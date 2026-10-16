@@ -1,0 +1,57 @@
+name: Bug report
+description: Something in the port does not work, crashes, looks wrong or plays differently from the cartridge.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing. Please do not attach or link a ROM, a BIOS or a save from a cartridge you do not own; issues containing them will be removed.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The first line of `version.txt` beside `LegoBattles.exe`.
+      placeholder: 0.1.0-beta.1 (a806556c)
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Where
+      options:
+        - Single player (story / Free Play)
+        - Online multiplayer
+        - Local multiplayer (two copies on one network)
+        - First-run setup / ROM conversion
+        - Settings panel / display / window
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: rom
+    attributes:
+      label: Your ROM
+      options:
+        - Europe
+        - USA (converted on first start)
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+      description: Steps to reproduce help most. Screenshots are welcome.
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: System
+      description: Windows version, GPU, and the window size or monitor resolution you play at.
+      placeholder: Windows 11, RTX 3060, 2560x1440 fullscreen
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log and recording
+      description: |
+        Drag in the newest file from `logs\`. If you can, also attach the newest `lb-session-*.lbdemo` beside the executable: it replays your session exactly. For multiplayer, logs from every player help.

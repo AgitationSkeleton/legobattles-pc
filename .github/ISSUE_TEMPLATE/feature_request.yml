@@ -1,0 +1,16 @@
+name: Suggestion
+description: An idea for the port -- an option, an enhancement, a quality-of-life change.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+      description: What should the port do, and why would it help?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else
+      description: How the original game behaves here, screenshots, examples from other ports.

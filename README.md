@@ -24,9 +24,15 @@ lobby on the public lobby server (`lbserver.viosarcade.xyz`); the Join screen
 lists the lobbies there. The host needs UDP port 26710 reachable from the
 internet; players on one network need nothing.
 
-**Reporting a problem:** attach the newest file in `logs\` and say what you were
-doing. Every session also records its inputs as `lb-session-*.lbdemo`, which
-replays the session exactly.
+**Reporting a problem:** open an issue on the
+[issue tracker](../../issues/new/choose) -- there is a form for bugs and one for
+suggestions. Attach the newest file in `logs\` and say what you were doing.
+Every session also records its inputs as `lb-session-*.lbdemo`, which replays
+the session exactly; attaching it usually makes a bug reproducible.
+
+**This is a beta.** Online multiplayer is lightly tested, and the port has so
+far been tested on a single PC. Reports from other hardware and networks are
+the most useful thing a tester can send.
 
 ## What is in this repository
 
@@ -100,6 +106,16 @@ Wi-Fi model the runner vendors. Both credits matter for licensing:
 (FreeBIOS, libslirp, xxHash, glad, Dear ImGui, SDL2, the MinGW runtime) with
 its licence, and [`LICENSES/`](LICENSES/) holds the full texts. Both also
 ship inside every release zip.
+
+## Licence
+
+The port's own code and documentation -- everything in this repository not
+listed in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) -- are licensed
+under the **GNU General Public License v3.0 or later** ([`LICENSE`](LICENSE)).
+GPL-3.0-or-later is the licence the port has to carry: its code is compiled
+into the ndsrecomp runner together with melonDS's GPL-3.0-or-later sources, so
+the executable as a whole is a GPL work. The third-party components keep their
+own licences.
 
 ## Legal
 

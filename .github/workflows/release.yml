@@ -99,6 +99,10 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      # The release notes, when release-notes/v<version>.md exists.
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: release-notes
       - uses: actions/download-artifact@v4
         with:
           name: LegoBattles-PC-${{ needs.build.outputs.version }}
@@ -110,6 +114,12 @@ jobs:
         run: |
           flags=""
           if [ "$PRERELEASE" = "true" ]; then flags="--prerelease"; fi
-          gh release create "v$VERSION" "LegoBattles-PC-$VERSION.zip"             "LegoBattles-PC-$VERSION-runner-source.zip" \
+          if [ -f "release-notes/v$VERSION.md" ]; then
+            flags="$flags --notes-file release-notes/v$VERSION.md"
+          else
+            flags="$flags --generate-notes"
+          fi
+          gh release create "v$VERSION" "LegoBattles-PC-$VERSION.zip" \
+            "LegoBattles-PC-$VERSION-runner-source.zip" \
             --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
-            --title "LEGO Battles PC $VERSION" --generate-notes $flags
+            --title "LEGO Battles PC $VERSION" $flags

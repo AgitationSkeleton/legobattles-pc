@@ -1,6 +1,7 @@
 # Third-party notices
 
-This port is built on other people's work. This file names each component, what
+The port's own code and documentation are GPL-3.0-or-later (see
+[`LICENSE`](LICENSE)). This port is built on other people's work. This file names each component, what
 the port uses it for, its copyright holder and its licence. The full licence
 texts are in [`LICENSES/`](LICENSES/), and every release zip carries the same
 folder.
