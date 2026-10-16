@@ -1,0 +1,42 @@
+// The LEGO Battles master server as a Cloudflare Worker: the lobby directory
+// (one Directory Durable Object for everyone) at lbserver.viosarcade.xyz.
+// See README.md here for deploying it.
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "legobattles-master",
+	"main": "src/index.js",
+	"compatibility_date": "2026-09-01",
+	"observability": {
+		"enabled": true
+	},
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "DIRECTORY",
+				"class_name": "Directory"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1",
+			"new_sqlite_classes": [
+				"Directory"
+			]
+		}
+	],
+	"vars": {
+		// An operator ceiling on an advertised max_players, not the game's cap
+		// (the Python server's --max-players; see services/master-server).
+		"MAX_PLAYERS": "8"
+	},
+	// viosarcade.xyz is a zone on this Cloudflare account; the address and
+	// its certificate are made on the first deploy. Plain HTTP on port 80 is
+	// served too, which is what the port's socket client speaks.
+	"routes": [
+		{
+			"pattern": "lbserver.viosarcade.xyz",
+			"custom_domain": true
+		}
+	]
+}

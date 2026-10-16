@@ -1,0 +1,10 @@
+section	metric	value	total	percent	note
+decompilation	bytes matching the ROM exactly	3380	1247754	0.27	789 functions verified by lb_match.py
+decompilation	bytes from hand-written C	32	1247754	0.0	4 functions with real names and types
+mapped	ARM9 .text bytes	1201170	1204164	99.75	9156 functions; 20 bytes of overlap merged out
+mapped	ARM7 code bytes	43868	63128	69.49	333 functions; 5232 bytes of overlap merged out
+annotated	ARM9 functions	2501	9314	26.85	2454 from RTTI vtables, 47 named symbols
+annotated	ARM9 code bytes	217806	1201170	18.13	
+annotated	derived annotations	5007	9314	53.76	tier S 135, tier C 313
+data	files decoded by a parser here	3891	3915	99.39	
+data	bytes decoded by a parser here	86585152	121243236	71.41	the remaining byte share is 34.6 MB of .mods video

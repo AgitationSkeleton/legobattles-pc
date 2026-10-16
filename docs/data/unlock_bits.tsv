@@ -1,0 +1,57 @@
+code	name	registry_index	fieldA_byte	fieldA_bit_lsb	stream_index_msb
+AVMPWHK	One Hit Kill (Heroes)	19	+0x0C1	5	106
+QMSLPOE	Fast Building	20	+0x0C1	6	105
+JRTPASX	Fast Magic	21	+0x0C0	4	99
+BGQOYRT	Double LEGO Bricks	22	+0x0C0	5	98
+LJYQRAC	Show Minikit	23	+0x0C1	7	104
+CPLYREK	Show LEGO Studs	24	+0x0C0	1	102
+ABABLRX	Regenerating Health	25	+0x0C0	2	101
+ZPWJFUQ	Long Range Magic	26	+0x0C0	7	96
+DWFTBNS	Super Magic	27	+0x0C0	6	97
+RTGYPKC	Show Red Bricks	28	+0x0C0	0	103
+PQZLJOB	Fast Harvesting	29	+0x0BF	1	94
+EDRFTGY	Upgraded Towers	30	+0x0C1	2	109
+THNBGRE	Super Explosions	31	+0x0C1	1	110
+UMSXIRQ	Full Unit Cap	32	+0x0BF	0	95
+HJCRAWK	Invincible Hero	33	+0x0C1	4	107
+KVBPQRJ	Fast Mining	34	+0x0BF	2	93
+IBGOFWX	Show Enemies	35	+0x0C0	3	100
+GJSGHOQ	Ninja	36	+0x0BB	5	58
+SHWSDGU	Ninja Master	37	+0x0BB	6	57
+IQOTMDA	Ninja Flying Ship	38	+0x0BB	4	59
+ITDXPMQ	Dwarf	39	+0x0B6	4	19
+OPKLSWN	Dwarf King	40	+0x0B6	5	18
+BNHSIOZ	Dwarf Glider	41	+0x0B6	3	20
+UGDRSQP	Islander	42	+0x0B9	2	45
+YRTPSHI	King Kahuka	43	+0x0B9	3	44
+GSIAVCN	Tiki Golem	44	+0x0B9	1	46
+ADGJLPI	Troll	45	+0x0B8	7	32
+XRCTVYB	Troll King	46	+0x0B7	0	31
+QETUOLJ	Troll Blimp	47	+0x0B8	6	33
+MSOFRJS	Space Police	48	+0x0BC	0	71
+RWPOKJL	Space Police Captain	49	+0x0BC	1	70
+VIWHSAZ	Space Police Cruiser	50	+0x0BD	7	72
+BLQPWUA	Space Criminal	51	+0x0BE	3	84
+ZVDNJSU	Space Criminal Leader	52	+0x0BE	4	83
+XGABVPL	Space Criminal Hotrod	53	+0x0BE	2	85
+UKELZOW	Conquistador	54	+0x0BF	6	89
+KQOCVME	Sheriff	55	+0x0BF	7	88
+LAOEBFG	Forestman	56	+0x0BE	1	86
+IEUBNFR	Ghost	57	+0x0BE	0	87
+PWOMFQN	Agent Chase	58	+0x0BF	5	90
+WEVFKLE	Classic Space	59	+0x0BF	4	91
+AMWJHDR	Skeleknight	60	+0x0B7	5	26
+OISJUEF	Horseman	61	+0x0B8	0	39
+ZHWLKIE	Cavalry	62	+0x0BA	3	52
+SIOAMDG	Gripley	63	+0x0BC	6	65
+RJASKRS	Grav Runner	64	+0x0BD	1	78
+FKWPTES	Wizard's Dragon	65	+0x0B7	2	29
+BRTKDQA	Brickbeard's Bounty	66	+0x0B9	5	42
+OJKWDTY	Battleship	67	+0x0BA	1	54
+TRGEQAZ	Flagship	68	+0x0BA	0	55
+PMWQFNG	Starship 1	69	+0x0BC	3	68
+NZXWDJR	Alien Assault Ship	70	+0x0BE	6	81
+HGQKIRY	Catapult	71			
+KLWDMVC	Troll Giant	72	+0x0B7	3	28
+BXQIEWD	Starfighter	73	+0x0BC	4	67
+JGREOKN	Alien Strike Ship	74	+0x0BE	7	80

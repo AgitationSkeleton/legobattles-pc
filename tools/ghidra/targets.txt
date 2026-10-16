@@ -1,0 +1,13 @@
+# The view/tilemap chain, in call order
+0x020396AC   filler: reads dirty flag, camera, calls the fill
+0x020A3234   THE FILL LOOP (thumb) - 10 metatile cols, 12+1 rows
+0x020A3478   one metatile -> six tile entries (thumb)
+0x02034B44   the building stamp, gated on visibility
+0x020396E0   scroll callback: BGxOFS + the two DMAs
+0x0202D1B4   BGxOFS setter (switch on layer)
+0x0210BC2C   >>> THE DMA BASE <<< dest = this() + offset
+0x0210CA60   the DMA itself
+0x0210CB20   the second DMA
+0x02038F28   entity cull rect: (camx,camy)..(+0x100,+0xC0)
+0x0203D3D8   entity draw pass A
+0x0203D488   entity draw pass B

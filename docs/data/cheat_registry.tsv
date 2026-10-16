@@ -1,0 +1,156 @@
+record	address	kind	index	code	string_id	name
+0	02126000	16	1	None	0x0af3	One Hit Kill (Heroes)
+1	02126010	16	2	None	0x0af4	Fast Building
+2	02126020	16	3	None	0x0af5	Fast Magic
+3	02126030	16	4	None	0x0af6	Double LEGO Bricks
+4	02126040	16	5	None	0x0af7	Show Minikit
+5	02126050	16	6	None	0x0af8	Show LEGO Studs
+6	02126060	16	7	None	0x0af9	Regenerating Health
+7	02126070	16	8	None	0x0afa	Long Range Magic
+8	02126080	16	9	None	0x0afb	Super Magic
+9	02126090	16	10	None	0x0afe	Show Red Bricks
+10	021260A0	16	11	None	0x0afc	Upgraded Towers
+11	021260B0	16	12	None	0x0afd	Super Explosions
+12	021260C0	16	13	None	0x0aff	Fast Harvesting
+13	021260D0	16	14	None	0x0b00	Full Unit Cap
+14	021260E0	16	15	None	0x0b01	Invincible Hero
+15	021260F0	16	16	None	0x0b02	Fast Mining
+16	02126100	16	17	None	0x0b03	Show Enemies
+17	02126110	16	18	SKQMXPL	0x0b04	Reveal Map
+18	02126120	8	19	AVMPWHK	0x0b05	One Hit Kill (Heroes)
+19	02126130	8	20	QMSLPOE	0x0b06	Fast Building
+20	02126140	8	21	JRTPASX	0x0b07	Fast Magic
+21	02126150	8	22	BGQOYRT	0x0b08	Double LEGO Bricks
+22	02126160	8	23	LJYQRAC	0x0b09	Show Minikit
+23	02126170	8	24	CPLYREK	0x0b0a	Show LEGO Studs
+24	02126180	8	25	ABABLRX	0x0b0b	Regenerating Health
+25	02126190	8	26	ZPWJFUQ	0x0b0c	Long Range Magic
+26	021261A0	8	27	DWFTBNS	0x0b0d	Super Magic
+27	021261B0	8	28	RTGYPKC	0x0b0e	Show Red Bricks
+28	021261C0	8	29	PQZLJOB	0x0b11	Fast Harvesting
+29	021261D0	8	30	EDRFTGY	0x0b0f	Upgraded Towers
+30	021261E0	8	31	THNBGRE	0x0b10	Super Explosions
+31	021261F0	8	32	UMSXIRQ	0x0b12	Full Unit Cap
+32	02126200	8	33	HJCRAWK	0x0b13	Invincible Hero
+33	02126210	8	34	KVBPQRJ	0x0b14	Fast Mining
+34	02126220	8	35	IBGOFWX	0x0b15	Show Enemies
+35	02126230	8	36	GJSGHOQ	0x0b16	Ninja
+36	02126240	8	37	SHWSDGU	0x0b17	Ninja Master
+37	02126250	8	38	IQOTMDA	0x0b18	Ninja Flying Ship
+38	02126260	8	39	ITDXPMQ	0x0b19	Dwarf
+39	02126270	8	40	OPKLSWN	0x0b1a	Dwarf King
+40	02126280	8	41	BNHSIOZ	0x0b1b	Dwarf Glider
+41	02126290	8	42	UGDRSQP	0x0b1c	Islander
+42	021262A0	8	43	YRTPSHI	0x0b1d	King Kahuka
+43	021262B0	8	44	GSIAVCN	0x0b1e	Tiki Golem
+44	021262C0	8	45	ADGJLPI	0x0b1f	Troll
+45	021262D0	8	46	XRCTVYB	0x0b21	Troll King
+46	021262E0	8	47	QETUOLJ	0x0b20	Troll Blimp
+47	021262F0	8	48	MSOFRJS	0x0b22	Space Police
+48	02126300	8	49	RWPOKJL	0x0b23	Space Police Captain
+49	02126310	8	50	VIWHSAZ	0x0b24	Space Police Cruiser
+50	02126320	8	51	BLQPWUA	0x0b25	Space Criminal
+51	02126330	8	52	ZVDNJSU	0x0b26	Space Criminal Leader
+52	02126340	8	53	XGABVPL	0x0b27	Space Criminal Hotrod
+53	02126350	8	54	UKELZOW	0x0b28	Conquistador
+54	02126360	8	55	KQOCVME	0x0b29	Sheriff
+55	02126370	8	56	LAOEBFG	0x0b2a	Forestman
+56	02126380	8	57	IEUBNFR	0x0b2b	Ghost
+57	02126390	8	58	PWOMFQN	0x0b2c	Agent Chase
+58	021263A0	8	59	WEVFKLE	0x0b2d	Classic Space
+59	021263B0	8	60	AMWJHDR	0x0b2e	Skeleknight
+60	021263C0	8	61	OISJUEF	0x0b2f	Horseman
+61	021263D0	8	62	ZHWLKIE	0x0b30	Cavalry
+62	021263E0	8	63	SIOAMDG	0x0b31	Gripley
+63	021263F0	8	64	RJASKRS	0x0b32	Grav Runner
+64	02126400	8	65	FKWPTES	0x0b33	Wizard's Dragon
+65	02126410	8	66	BRTKDQA	0x0b34	Brickbeard's Bounty
+66	02126420	8	67	OJKWDTY	0x0b35	Battleship
+67	02126430	8	68	TRGEQAZ	0x0b36	Flagship
+68	02126440	8	69	PMWQFNG	0x0b37	Starship 1
+69	02126450	8	70	NZXWDJR	0x0b38	Alien Assault Ship
+70	02126460	8	71	HGQKIRY	0x0b39	Catapult
+71	02126470	8	72	KLWDMVC	0x0b3a	Troll Giant
+72	02126480	8	73	BXQIEWD	0x0b3b	Starfighter
+73	02126490	8	74	JGREOKN	0x0b3c	Alien Strike Ship
+74	021264A0	8	75	None	0x0b3d	Version
+75	021264B0	8	76	None	0x0af1	Unnamed Cheat Code
+76	021264C0	4	77	None	0x0af1	Unnamed Cheat Code
+77	021264D0	1	78	None	0x0af1	Unnamed Cheat Code
+78	021264E0	1	79	None	0x0af1	Unnamed Cheat Code
+79	021264F0	4	80	None	0x0af1	Unnamed Cheat Code
+80	02126500	31	81	None	0x0af1	Unnamed Cheat Code
+81	02126510	31	82	None	0x0af1	Unnamed Cheat Code
+82	02126520	31	83	None	0x0af1	Unnamed Cheat Code
+83	02126530	3	84	None	0x0af1	Unnamed Cheat Code
+84	02126540	2	85	None	0x0af1	Unnamed Cheat Code
+85	02126550	3	86	None	0x0af1	Unnamed Cheat Code
+86	02126560	4	87	None	0x0af1	Unnamed Cheat Code
+87	02126570	31	88	None	0x0af1	Unnamed Cheat Code
+88	02126580	31	89	None	0x0af1	Unnamed Cheat Code
+89	02126590	1	90	None	0x0af1	Unnamed Cheat Code
+90	021265A0	31	91	None	0x0af1	Unnamed Cheat Code
+91	021265B0	3	92	None	0x0af1	Unnamed Cheat Code
+92	021265C0	3	93	None	0x0af1	Unnamed Cheat Code
+93	021265D0	1	94	None	0x0af1	Unnamed Cheat Code
+94	021265E0	1	95	None	0x0af1	Unnamed Cheat Code
+95	021265F0	1	96	None	0x0af1	Unnamed Cheat Code
+96	02126600	1	97	None	0x0af1	Unnamed Cheat Code
+97	02126610	1	98	None	0x0af1	Unnamed Cheat Code
+98	02126620	1	99	None	0x0af1	Unnamed Cheat Code
+99	02126630	1	100	None	0x0af1	Unnamed Cheat Code
+100	02126640	31	101	None	0x0af1	Unnamed Cheat Code
+101	02126650	1	102	None	0x0af1	Unnamed Cheat Code
+102	02126660	2	103	None	0x0af1	Unnamed Cheat Code
+103	02126670	3	104	None	0x0af1	Unnamed Cheat Code
+104	02126680	31	105	None	0x0af1	Unnamed Cheat Code
+105	02126690	1	106	None	0x0af1	Unnamed Cheat Code
+106	021266A0	1	107	None	0x0af1	Unnamed Cheat Code
+107	021266B0	1	108	None	0x0af1	Unnamed Cheat Code
+108	021266C0	1	109	None	0x0af1	Unnamed Cheat Code
+109	021266D0	1	110	None	0x0af1	Unnamed Cheat Code
+110	021266E0	1	111	None	0x0af1	Unnamed Cheat Code
+111	021266F0	1	112	None	0x0af1	Unnamed Cheat Code
+112	02126700	1	113	None	0x0af1	Unnamed Cheat Code
+113	02126710	1	114	None	0x0af1	Unnamed Cheat Code
+114	02126720	1	115	None	0x0af1	Unnamed Cheat Code
+115	02126730	1	116	None	0x0af1	Unnamed Cheat Code
+116	02126740	1	117	None	0x0af1	Unnamed Cheat Code
+117	02126750	1	118	None	0x0af1	Unnamed Cheat Code
+118	02126760	1	119	None	0x0af1	Unnamed Cheat Code
+119	02126770	1	120	None	0x0af1	Unnamed Cheat Code
+120	02126780	1	121	None	0x0af1	Unnamed Cheat Code
+121	02126790	1	122	None	0x0af1	Unnamed Cheat Code
+122	021267A0	1	123	None	0x0af1	Unnamed Cheat Code
+123	021267B0	1	124	None	0x0af1	Unnamed Cheat Code
+124	021267C0	1	125	None	0x0af1	Unnamed Cheat Code
+125	021267D0	1	126	None	0x0af1	Unnamed Cheat Code
+126	021267E0	1	127	None	0x0af1	Unnamed Cheat Code
+127	021267F0	1	128	None	0x0af1	Unnamed Cheat Code
+128	02126800	1	129	None	0x0af1	Unnamed Cheat Code
+129	02126810	1	130	None	0x0af1	Unnamed Cheat Code
+130	02126820	1	131	None	0x0af1	Unnamed Cheat Code
+131	02126830	1	132	None	0x0af1	Unnamed Cheat Code
+132	02126840	1	133	None	0x0af1	Unnamed Cheat Code
+133	02126850	1	134	None	0x0af1	Unnamed Cheat Code
+134	02126860	1	135	None	0x0af1	Unnamed Cheat Code
+135	02126870	1	136	None	0x0af1	Unnamed Cheat Code
+136	02126880	1	137	None	0x0af1	Unnamed Cheat Code
+137	02126890	1	138	None	0x0af1	Unnamed Cheat Code
+138	021268A0	1	139	None	0x0af1	Unnamed Cheat Code
+139	021268B0	1	140	None	0x0af1	Unnamed Cheat Code
+140	021268C0	1	141	None	0x0af1	Unnamed Cheat Code
+141	021268D0	1	142	None	0x0af1	Unnamed Cheat Code
+142	021268E0	4	143	None	0x0af1	Unnamed Cheat Code
+143	021268F0	31	144	None	0x0af1	Unnamed Cheat Code
+144	02126900	31	145	None	0x0af1	Unnamed Cheat Code
+145	02126910	31	146	None	0x0af1	Unnamed Cheat Code
+146	02126920	31	147	None	0x0af1	Unnamed Cheat Code
+147	02126930	31	148	None	0x0af1	Unnamed Cheat Code
+148	02126940	31	149	None	0x0af1	Unnamed Cheat Code
+149	02126950	31	150	None	0x0af1	Unnamed Cheat Code
+150	02126960	31	151	None	0x0af1	Unnamed Cheat Code
+151	02126970	31	152	None	0x0af1	Unnamed Cheat Code
+152	02126980	31	153	None	0x0af1	Unnamed Cheat Code
+153	02126990	31	154	None	0x0af1	Unnamed Cheat Code
+154	021269A0	1	0	S_Character_1	0x0001	Select Your Army

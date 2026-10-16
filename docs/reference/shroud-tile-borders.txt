@@ -1,0 +1,27 @@
+# Shroud tileset border coverage, measured from LB_FOGTILES (exp-fogtiles).
+# Coverage = non-transparent pixels on that 8-px border. 8 = solid cloud,
+# 0 = fully faded. A tile fades toward its REVEALED neighbours, and
+# metatile_mask sets a bit when a neighbour is SHROUDED, so an open border
+# corresponds to a 0 bit in the mask.
+#
+# idx  opaque  top  bot  lft  rgt
+  0B1   17/64   0    6    0    4
+  0B2   46/64   0    8    4    7
+  0B3   59/64   4    8    7    8
+  0B4   53/64   2    8    8    6
+  0B5   53/64   0    8    6    6
+  0B6   50/64   2    8    5    8
+  0B7   57/64   4    8    8    5
+  0B8   35/64   0    8    5    5
+  0B9   23/64   0    6    5    0
+  0BA   54/64   6    8    3    8
+  0BB   64/64   8    8    8    8
+  0BC   64/64   8    8    8    8
+  0BD   64/64   8    8    8    8
+  0BE   58/64   6    8    8    5
+  0BF   53/64   8    5    3    8
+  0C0   64/64   8    8    8    8
+  0C1   64/64   8    8    8    8
+  0C2   64/64   8    8    8    8
+  0C3   50/64   8    6    8    1
+  0C4   43/64   5    8    1    8

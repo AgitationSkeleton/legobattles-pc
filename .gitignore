@@ -1,0 +1,27 @@
+# Never in this repository: the game, the BIOS, saves, or anything extracted
+# or generated from them.
+*.nds
+*.sav
+*.bin
+*.rom
+*.lbdelta
+out/
+port/generated/
+port/runner/tree/
+port/runner/build/
+build/
+dist/
+saves/
+logs/
+*.sqlite3
+
+# Build products and tool state.
+*.o
+*.obj
+*.exe
+*.dll
+__pycache__/
+*.pyc
+node_modules/
+.wrangler/
+.dev.vars

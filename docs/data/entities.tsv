@@ -1,0 +1,552 @@
+index	class	name	display_name	faction	category	damage_min	damage_max	effect_id	flags	item_category	unlock_slot	ref	ref_kind	ref_name	category_id	is_structure	cost	health	mana	build_time	melee_damage_max	melee_spread	speed	speed_tiles_per_sec	field_10	move_class	melee_damage	attack_interval	attack_range	projectile	field_6a	resource_yield	field_70	interaction_range	name_string_id	asset	offset
+0	Battles::UnitBlueprint	K_King	King	King	Hero										0	False	500	1000	1000	600	50	10	410	3.0	49152	3	40	20	1			0	30	7	386	Sprites/k_hrm	4
+1	Battles::UnitBlueprint	K_King_F	Queen	King	Hero										0	False	500	1000	1000	600	40	10	478	3.5	49152	3	30	20	1			0	30	7	387	Sprites/k_hrf	128
+2	Battles::UnitBlueprint	K_Engineer	Builder	King	Builder										1	False	50	150	0	150	5	0	410	3.0	49152	1	5	30	1			0	11	5	388	Sprites/k_eng	252
+3	Battles::UnitBlueprint	K_Swordsman	Guardsman	King	Melee										2	False	100	350	0	270	15	5	410	3.0	49152	3	10	30	1			0	15	5	389	Sprites/k_mel	376
+4	Battles::UnitBlueprint	K_Archer	Archer	King	Ranged										3	False	150	300	0	390	0	0	478	3.5	49152	2	0	24	5	Arrow		0	18	7	390	Sprites/k_rgd	500
+5	Battles::UnitBlueprint	K_Knight	Knight	King	Mounted										4	False	250	300	0	480	50	10	614	4.5	49152	3	40	30	1			0	20	7	391	Sprites/k_bld_mtd	624
+6	Battles::UnitBlueprint	K_Ballista	Ballista	King	Siege										6	False	350	450	0	600	0	0	478	3.5	1365	4	0	24	7	BallistaBolt		0	45	7	392	Models/K_Ballista	748
+7	Battles::UnitBlueprint	K_Catapult	Catapult	King	Siege										6	False	500	550	0	840	0	0	410	3.0	1365	4	0	30	8	Boulder		0	55	8	393	Models/K_Catapult	872
+8	Battles::UnitBlueprint	K_Gryphon	King's Dragon	King	Siege										6	False	900	700	0	1140	0	0	819	6.0	49152	4	0	30	3	Fireball		0	65	8	394	Models/K_Dragon	996
+9	Battles::UnitBlueprint	K_TransportShip	Transport Ship	King	Transport										5	False	250	850	0	540	0	0	683	5.0	49152	5	0	42	4	Arrow		0	10	6	395	Models/K_TransportShip	1120
+10	Battles::UnitBlueprint	K_Castle	Castle	King	Base										7	True	1000	1500	65535	900	0	0	0	0		0	0	30	1			0	10	11	396	Sprites/k_bld_mtd	1244
+11	Battles::UnitBlueprint	K_LumberMill	Lumber Mill	King	Mill										8	True	400	750	0	540	0	0	0	0		0	0	30	1			0	3	8	397	Sprites/k_bld_mtd	1368
+12	Battles::UnitBlueprint	K_Mine	Mine	King	Mine										9	True	600	1250	0	690	0	0	0	0		0	0	30	1			25	3	8	398	Sprites/k_bld_mtd	1492
+13	Battles::UnitBlueprint	K_Farm	Farm	King	Farm										10	True	75	350	0	360	0	0	0	0		0	0	30	1			0	2	6	399	Sprites/k_bld_mtd	1616
+14	Battles::UnitBlueprint	K_Barracks	Barracks	King	Barracks										11	True	200	750	0	450	0	0	0	0		0	0	30	1			0	5	8	400	Sprites/k_bld_mtd	1740
+15	Battles::UnitBlueprint	K_Stables	Special Factory	King	VehicleCenter										12	True	350	1000	0	600	0	0	0	0		0	0	30	1			0	8	8	401	Sprites/k_bld_mtd	1864
+16	Battles::UnitBlueprint	K_Tower	Tower	King	Tower										13	True	300	400	0	420	0	0	0	0		0	0	24	5	TBolt		0	40	7	402	Sprites/k_bld_mtd	1988
+17	Battles::UnitBlueprint	K_Tower2	Tower II	King	Tower2										14	True	500	500	0	840	0	0	0	0		0	0	40	6	TBoulder		0	40	9	403	Sprites/k_bld_mtd	2112
+18	Battles::UnitBlueprint	K_Tower3	Tower III	King	Tower3										15	True	800	700	0	1260	0	0	0	0		0	0	60	7	TFireball		0	40	11	404	Sprites/k_bld_mtd	2236
+19	Battles::UnitBlueprint	K_Shipyard	Shipyard	King	Shipyard										16	True	350	1000	0	600	0	0	0	0		0	0	30	1			0	8	8	405	Sprites/k_bld_mtd	2360
+20	Battles::UnitBlueprint	W_Wizard	Wizard	Wizard	Hero										0	False	500	1100	1000	600	40	10	341	2.5	49152	1	30	20	1			0	30	7	406	Sprites/w_hrm	2484
+21	Battles::UnitBlueprint	W_Wizard_F	Sorceress	Wizard	Hero										0	False	500	900	1000	600	40	10	478	3.5	49152	1	30	20	1			0	30	7	407	Sprites/w_hrf	2608
+22	Battles::UnitBlueprint	W_Engineer	Builder	Wizard	Builder										1	False	55	160	0	150	5	0	375	2.75	49152	1	5	24	1			0	11	5	408	Sprites/w_eng	2732
+23	Battles::UnitBlueprint	W_Swordsman	Skeleton	Wizard	Melee										2	False	110	225	0	270	20	5	478	3.5	49152	3	15	30	1			0	15	5	409	Sprites/w_mel	2856
+24	Battles::UnitBlueprint	W_Crossbowman	Crossbowman	Wizard	Ranged										3	False	150	250	0	390	0	0	410	3.0	49152	1	0	24	4	CrossbowBolt		0	18	7	410	Sprites/w_rgd	2980
+25	Battles::UnitBlueprint	W_Skeleknight	Skeleknight	Wizard	Mounted										4	False	250	300	0	480	40	10	614	4.5	49152	3	30	30	1			0	20	7	411	Sprites/w_bld_mtd	3104
+26	Battles::UnitBlueprint	W_Ballista	Siege Tower	Wizard	Siege										6	False	350	450	0	600	0	0	410	3.0	1365	4	0	24	7	SiegeBolt		0	45	8	412	Models/W_Ballista	3228
+27	Battles::UnitBlueprint	W_Giant	Troll Giant	Wizard	Siege										6	False	500	550	0	840	0	0	478	3.5	49152	2	0	40	8	OgreBoulder		0	55	8	413	Models/W_Giant	3352
+28	Battles::UnitBlueprint	W_Dragon	Wizard's Dragon	Wizard	Siege										6	False	900	700	0	1140	0	0	819	6.0	49152	4	0	30	3	Fireball		0	65	8	414	Models/W_Dragon	3476
+29	Battles::UnitBlueprint	W_TransportShip	Transport Ship	Wizard	Transport										5	False	250	850	0	540	0	0	614	4.5	49152	5	0	42	4	CrossbowBolt		0	10	6	415	Models/W_TransportShip	3600
+30	Battles::UnitBlueprint	W_SkeletonTower	Skeleton Tower	Wizard	Base										7	True	1000	1500	65535	900	0	0	0	0		0	0	30	1			0	10	11	416	Sprites/w_bld_mtd	3724
+31	Battles::UnitBlueprint	W_LumberShack	Lumber Shack	Wizard	Mill										8	True	400	750	0	540	0	0	0	0		0	0	30	1			0	3	8	417	Sprites/w_bld_mtd	3848
+32	Battles::UnitBlueprint	W_Mine	Mine	Wizard	Mine										9	True	600	1250	0	690	0	0	0	0		0	0	30	1			25	3	8	418	Sprites/w_bld_mtd	3972
+33	Battles::UnitBlueprint	W_Graveyard	Graveyard	Wizard	Farm										10	True	75	350	0	360	0	0	0	0		0	0	30	1			0	2	6	419	Sprites/w_bld_mtd	4096
+34	Battles::UnitBlueprint	W_Mousoleum	Mausoleum	Wizard	Barracks										11	True	200	750	0	450	0	0	0	0		0	0	30	1			0	5	8	420	Sprites/w_bld_mtd	4220
+35	Battles::UnitBlueprint	W_Cauldron	Cauldron	Wizard	VehicleCenter										12	True	350	1000	0	600	0	0	0	0		0	0	30	1			0	8	8	421	Sprites/w_bld_mtd	4344
+36	Battles::UnitBlueprint	W_Tower	Tower	Wizard	Tower										13	True	300	400	0	420	0	0	0	0		0	0	24	6	TBolt		0	40	7	422	Sprites/w_bld_mtd	4468
+37	Battles::UnitBlueprint	W_Tower2	Tower II	Wizard	Tower2										14	True	500	500	0	840	0	0	0	0		0	0	40	6	TBoulder		0	40	9	423	Sprites/w_bld_mtd	4592
+38	Battles::UnitBlueprint	W_Tower3	Tower III	Wizard	Tower3										15	True	800	700	0	1260	0	0	0	0		0	0	60	7	TFireball		0	40	11	424	Sprites/w_bld_mtd	4716
+39	Battles::UnitBlueprint	W_Shipyard	Shipyard	Wizard	Shipyard										16	True	350	1000	0	600	0	0	0	0		0	0	30	1			0	8	8	425	Sprites/w_bld_mtd	4840
+40	Battles::UnitBlueprint	P_Captain	Captain Brickbeard	Pirate	Hero										0	False	500	1000	1000	600	60	10	341	2.5	49152	3	50	20	1			0	30	7	432	Sprites/p_hrm	4964
+41	Battles::UnitBlueprint	P_Captain_F	Lady Pirate	Pirate	Hero										0	False	500	1000	1000	600	50	10	410	3.0	49152	3	40	20	1			0	30	7	433	Sprites/p_hrf	5088
+42	Battles::UnitBlueprint	P_Builder	Builder	Pirate	Builder										1	False	45	140	0	150	5	0	444	3.25	49152	1	5	40	1			0	11	5	434	Sprites/p_eng	5212
+43	Battles::UnitBlueprint	P_Oarsman	Oarsman	Pirate	Melee										2	False	120	300	0	270	15	5	478	3.5	49152	3	10	30	1			0	15	5	435	Sprites/p_mel	5336
+44	Battles::UnitBlueprint	P_Crossbowman	Gunman	Pirate	Ranged										3	False	150	200	0	390	0	0	546	4.0	49152	2	0	24	5	PirateShot		0	18	7	436	Sprites/p_rgd	5460
+45	Battles::UnitBlueprint	P_Horseman	Horseman	Pirate	Mounted										4	False	250	400	0	480	40	10	683	5.0	49152	3	30	30	1			0	20	7	437	Sprites/p_bld_mtd	5584
+46	Battles::UnitBlueprint	P_Barracuda	Barracuda	Pirate	Siege										6	False	350	550	0	600	0	0	819	6.0	1365	4	0	40	5	PCannonBall		0	45	8	439	Models/P_Clipper	5708
+47	Battles::UnitBlueprint	P_Battleship	Battleship	Pirate	Siege										6	False	500	650	0	840	0	0	683	5.0	1365	4	0	30	6	PCannonBall		0	55	8	440	Models/P_Battleship	5832
+48	Battles::UnitBlueprint	P_FlyingDutchman	Brickbeard's Bounty	Pirate	Siege										6	False	750	700	0	1140	0	0	478	3.5	49152	4	0	30	7	PCannonBall		0	65	8	441	Models/P_Flagship	5956
+49	Battles::UnitBlueprint	P_TransportShip	Transport Ship	Pirate	Transport										5	False	250	750	0	540	0	0	546	4.0	49152	5	0	60	4	PirateShot		0	10	6	438	Models/P_Transport	6080
+50	Battles::UnitBlueprint	P_PiratesHold	Pirate's Hold	Pirate	Base										7	True	1000	1500	65535	900	0	0	0	0		0	0	30	1			0	10	11	442	Sprites/p_bld_mtd	6204
+51	Battles::UnitBlueprint	P_LumberShack	Lumber Shack	Pirate	Mill										8	True	400	750	0	540	0	0	0	0		0	0	30	1			0	3	8	443	Sprites/p_bld_mtd	6328
+52	Battles::UnitBlueprint	P_Quarry	Quarry	Pirate	Mine										9	True	600	1250	0	690	0	0	0	0		0	0	30	1			25	3	8	444	Sprites/p_bld_mtd	6452
+53	Battles::UnitBlueprint	P_ShantyShack	Plantation	Pirate	Farm										10	True	75	350	0	360	0	0	0	0		0	0	30	1			0	2	6	445	Sprites/p_bld_mtd	6576
+54	Battles::UnitBlueprint	P_Tavern	Shanty Shack	Pirate	Barracks										11	True	200	750	0	450	0	0	0	0		0	0	30	1			0	5	8	446	Sprites/p_bld_mtd	6700
+55	Battles::UnitBlueprint	P_Jetty	Jetty	Pirate	VehicleCenter										12	True	350	1000	0	600	0	0	0	0		0	0	30	1			0	8	8	447	Sprites/p_bld_mtd	6824
+56	Battles::UnitBlueprint	P_LogTower	Tower	Pirate	Tower										13	True	300	400	0	420	0	0	0	0		0	0	24	6	TPirateShot		0	40	7	448	Sprites/p_bld_mtd	6948
+57	Battles::UnitBlueprint	P_LogTower2	Tower II	Pirate	Tower2										14	True	500	500	0	840	0	0	0	0		0	0	40	6	PCannonBall		0	40	9	449	Sprites/p_bld_mtd	7072
+58	Battles::UnitBlueprint	P_LogTower3	Tower III	Pirate	Tower3										15	True	800	700	0	1260	0	0	0	0		0	0	60	7	TFireball		0	40	11	450	Sprites/p_bld_mtd	7196
+59	Battles::UnitBlueprint	P_Shipyard	Shipyard	Pirate	Shipyard										16	True	350	1000	0	600	0	0	0	0		0	0	30	1			0	8	8	451	Sprites/p_bld_mtd	7320
+60	Battles::UnitBlueprint	I_Governor	Governor Broadside	Imperial	Hero										0	False	500	1100	1000	600	50	10	341	2.5	49152	3	40	20	1			0	30	7	452	Sprites/i_hrm	7444
+61	Battles::UnitBlueprint	I_Governor_F	Camilla	Imperial	Hero										0	False	500	1000	1000	600	40	10	478	3.5	49152	3	30	20	1			0	30	7	453	Sprites/i_hrf	7568
+62	Battles::UnitBlueprint	I_Engineer	Builder	Imperial	Builder										1	False	55	160	0	150	5	0	375	2.75	49152	1	5	30	1			0	11	5	454	Sprites/i_eng	7692
+63	Battles::UnitBlueprint	I_Swordsman	Swordsman	Imperial	Melee										2	False	100	250	0	270	25	5	341	2.5	49152	3	20	30	1			0	15	5	455	Sprites/i_mel	7816
+64	Battles::UnitBlueprint	I_Rifleman	Rifleman	Imperial	Ranged										3	False	150	200	0	390	0	0	478	3.5	49152	2	0	24	4	ImperialShot		0	18	7	456	Sprites/i_rgd	7940
+65	Battles::UnitBlueprint	I_Cavalry	Cavalry	Imperial	Mounted										4	False	250	450	0	480	45	10	546	4.0	49152	3	35	30	1			0	20	7	457	Sprites/i_bld_mtd	8064
+66	Battles::UnitBlueprint	I_Clipper	Clipper	Imperial	Siege										6	False	350	550	0	600	0	0	853	6.25	1365	4	0	30	5	ICannonBall		0	45	8	459	Models/I_Clipper	8188
+67	Battles::UnitBlueprint	I_Battleship	Battleship	Imperial	Siege										6	False	500	650	0	840	0	0	614	4.5	49152	4	0	30	6	ICannonBall		0	55	8	460	Models/I_Battleship	8312
+68	Battles::UnitBlueprint	I_Dirigible	Flagship	Imperial	Siege										6	False	750	700	0	1140	0	0	410	3.0	49152	4	0	24	7	ICannonBall		0	65	8	461	Models/I_Flagship	8436
+69	Battles::UnitBlueprint	I_TransportShip	Transport Ship	Imperial	Transport										5	False	250	750	0	540	0	0	546	4.0	49152	5	0	42	4	ImperialShot		0	10	6	458	Models/I_Transport	8560
+70	Battles::UnitBlueprint	I_Fortress	Fortress	Imperial	Base										7	True	1000	1500	65535	900	0	0	0	0		0	0	30	1			0	10	11	462	Sprites/i_bld_mtd	8684
+71	Battles::UnitBlueprint	I_LumberMill	Lumber Mill	Imperial	Mill										8	True	400	750	0	540	0	0	0	0		0	0	30	1			0	3	8	463	Sprites/i_bld_mtd	8808
+72	Battles::UnitBlueprint	I_Quarry	Quarry	Imperial	Mine										9	True	600	1250	0	690	0	0	0	0		0	0	30	1			25	3	8	464	Sprites/i_bld_mtd	8932
+73	Battles::UnitBlueprint	I_Tavern	Quarters	Imperial	Farm										10	True	75	350	0	360	0	0	0	0		0	0	30	1			0	2	6	465	Sprites/i_bld_mtd	9056
+74	Battles::UnitBlueprint	I_Barracks	Barracks	Imperial	Barracks										11	True	200	750	0	450	0	0	0	0		0	0	30	1			0	5	8	466	Sprites/i_bld_mtd	9180
+75	Battles::UnitBlueprint	I_Drydock	Drydock	Imperial	VehicleCenter										12	True	350	1000	0	600	0	0	0	0		0	0	30	1			0	8	8	467	Sprites/i_bld_mtd	9304
+76	Battles::UnitBlueprint	I_StoneTower	Tower	Imperial	Tower										13	True	300	400	0	420	0	0	0	0		0	0	24	6	TPirateShot		0	40	7	468	Sprites/i_bld_mtd	9428
+77	Battles::UnitBlueprint	I_StoneTower2	Tower II	Imperial	Tower2										14	True	500	500	0	840	0	0	0	0		0	0	40	6	ICannonBall		0	40	9	469	Sprites/i_bld_mtd	9552
+78	Battles::UnitBlueprint	I_StoneTower3	Tower III	Imperial	Tower3										15	True	800	700	0	1260	0	0	0	0		0	0	60	7	TFireball		0	40	11	470	Sprites/i_bld_mtd	9676
+79	Battles::UnitBlueprint	I_Shipyard	Shipyard	Imperial	Shipyard										16	True	350	1000	0	600	0	0	0	0		0	0	30	1			0	8	8	471	Sprites/i_bld_mtd	9800
+80	Battles::UnitBlueprint	E_Commander	Biff	Earth	Hero										0	False	500	1000	1000	600	50	10	478	3.5	49152	3	40	20	1			0	30	7	480	Sprites/h_hrm	9924
+81	Battles::UnitBlueprint	E_Commander_F	Gemma	Earth	Hero										0	False	500	900	1000	600	0	0	410	3.0	49152	3	0	20	5	ELaser		0	30	7	481	Sprites/h_hrf	10048
+82	Battles::UnitBlueprint	E_Engineer	Builder	Earth	Builder										1	False	45	150	0	150	5	0	410	3.0	49152	1	5	40	1			0	11	5	482	Sprites/h_eng	10172
+83	Battles::UnitBlueprint	E_Melee	Trooper	Earth	Melee										2	False	90	275	0	270	30	10	341	2.5	49152	3	20	24	1			0	15	5	483	Sprites/h_mel	10296
+84	Battles::UnitBlueprint	E_Ranged	Commando	Earth	Ranged										3	False	150	300	0	390	0	0	410	3.0	49152	2	0	24	5	ELaser		0	18	7	484	Sprites/h_rgd	10420
+85	Battles::UnitBlueprint	E_Mounted	Gripley	Earth	Mounted										4	False	250	400	0	480	50	10	546	4.0	49152	3	40	30	1			0	20	7	485	Sprites/h_bld_mtd	10544
+86	Battles::UnitBlueprint	E_SiegeOne	Claw Tank	Earth	Siege										6	False	350	450	0	600	0	0	478	3.5	1365	4	0	24	5	BallistaBolt		0	45	8	486	Models/E_Clawtank	10668
+87	Battles::UnitBlueprint	E_SiegeTwo	Starfighter	Earth	Siege										6	False	500	550	0	840	0	0	410	3.0	1365	4	0	30	6	BallistaBolt		0	55	8	487	Models/E_Heroship	10792
+88	Battles::UnitBlueprint	E_SiegeThree	Starship 1	Earth	Siege										6	False	750	700	0	1140	0	0	819	6.0	49152	4	0	20	7	BallistaBolt		0	65	8	488	Models/E_EagleBase	10916
+89	Battles::UnitBlueprint	E_TransportShip	Transport Ship	Earth	Transport										5	False	250	850	0	540	0	0	683	5.0	49152	5	0	42	4	ELaser		0	10	6	489	Models/E_Reconship	11040
+90	Battles::UnitBlueprint	E_EagleCommandBase	Eagle Command	Earth	Base										7	True	1000	1500	65535	900	0	0	0	0		0	0	30	1			0	10	11	490	Sprites/h_bld_mtd	11164
+91	Battles::UnitBlueprint	E_Harvester	Harvester	Earth	Mill										8	True	400	750	0	540	0	0	0	0		0	0	30	1			0	3	8	491	Sprites/h_bld_mtd	11288
+92	Battles::UnitBlueprint	E_WellCap	Well Cap	Earth	Mine										9	True	600	1250	0	690	0	0	0	0		0	0	30	1			25	3	8	492	Sprites/h_bld_mtd	11412
+93	Battles::UnitBlueprint	E_Biodome	Biodome	Earth	Farm										10	True	75	350	0	360	0	0	0	0		0	0	30	1			0	2	6	493	Sprites/h_bld_mtd	11536
+94	Battles::UnitBlueprint	E_Barracks	Barracks	Earth	Barracks										11	True	200	750	0	450	0	0	0	0		0	0	30	1			0	5	8	494	Sprites/h_bld_mtd	11660
+95	Battles::UnitBlueprint	E_VehicleFactory	Vehicle Factory	Earth	VehicleCenter										12	True	350	1000	0	600	0	0	0	0		0	0	30	1			0	8	8	495	Sprites/h_bld_mtd	11784
+96	Battles::UnitBlueprint	E_RocketTowers	Tower	Earth	Tower										13	True	300	400	0	420	0	0	0	0		0	0	24	6	TLaser		0	40	7	496	Sprites/h_bld_mtd	11908
+97	Battles::UnitBlueprint	E_RocketTowers2	Tower II	Earth	Tower2										14	True	500	500	0	840	0	0	0	0		0	0	40	6	LaserCannon		0	40	9	497	Sprites/h_bld_mtd	12032
+98	Battles::UnitBlueprint	E_RocketTowers3	Tower III	Earth	Tower3										15	True	800	700	0	1260	0	0	0	0		0	0	60	7	PlasmaBall		0	40	11	498	Sprites/h_bld_mtd	12156
+99	Battles::UnitBlueprint	E_Shipyard	Shipyard	Earth	Shipyard										16	True	350	1000	0	600	0	0	0	0		0	0	30	1			0	8	8	499	Sprites/h_bld_mtd	12280
+100	Battles::UnitBlueprint	A_AlienKing	Alien Commander	Alien	Hero										0	False	500	1000	1000	600	60	10	341	2.5	49152	3	50	20	1			0	30	7	500	Sprites/a_hrm	12404
+101	Battles::UnitBlueprint	A_AlienKing_F	Alien Queen	Alien	Hero										0	False	500	900	1000	600	60	10	410	3.0	49152	3	50	20	1			0	30	7	501	Sprites/a_hrf	12528
+102	Battles::UnitBlueprint	A_Engineer	Builder	Alien	Builder										1	False	50	140	0	150	5	0	444	3.25	49152	1	5	24	1			0	11	5	502	Sprites/a_eng	12652
+103	Battles::UnitBlueprint	A_Melee	Drone	Alien	Melee										2	False	90	225	0	270	25	5	410	3.0	49152	3	20	30	1			0	15	5	503	Sprites/a_mel	12776
+104	Battles::UnitBlueprint	A_Ranged	Laser Trooper	Alien	Ranged										3	False	150	250	0	390	0	0	546	4.0	49152	2	0	24	4	ELaser		0	18	7	504	Sprites/a_rgd	12900
+105	Battles::UnitBlueprint	A_Mounted	Grav Runner	Alien	Mounted										4	False	250	350	0	480	45	10	683	5.0	49152	3	35	30	1			0	20	7	505	Sprites/a_bld_mtd	13024
+106	Battles::UnitBlueprint	A_SiegeOne	Alien Attack Ship	Alien	Siege										6	False	350	450	0	600	0	0	410	3.0	1365	4	0	24	5	BallistaBolt		0	45	8	506	Models/A_Ship	13148
+107	Battles::UnitBlueprint	A_SiegeTwo	Alien Strike Ship	Alien	Siege										6	False	500	550	0	840	0	0	478	3.5	49152	4	0	40	6	BallistaBolt		0	55	8	507	Models/A_Scout	13272
+108	Battles::UnitBlueprint	A_SiegeThree	Alien Assault Ship	Alien	Siege										6	False	750	700	0	1140	0	0	819	6.0	49152	4	0	20	7	BallistaBolt		0	65	8	508	Models/A_Fighter	13396
+109	Battles::UnitBlueprint	A_TransportShip	Transport Ship	Alien	Transport										5	False	250	850	0	540	0	0	614	4.5	49152	5	0	42	4	ALaser		0	10	6	509	Models/A_Transport	13520
+110	Battles::UnitBlueprint	A_CraterBase	Crater Base	Alien	Base										7	True	1000	1500	65535	900	0	0	0	0		0	0	30	1			0	10	11	510	Sprites/a_bld_mtd	13644
+111	Battles::UnitBlueprint	A_Harvester	Harvester	Alien	Mill										8	True	400	750	0	540	0	0	0	0		0	0	30	1			0	3	8	511	Sprites/a_bld_mtd	13768
+112	Battles::UnitBlueprint	A_WellCap	Well Cap	Alien	Mine										9	True	600	1250	0	690	0	0	0	0		0	0	30	1			25	3	8	512	Sprites/a_bld_mtd	13892
+113	Battles::UnitBlueprint	A_Hatchery	Hatchery	Alien	Farm										10	True	75	350	0	360	0	0	0	0		0	0	30	1			0	2	6	513	Sprites/a_bld_mtd	14016
+114	Battles::UnitBlueprint	A_BreedingPit	Breeding Pit	Alien	Barracks										11	True	200	750	0	450	0	0	0	0		0	0	30	1			0	5	8	514	Sprites/a_bld_mtd	14140
+115	Battles::UnitBlueprint	A_CreationPit	Creation Pit	Alien	VehicleCenter										12	True	350	1000	0	600	0	0	0	0		0	0	30	1			0	8	8	515	Sprites/a_bld_mtd	14264
+116	Battles::UnitBlueprint	A_Spire	Spire	Alien	Tower										13	True	300	400	0	420	0	0	0	0		0	0	24	6	TLaser		0	40	7	516	Sprites/a_bld_mtd	14388
+117	Battles::UnitBlueprint	A_Spire2	Spire II	Alien	Tower2										14	True	500	500	0	840	0	0	0	0		0	0	40	6	LaserCannon		0	40	9	517	Sprites/a_bld_mtd	14512
+118	Battles::UnitBlueprint	A_Spire3	Spire III	Alien	Tower3										15	True	800	700	0	1260	0	0	0	0		0	0	60	7	PlasmaBall		0	40	11	518	Sprites/a_bld_mtd	14636
+119	Battles::UnitBlueprint	A_Shipyard	Shipyard	Alien	Shipyard										16	True	350	1000	0	600	0	0	0	0		0	0	30	1			0	8	8	519	Sprites/a_bld_mtd	14760
+120	Battles::UnitBlueprint	Wall	Wall		Wall										19	True	10	250	0	60	0	0	0	0		0	0	30	0			0	1	3	526		14884
+121	Battles::UnitBlueprint	BridgeSmallH	Bridge		Bridge										17	True	10	350	0	30	0	0	0	0		0	0	30	0			0	1	5	527		15008
+122	Battles::UnitBlueprint	BridgeSmallV	Bridge		Bridge										17	True	10	350	0	30	0	0	0	0		0	0	30	0			0	1	5	528		15132
+123	Battles::UnitBlueprint	BridgeMediumH	Bridge		Bridge										17	True	10	500	0	30	0	0	0	0		0	0	30	0			0	1	5	529		15256
+124	Battles::UnitBlueprint	BridgeMediumV	Bridge		Bridge										17	True	10	500	0	30	0	0	0	0		0	0	30	0			0	1	5	530		15380
+125	Battles::UnitBlueprint	BridgeLargeH	Bridge		Bridge										17	True	10	650	0	30	0	0	0	0		0	0	30	0			0	1	5	531		15504
+126	Battles::UnitBlueprint	BridgeLargeV	Bridge		Bridge										17	True	10	650	0	30	0	0	0	0		0	0	30	0			0	1	5	532		15628
+127	Battles::UnitBlueprint	GateH	Gate		Gate										18	True	10	100	0	180	0	0	0	0		0	0	30	0			0	1	5	533		15752
+128	Battles::UnitBlueprint	GateV	Gate		Gate										18	True	10	100	0	180	0	0	0	0		0	0	30	0			0	1	5	534		15876
+129	Battles::UnitBlueprint	SpacePoliceCaptain	Space Police Captain		Hero										0	False	500	1000	1000	600	0	0	410	3.0	49152	3	0	20	5	ELaser		0	30	7	552	Sprites/p_cpt	16000
+130	Battles::UnitBlueprint	SpacePolice	Space Police		Ranged										3	False	100	250	0	390	0	0	478	3.5	49152	3	0	24	5	ELaser		0	18	7	553	Sprites/p_pol	16124
+131	Battles::UnitBlueprint	SpacePoliceShip	Space Police Cruiser		Siege										6	False	500	550	0	840	0	0	478	3.5	49152	4	0	30	6	LaserCannon		0	65	7	555	Models/S_Cruiser	16248
+132	Battles::UnitBlueprint	SpacePoliceBase	Space Police Base		Barracks										11	True	200	750	65535	450	0	0	0	0		0	0	30	1			0	5	9	554	Sprites/s_bld_mtd	16372
+133	Battles::UnitBlueprint	SpaceCriminalLeader	Space Criminal Leader		Hero										0	False	500	1100	1000	600	0	0	341	2.5	49152	1	0	20	5	ALaser		0	30	7	556	Sprites/c_ldr	16496
+134	Battles::UnitBlueprint	SpaceCriminal	Space Criminal		Ranged										3	False	100	250	0	390	0	0	546	4.0	49152	3	0	24	5	ALaser		0	18	7	557	Sprites/c_crm	16620
+135	Battles::UnitBlueprint	SpaceCriminalShip	Space Criminal Hotrod		Siege										6	False	500	550	0	840	0	0	478	3.5	49152	4	0	30	6	LaserCannon		0	65	7	559	Models/C_Hotrod	16744
+136	Battles::UnitBlueprint	SpaceCriminalBase	Space Criminal Base		Barracks										11	True	200	750	65535	450	0	0	0	0		0	0	30	1			0	5	9	558	Sprites/s_bld_mtd	16868
+137	Battles::UnitBlueprint	MarsFalvour	REMOVE THIS		None										255	False	0	0	0	0	0	0	0	0		255	0	30	0			0	0	0	535		16992
+138	Battles::UnitBlueprint	Robot	Robot		Melee										2	False	1	300	0	30	10	5	273	2.0	49152	3	5	120	1			0	1	7	525	Sprites/x_rob	17116
+139	Battles::UnitBlueprint	SpaceCriminalShipColor	[missing BP name]		None										255	False	0	0	0	0	0	0	0	0		255	0	30	0			0	0	0	385		17240
+140	Battles::UnitBlueprint	CrashedEarthSupplyPod	Crashed Supply Pod		VehicleCenter										12	True	200	1000	0	450	0	0	0	0		0	0	30	1			0	35	4	520	Sprites/s_bld_mtd	17364
+141	Battles::UnitBlueprint	CrashedMothership	Crashed Mothership		Farm										10	True	200	2500	0	450	0	0	0	0		0	0	30	1			0	35	5	521	Sprites/s_bld_mtd	17488
+142	Battles::UnitBlueprint	Meteorite	Meteorite		Barracks										11	True	200	1000	0	450	0	0	0	0		0	0	30	1			0	35	5	522	Sprites/s_bld_mtd	17612
+143	Battles::UnitBlueprint	CrashedAlienTransport	Crashed Alien Transport		Mill										8	True	200	1000	0	450	0	0	0	0		0	0	30	1			0	35	5	523	Sprites/s_bld_mtd	17736
+144	Battles::UnitBlueprint	AncientMarsStructure	Ancient Structure		Base										7	True	200	1000	0	450	0	0	0	0		0	0	30	1			0	35	5	524	Sprites/s_bld_mtd	17860
+145	Battles::UnitBlueprint	IslanderChief	King Kahuka		Hero										0	False	500	1000	1000	600	60	10	341	2.5	49152	3	50	20	1			0	30	7	544	Sprites/l_hrm	17984
+146	Battles::UnitBlueprint	Islander	Islander		Ranged										3	False	100	250	0	390	0	0	478	3.5	49152	3	0	24	5	Arrow		0	18	7	545	Sprites/l_rgd	18108
+147	Battles::UnitBlueprint	IslanderWarCanoe	Tiki Golem		Siege										6	False	500	550	0	840	0	0	478	3.5	49152	4	0	30	6	Boulder		0	65	7	547	Models/L_Golem	18232
+148	Battles::UnitBlueprint	IslanderTemple	Islander Temple		Barracks										11	True	200	750	65535	450	0	0	0	0		0	0	30	1			0	5	9	546	Sprites/l_bld_mtd	18356
+149	Battles::UnitBlueprint	NinjaKing	Ninja Master		Hero										0	False	500	900	1000	600	50	10	478	3.5	49152	3	40	20	1			0	30	7	548	Sprites/n_hrm	18480
+150	Battles::UnitBlueprint	Ninja	Ninja		Ranged										3	False	100	200	0	300	0	0	546	4.0	49152	3	0	24	5	Arrow		0	18	7	549	Sprites/n_mel	18604
+151	Battles::UnitBlueprint	WarJunk	Ninja Flying Ship		Siege										6	False	500	550	0	840	0	0	410	3.0	49152	4	0	40	6	SiegeBolt		0	65	7	551	Models/N_Airship	18728
+152	Battles::UnitBlueprint	NinjaTemple	Ninja Temple		Barracks										11	True	200	750	65535	450	0	0	0	0		0	0	30	1			0	5	9	550	Sprites/l_bld_mtd	18852
+153	Battles::UnitBlueprint	Monkey	Monkey		Melee										2	False	1	350	0	30	10	5	614	4.5	49152	3	5	30	1			0	1	7	477	Sprites/x_mon	18976
+154	Battles::UnitBlueprint	TraderShip	Trader Ship		Transport										5	False	1	500	0	30	0	0	614	4.5	49152	5	0	30	6	PirateShot		0	1	8	478	Models/P_Transport	19100
+155	Battles::UnitBlueprint	Shark	Shark		Siege										6	False	1	500	0	30	0	0	956	7.0	49152	4	0	30	2	SharkBite		0	1	8	479	Models/P_Shark	19224
+156	Battles::UnitBlueprint	ShipwreckWater	Shipwreck		Shipyard										16	True	200	1000	0	450	0	0	0	0		0	0	30	1			0	35	5	472	Sprites/l_bld_mtd	19348
+157	Battles::UnitBlueprint	ShipwreckBeach	Shipwreck		Farm										10	True	200	1000	0	450	0	0	0	0		0	0	30	1			0	35	4	473	Sprites/l_bld_mtd	19472
+158	Battles::UnitBlueprint	ForgottenIslanderTemple	Forgotten Temple		Barracks										11	True	200	1000	0	450	0	0	0	0		0	0	30	1			0	35	5	474	Sprites/l_bld_mtd	19596
+159	Battles::UnitBlueprint	AbandonnedImperialOutpost	Abandoned Outpost		Mill										8	True	200	1000	0	450	0	0	0	0		0	0	30	1			0	35	4	475	Sprites/l_bld_mtd	19720
+160	Battles::UnitBlueprint	Hermitage	Hermitage		Base										7	True	200	1000	0	450	0	0	0	0		0	0	30	1			0	35	5	476	Sprites/l_bld_mtd	19844
+161	Battles::UnitBlueprint	DwarfKing	Dwarf King		Hero										0	False	500	1000	1000	600	60	10	341	2.5	49152	3	50	20	1			0	30	7	536	Sprites/d_kng	19968
+162	Battles::UnitBlueprint	Dwarf	Dwarf		Melee										2	False	100	250	0	270	25	5	341	2.5	49152	3	20	30	1			0	15	7	537	Sprites/d_axe	20092
+163	Battles::UnitBlueprint	DwarfMineDefender	Dwarf Glider		Siege										6	False	500	550	0	840	0	0	410	3.0	49152	4	0	40	6	SiegeBolt		0	65	7	539	Models/D_FlyMachine	20216
+164	Battles::UnitBlueprint	DwarvenHall	Dwarf Hall		Barracks										11	True	200	750	65535	450	0	0	0	0		0	0	30	1			0	5	9	538	Sprites/d_bld_mtd	20340
+165	Battles::UnitBlueprint	TrollKing	Troll King		Hero										0	False	500	1100	1000	600	50	10	341	2.5	49152	3	40	20	1			0	30	7	540	Sprites/t_kng	20464
+166	Battles::UnitBlueprint	Troll	Troll		Melee										2	False	100	250	0	270	20	5	410	3.0	49152	3	15	30	1			0	15	7	541	Sprites/t_axe	20588
+167	Battles::UnitBlueprint	TrollBattleWheel	Troll Blimp		Siege										6	False	500	550	0	840	0	0	410	3.0	49152	4	0	40	6	SiegeBolt		0	65	7	543	Models/T_Dirigible	20712
+168	Battles::UnitBlueprint	TrollHall	Troll Hall		Barracks										11	True	200	750	65535	450	0	0	0	0		0	0	30	1			0	5	9	542	Sprites/d_bld_mtd	20836
+169	Battles::UnitBlueprint	Wolf	Wolf		Melee										2	False	1	500	0	30	45	20	546	4.0	49152	3	25	40	1			0	1	7	431	Sprites/x_dog	20960
+170	Battles::UnitBlueprint	Stonehenge	Standing Stones		Barracks										11	True	200	1000	0	450	0	0	0	0		0	0	30	1			0	35	4	426	Sprites/d_bld_mtd	21084
+171	Battles::UnitBlueprint	Cairn	Cairn		Farm										10	True	200	1000	0	450	0	0	0	0		0	0	30	1			0	35	5	427	Sprites/d_bld_mtd	21208
+172	Battles::UnitBlueprint	Church	Great Library		VehicleCenter										12	True	200	1000	0	450	0	0	0	0		0	0	30	1			0	35	4	428	Sprites/d_bld_mtd	21332
+173	Battles::UnitBlueprint	RuinedTower	Tower Ruins		Mill										8	True	200	1000	0	450	0	0	0	0		0	0	30	1			0	35	4	429	Sprites/d_bld_mtd	21456
+174	Battles::UnitBlueprint	RuinedCastle	Castle Ruins		Base										7	True	200	1000	0	450	0	0	0	0		0	0	30	1			0	35	5	430	Sprites/d_bld_mtd	21580
+175	Battles::UnitBlueprint	ForestMan	Forestman		Hero										0	False	500	1000	1000	600	0	0	410	3.0	49152	3	0	20	5	Arrow		0	30	7	560	Sprites/hh_hood	21704
+176	Battles::UnitBlueprint	Ghost	Ghost		Hero										0	False	500	900	1000	600	40	10	478	3.5	49152	3	30	20	1			0	30	7	561	Sprites/hh_ghst	21828
+177	Battles::UnitBlueprint	Sheriff	Sheriff		Hero										0	False	500	900	1000	600	0	0	341	2.5	49152	3	0	20	5	PirateShot		0	30	7	562	Sprites/hh_law	21952
+178	Battles::UnitBlueprint	Conquistador	Conquistador		Hero										0	False	500	1000	1000	600	40	10	410	3.0	49152	3	30	20	1			0	30	7	563	Sprites/hh_conq	22076
+179	Battles::UnitBlueprint	AgentChase	Agent Chase		Hero										0	False	500	900	1000	600	0	0	478	3.5	49152	3	0	20	5	ALaser		0	30	7	564	Sprites/hh_agnt	22200
+180	Battles::UnitBlueprint	ClassicSpace	Classic Space		Hero										0	False	500	900	1000	600	50	10	410	3.0	49152	3	40	20	1			0	30	7	565	Sprites/hh_space	22324
+181	Battles::UnitBlueprint	Santa	Santa		Hero										0	False	500	900	1000	600	0	0	478	3.5	49152	3	0	24	5	Gift		0	30	7	566	Sprites/x_mas	22448
+182	Battles::ProjectileBlueprint	Arrow	[missing BP name]			15	20	1	11100111101000																										385		22572
+183	Battles::ProjectileBlueprint	CrossbowBolt	[missing BP name]			15	20	1	11100111101000																										385		22688
+184	Battles::ProjectileBlueprint	TBolt	[missing BP name]			35	45	1	11100111001000																										385		22804
+185	Battles::ProjectileBlueprint	TBoulder	[missing BP name]			65	75	13	11100010000001																										385		22920
+186	Battles::ProjectileBlueprint	TFireball	[missing BP name]			85	95	8	11100110001001																										385		23036
+187	Battles::ProjectileBlueprint	BallistaBolt	[missing BP name]			65	75	3	11100111001000																										385		23152
+188	Battles::ProjectileBlueprint	SiegeBolt	[missing BP name]			65	75	3	11110111001100																										385		23268
+189	Battles::ProjectileBlueprint	Boulder	[missing BP name]			50	60	13	11100010000001																										385		23384
+190	Battles::ProjectileBlueprint	OgreBoulder	[missing BP name]			50	60	13	11100010000001																										385		23500
+191	Battles::ProjectileBlueprint	Fireball	[missing BP name]			50	60	0	11110111101101																										385		23616
+192	Battles::ProjectileBlueprint	ImperialShot	[missing BP name]			15	20	2	11110111101100																										385		23732
+193	Battles::ProjectileBlueprint	PirateShot	[missing BP name]			15	20	2	11110111101100																										385		23848
+194	Battles::ProjectileBlueprint	TPirateShot	[missing BP name]			45	50	2	11100110001000																										385		23964
+195	Battles::ProjectileBlueprint	ICannonBall	[missing BP name]			50	75	4	11100110000001																										385		24080
+196	Battles::ProjectileBlueprint	PCannonBall	[missing BP name]			50	75	4	11100110000001																										385		24196
+197	Battles::ProjectileBlueprint	ELaser	[missing BP name]			10	15	11	11110111101100																										385		24312
+198	Battles::ProjectileBlueprint	ALaser	[missing BP name]			10	15	11	11110111101100																										385		24428
+199	Battles::ProjectileBlueprint	TLaser	[missing BP name]			35	45	11	11100111001000																										385		24544
+200	Battles::ProjectileBlueprint	PlasmaBall	[missing BP name]			85	95	5	11100010000001																										385		24660
+201	Battles::ProjectileBlueprint	LaserCannon	[missing BP name]			65	75	10	11100010000001																										385		24776
+202	Battles::ProjectileBlueprint	ProjectileSpell	[missing BP name]			0	0	0	11111111101110																										385		24892
+203	Battles::ProjectileBlueprint	AirBallistaBolt	[missing BP name]			75	85	3	11110110100100																										385		25008
+204	Battles::ProjectileBlueprint	AirFireball	[missing BP name]			50	75	0	11110110100101																										385		25124
+205	Battles::ProjectileBlueprint	AirLaser	[missing BP name]			10	15	11	11110110100100																										385		25240
+206	Battles::ProjectileBlueprint	SharkBite	[missing BP name]			60	75	0	11110111100100																										385		25356
+207	Battles::ProjectileBlueprint	Gift	[missing BP name]			30	50	7	11100111101001																										385		25472
+208	Battles::ProjectileBlueprint	ProjectileNoEffect	[missing BP name]			0	0	0	00000000000000																										385		25588
+209	Battles::CollectableItemBlueprint	HealthPowerup	[missing BP name]							HealthPowerup																									385		25704
+210	Battles::CollectableItemBlueprint	ManaPowerup	[missing BP name]							ManaPowerup																									385		25816
+211	Battles::CollectableItemBlueprint	BlueStud	[missing BP name]							Stud																									385		25928
+212	Battles::CollectableItemBlueprint	CW1_1_Bones	[missing BP name]							MissionObject																									385		26040
+213	Battles::CollectableItemBlueprint	CW1_3_Scroll	[missing BP name]							MissionObject																									385		26152
+214	Battles::CollectableItemBlueprint	CW2_3_Map	[missing BP name]							MissionObject																									385		26264
+215	Battles::CollectableItemBlueprint	KCM01_SomeInterestingItem	[missing BP name]							MissionObject																									385		26376
+216	Battles::CollectableItemBlueprint	MH1_2_CargoPods	[missing BP name]							MissionObject																									385		26488
+217	Battles::CollectableItemBlueprint	CW_Bones	[missing BP name]							MissionObject																									385		26600
+218	Battles::CollectableItemBlueprint	CW_Sceptre1	[missing BP name]							MissionObject																									385		26712
+219	Battles::CollectableItemBlueprint	CW_Sceptre2	[missing BP name]							MissionObject																									385		26824
+220	Battles::CollectableItemBlueprint	CW_Scroll	[missing BP name]							MissionObject																									385		26936
+221	Battles::CollectableItemBlueprint	MH_Crystal	[missing BP name]							MissionObject																									385		27048
+222	Battles::CollectableItemBlueprint	MH_Chest	[missing BP name]							MissionObject																									385		27160
+223	Battles::CollectableItemBlueprint	MA_PartA	[missing BP name]							MissionObject																									385		27272
+224	Battles::CollectableItemBlueprint	MA_PartB	[missing BP name]							MissionObject																									385		27384
+225	Battles::CollectableItemBlueprint	MA_PartC	[missing BP name]							MissionObject																									385		27496
+226	Battles::CollectableItemBlueprint	MA_Crystal	[missing BP name]							MissionObject																									385		27608
+227	Battles::CollectableItemBlueprint	MA_Chest	[missing BP name]							MissionObject																									385		27720
+228	Battles::CollectableItemBlueprint	PP_MapA	[missing BP name]							MissionObject																									385		27832
+229	Battles::CollectableItemBlueprint	PP_MapB	[missing BP name]							MissionObject																									385		27944
+230	Battles::CollectableItemBlueprint	PP_Crate	[missing BP name]							MissionObject																									385		28056
+231	Battles::CollectableItemBlueprint	PP_Crate02	[missing BP name]							MissionObject																									385		28168
+232	Battles::CollectableItemBlueprint	PP_Crate03	[missing BP name]							MissionObject																									385		28280
+233	Battles::CollectableItemBlueprint	PP_Chest	[missing BP name]							MissionObject																									385		28392
+234	Battles::CollectableItemBlueprint	PI_Chest	[missing BP name]							MissionObject																									385		28504
+235	Battles::CollectableItemBlueprint	PI_Mine	[missing BP name]							MissionObject																									385		28616
+236	Battles::CollectableItemBlueprint	PI_Crate	[missing BP name]							MissionObject																									385		28728
+237	Battles::CollectableItemBlueprint	PI_MapA	[missing BP name]							MissionObject																									385		28840
+238	Battles::CollectableItemBlueprint	PI_MapB	[missing BP name]							MissionObject																									385		28952
+239	Battles::CollectableItemBlueprint	Map_01	[missing BP name]							Map	0	1242	loc_string_id																						385		29064
+240	Battles::CollectableItemBlueprint	Map_02	[missing BP name]							Map	1	1244	loc_string_id																						385		29176
+241	Battles::CollectableItemBlueprint	Map_03	[missing BP name]							Map	2	1246	loc_string_id																						385		29288
+242	Battles::CollectableItemBlueprint	Map_04	[missing BP name]							Map	3	1248	loc_string_id																						385		29400
+243	Battles::CollectableItemBlueprint	Map_05	[missing BP name]							Map	4	1250	loc_string_id																						385		29512
+244	Battles::CollectableItemBlueprint	Map_06	[missing BP name]							Map	5	1252	loc_string_id																						385		29624
+245	Battles::CollectableItemBlueprint	Map_07	[missing BP name]							Map	6	1254	loc_string_id																						385		29736
+246	Battles::CollectableItemBlueprint	Map_08	[missing BP name]							Map	7	1256	loc_string_id																						385		29848
+247	Battles::CollectableItemBlueprint	Map_09	[missing BP name]							Map	8	1258	loc_string_id																						385		29960
+248	Battles::CollectableItemBlueprint	Map_10	[missing BP name]							Map	9	1260	loc_string_id																						385		30072
+249	Battles::CollectableItemBlueprint	Map_11	[missing BP name]							Map	10	1262	loc_string_id																						385		30184
+250	Battles::CollectableItemBlueprint	Map_12	[missing BP name]							Map	11	1264	loc_string_id																						385		30296
+251	Battles::CollectableItemBlueprint	Map_13	[missing BP name]							Map	12	1266	loc_string_id																						385		30408
+252	Battles::CollectableItemBlueprint	Map_14	[missing BP name]							Map	13	1268	loc_string_id																						385		30520
+253	Battles::CollectableItemBlueprint	Map_15	[missing BP name]							Map	14	1270	loc_string_id																						385		30632
+254	Battles::CollectableItemBlueprint	Map_16	[missing BP name]							Map	15	1272	loc_string_id																						385		30744
+255	Battles::CollectableItemBlueprint	Map_17	[missing BP name]							Map	16	1274	loc_string_id																						385		30856
+256	Battles::CollectableItemBlueprint	Map_18	[missing BP name]							Map	17	1276	loc_string_id																						385		30968
+257	Battles::CollectableItemBlueprint	Map_19	[missing BP name]							Map	18	1278	loc_string_id																						385		31080
+258	Battles::CollectableItemBlueprint	Map_20	[missing BP name]							Map	19	1280	loc_string_id																						385		31192
+259	Battles::CollectableItemBlueprint	Map_21	[missing BP name]							Map	20	1282	loc_string_id																						385		31304
+260	Battles::CollectableItemBlueprint	Map_22	[missing BP name]							Map	21	1284	loc_string_id																						385		31416
+261	Battles::CollectableItemBlueprint	Map_23	[missing BP name]							Map	22	1286	loc_string_id																						385		31528
+262	Battles::CollectableItemBlueprint	Map_24	[missing BP name]							Map	23	1288	loc_string_id																						385		31640
+263	Battles::CollectableItemBlueprint	Map_25	[missing BP name]							Map	24	1290	loc_string_id																						385		31752
+264	Battles::CollectableItemBlueprint	Map_26	[missing BP name]							Map	25	1292	loc_string_id																						385		31864
+265	Battles::CollectableItemBlueprint	Map_27	[missing BP name]							Map	26	1294	loc_string_id																						385		31976
+266	Battles::CollectableItemBlueprint	Map_28	[missing BP name]							Map	27	1296	loc_string_id																						385		32088
+267	Battles::CollectableItemBlueprint	Map_29	[missing BP name]							Map	28	1298	loc_string_id																						385		32200
+268	Battles::CollectableItemBlueprint	Map_30	[missing BP name]							Map	29	1300	loc_string_id																						385		32312
+269	Battles::CollectableItemBlueprint	ConceptArt_Character1_C	King Character 1							ConceptArt	30	22	conceptart_table																						573		32424
+270	Battles::CollectableItemBlueprint	ConceptArt_Character2_C	Wizard Character 1							ConceptArt	31	23	conceptart_table																						574		32536
+271	Battles::CollectableItemBlueprint	ConceptArt_Character3_C	King Character 2							ConceptArt	32	24	conceptart_table																						575		32648
+272	Battles::CollectableItemBlueprint	ConceptArt_Character4_C	Wizard Character 2							ConceptArt	33	25	conceptart_table																						576		32760
+273	Battles::CollectableItemBlueprint	ConceptArt_Character5_C	Dwarf Character							ConceptArt	34	26	conceptart_table																						577		32872
+274	Battles::CollectableItemBlueprint	ConceptArt_Character6_C	King Character 3							ConceptArt	35	27	conceptart_table																						578		32984
+275	Battles::CollectableItemBlueprint	ConceptArt_Cutscene1_C	King Cutscene							ConceptArt	36	28	conceptart_table																						579		33096
+276	Battles::CollectableItemBlueprint	ConceptArt_Faction1_1_C	King Picture 1							ConceptArt	37	29	conceptart_table																						580		33208
+277	Battles::CollectableItemBlueprint	ConceptArt_Faction1_2_C	King Picture 2							ConceptArt	38	30	conceptart_table																						581		33320
+278	Battles::CollectableItemBlueprint	ConceptArt_Faction2_1_C	Wizard Picture 1							ConceptArt	39	31	conceptart_table																						582		33432
+279	Battles::CollectableItemBlueprint	ConceptArt_Faction2_2_C	Wizard Picture 2							ConceptArt	40	32	conceptart_table																						583		33544
+280	Battles::CollectableItemBlueprint	ConceptArt_Scene1_C	King Scene 1							ConceptArt	41	33	conceptart_table																						584		33656
+281	Battles::CollectableItemBlueprint	ConceptArt_Scene2_C	King Scene 2							ConceptArt	42	34	conceptart_table																						585		33768
+282	Battles::CollectableItemBlueprint	ConceptArt_Scene3_C	King Scene 3							ConceptArt	43	35	conceptart_table																						586		33880
+283	Battles::CollectableItemBlueprint	ConceptArt_Scene4_C	King Scene 4							ConceptArt	44	36	conceptart_table																						587		33992
+284	Battles::CollectableItemBlueprint	ConceptArt_Scene5_C	Wizard Scene 1							ConceptArt	45	37	conceptart_table																						588		34104
+285	Battles::CollectableItemBlueprint	ConceptArt_Scene6_C	King Scene 5							ConceptArt	46	38	conceptart_table																						589		34216
+286	Battles::CollectableItemBlueprint	ConceptArt_Scene7_C	King Scene 6							ConceptArt	47	39	conceptart_table																						590		34328
+287	Battles::CollectableItemBlueprint	ConceptArt_Scene8_C	Wizard Scene 2							ConceptArt	48	40	conceptart_table																						591		34440
+288	Battles::CollectableItemBlueprint	ConceptArt_Scene9_C	Wizard Scene 3							ConceptArt	49	41	conceptart_table																						592		34552
+289	Battles::CollectableItemBlueprint	ConceptArt_Scene10_C	Wizard Scene 4							ConceptArt	50	42	conceptart_table																						593		34664
+290	Battles::CollectableItemBlueprint	ConceptArt_Scene11_C	Wizard Scene 5							ConceptArt	51	43	conceptart_table																						594		34776
+291	Battles::CollectableItemBlueprint	ConceptArt_Character1_P	Pirate Character 1							ConceptArt	52	44	conceptart_table																						595		34888
+292	Battles::CollectableItemBlueprint	ConceptArt_Character2_P	Pirate Character 2							ConceptArt	53	45	conceptart_table																						596		35000
+293	Battles::CollectableItemBlueprint	ConceptArt_Character3_P	Imperial Character 1							ConceptArt	54	46	conceptart_table																						597		35112
+294	Battles::CollectableItemBlueprint	ConceptArt_Character4_P	Imperial Character 2							ConceptArt	55	47	conceptart_table																						598		35224
+295	Battles::CollectableItemBlueprint	ConceptArt_Character5_P	Pirate Character 3							ConceptArt	56	48	conceptart_table																						599		35336
+296	Battles::CollectableItemBlueprint	ConceptArt_Character6_P	Pirate Character 4							ConceptArt	57	49	conceptart_table																						600		35448
+297	Battles::CollectableItemBlueprint	ConceptArt_Cutscene1_P	Pirate Cutscene							ConceptArt	58	50	conceptart_table																						601		35560
+298	Battles::CollectableItemBlueprint	ConceptArt_Faction1_1_P	Imperial Picture 1							ConceptArt	59	51	conceptart_table																						602		35672
+299	Battles::CollectableItemBlueprint	ConceptArt_Faction1_2_P	Islander Picture							ConceptArt	60	52	conceptart_table																						603		35784
+300	Battles::CollectableItemBlueprint	ConceptArt_Faction2_1_P	Imperial Picture 2							ConceptArt	61	53	conceptart_table																						604		35896
+301	Battles::CollectableItemBlueprint	ConceptArt_Faction2_2_P	Ninja Picture							ConceptArt	62	54	conceptart_table																						605		36008
+302	Battles::CollectableItemBlueprint	ConceptArt_Scene1_P	Imperial Scene 1							ConceptArt	63	55	conceptart_table																						606		36120
+303	Battles::CollectableItemBlueprint	ConceptArt_Scene2_P	Ninja Scene							ConceptArt	64	56	conceptart_table																						607		36232
+304	Battles::CollectableItemBlueprint	ConceptArt_Scene3_P	Imperial Scene 2							ConceptArt	65	57	conceptart_table																						608		36344
+305	Battles::CollectableItemBlueprint	ConceptArt_Scene4_P	Imperial Scene 3							ConceptArt	66	58	conceptart_table																						609		36456
+306	Battles::CollectableItemBlueprint	ConceptArt_Scene5_P	Pirate Scene 1							ConceptArt	67	59	conceptart_table																						610		36568
+307	Battles::CollectableItemBlueprint	ConceptArt_Scene6_P	Pirate Scene 2							ConceptArt	68	60	conceptart_table																						611		36680
+308	Battles::CollectableItemBlueprint	ConceptArt_Scene7_P	Pirate Scene 3							ConceptArt	69	61	conceptart_table																						612		36792
+309	Battles::CollectableItemBlueprint	ConceptArt_Scene8_P	Pirate Scene 4							ConceptArt	70	62	conceptart_table																						613		36904
+310	Battles::CollectableItemBlueprint	ConceptArt_Scene9_P	Pirate Scene 5							ConceptArt	71	63	conceptart_table																						614		37016
+311	Battles::CollectableItemBlueprint	ConceptArt_Scene10_P	Pirate Scene 6							ConceptArt	72	64	conceptart_table																						615		37128
+312	Battles::CollectableItemBlueprint	ConceptArt_Scene11_P	Pirate Scene 7							ConceptArt	73	65	conceptart_table																						616		37240
+313	Battles::CollectableItemBlueprint	ConceptArt_Character1_S	Alien Character 1							ConceptArt	74	0	conceptart_table																						617		37352
+314	Battles::CollectableItemBlueprint	ConceptArt_Character2_S	Alien Character 2							ConceptArt	75	1	conceptart_table																						618		37464
+315	Battles::CollectableItemBlueprint	ConceptArt_Character3_S	Alien Character 3							ConceptArt	76	2	conceptart_table																						619		37576
+316	Battles::CollectableItemBlueprint	ConceptArt_Character4_S	Earth Character 1							ConceptArt	77	3	conceptart_table																						620		37688
+317	Battles::CollectableItemBlueprint	ConceptArt_Character5_S	Earth Character 2							ConceptArt	78	4	conceptart_table																						621		37800
+318	Battles::CollectableItemBlueprint	ConceptArt_Character6_S	Alien Character 4							ConceptArt	79	5	conceptart_table																						622		37912
+319	Battles::CollectableItemBlueprint	ConceptArt_Cutscene1_S	Alien Cutscene							ConceptArt	80	6	conceptart_table																						623		38024
+320	Battles::CollectableItemBlueprint	ConceptArt_Faction1_1_S	Earth Picture 1							ConceptArt	81	7	conceptart_table																						624		38136
+321	Battles::CollectableItemBlueprint	ConceptArt_Faction1_2_S	Earth Picture 2							ConceptArt	82	8	conceptart_table																						625		38248
+322	Battles::CollectableItemBlueprint	ConceptArt_Faction2_1_S	Alien Picture							ConceptArt	83	9	conceptart_table																						626		38360
+323	Battles::CollectableItemBlueprint	ConceptArt_Faction2_2_S	Space Criminal Picture							ConceptArt	84	10	conceptart_table																						627		38472
+324	Battles::CollectableItemBlueprint	ConceptArt_Scene1_S	Alien Scene 1							ConceptArt	85	11	conceptart_table																						628		38584
+325	Battles::CollectableItemBlueprint	ConceptArt_Scene2_S	Alien Scene 2							ConceptArt	86	12	conceptart_table																						629		38696
+326	Battles::CollectableItemBlueprint	ConceptArt_Scene3_S	Alien Scene 3							ConceptArt	87	13	conceptart_table																						630		38808
+327	Battles::CollectableItemBlueprint	ConceptArt_Scene4_S	Alien Scene 4							ConceptArt	88	14	conceptart_table																						631		38920
+328	Battles::CollectableItemBlueprint	ConceptArt_Scene5_S	Alien Scene 5							ConceptArt	89	15	conceptart_table																						632		39032
+329	Battles::CollectableItemBlueprint	ConceptArt_Scene6_S	Earth Scene 1							ConceptArt	90	16	conceptart_table																						633		39144
+330	Battles::CollectableItemBlueprint	ConceptArt_Scene7_S	Earth Scene 2							ConceptArt	91	17	conceptart_table																						634		39256
+331	Battles::CollectableItemBlueprint	ConceptArt_Scene8_S	Earth Scene 3							ConceptArt	92	18	conceptart_table																						635		39368
+332	Battles::CollectableItemBlueprint	ConceptArt_Scene9_S	Earth Scene 4							ConceptArt	93	19	conceptart_table																						636		39480
+333	Battles::CollectableItemBlueprint	ConceptArt_Scene10_S	Earth Scene 5							ConceptArt	94	20	conceptart_table																						637		39592
+334	Battles::CollectableItemBlueprint	ConceptArt_Scene11_S	Earth Scene 6							ConceptArt	95	21	conceptart_table																						638		39704
+335	Battles::CollectableItemBlueprint	Hint_1	Hint 1							Hint		2878	loc_string_id																						657		39816
+336	Battles::CollectableItemBlueprint	Hint_2	Hint 2							Hint		2879	loc_string_id																						658		39928
+337	Battles::CollectableItemBlueprint	Hint_3	Hint 3							Hint		2880	loc_string_id																						659		40040
+338	Battles::CollectableItemBlueprint	Hint_4	Hint 4							Hint		2881	loc_string_id																						660		40152
+339	Battles::CollectableItemBlueprint	Hint_5	Hint 5							Hint		2882	loc_string_id																						661		40264
+340	Battles::CollectableItemBlueprint	Hint_6	Hint 6							Hint		2883	loc_string_id																						662		40376
+341	Battles::CollectableItemBlueprint	Hint_7	Hint 7							Hint		2884	loc_string_id																						663		40488
+342	Battles::CollectableItemBlueprint	Hint_8	Hint 8							Hint		2885	loc_string_id																						664		40600
+343	Battles::CollectableItemBlueprint	Hint_9	Hint 9							Hint		2886	loc_string_id																						665		40712
+344	Battles::CollectableItemBlueprint	Hint_10	Hint 10							Hint		2887	loc_string_id																						666		40824
+345	Battles::CollectableItemBlueprint	Hint_11	Hint 11							Hint		2888	loc_string_id																						667		40936
+346	Battles::CollectableItemBlueprint	Hint_12	Hint 12							Hint		2889	loc_string_id																						668		41048
+347	Battles::CollectableItemBlueprint	Hint_13	Hint 13							Hint		2890	loc_string_id																						669		41160
+348	Battles::CollectableItemBlueprint	Hint_14	Hint 14							Hint		2891	loc_string_id																						670		41272
+349	Battles::CollectableItemBlueprint	Hint_15	Hint 15							Hint		2892	loc_string_id																						671		41384
+350	Battles::CollectableItemBlueprint	Hint_16	Hint 16							Hint		2893	loc_string_id																						672		41496
+351	Battles::CollectableItemBlueprint	Hint_17	Hint 17							Hint		2894	loc_string_id																						673		41608
+352	Battles::CollectableItemBlueprint	Hint_18	Hint 18							Hint		2895	loc_string_id																						674		41720
+353	Battles::CollectableItemBlueprint	Hint_19	Hint 19							Hint		2896	loc_string_id																						675		41832
+354	Battles::CollectableItemBlueprint	Hint_20	Hint 20							Hint		2897	loc_string_id																						676		41944
+355	Battles::CollectableItemBlueprint	Hint_21	Hint 21							Hint		2898	loc_string_id																						677		42056
+356	Battles::CollectableItemBlueprint	Minifig_K_King	[missing BP name]							Minifig	96	0	blueprint_index	K_King																					385		42168
+357	Battles::CollectableItemBlueprint	Minifig_K_King_F	[missing BP name]							Minifig	97	1	blueprint_index	K_King_F																					385		42280
+358	Battles::CollectableItemBlueprint	Minifig_K_Engineer	[missing BP name]							Minifig	98	2	blueprint_index	K_Engineer																					385		42392
+359	Battles::CollectableItemBlueprint	Minifig_K_Swordsman	[missing BP name]							Minifig	99	3	blueprint_index	K_Swordsman																					385		42504
+360	Battles::CollectableItemBlueprint	Minifig_K_Archer	[missing BP name]							Minifig	100	4	blueprint_index	K_Archer																					385		42616
+361	Battles::CollectableItemBlueprint	Minifig_K_Knight	[missing BP name]							Minifig	101	5	blueprint_index	K_Knight																					385		42728
+362	Battles::CollectableItemBlueprint	Minifig_K_Ballista	[missing BP name]							Minifig	102	6	blueprint_index	K_Ballista																					385		42840
+363	Battles::CollectableItemBlueprint	Minifig_K_Catapult	[missing BP name]							Minifig	103	7	blueprint_index	K_Catapult																					385		42952
+364	Battles::CollectableItemBlueprint	Minifig_K_Gryphon	[missing BP name]							Minifig	104	8	blueprint_index	K_Gryphon																					385		43064
+365	Battles::CollectableItemBlueprint	Minifig_K_TransportShip	[missing BP name]							Minifig	105	9	blueprint_index	K_TransportShip																					385		43176
+366	Battles::CollectableItemBlueprint	Minifig_DwarfKing	[missing BP name]							Minifig	106	161	blueprint_index	DwarfKing																					385		43288
+367	Battles::CollectableItemBlueprint	Minifig_Dwarf	[missing BP name]							Minifig	107	162	blueprint_index	Dwarf																					385		43400
+368	Battles::CollectableItemBlueprint	Minifig_DwarfMineDefender	[missing BP name]							Minifig	108	163	blueprint_index	DwarfMineDefender																					385		43512
+369	Battles::CollectableItemBlueprint	Minifig_W_Wizard	[missing BP name]							Minifig	109	20	blueprint_index	W_Wizard																					385		43624
+370	Battles::CollectableItemBlueprint	Minifig_W_Wizard_F	[missing BP name]							Minifig	110	21	blueprint_index	W_Wizard_F																					385		43736
+371	Battles::CollectableItemBlueprint	Minifig_W_Engineer	[missing BP name]							Minifig	111	22	blueprint_index	W_Engineer																					385		43848
+372	Battles::CollectableItemBlueprint	Minifig_W_Swordsman	[missing BP name]							Minifig	112	23	blueprint_index	W_Swordsman																					385		43960
+373	Battles::CollectableItemBlueprint	Minifig_W_Crossbowman	[missing BP name]							Minifig	113	24	blueprint_index	W_Crossbowman																					385		44072
+374	Battles::CollectableItemBlueprint	Minifig_W_Skeleknight	[missing BP name]							Minifig	114	25	blueprint_index	W_Skeleknight																					385		44184
+375	Battles::CollectableItemBlueprint	Minifig_W_Ballista	[missing BP name]							Minifig	115	26	blueprint_index	W_Ballista																					385		44296
+376	Battles::CollectableItemBlueprint	Minifig_W_Giant	[missing BP name]							Minifig	116	27	blueprint_index	W_Giant																					385		44408
+377	Battles::CollectableItemBlueprint	Minifig_W_Dragon	[missing BP name]							Minifig	117	28	blueprint_index	W_Dragon																					385		44520
+378	Battles::CollectableItemBlueprint	Minifig_W_TransportShip	[missing BP name]							Minifig	118	29	blueprint_index	W_TransportShip																					385		44632
+379	Battles::CollectableItemBlueprint	Minifig_TrollKing	[missing BP name]							Minifig	119	165	blueprint_index	TrollKing																					385		44744
+380	Battles::CollectableItemBlueprint	Minifig_Troll	[missing BP name]							Minifig	120	166	blueprint_index	Troll																					385		44856
+381	Battles::CollectableItemBlueprint	Minifig_TrollBattleWheel	[missing BP name]							Minifig	121	167	blueprint_index	TrollBattleWheel																					385		44968
+382	Battles::CollectableItemBlueprint	Minifig_P_Captain	[missing BP name]							Minifig	122	40	blueprint_index	P_Captain																					385		45080
+383	Battles::CollectableItemBlueprint	Minifig_P_Captain_F	[missing BP name]							Minifig	123	41	blueprint_index	P_Captain_F																					385		45192
+384	Battles::CollectableItemBlueprint	Minifig_P_Builder	[missing BP name]							Minifig	124	42	blueprint_index	P_Builder																					385		45304
+385	Battles::CollectableItemBlueprint	Minifig_P_Oarsman	[missing BP name]							Minifig	125	43	blueprint_index	P_Oarsman																					385		45416
+386	Battles::CollectableItemBlueprint	Minifig_P_Crossbowman	[missing BP name]							Minifig	126	44	blueprint_index	P_Crossbowman																					385		45528
+387	Battles::CollectableItemBlueprint	Minifig_P_Horseman	[missing BP name]							Minifig	127	45	blueprint_index	P_Horseman																					385		45640
+388	Battles::CollectableItemBlueprint	Minifig_P_Barracuda	[missing BP name]							Minifig	128	46	blueprint_index	P_Barracuda																					385		45752
+389	Battles::CollectableItemBlueprint	Minifig_P_Battleship	[missing BP name]							Minifig	129	47	blueprint_index	P_Battleship																					385		45864
+390	Battles::CollectableItemBlueprint	Minifig_P_FlyingDutchman	[missing BP name]							Minifig	130	48	blueprint_index	P_FlyingDutchman																					385		45976
+391	Battles::CollectableItemBlueprint	Minifig_P_TransportShip	[missing BP name]							Minifig	131	49	blueprint_index	P_TransportShip																					385		46088
+392	Battles::CollectableItemBlueprint	Minifig_IslanderChief	[missing BP name]							Minifig	132	145	blueprint_index	IslanderChief																					385		46200
+393	Battles::CollectableItemBlueprint	Minifig_Islander	[missing BP name]							Minifig	133	146	blueprint_index	Islander																					385		46312
+394	Battles::CollectableItemBlueprint	Minifig_IslanderWarCanoe	[missing BP name]							Minifig	134	147	blueprint_index	IslanderWarCanoe																					385		46424
+395	Battles::CollectableItemBlueprint	Minifig_I_Governor	[missing BP name]							Minifig	135	60	blueprint_index	I_Governor																					385		46536
+396	Battles::CollectableItemBlueprint	Minifig_I_Governor_F	[missing BP name]							Minifig	136	61	blueprint_index	I_Governor_F																					385		46648
+397	Battles::CollectableItemBlueprint	Minifig_I_Engineer	[missing BP name]							Minifig	137	62	blueprint_index	I_Engineer																					385		46760
+398	Battles::CollectableItemBlueprint	Minifig_I_Swordsman	[missing BP name]							Minifig	138	63	blueprint_index	I_Swordsman																					385		46872
+399	Battles::CollectableItemBlueprint	Minifig_I_Rifleman	[missing BP name]							Minifig	139	64	blueprint_index	I_Rifleman																					385		46984
+400	Battles::CollectableItemBlueprint	Minifig_I_Cavalry	[missing BP name]							Minifig	140	65	blueprint_index	I_Cavalry																					385		47096
+401	Battles::CollectableItemBlueprint	Minifig_I_Clipper	[missing BP name]							Minifig	141	66	blueprint_index	I_Clipper																					385		47208
+402	Battles::CollectableItemBlueprint	Minifig_I_Battleship	[missing BP name]							Minifig	142	67	blueprint_index	I_Battleship																					385		47320
+403	Battles::CollectableItemBlueprint	Minifig_I_Dirigible	[missing BP name]							Minifig	143	68	blueprint_index	I_Dirigible																					385		47432
+404	Battles::CollectableItemBlueprint	Minifig_I_TransportShip	[missing BP name]							Minifig	144	69	blueprint_index	I_TransportShip																					385		47544
+405	Battles::CollectableItemBlueprint	Minifig_NinjaKing	[missing BP name]							Minifig	145	149	blueprint_index	NinjaKing																					385		47656
+406	Battles::CollectableItemBlueprint	Minifig_Ninja	[missing BP name]							Minifig	146	150	blueprint_index	Ninja																					385		47768
+407	Battles::CollectableItemBlueprint	Minifig_WarJunk	[missing BP name]							Minifig	147	151	blueprint_index	WarJunk																					385		47880
+408	Battles::CollectableItemBlueprint	Minifig_E_Commander	[missing BP name]							Minifig	148	80	blueprint_index	E_Commander																					385		47992
+409	Battles::CollectableItemBlueprint	Minifig_E_Commander_F	[missing BP name]							Minifig	149	81	blueprint_index	E_Commander_F																					385		48104
+410	Battles::CollectableItemBlueprint	Minifig_E_Engineer	[missing BP name]							Minifig	150	82	blueprint_index	E_Engineer																					385		48216
+411	Battles::CollectableItemBlueprint	Minifig_E_Melee	[missing BP name]							Minifig	151	83	blueprint_index	E_Melee																					385		48328
+412	Battles::CollectableItemBlueprint	Minifig_E_Ranged	[missing BP name]							Minifig	152	84	blueprint_index	E_Ranged																					385		48440
+413	Battles::CollectableItemBlueprint	Minifig_E_Mounted	[missing BP name]							Minifig	153	85	blueprint_index	E_Mounted																					385		48552
+414	Battles::CollectableItemBlueprint	Minifig_E_SiegeOne	[missing BP name]							Minifig	154	86	blueprint_index	E_SiegeOne																					385		48664
+415	Battles::CollectableItemBlueprint	Minifig_E_SiegeTwo	[missing BP name]							Minifig	155	87	blueprint_index	E_SiegeTwo																					385		48776
+416	Battles::CollectableItemBlueprint	Minifig_E_SigeThree	[missing BP name]							Minifig	156	88	blueprint_index	E_SiegeThree																					385		48888
+417	Battles::CollectableItemBlueprint	Minifig_E_TransportShip	[missing BP name]							Minifig	157	89	blueprint_index	E_TransportShip																					385		49000
+418	Battles::CollectableItemBlueprint	Minifig_SpacePoliceCaptain	[missing BP name]							Minifig	158	129	blueprint_index	SpacePoliceCaptain																					385		49112
+419	Battles::CollectableItemBlueprint	Minifig_SpacePolice	[missing BP name]							Minifig	159	130	blueprint_index	SpacePolice																					385		49224
+420	Battles::CollectableItemBlueprint	Minifig_SpacePoliceShip	[missing BP name]							Minifig	160	131	blueprint_index	SpacePoliceShip																					385		49336
+421	Battles::CollectableItemBlueprint	Minifig_A_AlienKing	[missing BP name]							Minifig	161	100	blueprint_index	A_AlienKing																					385		49448
+422	Battles::CollectableItemBlueprint	Minifig_A_AlienKing_F	[missing BP name]							Minifig	162	101	blueprint_index	A_AlienKing_F																					385		49560
+423	Battles::CollectableItemBlueprint	Minifig_A_Engineer	[missing BP name]							Minifig	163	102	blueprint_index	A_Engineer																					385		49672
+424	Battles::CollectableItemBlueprint	Minifig_A_Melee	[missing BP name]							Minifig	164	103	blueprint_index	A_Melee																					385		49784
+425	Battles::CollectableItemBlueprint	Minifig_A_Ranged	[missing BP name]							Minifig	165	104	blueprint_index	A_Ranged																					385		49896
+426	Battles::CollectableItemBlueprint	Minifig_A_Mounted	[missing BP name]							Minifig	166	105	blueprint_index	A_Mounted																					385		50008
+427	Battles::CollectableItemBlueprint	Minifig_A_SiegeOne	[missing BP name]							Minifig	167	106	blueprint_index	A_SiegeOne																					385		50120
+428	Battles::CollectableItemBlueprint	Minifig_A_SiegeTwo	[missing BP name]							Minifig	168	107	blueprint_index	A_SiegeTwo																					385		50232
+429	Battles::CollectableItemBlueprint	Minifig_A_SiegeThree	[missing BP name]							Minifig	169	108	blueprint_index	A_SiegeThree																					385		50344
+430	Battles::CollectableItemBlueprint	Minifig_A_TransportShip	[missing BP name]							Minifig	170	109	blueprint_index	A_TransportShip																					385		50456
+431	Battles::CollectableItemBlueprint	Minifig_SpaceCriminalLeader	[missing BP name]							Minifig	171	133	blueprint_index	SpaceCriminalLeader																					385		50568
+432	Battles::CollectableItemBlueprint	Minifig_SpaceCriminal	[missing BP name]							Minifig	172	134	blueprint_index	SpaceCriminal																					385		50680
+433	Battles::CollectableItemBlueprint	Minifig_SpaceCriminalShip	[missing BP name]							Minifig	173	135	blueprint_index	SpaceCriminalShip																					385		50792
+434	Battles::CollectableItemBlueprint	Minifig_ForestMan	[missing BP name]							Minifig	174	175	blueprint_index	ForestMan																					385		50904
+435	Battles::CollectableItemBlueprint	Minifig_Ghost	[missing BP name]							Minifig	175	176	blueprint_index	Ghost																					385		51016
+436	Battles::CollectableItemBlueprint	Minifig_Sheriff	[missing BP name]							Minifig	176	177	blueprint_index	Sheriff																					385		51128
+437	Battles::CollectableItemBlueprint	Minifig_Conquistador	[missing BP name]							Minifig	177	178	blueprint_index	Conquistador																					385		51240
+438	Battles::CollectableItemBlueprint	Minifig_AgentChase	[missing BP name]							Minifig	178	179	blueprint_index	AgentChase																					385		51352
+439	Battles::CollectableItemBlueprint	Minifig_ClassicSpace	[missing BP name]							Minifig	179	180	blueprint_index	ClassicSpace																					385		51464
+440	Battles::CollectableItemBlueprint	Minifig_Santa	[missing BP name]							Minifig	180	181	blueprint_index	Santa																					385		51576
+441	Battles::CollectableItemBlueprint	RedBrick_FastMining	Red Brick 1							RedBrick	181	16	redbrick_table																						655		51688
+442	Battles::CollectableItemBlueprint	RedBrick_FastHarvest	Red Brick 2							RedBrick	182	13	redbrick_table																						652		51800
+443	Battles::CollectableItemBlueprint	RedBrick_FullAllowance	Red Brick 3							RedBrick	183	14	redbrick_table																						653		51912
+444	Battles::CollectableItemBlueprint	RedBrick_IncreaseSpellRange	Red Brick 4							RedBrick	184	8	redbrick_table																						647		52024
+445	Battles::CollectableItemBlueprint	RedBrick_IncreaseSpellTime	Red Brick 5							RedBrick	185	9	redbrick_table																						648		52136
+446	Battles::CollectableItemBlueprint	RedBrick_DoubleStuds	Red Brick 6							RedBrick	186	4	redbrick_table																						643		52248
+447	Battles::CollectableItemBlueprint	RedBrick_QuickMagic	Red Brick 7							RedBrick	187	3	redbrick_table																						642		52360
+448	Battles::CollectableItemBlueprint	RedBrick_EnemiesOnMinimap	Red Brick 8							RedBrick	188	17	redbrick_table																						656		52472
+449	Battles::CollectableItemBlueprint	RedBrick_Regeneration	Red Brick 9							RedBrick	189	7	redbrick_table																						646		52584
+450	Battles::CollectableItemBlueprint	RedBrick_RevealCoins	Red Brick 10							RedBrick	190	6	redbrick_table																						645		52696
+451	Battles::CollectableItemBlueprint	RedBrick_RevealRedBrick	Red Brick 11							RedBrick	191	10	redbrick_table																						649		52808
+452	Battles::CollectableItemBlueprint	RedBrick_RevealMinikit	Red Brick 12							RedBrick	192	5	redbrick_table																						644		52920
+453	Battles::CollectableItemBlueprint	RedBrick_FastProduction	Red Brick 13							RedBrick	193	2	redbrick_table																						641		53032
+454	Battles::CollectableItemBlueprint	RedBrick_OneHitKill	Red Brick 14							RedBrick	194	1	redbrick_table																						640		53144
+455	Battles::CollectableItemBlueprint	RedBrick_InvincibleHero	Red Brick 15							RedBrick	195	15	redbrick_table																						654		53256
+456	Battles::CollectableItemBlueprint	RedBrick_TurnOffFow	Red Brick 16							RedBrick	196	0	redbrick_table																						639		53368
+457	Battles::CollectableItemBlueprint	RedBrick_AutoUpgrade	Red Brick 17							RedBrick	197	11	redbrick_table																						650		53480
+458	Battles::CollectableItemBlueprint	RedBrick_SuperExplosions	Red Brick 18							RedBrick	198	12	redbrick_table																						651		53592
+459	Battles::CollectableItemBlueprint	Minikit_E1_1	[missing BP name]							Minikit	199	419	blueprint_index	Minifig_SpacePolice																					385		53704
+460	Battles::CollectableItemBlueprint	Minikit_E1_2	[missing BP name]							Minikit	200	419	blueprint_index	Minifig_SpacePolice																					385		53816
+461	Battles::CollectableItemBlueprint	Minikit_E1_3	[missing BP name]							Minikit	201	419	blueprint_index	Minifig_SpacePolice																					385		53928
+462	Battles::CollectableItemBlueprint	Minikit_E1_4	[missing BP name]							Minikit	202	419	blueprint_index	Minifig_SpacePolice																					385		54040
+463	Battles::CollectableItemBlueprint	Minikit_E1_5	[missing BP name]							Minikit	203	419	blueprint_index	Minifig_SpacePolice																					385		54152
+464	Battles::CollectableItemBlueprint	Minikit_E1_6	[missing BP name]							Minikit	204	419	blueprint_index	Minifig_SpacePolice																					385		54264
+465	Battles::CollectableItemBlueprint	Minikit_E2_1	[missing BP name]							Minikit	205	420	blueprint_index	Minifig_SpacePoliceShip																					385		54376
+466	Battles::CollectableItemBlueprint	Minikit_E2_2	[missing BP name]							Minikit	206	420	blueprint_index	Minifig_SpacePoliceShip																					385		54488
+467	Battles::CollectableItemBlueprint	Minikit_E2_3	[missing BP name]							Minikit	207	420	blueprint_index	Minifig_SpacePoliceShip																					385		54600
+468	Battles::CollectableItemBlueprint	Minikit_E2_4	[missing BP name]							Minikit	208	420	blueprint_index	Minifig_SpacePoliceShip																					385		54712
+469	Battles::CollectableItemBlueprint	Minikit_E2_5	[missing BP name]							Minikit	209	420	blueprint_index	Minifig_SpacePoliceShip																					385		54824
+470	Battles::CollectableItemBlueprint	Minikit_E3_1	[missing BP name]							Minikit	210	418	blueprint_index	Minifig_SpacePoliceCaptain																					385		54936
+471	Battles::CollectableItemBlueprint	Minikit_E3_2	[missing BP name]							Minikit	211	418	blueprint_index	Minifig_SpacePoliceCaptain																					385		55048
+472	Battles::CollectableItemBlueprint	Minikit_E3_3	[missing BP name]							Minikit	212	418	blueprint_index	Minifig_SpacePoliceCaptain																					385		55160
+473	Battles::CollectableItemBlueprint	Minikit_E3_4	[missing BP name]							Minikit	213	418	blueprint_index	Minifig_SpacePoliceCaptain																					385		55272
+474	Battles::CollectableItemBlueprint	Minikits_A1_1	[missing BP name]							Minikit	214	432	blueprint_index	Minifig_SpaceCriminal																					385		55384
+475	Battles::CollectableItemBlueprint	Minikits_A1_2	[missing BP name]							Minikit	215	432	blueprint_index	Minifig_SpaceCriminal																					385		55496
+476	Battles::CollectableItemBlueprint	Minikits_A1_3	[missing BP name]							Minikit	216	432	blueprint_index	Minifig_SpaceCriminal																					385		55608
+477	Battles::CollectableItemBlueprint	Minikits_A1_4	[missing BP name]							Minikit	217	432	blueprint_index	Minifig_SpaceCriminal																					385		55720
+478	Battles::CollectableItemBlueprint	Minikits_A1_5	[missing BP name]							Minikit	218	432	blueprint_index	Minifig_SpaceCriminal																					385		55832
+479	Battles::CollectableItemBlueprint	Minikits_A2_1	[missing BP name]							Minikit	219	433	blueprint_index	Minifig_SpaceCriminalShip																					385		55944
+480	Battles::CollectableItemBlueprint	Minikits_A2_2	[missing BP name]							Minikit	220	433	blueprint_index	Minifig_SpaceCriminalShip																					385		56056
+481	Battles::CollectableItemBlueprint	Minikits_A2_3	[missing BP name]							Minikit	221	433	blueprint_index	Minifig_SpaceCriminalShip																					385		56168
+482	Battles::CollectableItemBlueprint	Minikits_A2_4	[missing BP name]							Minikit	222	433	blueprint_index	Minifig_SpaceCriminalShip																					385		56280
+483	Battles::CollectableItemBlueprint	Minikits_A2_5	[missing BP name]							Minikit	223	433	blueprint_index	Minifig_SpaceCriminalShip																					385		56392
+484	Battles::CollectableItemBlueprint	Minikits_A3_1	[missing BP name]							Minikit	224	431	blueprint_index	Minifig_SpaceCriminalLeader																					385		56504
+485	Battles::CollectableItemBlueprint	Minikits_A3_2	[missing BP name]							Minikit	225	431	blueprint_index	Minifig_SpaceCriminalLeader																					385		56616
+486	Battles::CollectableItemBlueprint	Minikits_A3_3	[missing BP name]							Minikit	226	431	blueprint_index	Minifig_SpaceCriminalLeader																					385		56728
+487	Battles::CollectableItemBlueprint	Minikits_A3_4	[missing BP name]							Minikit	227	431	blueprint_index	Minifig_SpaceCriminalLeader																					385		56840
+488	Battles::CollectableItemBlueprint	Minikits_A3_5	[missing BP name]							Minikit	228	431	blueprint_index	Minifig_SpaceCriminalLeader																					385		56952
+489	Battles::CollectableItemBlueprint	Minikits_K1_1	[missing BP name]							Minikit	229	367	blueprint_index	Minifig_Dwarf																					385		57064
+490	Battles::CollectableItemBlueprint	Minikits_K1_2	[missing BP name]							Minikit	230	367	blueprint_index	Minifig_Dwarf																					385		57176
+491	Battles::CollectableItemBlueprint	Minikits_K1_3	[missing BP name]							Minikit	231	367	blueprint_index	Minifig_Dwarf																					385		57288
+492	Battles::CollectableItemBlueprint	Minikits_K1_4	[missing BP name]							Minikit	232	367	blueprint_index	Minifig_Dwarf																					385		57400
+493	Battles::CollectableItemBlueprint	Minikits_K1_5	[missing BP name]							Minikit	233	367	blueprint_index	Minifig_Dwarf																					385		57512
+494	Battles::CollectableItemBlueprint	Minikits_K2_1	[missing BP name]							Minikit	234	368	blueprint_index	Minifig_DwarfMineDefender																					385		57624
+495	Battles::CollectableItemBlueprint	Minikits_K2_2	[missing BP name]							Minikit	235	368	blueprint_index	Minifig_DwarfMineDefender																					385		57736
+496	Battles::CollectableItemBlueprint	Minikits_K2_3	[missing BP name]							Minikit	236	368	blueprint_index	Minifig_DwarfMineDefender																					385		57848
+497	Battles::CollectableItemBlueprint	Minikits_K2_4	[missing BP name]							Minikit	237	368	blueprint_index	Minifig_DwarfMineDefender																					385		57960
+498	Battles::CollectableItemBlueprint	Minikits_K2_5	[missing BP name]							Minikit	238	368	blueprint_index	Minifig_DwarfMineDefender																					385		58072
+499	Battles::CollectableItemBlueprint	Minikits_K2_6	[missing BP name]							Minikit	239	368	blueprint_index	Minifig_DwarfMineDefender																					385		58184
+500	Battles::CollectableItemBlueprint	Minikits_K3_1	[missing BP name]							Minikit	240	366	blueprint_index	Minifig_DwarfKing																					385		58296
+501	Battles::CollectableItemBlueprint	Minikits_K3_2	[missing BP name]							Minikit	241	366	blueprint_index	Minifig_DwarfKing																					385		58408
+502	Battles::CollectableItemBlueprint	Minikits_K3_3	[missing BP name]							Minikit	242	366	blueprint_index	Minifig_DwarfKing																					385		58520
+503	Battles::CollectableItemBlueprint	Minikits_K3_4	[missing BP name]							Minikit	243	366	blueprint_index	Minifig_DwarfKing																					385		58632
+504	Battles::CollectableItemBlueprint	Minikits_W1_1	[missing BP name]							Minikit	244	380	blueprint_index	Minifig_Troll																					385		58744
+505	Battles::CollectableItemBlueprint	Minikits_W1_2	[missing BP name]							Minikit	245	380	blueprint_index	Minifig_Troll																					385		58856
+506	Battles::CollectableItemBlueprint	Minikits_W1_3	[missing BP name]							Minikit	246	380	blueprint_index	Minifig_Troll																					385		58968
+507	Battles::CollectableItemBlueprint	Minikits_W1_4	[missing BP name]							Minikit	247	380	blueprint_index	Minifig_Troll																					385		59080
+508	Battles::CollectableItemBlueprint	Minikits_W1_5	[missing BP name]							Minikit	248	380	blueprint_index	Minifig_Troll																					385		59192
+509	Battles::CollectableItemBlueprint	Minikits_W1_6	[missing BP name]							Minikit	249	380	blueprint_index	Minifig_Troll																					385		59304
+510	Battles::CollectableItemBlueprint	Minikits_W2_1	[missing BP name]							Minikit	250	381	blueprint_index	Minifig_TrollBattleWheel																					385		59416
+511	Battles::CollectableItemBlueprint	Minikits_W2_2	[missing BP name]							Minikit	251	381	blueprint_index	Minifig_TrollBattleWheel																					385		59528
+512	Battles::CollectableItemBlueprint	Minikits_W2_3	[missing BP name]							Minikit	252	381	blueprint_index	Minifig_TrollBattleWheel																					385		59640
+513	Battles::CollectableItemBlueprint	Minikits_W2_4	[missing BP name]							Minikit	253	381	blueprint_index	Minifig_TrollBattleWheel																					385		59752
+514	Battles::CollectableItemBlueprint	Minikits_W2_5	[missing BP name]							Minikit	254	381	blueprint_index	Minifig_TrollBattleWheel																					385		59864
+515	Battles::CollectableItemBlueprint	Minikits_W3_1	[missing BP name]							Minikit	255	379	blueprint_index	Minifig_TrollKing																					385		59976
+516	Battles::CollectableItemBlueprint	Minikits_W3_2	[missing BP name]							Minikit	256	379	blueprint_index	Minifig_TrollKing																					385		60088
+517	Battles::CollectableItemBlueprint	Minikits_W3_3	[missing BP name]							Minikit	257	379	blueprint_index	Minifig_TrollKing																					385		60200
+518	Battles::CollectableItemBlueprint	Minikits_W3_4	[missing BP name]							Minikit	258	379	blueprint_index	Minifig_TrollKing																					385		60312
+519	Battles::CollectableItemBlueprint	Minikits_P1_1	[missing BP name]							Minikit	259	393	blueprint_index	Minifig_Islander																					385		60424
+520	Battles::CollectableItemBlueprint	Minikits_P1_2	[missing BP name]							Minikit	260	393	blueprint_index	Minifig_Islander																					385		60536
+521	Battles::CollectableItemBlueprint	Minikits_P1_3	[missing BP name]							Minikit	261	393	blueprint_index	Minifig_Islander																					385		60648
+522	Battles::CollectableItemBlueprint	Minikits_P1_4	[missing BP name]							Minikit	262	393	blueprint_index	Minifig_Islander																					385		60760
+523	Battles::CollectableItemBlueprint	Minikits_P1_5	[missing BP name]							Minikit	263	393	blueprint_index	Minifig_Islander																					385		60872
+524	Battles::CollectableItemBlueprint	Minikits_P2_1	[missing BP name]							Minikit	264	394	blueprint_index	Minifig_IslanderWarCanoe																					385		60984
+525	Battles::CollectableItemBlueprint	Minikits_P2_2	[missing BP name]							Minikit	265	394	blueprint_index	Minifig_IslanderWarCanoe																					385		61096
+526	Battles::CollectableItemBlueprint	Minikits_P2_3	[missing BP name]							Minikit	266	394	blueprint_index	Minifig_IslanderWarCanoe																					385		61208
+527	Battles::CollectableItemBlueprint	Minikits_P2_4	[missing BP name]							Minikit	267	394	blueprint_index	Minifig_IslanderWarCanoe																					385		61320
+528	Battles::CollectableItemBlueprint	Minikits_P2_5	[missing BP name]							Minikit	268	394	blueprint_index	Minifig_IslanderWarCanoe																					385		61432
+529	Battles::CollectableItemBlueprint	Minikits_P3_1	[missing BP name]							Minikit	269	392	blueprint_index	Minifig_IslanderChief																					385		61544
+530	Battles::CollectableItemBlueprint	Minikits_P3_2	[missing BP name]							Minikit	270	392	blueprint_index	Minifig_IslanderChief																					385		61656
+531	Battles::CollectableItemBlueprint	Minikits_P3_3	[missing BP name]							Minikit	271	392	blueprint_index	Minifig_IslanderChief																					385		61768
+532	Battles::CollectableItemBlueprint	Minikits_P3_4	[missing BP name]							Minikit	272	392	blueprint_index	Minifig_IslanderChief																					385		61880
+533	Battles::CollectableItemBlueprint	Minikits_P3_5	[missing BP name]							Minikit	273	392	blueprint_index	Minifig_IslanderChief																					385		61992
+534	Battles::CollectableItemBlueprint	Minikits_I1_1	[missing BP name]							Minikit	274	406	blueprint_index	Minifig_Ninja																					385		62104
+535	Battles::CollectableItemBlueprint	Minikits_I1_2	[missing BP name]							Minikit	275	406	blueprint_index	Minifig_Ninja																					385		62216
+536	Battles::CollectableItemBlueprint	Minikits_I1_3	[missing BP name]							Minikit	276	406	blueprint_index	Minifig_Ninja																					385		62328
+537	Battles::CollectableItemBlueprint	Minikits_I1_4	[missing BP name]							Minikit	277	406	blueprint_index	Minifig_Ninja																					385		62440
+538	Battles::CollectableItemBlueprint	Minikits_I1_5	[missing BP name]							Minikit	278	406	blueprint_index	Minifig_Ninja																					385		62552
+539	Battles::CollectableItemBlueprint	Minikits_I2_1	[missing BP name]							Minikit	279	407	blueprint_index	Minifig_WarJunk																					385		62664
+540	Battles::CollectableItemBlueprint	Minikits_I2_2	[missing BP name]							Minikit	280	407	blueprint_index	Minifig_WarJunk																					385		62776
+541	Battles::CollectableItemBlueprint	Minikits_I2_3	[missing BP name]							Minikit	281	407	blueprint_index	Minifig_WarJunk																					385		62888
+542	Battles::CollectableItemBlueprint	Minikits_I2_4	[missing BP name]							Minikit	282	407	blueprint_index	Minifig_WarJunk																					385		63000
+543	Battles::CollectableItemBlueprint	Minikits_I2_5	[missing BP name]							Minikit	283	407	blueprint_index	Minifig_WarJunk																					385		63112
+544	Battles::CollectableItemBlueprint	Minikits_I3_1	[missing BP name]							Minikit	284	405	blueprint_index	Minifig_NinjaKing																					385		63224
+545	Battles::CollectableItemBlueprint	Minikits_I3_2	[missing BP name]							Minikit	285	405	blueprint_index	Minifig_NinjaKing																					385		63336
+546	Battles::CollectableItemBlueprint	Minikits_I3_3	[missing BP name]							Minikit	286	405	blueprint_index	Minifig_NinjaKing																					385		63448
+547	Battles::CollectableItemBlueprint	Minikits_I3_4	[missing BP name]							Minikit	287	405	blueprint_index	Minifig_NinjaKing																					385		63560
+548	Battles::CollectableItemBlueprint	Minikits_I3_5	[missing BP name]							Minikit	288	405	blueprint_index	Minifig_NinjaKing																					385		63672
+549	Battles::CollectableItemBlueprint	Ticket	[missing BP name]							Ticket																									385		63784
+550	Battles::CollectableItemBlueprint	CK1_3_Scroll	[missing BP name]							MissionObject																									385		63896

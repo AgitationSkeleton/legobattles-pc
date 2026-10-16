@@ -1,0 +1,201 @@
+address	size	subsystem	confidence	evidence
+0202e624	8780	UI/menus	high	86-case switch building "UI/AllInOne/Iconic_MainMenu"+".NCLR"; caller Battles::User::MapTab::virtual_07
+02068cf0	3232	simulation/units	high	RTTI vtable slot shipped in the ROM: Battles::Sim::ConstructStructureEntityCommand::virtual_09
+020c9fc8	2920	UI/menus	high	populates 11 list rows (020e6774 index 0..10) from a per-player stats record at (+0x50 & 0xff)*0xA4 + DAT_020cab30
+0208d940	2892	AI	high	RTTI vtable slot shipped in the ROM: Battles::User::JobAttackTaskForce::virtual_01
+020370b4	2764	2D rendering	medium	memsets 0x600 of tilemap 0x02152FC0 to 0x1f then stamps tile 0x3f/0x4f/0x4e per cell via FUN_0203cbb8
+02080f14	2688	pathfinding	high	project symbol AstarSearch_SearchStep, byte-matched in src/
+02067c50	2456	simulation/units	high	RTTI vtable slot shipped in the ROM: Battles::Sim::ConstructMultipleEntityCommand::virtual_09
+0203393c	2252	UI/menus	high	nine-patch layout calling FUN_02034a04(this,0..8) per corner/edge; tail is str #1,[0x04000448] (MTX_POP)
+02120894	2216	runtime/C++ ABI	medium	switch(op&0x1f) with 0x20/0x40 flags restores a register file at ctx+0x1c+i*4, operands from tagged-varint reader 0212026c
+020353b4	2100	UI/menus	medium	builds "Sprites/"+"CastleItems"/"PiratesItems"/"MarsItems" with "_0"/"_1"/"_2"/"_w4" suffixes
+0211cbdc	2076	math/util	high	printf-family formatter: (code* sink, ctx, char* fmt, uint* args) with 34 case labels
+02108740	2068	audio	medium	SDAT block reached only from sound preloader 02088590; flushes each buffer via 0210eaf4 then calls the hook at ctx+0x134
+020587ac	2020	simulation/units	high	stamps occupation-grid cells via 020a30c0(grid,tile,3) over the footprint w*h at unitdef+4/+5, evicts occupants via 02059c60/02059a44
+020088d4	1944	UI/menus	medium	cheat/debug action dispatch on *param_2; caller 02009158 matches a 155-entry 0x10-byte table at DAT_020091c0
+020267f8	1928	2D rendering	high	minimap rebuild: packs two 4bpp pixels per byte into the 02025498 surface, uploads via 0204e0e0(0x22,...)
+0202b5c0	1928	2D rendering	high	writes BGxCNT via *DAT_0202bd48..0202bd64: char-base<<2, screen-base<<8, 256-colour<<7, size<<0xe
+0205079c	1924	simulation/units	medium	private helper: every caller is a method of Battles::Sim::AttackAction
+0202c4c4	1920	2D rendering	high	writes BGxCNT at 0x04000008-0x0400000E and 0x04001008-0x0400100E with &0x43 field packing (read from the ARM9 binary)
+02097af4	1920	AI	high	switch on spell category; each arm calls 02098324(...,0x14 or 6), splits typedef+0x5c 7..0x13 from 0..6, keeps highest HP +0x1a0
+020d3acc	1884	UI/menus	medium	private helper: every caller is a method of Battles::User::InfoTab
+0211c478	1848	math/util	high	sole caller is the printf formatter 0211cbdc
+0202bd68	1844	2D rendering	high	per-BG tile blit at stride 0x20 (4bpp) / 0x40 (8bpp), coords>>3, rows queued via 0204e0e0(0x11/0x12/0x17)
+02076254	1840	simulation/units	high	RTTI vtable slot shipped in the ROM: Battles::Sim::DamageSpell::virtual_02
+020d1744	1840	UI/menus	high	selected-entity info panel: "%d/%d" from entity+0x1a0 over unitdef+0x62 into the TextWidget at param_1+0x3a8
+020c890c	1822	UI/menus	high	RTTI vtable slot shipped in the ROM: Battles::User::SplashScreen::virtual_09
+020b1c94	1710	UI/menus	medium	sits inside the Battles::User::CampaignScore translation unit (between two of its methods)
+0203b7fc	1704	2D rendering	high	builds 8bpp 8x8 tiles (memset 0x40, 0xFF outline) and border tiles 0xd/0xe/0xf/0x1d/0x1e/0x2d/0x2e/0x2f for the DragManager box
+020f0acc	1704	math/util	high	8-octant Bresenham tile walk with an error accumulator, returning a bearing in degrees (0x2d/0x5a/0x87/0xb4/0xe1/0x168)
+0208cee8	1698	AI	high	RTTI vtable slot shipped in the ROM: Battles::User::JobAttack::virtual_01
+020603f4	1692	simulation/units	high	RTTI vtable slot shipped in the ROM: Battles::Sim::AssistStructureEntityCommand::virtual_09
+0200fb88	1660	effects/particles	high	RTTI vtable slot shipped in the ROM: Battles::ArtilleryEffect::virtual_04
+02056094	1644	pathfinding	high	RTTI vtable slot shipped in the ROM: Battles::Sim::AstarPlotter::virtual_03
+02109e88	1636	3D rendering	medium	longlong fixed-point at 0x100000 scale; sole caller is the GXFIFO packet submitter 020ff9ac
+0207bc0c	1628	simulation/units	high	spell factory: switch(*param_4) cases 0..0x22, each 0204c6e4(size,heap,classid) plus a spell ctor, stored at *(*DAT_0207c28c+8)+*param_2*4
+02013b88	1620	effects/particles	high	RTTI vtable slot shipped in the ROM: Battles::CrabSwarmEffect::virtual_04
+020d33d8	1548	UI/menus	medium	sits inside the Battles::User::InfoTab translation unit (between two of its methods)
+020a7198	1512	mission/scripting	medium	achievement/goal switch 0..0x18, each case compares a counter to the threshold at *(ushort*)(param_1+9); caller marks a done byte
+020f7eb0	1472	FMV/video	high	byte-match decompressor over a +0x100 window; reached only from movie player 0202778c via 020f7964
+02023708	1468	effects/particles	high	RTTI vtable slot shipped in the ROM: Battles::VictoryEffect::virtual_04
+020e2408	1442	UI/menus	medium	box-select: bins entity refs by kind byte +0x5c into 9 ArrayU8 buckets; caller 020e3518 fires Battles::SelectionChangedEvent
+02050f3c	1440	simulation/units	medium	private helper: every caller is a method of Battles::Sim::AttackAction
+020f6f0c	1432	FMV/video	medium	reached from Battles::User::MovieScreen::helper (02027858); its 0x020F6000 block is consumed by the movie player
+020f5168	1420	networking	medium	builds CreateGameEvent::GameParametersType; sole caller is TX_RX (020f4b00)
+0209c774	1412	AI	high	walks the squad ArrayEntityRef at +0x20 and switch(*(param_1+0x10)) cases 7/9/10/0xB each issue an order via 02005884 + 0209b598(...,0x14)
+0211b3a0	1388	math/util	high	returns char*; sole caller is the printf formatter 0211cbdc
+021292f0	1388	FMV/video	high	reachable from the movie player's audio pump 02027ca0; inside the codec region whose only entry is 020f7964
+02071360	1384	simulation/units	medium	PatrolEntityCommand tick: waypoint lookup 020ee5b4, standoff from unitdef+0x71, enqueues a MoveUnitAction via 020502e8/0206ab84
+0205fc1c	1360	simulation/units	high	RTTI vtable slot shipped in the ROM: Battles::Sim::Bridge::virtual_03
+020523a8	1356	simulation/units	high	RTTI vtable slot shipped in the ROM: Battles::Sim::ConstructProgressAction::virtual_02
+0200dfb8	1344	effects/particles	high	RTTI vtable slot shipped in the ROM: Battles::ArrowHighLightEffect::virtual_04
+020643c8	1344	simulation/units	medium	stand-off range math (unitdef[0x71]^2 * 0x1000), then enqueues a MoveUnitAction via 020502e8/0206ab84 and sets command byte +0x47
+0206c7a0	1340	simulation/units	high	RTTI vtable slot shipped in the ROM: Battles::Sim::HarvestEngineerEntityCommand::virtual_09
+02116074	1340	save/load	medium	in the [SDK+NINTENDO:BACKUP] TU (stamp at 0x02116E24); masks 0x7fffff/0x3fffff are backup-device address ranges
+020c63e8	1336	UI/menus	medium	sits inside the Battles::User::SkirmishScoreTopScreen translation unit (between two of its methods)
+020bb590	1334	UI/menus	medium	sits inside the Battles::User::JoinWifiGame translation unit (between two of its methods)
+020d0cf8	1326	UI/menus	high	caller Battles::User::BuildTab::virtual_12; fills 12 build slots with SpriteWidget ids 0x148+slot, 3 modes on +0x3b0
+0205f124	1316	simulation/units	high	project symbol Entity_Tick, byte-matched in src/
+0205b8a8	1296	simulation/units	high	disembark commit: 02059c60 sets the mover's +0x158 flag and dest tile +0x130/+0x131, then +0x114/+0x115 gets the null EntityRef from 02087454
+020dcd34	1296	UI/menus	high	switch on widget id *(ushort*)(*(param_2+4)+2): cases 0, 0x2b-0x34, 0x42/0x43, 0x4c-0x5f, each calling 020ea3a4 for the rect
+02004dfc	1264	game events/commands	high	command-stream factory: switch on the stream opcode, Heap_New of the matching Battles::*Command with tags 0x30-0x50
+02038890	1256	2D rendering	high	sets BG3CNT (0x0400000E) = &0x43|0x284; stamps per-player u16 triples from the 6-byte-stride table at 0x02127E48
+0208b460	1238	AI	high	project symbol AI_DecideScoutOrTaskForce, byte-matched in src/
+0205e7f4	1228	simulation/units	high	Entity::SetHealth - writes *(short*)(entity+0x1a0), fires event 0x2c/0x2d, crosses 0x21/0x42 percent bands, calls 0205e78c at zero
+020c1f68	1226	UI/menus	medium	sits inside the Battles::User::ProfileSelect translation unit (between two of its methods)
+0211be78	1200	math/util	high	sole caller is the printf formatter 0211cbdc
+02053f90	1188	simulation/units	medium	MoveActionBase helper: overlap query 0207d27c/0207d424, typedef flags +0x66..+0x69, writes the stop reason to action+0x2c
+02026298	1172	2D rendering	high	builds 12x12 BG screen entries via 0202520c (tile|pal<<12) at +0xc8 and uploads 0x800 bytes via 0204e0e0(0x26)
+02054b84	1172	simulation/units	high	RTTI vtable slot shipped in the ROM: Battles::Sim::RepairStructureAction::virtual_02
+020de1d0	1172	UI/menus	medium	sits inside the Battles::User::WorldViewScreen translation unit (between two of its methods)
+0209754c	1168	AI	high	builds 12-byte DesiredSpellCategory records (weight 0x14/0x28/0x3c/0x50/0x5a), scores the 0x14-byte spell table at DAT_020979f8 via 0209849c
+020629fc	1148	simulation/units	high	RTTI vtable slot shipped in the ROM: Battles::Sim::CombatHoldPositionEntityCommand::virtual_09
+020d1244	1146	UI/menus	high	switch on kind byte +0x5c cases 7..0x13 adding ListWidget rows 020e6968(list, 0x72..0x81) and sprite ids 0x148+i
+020feb98	1140	3D rendering	high	calls the GXFIFO packet writer 02100de0
+02012cc4	1128	effects/particles	high	RTTI vtable slot shipped in the ROM: Battles::CoconutStormEffect::virtual_04
+02055194	1128	simulation/units	high	quadratic Bezier step (1-t)^2*P0 + 2t(1-t)*C + t^2*P1 in 20.12; t at +0x40 advanced by +0x44 and clamped to 0x1000
+0205d7f0	1128	simulation/units	high	entity spawn: placement check 0207f1b4, HP via 0205e7f4, occupancy claim 02059c60/02059a44, returns the new EntityRef
+02074254	1124	simulation/units	medium	gathers area entities via 0207ec44, filters by ownership 02085d58 and unitdef byte +0x5c == 0x11, sets status +0x30 to 1 or 2
+020c9b68	1112	UI/menus	medium	sits inside the Battles::User::StatsScreen translation unit (between two of its methods)
+020ff244	1104	3D rendering	high	calls the GXFIFO packet writer 02100de0
+02065db4	1096	simulation/units	medium	CombatMoveEntityCommand tick: rejects a step whose Manhattan distance does not shrink, else enqueues a MoveUnitAction via 020502e8/0206ab84
+0204503c	1092	mission/scripting	high	RTTI vtable slot shipped in the ROM: Battles::WizardCampaign::ctor
+02033404	1076	UI/menus	high	sole target of Battles::User::{Sprite,List,RadioButton,Scroll,SlidingSprite}Widget::virtual_03; rejects w/h >= 0x3e9
+020c5f40	1076	UI/menus	medium	sits inside the Battles::User::SkirmishScoreTopScreen translation unit (between two of its methods)
+0208382c	1068	simulation/units	high	sim command dispatcher: switch on *(param_2+0xc) 0..0x21 into 34 handlers at 0x02083c58..0x02084ea8, result code to *(param_2+8)
+02001938	1064	simulation/units	medium	build-site validity predicate: footprint (w,h) from 02001170, tile bytes +4/+5 vs that rect, Continent reachability 02057f38/02057b70
+02017434	1060	effects/particles	high	RTTI vtable slot shipped in the ROM: Battles::FireBallEffect::virtual_04
+020f4b00	1056	networking	high	sole string reference "TX/RX"; drives the block consumed only by ClientLobby/HostLobby/JoinWifiGame
+0205f6c0	1052	simulation/units	medium	sits inside the Battles::Sim::Bridge translation unit (between two of its methods)
+020651d0	1044	simulation/units	medium	private helper: every caller is a method of Battles::Sim::CombatMoveEntityCommand
+021025d4	1044	3D rendering	medium	G3D block; hardware divider/sqrt helper 0210a938 called 7x
+020b7fb4	1042	UI/menus	medium	sits inside the Battles::User::CustomizeArmy translation unit (between two of its methods)
+020dad9a	1042	UI/menus	medium	Thumb jump table at DAT_020dadd8 bounded at 0x92 over a widget id; caller Battles::User::WorldViewScreen::virtual_08
+02032b30	1032	2D rendering	high	blits 0x20/0x40-byte 8x8 tiles through a 0x800 staging buffer, DMA via FUN_0204e0e0(0x2e/0/5)
+020631d4	1028	simulation/units	medium	private helper: every caller is a method of Battles::Sim::CombatHoldPositionEntityCommand
+02066dd0	1028	simulation/units	medium	private helper: every caller is a method of Battles::Sim::CombatStandGroundEntityCommand
+0206ff04	1028	simulation/units	medium	private helper: every caller is a method of Battles::Sim::PatrolEntityCommand
+0201b410	1024	effects/particles	high	RTTI vtable slot shipped in the ROM: Battles::HeroStartSpellEffect::virtual_04
+02096c4c	1022	AI	medium	pushes the tile at param_3+4/+5 away from the base tile at param_1+0x4c/0x4d, clamped to +/-6 then to map bounds 020a4524/020a4530
+021306d0	1020	FMV/video	medium	in the 0x0212C000+ codec region whose only external entry is 020f7964; hand-written asm (Ghidra loses r6)
+02027858	1016	FMV/video	medium	private helper: every caller is a method of Battles::User::MovieScreen
+0202cc7c	1016	2D rendering	high	same 8-way BG-slot switch; cache flush plus FUN_0204e0e0(0x13-0x16/0x23-0x26) VRAM uploads
+020fe164	1004	3D rendering	medium	calls hardware-divider helper 0210a938; G3D band reached from 0203b3ac (DISP3DCNT)
+020200b8	976	effects/particles	medium	sits inside the Battles::SpellIconsMiningEffect translation unit (between two of its methods)
+020a9b7c	972	UI/menus	medium	sets command-availability bits 0x2a..0x65 in the 020a9f80 bitset (bound 0x67); reached from WorldViewScreen_tu via 020a8794
+0201d7fc	964	effects/particles	high	RTTI vtable slot shipped in the ROM: Battles::MonkeySwarmEffect::virtual_04
+02063f80	956	simulation/units	medium	private helper: every caller is a method of Battles::Sim::CombatHoldPositionEntityCommand
+0201a5bc	944	effects/particles	high	RTTI vtable slot shipped in the ROM: Battles::HealthBoostTrailStarEffect::virtual_04
+0203b3ac	944	3D rendering	high	DISP3DCNT (0x04000060) &0xcfff|0x20; ortho(0,0xC0000,0,0x100000,0xFFE00000,0x200000,0x1000) plus MTX_TRANS/MTX_MULT_3x3
+020f59b8	944	networking	medium	same lobby block as TX_RX; consumers are SkirmishSetup_tu/ClientLobby_tu/HostLobby_tu
+0211ef70	944	math/util	high	IEEE-754 double masks 0x7ff, 0x7fffffffffffffff, 0x1fffff; returns longlong from four uints
+02101bdc	940	3D rendering	medium	G3D block; dispatches to 021025d4/021029ec/02102440 and the hardware divider 0210a938
+0205a9c4	936	simulation/units	medium	sits inside the Battles::Sim::Entity translation unit (between two of its methods)
+020b2a7c	936	UI/menus	medium	sits inside the Battles::User::CampaignSetup translation unit (between two of its methods)
+021125a4	936	file/archive	medium	0x02112000 block consumed by FileLoader_tu(16), the movie player and the SDAT loader
+0205ccc4	928	simulation/units	high	rebuilds the cached stat block at entity+0x164 from the typedef via 0205cc14, multiplied in 20.12 by each modifier in the list at +0x1e4
+020614bc	928	simulation/units	high	RTTI vtable slot shipped in the ROM: Battles::Sim::AttackEntityCommand::virtual_00
+02061860	924	simulation/units	medium	private helper: every caller is a method of Battles::Sim::AttackEntityCommand
+020965ec	922	AI	medium	tick counter +0x21 drives a +/-3-tile wander, probes with 0207ff10(pos,1,4)/(pos,1,7), then 02097374(...,8,...,0x51) build request
+02118230	920	networking	medium	0x02118000 wireless block reached only from HostLobby_tu/ClientLobby_tu/JoinWifiGame_tu; chain reaches IPCFIFOCNT at 02111cd4
+0206cd4c	916	simulation/units	medium	private helper: every caller is a method of Battles::Sim::HarvestEngineerEntityCommand
+0201e35c	912	effects/particles	medium	sits inside the Battles::RoarEffect translation unit (between two of its methods)
+021008fc	912	3D rendering	high	writes GX_MTX_MODE/GX_MTX_POP and calls the GXFIFO writer 02100de0
+0202a058	908	effects/particles	high	per-particle record packs BGR555 at +4 (b|g<<5|r<<10), extents<<0xc, pool alloc 020f16c4 + ParticleSystem rewind 02029e88
+02030da4	908	UI/menus	high	screen ids 0x2c/0x41-0x44 select "/LS_CheatCodes","/LS_Maps","/LS_ConceptArt","/AchievementIcons"
+0205b384	908	simulation/units	medium	unload validation: pops the head of the carrier list at +0xFC via 020ec818, resolves via 02087350, returns the tile result of 0207f1b4/0207f398
+020e8fbc	908	UI/menus	high	RTTI vtable slot shipped in the ROM: Battles::User::SpriteWidget::virtual_03
+021096c0	908	3D rendering	medium	longlong fixed-point at 0x100000 with bit-11 masks; callers 020fdf7c/020fdfc0 are in the G3D block
+0203bed0	904	UI/menus	medium	HP% via FUN_0211fdb4(hp*100,max), /20 clamped to 4 picks Vector3u8 (0,0x1f,0)/(0x1f,0,0)/(0x1f,0x13,0)
+0212050c	904	runtime/C++ ABI	medium	same varint+opcode block as 02120894, below __cxxabiv1::__class_type_info at 0x021218e8
+02022888	892	effects/particles	high	RTTI vtable slot shipped in the ROM: Battles::UpgradeEffect::virtual_04
+0204fa88	892	save/load	high	bit-packed save writer: 0204b854(...,0xb) opens record 0xb, writes 1/0x10/0x20/7/3/8-bit fields, ends with the 0204bb84 flush
+020b64b4	892	UI/menus	high	RTTI vtable slot shipped in the ROM: Battles::User::ClientLobby::virtual_09
+020e7cf8	890	UI/menus	medium	private helper: every caller is a method of Battles::User::ScrollWidget
+0200d504	888	2D rendering	medium	Heap_New(0x1c, tags 0x35/0x36/0x37) + AnimationInstance2D::ctor for 3 layers; 3D branch only when def kind byte +0x5c is 5 or 6
+0203420c	884	2D rendering	high	writes u16 screen entries tile|palBank<<12 at base+0xc+(x+y*0x20)*2, clamped to 32x24
+0209d7f4	882	AI	high	iterates every squad's EntityRef array at +0x20, filters via 0209baf0/0205a118(entity,0x1d), adds via 0209d21c under a cap
+0209a6d8	874	AI	high	project symbol Squad_ProposeCombatMode, byte-matched in src/
+02018400	872	effects/particles	medium	sits inside the Battles::ForrestSpawnEffect translation unit (between two of its methods)
+0206f8d4	868	simulation/units	high	RTTI vtable slot shipped in the ROM: Battles::Sim::PatrolEntityCommand::virtual_00
+02035028	864	UI/menus	medium	loads "KingFaction.NCLR" into a PalettePtr and registers a sprite per entity whose kind byte +0x5c == 4
+020e1fa0	864	UI/menus	high	widget focus-chain wiring through 020e0e10 (86 callers, all UI screen TUs) walking vtbl+0xc
+020ebf34	864	2D rendering	medium	projectile sprite draw: 020ebe54(0,0x10,angle) picks 1 of 16 facings, sets flip flags, alpha 0x1f at +0x13, submits via 0202da80
+0211ebf4	864	math/util	high	returns ulonglong from four uints inside the 0x0211E000 IEEE-754 double block
+02070d2c	860	simulation/units	medium	private helper: every caller is a method of Battles::Sim::PatrolEntityCommand
+0208f7cc	860	AI	medium	private helper: every caller is a method of Battles::User::JobAttackTaskForce
+02027ca0	856	audio	high	fills the ring at DAT_02028004+0x10, DC_CleanRange per (+0x38)<<1 bytes, then 02110c90(ch0/ch1,...,0x7f,...,0x40) SND channel setup
+02039fb4	856	2D rendering	high	writes 2x2 u16 metatiles at p,p[1],p[0x20],p[0x21] over a 10x12 cell grid; x/3 via 0xAAAAAAAB reciprocal
+02061bfc	856	simulation/units	medium	AttackEntityCommand tick: adjacency threshold 0x800 raised to 0x1000 when 0205c034 refuses, then enqueues a MoveUnitAction via 020502e8/0206ab84
+02072248	856	simulation/units	medium	private helper: every caller is a method of Battles::Sim::ProduceUnitEntityCommand
+020acf4c	854	UI/menus	high	widget-id -> widget table *(DAT_020ad22c + param_1[6]*4) bounded at 0x62, then the 020e0e10 focus-chain walk; caller Options_tu
+0208f47c	848	AI	medium	private helper: every caller is a method of Battles::User::JobAttackTaskForce
+020fb040	844	2D rendering	high	copies 6-byte OAM attribute records to 8-byte entries, sign-extends the 16-bit X and scales by 0x1000
+020f616c	840	unknown	low	unclear - no callers, no callees, isolated data block at 0x020F64B4
+020fa324	836	3D rendering	high	emits GX_MTX_TRANS/SCALE, GX_TEXIMAGE_PARAM, GX_PLTT_BASE, GX_POLYGON_ATTR, GX_BEGIN_VTXS, GX_COLOR per quad
+0204c210	832	3D rendering	high	GX textured quad: TEXIMAGE_PARAM |0x40000000, POLYGON_ATTR alpha<<0x10|0xc0, BEGIN_VTXS=1/END_VTXS pair, 20.12 coords
+02119704	832	networking	medium	0x02118000 wireless block; reaches IPCFIFOCNT at 02111cd4; consumers are the three lobby screens
+0204f718	828	save/load	high	exact read counterpart of 0204fa88: 0204b830(...,0xb) then 0204ba64 bit reads into the same offsets
+0206a314	828	simulation/units	high	RTTI vtable slot shipped in the ROM: Battles::Sim::DieEntityCommand::virtual_09
+020910f4	826	AI	medium	private helper: every caller is a method of Battles::User::JobRepair
+020ff9ac	824	3D rendering	high	writes GXFIFO twelve times
+021029ec	824	3D rendering	medium	G3D sibling of 021025d4; calls the hardware divider 0210a938
+0207f9bc	816	pathfinding	medium	0207f578 builds the -1..w+1 x -1..h+1 tile ring, then a linear scan keeps the min 020f2c4c squared-distance candidate passing 0205c034
+021005b8	816	3D rendering	high	calls the GXFIFO writer 02100de0 fourteen times plus the matrix writer 02100ec4
+0211e100	816	math/util	medium	0x0211E000 soft-float block; sole caller 0211e484 also calls the double routine 0211ebf4
+02116adc	808	save/load	high	backup-device sizing constants 0x2000/0xd000/0x10000/0x4340; called by [SDK+NINTENDO:BACKUP] function 02117124
+020bf35c	806	UI/menus	high	calls the UI focus-chain helper 020e0e10 ten times; sole string reference "UI/BlackBG"; caller StoreMovies_tu
+020f0320	804	file/archive	high	FileLoader read loop: accumulates 020f0028 chunk reads, decompress branch 020f065c, frees via 0204ca50
+020e5c78	802	UI/menus	high	RTTI vtable slot shipped in the ROM: Battles::User::ComboWidget::ctor
+020dd708	790	UI/menus	high	RTTI vtable slot shipped in the ROM: Battles::User::WorldViewScreen::virtual_09
+020b3dcc	784	UI/menus	medium	sits inside the Battles::User::CampaignSetup translation unit (between two of its methods)
+02090634	782	AI	high	RTTI vtable slot shipped in the ROM: Battles::User::JobDefend::virtual_01
+02053c64	780	simulation/units	high	RTTI vtable slot shipped in the ROM: Battles::Sim::MoveActionBase::virtual_02
+02124708	776	runtime/C++ ABI	high	calls Runtime_RegisterStaticObject (the atexit registrar); no callers, run from the static-init table
+0211e7c4	772	math/util	high	IEEE-754 double masks (0x7ff exponent, 0x7fffffffffffffff); returns longlong from four uints
+0200ee44	768	effects/particles	high	RTTI vtable slot shipped in the ROM: Battles::ArrowVolleyEffect::virtual_04
+02072a2c	768	simulation/units	high	RTTI vtable slot shipped in the ROM: Battles::Sim::RepairStructureEntityCommand::virtual_09
+020b4138	768	UI/menus	medium	sits inside the Battles::User::CampaignSetup translation unit (between two of its methods)
+0208c204	760	AI	high	compares typedef cost +0x5e against the player stockpile at +0x90 with a 0x3c reserve, issues from two queues via 0208cc6c/0208caf0
+02097074	760	AI	high	walks the EntityRef array at +0x20, finds nearest category-7 then category-0xb via 020938dc, writes job type 0x22 at +0x44
+020ad64c	760	UI/menus	medium	sits inside the Battles::User::Options translation unit (between two of its methods)
+0211bb7c	760	math/util	high	sole caller is the printf formatter 0211cbdc
+0204efbc	756	2D rendering	high	VBlank VRAM-transfer dispatch ids 0xf..0x2e writing 0x05000000/0x05000200/0x05000400 palettes and 0x07000000/0x07000400 OAM
+020b2fd0	756	UI/menus	medium	sits inside the Battles::User::CampaignSetup translation unit (between two of its methods)
+020b8b9c	756	UI/menus	high	calls the UI focus-chain helper 020e0e10 ten times plus QuickDialog_tu; sole string reference "UI/AllInOne/DefaultBG"
+0208f18c	752	AI	medium	private helper: every caller is a method of Battles::User::JobAttackTaskForce
+0209a27c	752	AI	high	scans the squad array, keeps nearest by Manhattan distance (0211acdc) and highest priority +0xc, admission test 0209baf0 vs template +0x24
+02037b9c	748	2D rendering	medium	walks a 12.12 line from tile(+0x20,+0x21) to (+0x18,+0x19) stamping tile 0x3f or 0x4f via FUN_0203cbb8
+0206e60c	740	simulation/units	high	project symbol Combat_ApplyAreaDamage, byte-matched in src/
+02130444	740	FMV/video	medium	in the 0x0212C000+ codec region entered only via 020f7964; byte table at DAT_021304dc, hand-written asm
+020a8340	738	save/load	high	bit-packs the stats block via 0204ba48/0204bab0 (0x20/0x10 bits, then 0x23 ushorts at 0xe bits), flushed by 0204bb84
+0205a2e8	736	simulation/units	medium	sits inside the Battles::Sim::Entity translation unit (between two of its methods)
+020254b4	732	2D rendering	high	4bpp span fill: param_5*0x11111111 with nibble edge masks, addressed via 02025498 = +0x84+(y>>3)*0x200+(y&7)*4
+020730a0	728	simulation/units	high	RTTI vtable slot shipped in the ROM: Battles::Sim::ResearchUpgradeEntityCommand::virtual_08
+0209be0c	728	AI	high	rejects typedef+0x5c categories 7..0x13, requires HP(+0x1a0) < maxHP(+0x62)-0x14, finds a 0x23/0xe/0x46 helper via 020938dc
+020192f8	724	effects/particles	high	RTTI vtable slot shipped in the ROM: Battles::FreezeEffect::virtual_04
+02039148	724	3D rendering	high	world-render root: MTX_MODE/PUSH/IDENTITY/POP via FUN_02100de0 -> GXFIFO 0x04000400, brackets Projectile_DrawAll
+020e4f38	724	UI/menus	medium	private helper: every caller is a method of Battles::User::Options
+02109a4c	724	3D rendering	medium	longlong fixed-point at 0x100000; sole caller 020fdfc0 sits in the G3D block
+020a9898	722	UI/menus	medium	sets bits 3..0x1a in the 020a9f80 bitset from the cursor object's +0x18 type and the held-key mask *DAT_020a9b70
+0202ab14	720	2D rendering	high	registers this BG's char base v<<0xe and screen base v<<0xb in the 0x110-byte BG registry (0204d6a0/0204d6ec)

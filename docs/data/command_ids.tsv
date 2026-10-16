@@ -1,0 +1,28 @@
+type_id	class	ctor	source
+0	Battles::ChangeAllianceCommand	0x02003EC0	r1 to CommandBase ctor func_02004350
+1	Battles::CreateCollectableItemCommand	0x02005F88	r1 to CommandBase ctor func_02004350
+3	Battles::CreateUnitFactionCommand	0x020061E8	r1 to CommandBase ctor func_02004350
+4	Battles::TeleportUnitCommand	0x020076E8	r1 to CommandBase ctor func_02004350
+5	Battles::SyncCheckCommand	0x020074EC	r1 to CommandBase ctor func_02004350
+6	Battles::SyncStatusCommand	0x02007594	r1 to CommandBase ctor func_02004350
+14	Battles::AssistStructureCommand	0x020036B0	r1 to CommandBase ctor func_02004350
+15	Battles::AttackCommand	0x02003890	r1 to CommandBase ctor func_02004350
+16	Battles::CastSpellCommand	0x02003C0C	r1 to CommandBase ctor func_02004350
+17	Battles::CombatHoldPositionCommand	0x02003FFC	r1 to CommandBase ctor func_02004350
+18	Battles::CombatStandGroundCommand	0x02004190	r1 to CommandBase ctor func_02004350
+19	Battles::ConstructMultipleCommand	0x02005B48	r1 to CommandBase ctor func_02004350
+20	Battles::ConstructStructureCommand	0x02005D84	r1 to CommandBase ctor func_02004350
+21	Battles::GarrisonCommand	0x020063E8	r1 to CommandBase ctor func_02004350
+22	Battles::HarvestResourceCommand	0x020065C8	r1 to CommandBase ctor func_02004350
+23	Battles::MoveEntitiesCommand	0x020067A4	r1 to CommandBase ctor func_02004350
+24	Battles::PatrolCommand	0x020069C8	r1 to CommandBase ctor func_02004350
+25	Battles::ProduceEntityCommand	0x02006BB8	r1 to CommandBase ctor func_02004350
+26	Battles::CancelProduceQueueItemCommand	0x02003B08	r1 to CommandBase ctor func_02004350
+27	Battles::RallyPointCommand	0x02006CBC	r1 to CommandBase ctor func_02004350
+28	Battles::RepairStructureCommand	0x02006E98	r1 to CommandBase ctor func_02004350
+29	Battles::ResearchUpgradeCommand	0x02007070	r1 to CommandBase ctor func_02004350
+30	Battles::RetireCommand	0x0200718C	r1 to CommandBase ctor func_02004350
+31	Battles::StopCommand	0x0200733C	r1 to CommandBase ctor func_02004350
+32	Battles::UngarrisonCommand	0x020077F0	r1 to CommandBase ctor func_02004350
+33	Battles::WaitingToDieCommand	0x020079A8	r1 to CommandBase ctor func_02004350
+	Battles::TeamCommand		UNRESOLVED - id arrives as a parameter

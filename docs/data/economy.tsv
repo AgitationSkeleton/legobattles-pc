@@ -1,0 +1,22 @@
+category_id	name	blueprints	kind	limit_class_cap
+0	Hero	25	unit	1
+1	Builder	6	unit	20
+2	Melee	11	unit	4
+3	Ranged	10	unit	7
+4	Mounted	6	unit	14
+5	Transport	7	unit	29
+6	Siege	25	unit	20
+7	Base	9	structure	8
+8	Mill	9	structure	0
+9	Mine	6	structure	
+10	Farm	9	structure	
+11	Barracks	15	structure	
+12	VehicleCenter	8	structure	
+13	Tower	6	structure	
+14	Tower2	6	structure	
+15	Tower3	6	structure	
+16	Shipyard	7	structure	
+17	Bridge	6	structure	
+18	Gate	2	structure	
+19	Wall	1	structure	
+255	None	2		

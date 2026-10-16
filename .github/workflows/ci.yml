@@ -1,0 +1,46 @@
+# What can be checked without the game: the lobby servers and the Python tools.
+# The port itself needs the ROM to build, so it is built by release.yml on a
+# self-hosted runner instead.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Byte-compile every tool
+        run: python -m compileall -q tools services
+      - name: Master server (Python) tests
+        working-directory: services/master-server
+        run: python test_master_server.py
+
+  cloudflare-server:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/master-server-cloudflare
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci
+      - name: Run the Worker locally and test its protocol
+        run: |
+          npx wrangler dev --port 8787 --ip 127.0.0.1 > wrangler.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -fs http://127.0.0.1:8787/health && break
+            sleep 1
+          done
+          SERVER=http://127.0.0.1:8787 node test/run.mjs
+      - name: Wrangler log
+        if: failure()
+        run: cat wrangler.log

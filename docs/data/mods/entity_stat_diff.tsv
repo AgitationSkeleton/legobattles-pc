@@ -1,0 +1,1891 @@
+mod	entity	category	field	vanilla	modded
+REbalance	ALaser		damage_min	10	25
+REbalance	ALaser		damage_max	15	35
+REbalance	ALaser		damage_min_2	10	25
+REbalance	ALaser		damage_max_2	15	35
+REbalance	ALaser		flags	11110111101100	11100011000000
+REbalance	A_AlienKing	Hero	mana	1000	405
+REbalance	A_AlienKing	Hero	projectile		199
+REbalance	A_AlienKing	Hero	melee_damage	50	0
+REbalance	A_AlienKing	Hero	melee_damage_max	60	0
+REbalance	A_AlienKing	Hero	melee_spread	10	0
+REbalance	A_AlienKing	Hero	attack_interval	20	24
+REbalance	A_AlienKing	Hero	attack_range	1	5
+REbalance	A_AlienKing_F	Hero	health	900	1000
+REbalance	A_Engineer	Builder	speed	444	478
+REbalance	A_Engineer	Builder	speed_tiles_per_sec	3.25	3.5
+REbalance	A_Engineer	Builder	cost	50	55
+REbalance	A_Engineer	Builder	health	140	100
+REbalance	A_Engineer	Builder	attack_interval	24	30
+REbalance	A_Melee	Melee	build_time	270	150
+REbalance	A_Melee	Melee	projectile		198
+REbalance	A_Melee	Melee	melee_damage	20	0
+REbalance	A_Melee	Melee	melee_damage_max	25	0
+REbalance	A_Melee	Melee	melee_spread	5	0
+REbalance	A_Melee	Melee	attack_interval	30	24
+REbalance	A_Melee	Melee	attack_range	1	7
+REbalance	A_Mounted	Mounted	cost	250	300
+REbalance	A_Mounted	Mounted	build_time	480	570
+REbalance	A_Mounted	Mounted	projectile		197
+REbalance	A_Mounted	Mounted	melee_damage	35	0
+REbalance	A_Mounted	Mounted	melee_damage_max	45	0
+REbalance	A_Mounted	Mounted	melee_spread	10	0
+REbalance	A_Mounted	Mounted	attack_interval	30	10
+REbalance	A_Mounted	Mounted	attack_range	1	4
+REbalance	A_Ranged	Ranged	cost	150	200
+REbalance	A_Ranged	Ranged	build_time	390	420
+REbalance	A_Ranged	Ranged	health	250	600
+REbalance	A_Ranged	Ranged	projectile	197	198
+REbalance	A_Ranged	Ranged	attack_interval	24	38
+REbalance	A_Ranged	Ranged	field_70	18	20
+REbalance	A_Shipyard	Shipyard	cost	350	300
+REbalance	A_Shipyard	Shipyard	build_time	600	540
+REbalance	A_SiegeOne	Siege	speed	410	478
+REbalance	A_SiegeOne	Siege	speed_tiles_per_sec	3.0	3.5
+REbalance	A_SiegeOne	Siege	cost	350	500
+REbalance	A_SiegeOne	Siege	build_time	600	1500
+REbalance	A_SiegeOne	Siege	projectile	187	203
+REbalance	A_SiegeOne	Siege	attack_interval	24	15
+REbalance	A_SiegeOne	Siege	interaction_range	8	7
+REbalance	A_SiegeThree	Siege	cost	750	1250
+REbalance	A_SiegeThree	Siege	build_time	1140	3600
+REbalance	A_SiegeTwo	Siege	cost	500	750
+REbalance	A_SiegeTwo	Siege	build_time	840	2250
+REbalance	A_SiegeTwo	Siege	health	550	400
+REbalance	A_SiegeTwo	Siege	projectile	187	188
+REbalance	A_SiegeTwo	Siege	attack_interval	40	15
+REbalance	A_SiegeTwo	Siege	attack_range	6	7
+REbalance	A_Spire	Tower	health	400	350
+REbalance	A_Spire	Tower	attack_interval	24	30
+REbalance	A_Spire	Tower	field_70	40	38
+REbalance	A_Spire2	Tower2	cost	500	400
+REbalance	A_Spire2	Tower2	build_time	840	660
+REbalance	A_Spire2	Tower2	health	500	400
+REbalance	A_Spire2	Tower2	attack_interval	40	38
+REbalance	A_Spire2	Tower2	attack_range	6	7
+REbalance	A_Spire3	Tower3	cost	800	550
+REbalance	A_Spire3	Tower3	build_time	1260	810
+REbalance	A_Spire3	Tower3	health	700	400
+REbalance	A_Spire3	Tower3	attack_interval	60	72
+REbalance	A_Spire3	Tower3	attack_range	7	8
+REbalance	A_TransportShip	Transport	cost	250	750
+REbalance	A_TransportShip	Transport	build_time	540	1140
+REbalance	A_TransportShip	Transport	health	850	650
+REbalance	A_TransportShip	Transport	projectile	198	188
+REbalance	A_TransportShip	Transport	attack_range	4	6
+REbalance	A_TransportShip	Transport	field_70	10	20
+REbalance	A_WellCap	Mine	cost	600	300
+REbalance	A_WellCap	Mine	build_time	690	300
+REbalance	A_WellCap	Mine	resource_yield	25	30
+REbalance	AgentChase	Hero	cost	500	900
+REbalance	AgentChase	Hero	build_time	600	900
+REbalance	AgentChase	Hero	health	900	800
+REbalance	AgentChase	Hero	mana	1000	700
+REbalance	AgentChase	Hero	projectile	198	205
+REbalance	AgentChase	Hero	attack_interval	20	50
+REbalance	AirBallistaBolt		damage_min	75	65
+REbalance	AirBallistaBolt		damage_max	85	75
+REbalance	AirBallistaBolt		damage_min_2	75	65
+REbalance	AirBallistaBolt		damage_max_2	85	75
+REbalance	AirBallistaBolt		flags	11110110100100	11100011000000
+REbalance	AirFireball		damage_min	50	65
+REbalance	AirFireball		damage_min_2	50	65
+REbalance	AirFireball		flags	11110110100101	11100110000001
+REbalance	AirLaser		damage_min	10	185
+REbalance	AirLaser		damage_max	15	195
+REbalance	AirLaser		damage_min_2	10	185
+REbalance	AirLaser		damage_max_2	15	195
+REbalance	AirLaser		flags	11110110100100	11100011000000
+REbalance	Arrow		damage_min	15	20
+REbalance	Arrow		damage_max	20	30
+REbalance	Arrow		damage_min_2	15	20
+REbalance	Arrow		damage_max_2	20	30
+REbalance	BridgeLargeH	Bridge	build_time	30	150
+REbalance	BridgeLargeH	Bridge	health	650	2000
+REbalance	BridgeLargeV	Bridge	build_time	30	150
+REbalance	BridgeLargeV	Bridge	health	650	2000
+REbalance	BridgeMediumH	Bridge	health	500	1750
+REbalance	BridgeMediumV	Bridge	health	500	1750
+REbalance	BridgeSmallH	Bridge	health	350	850
+REbalance	BridgeSmallV	Bridge	health	350	850
+REbalance	ClassicSpace	Hero	mana	1000	605
+REbalance	ClassicSpace	Hero	melee_damage	40	30
+REbalance	ClassicSpace	Hero	melee_damage_max	50	40
+REbalance	Conquistador	Hero	speed	410	683
+REbalance	Conquistador	Hero	speed_tiles_per_sec	3.0	5.0
+REbalance	CrossbowBolt		damage_min	15	25
+REbalance	CrossbowBolt		damage_max	20	30
+REbalance	CrossbowBolt		damage_min_2	15	25
+REbalance	CrossbowBolt		damage_max_2	20	30
+REbalance	Dwarf	Melee	cost	100	250
+REbalance	Dwarf	Melee	build_time	270	480
+REbalance	Dwarf	Melee	health	250	600
+REbalance	Dwarf	Melee	melee_damage	20	30
+REbalance	Dwarf	Melee	melee_damage_max	25	40
+REbalance	Dwarf	Melee	melee_spread	5	10
+REbalance	Dwarf	Melee	field_70	15	20
+REbalance	DwarfKing	Hero	mana	1000	800
+REbalance	DwarfKing	Hero	melee_damage	50	200
+REbalance	DwarfKing	Hero	melee_damage_max	60	200
+REbalance	DwarfKing	Hero	melee_spread	10	0
+REbalance	DwarfKing	Hero	attack_interval	20	60
+REbalance	DwarfMineDefender	Siege	speed	410	341
+REbalance	DwarfMineDefender	Siege	speed_tiles_per_sec	3.0	2.5
+REbalance	DwarfMineDefender	Siege	cost	500	750
+REbalance	DwarfMineDefender	Siege	build_time	840	2250
+REbalance	DwarfMineDefender	Siege	health	550	875
+REbalance	DwarfMineDefender	Siege	projectile	188	190
+REbalance	DwarfMineDefender	Siege	attack_interval	40	60
+REbalance	DwarfMineDefender	Siege	attack_range	6	2
+REbalance	ELaser		damage_max	15	20
+REbalance	ELaser		damage_max_2	15	20
+REbalance	ELaser		flags	11110111101100	11100111000000
+REbalance	E_Commander	Hero	speed	478	410
+REbalance	E_Commander	Hero	speed_tiles_per_sec	3.5	3.0
+REbalance	E_Commander	Hero	cost	500	750
+REbalance	E_Commander	Hero	build_time	600	900
+REbalance	E_Commander	Hero	health	1000	700
+REbalance	E_Commander	Hero	mana	1000	600
+REbalance	E_Commander_F	Hero	health	900	800
+REbalance	E_Commander_F	Hero	mana	1000	605
+REbalance	E_Commander_F	Hero	projectile	197	198
+REbalance	E_Commander_F	Hero	attack_interval	20	12
+REbalance	E_Engineer	Builder	attack_interval	40	20
+REbalance	E_Melee	Melee	health	275	325
+REbalance	E_Melee	Melee	melee_damage	20	25
+REbalance	E_Melee	Melee	melee_damage_max	30	35
+REbalance	E_Melee	Melee	attack_interval	24	20
+REbalance	E_Melee	Melee	interaction_range	5	7
+REbalance	E_Ranged	Ranged	speed	410	341
+REbalance	E_Ranged	Ranged	speed_tiles_per_sec	3.0	2.5
+REbalance	E_Ranged	Ranged	cost	150	250
+REbalance	E_Ranged	Ranged	build_time	390	480
+REbalance	E_Ranged	Ranged	health	300	325
+REbalance	E_Ranged	Ranged	projectile	197	198
+REbalance	E_Ranged	Ranged	attack_interval	24	20
+REbalance	E_Ranged	Ranged	field_70	18	16
+REbalance	E_RocketTowers	Tower	health	400	550
+REbalance	E_RocketTowers	Tower	attack_interval	24	55
+REbalance	E_RocketTowers	Tower	field_70	40	38
+REbalance	E_RocketTowers2	Tower2	cost	500	400
+REbalance	E_RocketTowers2	Tower2	build_time	840	660
+REbalance	E_RocketTowers2	Tower2	health	500	650
+REbalance	E_RocketTowers2	Tower2	attack_interval	40	62
+REbalance	E_RocketTowers2	Tower2	attack_range	6	7
+REbalance	E_RocketTowers3	Tower3	cost	800	550
+REbalance	E_RocketTowers3	Tower3	build_time	1260	810
+REbalance	E_RocketTowers3	Tower3	health	700	850
+REbalance	E_RocketTowers3	Tower3	attack_interval	60	150
+REbalance	E_RocketTowers3	Tower3	attack_range	7	8
+REbalance	E_Shipyard	Shipyard	cost	350	300
+REbalance	E_Shipyard	Shipyard	build_time	600	540
+REbalance	E_SiegeOne	Siege	speed	478	341
+REbalance	E_SiegeOne	Siege	speed_tiles_per_sec	3.5	2.5
+REbalance	E_SiegeOne	Siege	cost	350	750
+REbalance	E_SiegeOne	Siege	build_time	600	2250
+REbalance	E_SiegeOne	Siege	health	450	900
+REbalance	E_SiegeOne	Siege	attack_range	5	6
+REbalance	E_SiegeOne	Siege	field_70	45	55
+REbalance	E_SiegeOne	Siege	interaction_range	8	7
+REbalance	E_SiegeThree	Siege	speed	819	683
+REbalance	E_SiegeThree	Siege	speed_tiles_per_sec	6.0	5.0
+REbalance	E_SiegeThree	Siege	cost	750	1250
+REbalance	E_SiegeThree	Siege	build_time	1140	3600
+REbalance	E_SiegeThree	Siege	health	700	800
+REbalance	E_SiegeThree	Siege	attack_interval	20	15
+REbalance	E_SiegeThree	Siege	attack_range	7	5
+REbalance	E_SiegeTwo	Siege	speed	410	478
+REbalance	E_SiegeTwo	Siege	speed_tiles_per_sec	3.0	3.5
+REbalance	E_SiegeTwo	Siege	cost	500	750
+REbalance	E_SiegeTwo	Siege	build_time	840	2250
+REbalance	E_SiegeTwo	Siege	health	550	1000
+REbalance	E_SiegeTwo	Siege	attack_range	6	5
+REbalance	E_SiegeTwo	Siege	field_70	55	70
+REbalance	E_TransportShip	Transport	cost	250	500
+REbalance	E_TransportShip	Transport	build_time	540	840
+REbalance	E_WellCap	Mine	cost	600	350
+REbalance	E_WellCap	Mine	build_time	690	480
+REbalance	E_WellCap	Mine	resource_yield	25	45
+REbalance	Fireball		damage_min	50	95
+REbalance	Fireball		damage_max	60	105
+REbalance	Fireball		damage_min_2	50	95
+REbalance	Fireball		damage_max_2	60	105
+REbalance	Fireball		flags	11110111101101	11100110000001
+REbalance	ForestMan	Hero	health	1000	1100
+REbalance	ForestMan	Hero	projectile	182	184
+REbalance	ForestMan	Hero	attack_interval	20	40
+REbalance	ForestMan	Hero	attack_range	5	6
+REbalance	Gift		damage_min	30	45
+REbalance	Gift		damage_max	50	55
+REbalance	Gift		damage_min_2	30	45
+REbalance	Gift		damage_max_2	50	55
+REbalance	I_Battleship	Siege	cost	500	750
+REbalance	I_Battleship	Siege	build_time	840	2250
+REbalance	I_Battleship	Siege	health	650	700
+REbalance	I_Battleship	Siege	attack_interval	30	24
+REbalance	I_Battleship	Siege	attack_range	6	7
+REbalance	I_Battleship	Siege	interaction_range	8	9
+REbalance	I_Clipper	Siege	cost	350	500
+REbalance	I_Clipper	Siege	build_time	600	1500
+REbalance	I_Clipper	Siege	health	550	650
+REbalance	I_Clipper	Siege	attack_range	5	6
+REbalance	I_Dirigible	Siege	speed	410	478
+REbalance	I_Dirigible	Siege	speed_tiles_per_sec	3.0	3.5
+REbalance	I_Dirigible	Siege	cost	750	1250
+REbalance	I_Dirigible	Siege	build_time	1140	3600
+REbalance	I_Dirigible	Siege	health	700	850
+REbalance	I_Dirigible	Siege	attack_interval	24	20
+REbalance	I_Dirigible	Siege	attack_range	7	6
+REbalance	I_Dirigible	Siege	interaction_range	8	9
+REbalance	I_Engineer	Builder	speed	375	341
+REbalance	I_Engineer	Builder	speed_tiles_per_sec	2.75	2.5
+REbalance	I_Engineer	Builder	cost	55	40
+REbalance	I_Engineer	Builder	health	160	200
+REbalance	I_Engineer	Builder	attack_interval	30	15
+REbalance	I_Quarry	Mine	cost	600	400
+REbalance	I_Quarry	Mine	build_time	690	540
+REbalance	I_Quarry	Mine	resource_yield	25	65
+REbalance	I_Rifleman	Ranged	speed	478	341
+REbalance	I_Rifleman	Ranged	speed_tiles_per_sec	3.5	2.5
+REbalance	I_Rifleman	Ranged	cost	150	250
+REbalance	I_Rifleman	Ranged	build_time	390	480
+REbalance	I_Rifleman	Ranged	attack_interval	24	50
+REbalance	I_Rifleman	Ranged	attack_range	4	5
+REbalance	I_Rifleman	Ranged	field_70	18	16
+REbalance	I_Shipyard	Shipyard	cost	350	300
+REbalance	I_Shipyard	Shipyard	build_time	600	540
+REbalance	I_StoneTower	Tower	projectile	194	196
+REbalance	I_StoneTower	Tower	attack_interval	24	30
+REbalance	I_StoneTower	Tower	field_70	40	36
+REbalance	I_StoneTower2	Tower2	cost	500	400
+REbalance	I_StoneTower2	Tower2	build_time	840	660
+REbalance	I_StoneTower2	Tower2	health	500	650
+REbalance	I_StoneTower2	Tower2	projectile	195	194
+REbalance	I_StoneTower2	Tower2	attack_interval	40	24
+REbalance	I_StoneTower3	Tower3	cost	800	550
+REbalance	I_StoneTower3	Tower3	build_time	1260	810
+REbalance	I_StoneTower3	Tower3	health	700	850
+REbalance	I_StoneTower3	Tower3	attack_interval	60	90
+REbalance	I_Swordsman	Melee	speed	341	410
+REbalance	I_Swordsman	Melee	speed_tiles_per_sec	2.5	3.0
+REbalance	I_Swordsman	Melee	cost	100	175
+REbalance	I_Swordsman	Melee	build_time	270	390
+REbalance	I_Swordsman	Melee	melee_damage	20	45
+REbalance	I_Swordsman	Melee	melee_damage_max	25	55
+REbalance	I_Swordsman	Melee	melee_spread	5	10
+REbalance	I_Swordsman	Melee	attack_interval	30	20
+REbalance	I_Swordsman	Melee	attack_range	1	2
+REbalance	I_Swordsman	Melee	interaction_range	5	8
+REbalance	I_TransportShip	Transport	speed	546	478
+REbalance	I_TransportShip	Transport	speed_tiles_per_sec	4.0	3.5
+REbalance	I_TransportShip	Transport	cost	250	750
+REbalance	I_TransportShip	Transport	build_time	540	1140
+REbalance	I_TransportShip	Transport	health	750	450
+REbalance	I_TransportShip	Transport	attack_interval	42	34
+REbalance	I_TransportShip	Transport	attack_range	4	7
+REbalance	I_TransportShip	Transport	field_70	10	20
+REbalance	I_TransportShip	Transport	interaction_range	6	8
+REbalance	ImperialShot		damage_min	15	95
+REbalance	ImperialShot		damage_max	20	105
+REbalance	ImperialShot		damage_min_2	15	95
+REbalance	ImperialShot		damage_max_2	20	105
+REbalance	ImperialShot		flags	11110111101100	11110011000100
+REbalance	Islander	Ranged	speed	478	546
+REbalance	Islander	Ranged	speed_tiles_per_sec	3.5	4.0
+REbalance	Islander	Ranged	cost	100	200
+REbalance	Islander	Ranged	health	250	350
+REbalance	Islander	Ranged	projectile	182	184
+REbalance	Islander	Ranged	attack_interval	24	60
+REbalance	Islander	Ranged	attack_range	5	8
+REbalance	Islander	Ranged	field_70	18	15
+REbalance	Islander	Ranged	interaction_range	7	9
+REbalance	IslanderChief	Hero	health	1000	2000
+REbalance	IslanderChief	Hero	mana	1000	2750
+REbalance	IslanderChief	Hero	projectile		184
+REbalance	IslanderChief	Hero	melee_damage	50	0
+REbalance	IslanderChief	Hero	melee_damage_max	60	0
+REbalance	IslanderChief	Hero	melee_spread	10	0
+REbalance	IslanderChief	Hero	attack_interval	20	45
+REbalance	IslanderChief	Hero	attack_range	1	5
+REbalance	IslanderWarCanoe	Siege	speed	478	546
+REbalance	IslanderWarCanoe	Siege	speed_tiles_per_sec	3.5	4.0
+REbalance	IslanderWarCanoe	Siege	cost	500	750
+REbalance	IslanderWarCanoe	Siege	build_time	840	2250
+REbalance	IslanderWarCanoe	Siege	projectile	189	185
+REbalance	IslanderWarCanoe	Siege	attack_interval	30	45
+REbalance	K_Archer	Ranged	cost	150	250
+REbalance	K_Archer	Ranged	build_time	390	480
+REbalance	K_Archer	Ranged	health	300	400
+REbalance	K_Archer	Ranged	attack_range	5	7
+REbalance	K_Archer	Ranged	field_70	18	15
+REbalance	K_Ballista	Siege	cost	350	500
+REbalance	K_Ballista	Siege	build_time	600	1500
+REbalance	K_Ballista	Siege	attack_range	7	8
+REbalance	K_Ballista	Siege	interaction_range	7	8
+REbalance	K_Catapult	Siege	cost	500	750
+REbalance	K_Catapult	Siege	build_time	840	2250
+REbalance	K_Engineer	Builder	speed	410	444
+REbalance	K_Engineer	Builder	speed_tiles_per_sec	3.0	3.25
+REbalance	K_Engineer	Builder	build_time	150	180
+REbalance	K_Engineer	Builder	health	150	200
+REbalance	K_Engineer	Builder	attack_interval	30	15
+REbalance	K_Engineer	Builder	interaction_range	5	6
+REbalance	K_Gryphon	Siege	speed	819	683
+REbalance	K_Gryphon	Siege	speed_tiles_per_sec	6.0	5.0
+REbalance	K_Gryphon	Siege	cost	900	1500
+REbalance	K_Gryphon	Siege	build_time	1140	3600
+REbalance	K_Gryphon	Siege	health	700	900
+REbalance	K_Gryphon	Siege	attack_interval	30	45
+REbalance	K_Knight	Mounted	health	300	525
+REbalance	K_Knight	Mounted	melee_damage	40	30
+REbalance	K_Knight	Mounted	melee_damage_max	50	40
+REbalance	K_Mine	Mine	cost	600	350
+REbalance	K_Mine	Mine	build_time	690	480
+REbalance	K_Mine	Mine	resource_yield	25	50
+REbalance	K_Shipyard	Shipyard	cost	350	300
+REbalance	K_Shipyard	Shipyard	build_time	600	540
+REbalance	K_Swordsman	Melee	cost	100	135
+REbalance	K_Swordsman	Melee	build_time	270	330
+REbalance	K_Swordsman	Melee	health	350	675
+REbalance	K_Swordsman	Melee	attack_interval	30	24
+REbalance	K_Swordsman	Melee	field_70	15	21
+REbalance	K_Tower	Tower	health	400	550
+REbalance	K_Tower	Tower	attack_interval	24	30
+REbalance	K_Tower	Tower	field_70	40	38
+REbalance	K_Tower2	Tower2	cost	500	400
+REbalance	K_Tower2	Tower2	build_time	840	660
+REbalance	K_Tower2	Tower2	health	500	650
+REbalance	K_Tower2	Tower2	attack_interval	40	32
+REbalance	K_Tower3	Tower3	cost	800	550
+REbalance	K_Tower3	Tower3	build_time	1260	810
+REbalance	K_Tower3	Tower3	health	700	850
+REbalance	K_Tower3	Tower3	attack_interval	60	55
+REbalance	K_Tower3	Tower3	attack_range	7	6
+REbalance	K_TransportShip	Transport	speed	683	956
+REbalance	K_TransportShip	Transport	speed_tiles_per_sec	5.0	7.0
+REbalance	K_TransportShip	Transport	cost	250	350
+REbalance	K_TransportShip	Transport	build_time	540	600
+REbalance	K_TransportShip	Transport	attack_interval	42	20
+REbalance	K_TransportShip	Transport	attack_range	4	7
+REbalance	K_TransportShip	Transport	interaction_range	6	8
+REbalance	Monkey	Melee	speed	614	683
+REbalance	Monkey	Melee	speed_tiles_per_sec	4.5	5.0
+REbalance	Monkey	Melee	melee_damage	5	150
+REbalance	Monkey	Melee	melee_damage_max	10	150
+REbalance	Monkey	Melee	melee_spread	5	0
+REbalance	Monkey	Melee	attack_interval	30	60
+REbalance	Ninja	Ranged	speed	546	683
+REbalance	Ninja	Ranged	speed_tiles_per_sec	4.0	5.0
+REbalance	Ninja	Ranged	projectile	182	184
+REbalance	Ninja	Ranged	attack_interval	24	40
+REbalance	Ninja	Ranged	field_70	18	14
+REbalance	NinjaKing	Hero	melee_damage	40	50
+REbalance	NinjaKing	Hero	melee_damage_max	50	60
+REbalance	OgreBoulder		damage_min	50	150
+REbalance	OgreBoulder		damage_max	60	175
+REbalance	OgreBoulder		damage_min_2	50	150
+REbalance	OgreBoulder		damage_max_2	60	175
+REbalance	PCannonBall		damage_min	50	25
+REbalance	PCannonBall		damage_max	75	35
+REbalance	PCannonBall		damage_min_2	50	25
+REbalance	PCannonBall		damage_max_2	75	35
+REbalance	P_Barracuda	Siege	cost	350	500
+REbalance	P_Barracuda	Siege	build_time	600	1500
+REbalance	P_Barracuda	Siege	health	550	650
+REbalance	P_Barracuda	Siege	projectile	196	195
+REbalance	P_Barracuda	Siege	attack_range	5	7
+REbalance	P_Barracuda	Siege	interaction_range	8	17
+REbalance	P_Battleship	Siege	cost	500	750
+REbalance	P_Battleship	Siege	build_time	840	2250
+REbalance	P_Battleship	Siege	projectile	196	195
+REbalance	P_Battleship	Siege	attack_range	6	8
+REbalance	P_Battleship	Siege	interaction_range	8	9
+REbalance	P_Builder	Builder	attack_interval	40	24
+REbalance	P_Captain	Hero	projectile		195
+REbalance	P_Captain	Hero	melee_damage	50	0
+REbalance	P_Captain	Hero	melee_damage_max	60	0
+REbalance	P_Captain	Hero	melee_spread	10	0
+REbalance	P_Captain	Hero	attack_interval	20	34
+REbalance	P_Captain	Hero	attack_range	1	6
+REbalance	P_Captain_F	Hero	speed	410	478
+REbalance	P_Captain_F	Hero	speed_tiles_per_sec	3.0	3.5
+REbalance	P_Captain_F	Hero	mana	1000	1350
+REbalance	P_Captain_F	Hero	melee_damage	40	50
+REbalance	P_Captain_F	Hero	melee_damage_max	50	60
+REbalance	P_Crossbowman	Ranged	speed	546	410
+REbalance	P_Crossbowman	Ranged	speed_tiles_per_sec	4.0	3.0
+REbalance	P_Crossbowman	Ranged	cost	150	200
+REbalance	P_Crossbowman	Ranged	build_time	390	420
+REbalance	P_Crossbowman	Ranged	health	200	300
+REbalance	P_Crossbowman	Ranged	projectile	193	196
+REbalance	P_Crossbowman	Ranged	attack_interval	24	30
+REbalance	P_Crossbowman	Ranged	field_70	18	15
+REbalance	P_FlyingDutchman	Siege	speed	478	614
+REbalance	P_FlyingDutchman	Siege	speed_tiles_per_sec	3.5	4.5
+REbalance	P_FlyingDutchman	Siege	cost	750	1250
+REbalance	P_FlyingDutchman	Siege	build_time	1140	3600
+REbalance	P_FlyingDutchman	Siege	projectile	196	195
+REbalance	P_FlyingDutchman	Siege	attack_interval	30	34
+REbalance	P_FlyingDutchman	Siege	attack_range	7	9
+REbalance	P_FlyingDutchman	Siege	interaction_range	8	9
+REbalance	P_Horseman	Mounted	cost	250	200
+REbalance	P_Horseman	Mounted	melee_damage	30	35
+REbalance	P_Horseman	Mounted	melee_damage_max	40	45
+REbalance	P_Horseman	Mounted	attack_range	1	2
+REbalance	P_LogTower	Tower	attack_interval	24	40
+REbalance	P_LogTower	Tower	field_70	40	38
+REbalance	P_LogTower2	Tower2	cost	500	400
+REbalance	P_LogTower2	Tower2	build_time	840	660
+REbalance	P_LogTower2	Tower2	projectile	196	195
+REbalance	P_LogTower2	Tower2	attack_range	6	7
+REbalance	P_LogTower3	Tower3	cost	800	550
+REbalance	P_LogTower3	Tower3	build_time	1260	810
+REbalance	P_LogTower3	Tower3	health	700	600
+REbalance	P_LogTower3	Tower3	attack_interval	60	90
+REbalance	P_LogTower3	Tower3	attack_range	7	8
+REbalance	P_Oarsman	Melee	speed	478	683
+REbalance	P_Oarsman	Melee	speed_tiles_per_sec	3.5	5.0
+REbalance	P_Oarsman	Melee	cost	120	100
+REbalance	P_Oarsman	Melee	build_time	270	330
+REbalance	P_Oarsman	Melee	health	300	550
+REbalance	P_Oarsman	Melee	attack_range	1	2
+REbalance	P_Oarsman	Melee	interaction_range	5	7
+REbalance	P_Quarry	Mine	cost	600	350
+REbalance	P_Quarry	Mine	build_time	690	480
+REbalance	P_Quarry	Mine	resource_yield	25	35
+REbalance	P_Shipyard	Shipyard	cost	350	300
+REbalance	P_Shipyard	Shipyard	build_time	600	540
+REbalance	P_TransportShip	Transport	speed	546	683
+REbalance	P_TransportShip	Transport	speed_tiles_per_sec	4.0	5.0
+REbalance	P_TransportShip	Transport	cost	250	750
+REbalance	P_TransportShip	Transport	build_time	540	1140
+REbalance	P_TransportShip	Transport	health	750	550
+REbalance	P_TransportShip	Transport	projectile	193	194
+REbalance	P_TransportShip	Transport	attack_interval	60	32
+REbalance	P_TransportShip	Transport	attack_range	4	8
+REbalance	P_TransportShip	Transport	field_70	10	20
+REbalance	P_TransportShip	Transport	interaction_range	6	9
+REbalance	PirateShot		damage_min	15	25
+REbalance	PirateShot		damage_max	20	35
+REbalance	PirateShot		damage_min_2	15	25
+REbalance	PirateShot		damage_max_2	20	35
+REbalance	PirateShot		flags	11110111101100	11110011000100
+REbalance	PlasmaBall		damage_min	85	80
+REbalance	PlasmaBall		damage_max	95	90
+REbalance	PlasmaBall		damage_min_2	85	80
+REbalance	PlasmaBall		damage_max_2	95	90
+REbalance	ProjectileSpell		flags	11111111101110	11101111100010
+REbalance	Robot	Melee	health	300	500
+REbalance	Robot	Melee	melee_damage	5	232
+REbalance	Robot	Melee	melee_damage_max	10	232
+REbalance	Robot	Melee	melee_spread	5	0
+REbalance	Shark	Siege	health	500	750
+REbalance	Shark	Siege	attack_interval	30	20
+REbalance	Shark	Siege	attack_range	2	3
+REbalance	Sheriff	Hero	attack_interval	20	36
+REbalance	ShipwreckWater	Shipyard	cost	200	300
+REbalance	SpaceCriminal	Ranged	health	250	300
+REbalance	SpaceCriminal	Ranged	attack_range	5	6
+REbalance	SpaceCriminal	Ranged	field_70	18	15
+REbalance	SpaceCriminalLeader	Hero	cost	500	750
+REbalance	SpaceCriminalLeader	Hero	build_time	600	900
+REbalance	SpaceCriminalLeader	Hero	health	1100	900
+REbalance	SpaceCriminalLeader	Hero	mana	1000	605
+REbalance	SpaceCriminalLeader	Hero	projectile	198	197
+REbalance	SpaceCriminalShip	Siege	cost	500	750
+REbalance	SpaceCriminalShip	Siege	build_time	840	2250
+REbalance	SpaceCriminalShip	Siege	attack_interval	30	34
+REbalance	SpaceCriminalShip	Siege	attack_range	6	5
+REbalance	SpacePolice	Ranged	speed	478	410
+REbalance	SpacePolice	Ranged	speed_tiles_per_sec	3.5	3.0
+REbalance	SpacePolice	Ranged	cost	100	250
+REbalance	SpacePolice	Ranged	projectile	197	199
+REbalance	SpacePolice	Ranged	attack_interval	24	45
+REbalance	SpacePolice	Ranged	attack_range	5	8
+REbalance	SpacePolice	Ranged	field_70	18	15
+REbalance	SpacePolice	Ranged	interaction_range	7	9
+REbalance	SpacePoliceCaptain	Hero	projectile	197	198
+REbalance	SpacePoliceCaptain	Hero	attack_interval	20	24
+REbalance	SpacePoliceCaptain	Hero	attack_range	5	8
+REbalance	SpacePoliceCaptain	Hero	interaction_range	7	9
+REbalance	SpacePoliceShip	Siege	cost	500	750
+REbalance	SpacePoliceShip	Siege	build_time	840	2250
+REbalance	SpacePoliceShip	Siege	health	550	450
+REbalance	SpacePoliceShip	Siege	attack_interval	30	36
+REbalance	TBolt		damage_min	35	55
+REbalance	TBolt		damage_max	45	65
+REbalance	TBolt		damage_min_2	35	55
+REbalance	TBolt		damage_max_2	45	65
+REbalance	TBolt		flags	11100111001000	11100110001000
+REbalance	TFireball		damage_min	85	80
+REbalance	TFireball		damage_max	95	90
+REbalance	TFireball		damage_min_2	85	80
+REbalance	TFireball		damage_max_2	95	90
+REbalance	TLaser		damage_min	35	55
+REbalance	TLaser		damage_max	45	65
+REbalance	TLaser		damage_min_2	35	55
+REbalance	TLaser		damage_max_2	45	65
+REbalance	TLaser		flags	11100111001000	11100010000000
+REbalance	TPirateShot		damage_min	45	55
+REbalance	TPirateShot		damage_max	50	65
+REbalance	TPirateShot		damage_min_2	45	55
+REbalance	TPirateShot		damage_max_2	50	65
+REbalance	Troll	Melee	speed	410	546
+REbalance	Troll	Melee	speed_tiles_per_sec	3.0	4.0
+REbalance	Troll	Melee	cost	100	250
+REbalance	Troll	Melee	build_time	270	480
+REbalance	Troll	Melee	health	250	350
+REbalance	Troll	Melee	mana	0	18500
+REbalance	Troll	Melee	melee_damage	15	40
+REbalance	Troll	Melee	melee_damage_max	20	60
+REbalance	Troll	Melee	melee_spread	5	20
+REbalance	Troll	Melee	field_70	15	20
+REbalance	Troll	Melee	interaction_range	7	9
+REbalance	TrollBattleWheel	Siege	speed	410	478
+REbalance	TrollBattleWheel	Siege	speed_tiles_per_sec	3.0	3.5
+REbalance	TrollBattleWheel	Siege	cost	500	1000
+REbalance	TrollBattleWheel	Siege	build_time	840	2250
+REbalance	TrollBattleWheel	Siege	projectile	188	203
+REbalance	TrollBattleWheel	Siege	attack_interval	40	24
+REbalance	TrollBattleWheel	Siege	attack_range	6	9
+REbalance	TrollBattleWheel	Siege	field_70	65	55
+REbalance	TrollBattleWheel	Siege	interaction_range	7	9
+REbalance	TrollHall	Barracks	health	750	900
+REbalance	TrollKing	Hero	health	1100	1200
+REbalance	TrollKing	Hero	mana	1000	1750
+REbalance	W_Ballista	Siege	cost	350	500
+REbalance	W_Ballista	Siege	build_time	600	1500
+REbalance	W_Ballista	Siege	projectile	188	186
+REbalance	W_Ballista	Siege	attack_interval	24	62
+REbalance	W_Crossbowman	Ranged	build_time	390	300
+REbalance	W_Crossbowman	Ranged	attack_interval	24	20
+REbalance	W_Crossbowman	Ranged	attack_range	4	5
+REbalance	W_Crossbowman	Ranged	field_70	18	15
+REbalance	W_Dragon	Siege	cost	900	1250
+REbalance	W_Dragon	Siege	build_time	1140	3600
+REbalance	W_Dragon	Siege	projectile	191	204
+REbalance	W_Dragon	Siege	attack_range	3	4
+REbalance	W_Engineer	Builder	cost	55	65
+REbalance	W_Engineer	Builder	build_time	150	120
+REbalance	W_Engineer	Builder	attack_interval	24	20
+REbalance	W_Giant	Siege	speed	478	546
+REbalance	W_Giant	Siege	speed_tiles_per_sec	3.5	4.0
+REbalance	W_Giant	Siege	cost	500	750
+REbalance	W_Giant	Siege	build_time	840	2250
+REbalance	W_Giant	Siege	health	550	675
+REbalance	W_Giant	Siege	projectile	190	189
+REbalance	W_Mine	Mine	cost	600	400
+REbalance	W_Mine	Mine	build_time	690	540
+REbalance	W_Mine	Mine	resource_yield	25	55
+REbalance	W_Shipyard	Shipyard	cost	350	300
+REbalance	W_Shipyard	Shipyard	build_time	600	540
+REbalance	W_Skeleknight	Mounted	melee_damage	30	55
+REbalance	W_Skeleknight	Mounted	melee_damage_max	40	65
+REbalance	W_Swordsman	Melee	cost	110	35
+REbalance	W_Swordsman	Melee	build_time	270	60
+REbalance	W_Swordsman	Melee	health	225	200
+REbalance	W_Swordsman	Melee	melee_damage	15	25
+REbalance	W_Swordsman	Melee	melee_damage_max	20	30
+REbalance	W_Swordsman	Melee	attack_interval	30	32
+REbalance	W_Swordsman	Melee	field_70	15	20
+REbalance	W_Tower	Tower	health	400	350
+REbalance	W_Tower	Tower	attack_interval	24	55
+REbalance	W_Tower	Tower	attack_range	6	7
+REbalance	W_Tower	Tower	field_70	40	38
+REbalance	W_Tower2	Tower2	cost	500	400
+REbalance	W_Tower2	Tower2	build_time	840	660
+REbalance	W_Tower2	Tower2	health	500	400
+REbalance	W_Tower2	Tower2	attack_interval	40	60
+REbalance	W_Tower2	Tower2	attack_range	6	8
+REbalance	W_Tower3	Tower3	cost	800	550
+REbalance	W_Tower3	Tower3	build_time	1260	810
+REbalance	W_Tower3	Tower3	health	700	450
+REbalance	W_Tower3	Tower3	projectile	186	203
+REbalance	W_Tower3	Tower3	attack_interval	60	30
+REbalance	W_Tower3	Tower3	attack_range	7	9
+REbalance	W_TransportShip	Transport	speed	614	683
+REbalance	W_TransportShip	Transport	speed_tiles_per_sec	4.5	5.0
+REbalance	W_TransportShip	Transport	cost	250	500
+REbalance	W_TransportShip	Transport	build_time	540	840
+REbalance	W_TransportShip	Transport	health	850	1750
+REbalance	W_TransportShip	Transport	attack_interval	42	30
+REbalance	W_TransportShip	Transport	attack_range	4	6
+REbalance	W_TransportShip	Transport	field_70	10	20
+REbalance	W_TransportShip	Transport	interaction_range	6	8
+REbalance	W_Wizard	Hero	mana	1000	800
+REbalance	W_Wizard	Hero	projectile		186
+REbalance	W_Wizard	Hero	melee_damage	30	0
+REbalance	W_Wizard	Hero	melee_damage_max	40	0
+REbalance	W_Wizard	Hero	melee_spread	10	0
+REbalance	W_Wizard	Hero	attack_interval	20	40
+REbalance	W_Wizard	Hero	attack_range	1	5
+REbalance	W_Wizard_F	Hero	mana	1000	1500
+REbalance	W_Wizard_F	Hero	projectile		200
+REbalance	W_Wizard_F	Hero	melee_damage	30	0
+REbalance	W_Wizard_F	Hero	melee_damage_max	40	0
+REbalance	W_Wizard_F	Hero	melee_spread	10	0
+REbalance	W_Wizard_F	Hero	attack_interval	20	30
+REbalance	W_Wizard_F	Hero	attack_range	1	6
+REbalance	Wall	Wall	build_time	60	5
+REbalance	Wall	Wall	health	250	300
+REbalance	WarJunk	Siege	speed	410	956
+REbalance	WarJunk	Siege	speed_tiles_per_sec	3.0	7.0
+REbalance	WarJunk	Siege	cost	500	750
+REbalance	WarJunk	Siege	build_time	840	2250
+REbalance	WarJunk	Siege	health	550	600
+REbalance	WarJunk	Siege	projectile	188	187
+REbalance	WarJunk	Siege	attack_interval	40	30
+REbalance	WarJunk	Siege	field_70	65	55
+FactionWars	ALaser		damage_min	10	20
+FactionWars	ALaser		damage_max	15	25
+FactionWars	ALaser		damage_min_2	10	20
+FactionWars	ALaser		damage_max_2	15	25
+FactionWars	A_AlienKing	Hero	cost	500	300
+FactionWars	A_AlienKing	Hero	build_time	600	480
+FactionWars	A_AlienKing	Hero	health	1000	500
+FactionWars	A_AlienKing_F	Hero	cost	500	300
+FactionWars	A_AlienKing_F	Hero	build_time	600	480
+FactionWars	A_AlienKing_F	Hero	health	900	450
+FactionWars	A_Engineer	Builder	speed	444	614
+FactionWars	A_Engineer	Builder	speed_tiles_per_sec	3.25	4.5
+FactionWars	A_Engineer	Builder	melee_damage	5	15
+FactionWars	A_Engineer	Builder	melee_damage_max	5	15
+FactionWars	A_Melee	Melee	speed	410	546
+FactionWars	A_Melee	Melee	speed_tiles_per_sec	3.0	4.0
+FactionWars	A_Melee	Melee	cost	90	250
+FactionWars	A_Melee	Melee	build_time	270	5
+FactionWars	A_Melee	Melee	health	225	300
+FactionWars	A_Melee	Melee	attack_interval	30	24
+FactionWars	A_Melee	Melee	field_70	15	22
+FactionWars	A_Melee	Melee	interaction_range	5	7
+FactionWars	A_Mounted	Mounted	build_time	480	390
+FactionWars	A_Ranged	Ranged	cost	150	250
+FactionWars	A_Ranged	Ranged	health	250	300
+FactionWars	A_SiegeOne	Siege	speed	410	683
+FactionWars	A_SiegeOne	Siege	speed_tiles_per_sec	3.0	5.0
+FactionWars	A_SiegeOne	Siege	cost	350	650
+FactionWars	A_SiegeOne	Siege	build_time	600	840
+FactionWars	A_SiegeOne	Siege	health	450	600
+FactionWars	A_SiegeOne	Siege	attack_interval	24	15
+FactionWars	A_SiegeOne	Siege	attack_range	5	7
+FactionWars	A_SiegeOne	Siege	field_70	45	55
+FactionWars	A_SiegeThree	Siege	cost	750	650
+FactionWars	A_SiegeThree	Siege	build_time	1140	840
+FactionWars	A_SiegeThree	Siege	field_70	65	55
+FactionWars	A_SiegeTwo	Siege	speed	478	683
+FactionWars	A_SiegeTwo	Siege	speed_tiles_per_sec	3.5	5.0
+FactionWars	A_SiegeTwo	Siege	cost	500	650
+FactionWars	A_SiegeTwo	Siege	health	550	600
+FactionWars	A_SiegeTwo	Siege	projectile	187	201
+FactionWars	A_SiegeTwo	Siege	attack_interval	40	36
+FactionWars	A_SiegeTwo	Siege	attack_range	6	8
+FactionWars	A_Spire	Tower	health	400	500
+FactionWars	A_Spire	Tower	attack_range	6	7
+FactionWars	A_Spire	Tower	interaction_range	7	9
+FactionWars	A_Spire2	Tower2	cost	500	5
+FactionWars	A_Spire2	Tower2	build_time	840	5
+FactionWars	A_Spire3	Tower3	cost	800	5
+FactionWars	A_Spire3	Tower3	build_time	1260	5
+FactionWars	A_Spire3	Tower3	health	700	500
+FactionWars	A_Spire3	Tower3	projectile	200	199
+FactionWars	A_Spire3	Tower3	attack_interval	60	30
+FactionWars	A_Spire3	Tower3	attack_range	7	10
+FactionWars	A_Spire3	Tower3	interaction_range	11	13
+FactionWars	A_TransportShip	Transport	speed	614	410
+FactionWars	A_TransportShip	Transport	speed_tiles_per_sec	4.5	3.0
+FactionWars	A_TransportShip	Transport	cost	250	3500
+FactionWars	A_TransportShip	Transport	build_time	540	2000
+FactionWars	A_TransportShip	Transport	health	850	1500
+FactionWars	A_TransportShip	Transport	projectile	198	205
+FactionWars	A_TransportShip	Transport	attack_interval	42	15
+FactionWars	A_TransportShip	Transport	attack_range	4	7
+FactionWars	A_TransportShip	Transport	field_70	10	55
+FactionWars	A_TransportShip	Transport	interaction_range	6	12
+FactionWars	AgentChase	Hero	cost	500	300
+FactionWars	AgentChase	Hero	build_time	600	480
+FactionWars	AgentChase	Hero	health	900	450
+FactionWars	AgentChase	Hero	projectile	198	197
+FactionWars	AirLaser		damage_min	10	145
+FactionWars	AirLaser		damage_max	15	155
+FactionWars	AirLaser		damage_min_2	10	145
+FactionWars	AirLaser		damage_max_2	15	155
+FactionWars	Arrow		damage_min	15	25
+FactionWars	Arrow		damage_max	20	30
+FactionWars	Arrow		damage_min_2	15	25
+FactionWars	Arrow		damage_max_2	20	30
+FactionWars	Boulder		damage_min	50	65
+FactionWars	Boulder		damage_max	60	75
+FactionWars	Boulder		damage_min_2	50	65
+FactionWars	Boulder		damage_max_2	60	75
+FactionWars	ClassicSpace	Hero	cost	500	300
+FactionWars	ClassicSpace	Hero	build_time	600	480
+FactionWars	ClassicSpace	Hero	health	900	500
+FactionWars	ClassicSpace	Hero	melee_damage	40	45
+FactionWars	ClassicSpace	Hero	melee_damage_max	50	55
+FactionWars	Conquistador	Hero	cost	500	300
+FactionWars	Conquistador	Hero	build_time	600	480
+FactionWars	Conquistador	Hero	health	1000	500
+FactionWars	Conquistador	Hero	melee_damage	30	35
+FactionWars	Conquistador	Hero	melee_damage_max	40	45
+FactionWars	CrossbowBolt		damage_min	15	30
+FactionWars	CrossbowBolt		damage_max	20	35
+FactionWars	CrossbowBolt		damage_min_2	15	30
+FactionWars	CrossbowBolt		damage_max_2	20	35
+FactionWars	Dwarf	Melee	cost	100	250
+FactionWars	Dwarf	Melee	build_time	270	390
+FactionWars	Dwarf	Melee	health	250	450
+FactionWars	Dwarf	Melee	melee_damage	20	30
+FactionWars	Dwarf	Melee	melee_damage_max	25	40
+FactionWars	Dwarf	Melee	melee_spread	5	10
+FactionWars	Dwarf	Melee	attack_interval	30	24
+FactionWars	Dwarf	Melee	field_70	15	22
+FactionWars	DwarfKing	Hero	cost	500	300
+FactionWars	DwarfKing	Hero	build_time	600	480
+FactionWars	DwarfKing	Hero	health	1000	500
+FactionWars	DwarfMineDefender	Siege	cost	500	750
+FactionWars	DwarfMineDefender	Siege	health	550	600
+FactionWars	DwarfMineDefender	Siege	projectile	188	187
+FactionWars	DwarfMineDefender	Siege	attack_interval	40	20
+FactionWars	DwarfMineDefender	Siege	attack_range	6	10
+FactionWars	DwarfMineDefender	Siege	field_70	65	55
+FactionWars	DwarfMineDefender	Siege	interaction_range	7	8
+FactionWars	ELaser		damage_min	10	30
+FactionWars	ELaser		damage_max	15	35
+FactionWars	ELaser		damage_min_2	10	30
+FactionWars	ELaser		damage_max_2	15	35
+FactionWars	E_Biodome	Farm	cost	75	250
+FactionWars	E_Biodome	Farm	build_time	360	1000
+FactionWars	E_Commander	Hero	cost	500	300
+FactionWars	E_Commander	Hero	build_time	600	480
+FactionWars	E_Commander	Hero	health	1000	500
+FactionWars	E_Commander_F	Hero	cost	500	300
+FactionWars	E_Commander_F	Hero	build_time	600	480
+FactionWars	E_Commander_F	Hero	health	900	450
+FactionWars	E_Engineer	Builder	cost	45	150
+FactionWars	E_Engineer	Builder	build_time	150	420
+FactionWars	E_Melee	Melee	cost	90	250
+FactionWars	E_Melee	Melee	build_time	270	390
+FactionWars	E_Melee	Melee	health	275	350
+FactionWars	E_Melee	Melee	melee_damage	20	40
+FactionWars	E_Melee	Melee	melee_damage_max	30	50
+FactionWars	E_Melee	Melee	field_70	15	22
+FactionWars	E_Melee	Melee	interaction_range	5	7
+FactionWars	E_Mounted	Mounted	cost	250	750
+FactionWars	E_Mounted	Mounted	build_time	480	840
+FactionWars	E_Mounted	Mounted	health	400	900
+FactionWars	E_Mounted	Mounted	melee_damage	40	60
+FactionWars	E_Mounted	Mounted	melee_damage_max	50	70
+FactionWars	E_Ranged	Ranged	speed	410	478
+FactionWars	E_Ranged	Ranged	speed_tiles_per_sec	3.0	3.5
+FactionWars	E_Ranged	Ranged	cost	150	250
+FactionWars	E_Ranged	Ranged	health	300	350
+FactionWars	E_Ranged	Ranged	attack_range	5	7
+FactionWars	E_RocketTowers	Tower	health	400	500
+FactionWars	E_RocketTowers	Tower	attack_range	6	7
+FactionWars	E_RocketTowers	Tower	interaction_range	7	9
+FactionWars	E_RocketTowers2	Tower2	cost	500	5
+FactionWars	E_RocketTowers2	Tower2	build_time	840	5
+FactionWars	E_RocketTowers3	Tower3	cost	800	5
+FactionWars	E_RocketTowers3	Tower3	build_time	1260	5
+FactionWars	E_RocketTowers3	Tower3	health	700	500
+FactionWars	E_RocketTowers3	Tower3	projectile	200	199
+FactionWars	E_RocketTowers3	Tower3	attack_interval	60	30
+FactionWars	E_RocketTowers3	Tower3	attack_range	7	10
+FactionWars	E_RocketTowers3	Tower3	interaction_range	11	13
+FactionWars	E_SiegeOne	Siege	speed	478	410
+FactionWars	E_SiegeOne	Siege	speed_tiles_per_sec	3.5	3.0
+FactionWars	E_SiegeOne	Siege	cost	350	1500
+FactionWars	E_SiegeOne	Siege	build_time	600	1500
+FactionWars	E_SiegeOne	Siege	health	450	850
+FactionWars	E_SiegeOne	Siege	projectile	187	188
+FactionWars	E_SiegeOne	Siege	attack_interval	24	15
+FactionWars	E_SiegeOne	Siege	attack_range	5	7
+FactionWars	E_SiegeOne	Siege	field_70	45	55
+FactionWars	E_SiegeThree	Siege	cost	750	1500
+FactionWars	E_SiegeThree	Siege	build_time	1140	1500
+FactionWars	E_SiegeThree	Siege	health	700	1000
+FactionWars	E_SiegeThree	Siege	projectile	187	188
+FactionWars	E_SiegeThree	Siege	field_70	65	55
+FactionWars	E_SiegeTwo	Siege	speed	410	478
+FactionWars	E_SiegeTwo	Siege	speed_tiles_per_sec	3.0	3.5
+FactionWars	E_SiegeTwo	Siege	cost	500	1500
+FactionWars	E_SiegeTwo	Siege	build_time	840	1500
+FactionWars	E_SiegeTwo	Siege	health	550	850
+FactionWars	E_SiegeTwo	Siege	projectile	187	200
+FactionWars	E_SiegeTwo	Siege	attack_interval	30	36
+FactionWars	E_SiegeTwo	Siege	attack_range	6	8
+FactionWars	E_TransportShip	Transport	cost	250	1500
+FactionWars	E_TransportShip	Transport	build_time	540	1500
+FactionWars	E_TransportShip	Transport	projectile	197	200
+FactionWars	E_TransportShip	Transport	field_70	10	55
+FactionWars	E_TransportShip	Transport	interaction_range	6	8
+FactionWars	Fireball		damage_min	50	65
+FactionWars	Fireball		damage_max	60	75
+FactionWars	Fireball		damage_min_2	50	65
+FactionWars	Fireball		damage_max_2	60	75
+FactionWars	ForestMan	Hero	cost	500	300
+FactionWars	ForestMan	Hero	build_time	600	480
+FactionWars	ForestMan	Hero	health	1000	500
+FactionWars	ForestMan	Hero	attack_range	5	7
+FactionWars	Ghost	Hero	cost	500	300
+FactionWars	Ghost	Hero	build_time	600	480
+FactionWars	Ghost	Hero	health	900	450
+FactionWars	Ghost	Hero	melee_damage	30	35
+FactionWars	Ghost	Hero	melee_damage_max	40	45
+FactionWars	ICannonBall		damage_min	50	65
+FactionWars	ICannonBall		damage_min_2	50	65
+FactionWars	I_Barracks	Barracks	health	750	900
+FactionWars	I_Battleship	Siege	cost	500	750
+FactionWars	I_Battleship	Siege	health	650	700
+FactionWars	I_Battleship	Siege	attack_interval	30	20
+FactionWars	I_Battleship	Siege	attack_range	6	9
+FactionWars	I_Cavalry	Mounted	build_time	480	390
+FactionWars	I_Clipper	Siege	speed	853	683
+FactionWars	I_Clipper	Siege	speed_tiles_per_sec	6.25	5.0
+FactionWars	I_Clipper	Siege	cost	350	750
+FactionWars	I_Clipper	Siege	build_time	600	840
+FactionWars	I_Clipper	Siege	health	550	700
+FactionWars	I_Clipper	Siege	attack_interval	30	16
+FactionWars	I_Clipper	Siege	attack_range	5	7
+FactionWars	I_Clipper	Siege	field_70	45	55
+FactionWars	I_Dirigible	Siege	build_time	1140	840
+FactionWars	I_Dirigible	Siege	health	700	850
+FactionWars	I_Dirigible	Siege	attack_interval	24	22
+FactionWars	I_Dirigible	Siege	attack_range	7	8
+FactionWars	I_Dirigible	Siege	field_70	65	55
+FactionWars	I_Drydock	VehicleCenter	health	1000	1200
+FactionWars	I_Fortress	Base	health	1500	2000
+FactionWars	I_Governor	Hero	cost	500	300
+FactionWars	I_Governor	Hero	build_time	600	480
+FactionWars	I_Governor	Hero	health	1100	550
+FactionWars	I_Governor_F	Hero	cost	500	300
+FactionWars	I_Governor_F	Hero	build_time	600	480
+FactionWars	I_Governor_F	Hero	health	1000	500
+FactionWars	I_LumberMill	Mill	health	750	1000
+FactionWars	I_Quarry	Mine	health	1250	1500
+FactionWars	I_Rifleman	Ranged	speed	478	410
+FactionWars	I_Rifleman	Ranged	speed_tiles_per_sec	3.5	3.0
+FactionWars	I_Rifleman	Ranged	cost	150	250
+FactionWars	I_Rifleman	Ranged	health	200	350
+FactionWars	I_Rifleman	Ranged	attack_interval	24	20
+FactionWars	I_Rifleman	Ranged	attack_range	4	5
+FactionWars	I_Shipyard	Shipyard	health	1000	1200
+FactionWars	I_StoneTower	Tower	cost	300	400
+FactionWars	I_StoneTower	Tower	health	400	600
+FactionWars	I_StoneTower	Tower	attack_range	6	7
+FactionWars	I_StoneTower	Tower	interaction_range	7	11
+FactionWars	I_StoneTower2	Tower2	cost	500	5
+FactionWars	I_StoneTower2	Tower2	build_time	840	5
+FactionWars	I_StoneTower2	Tower2	health	500	600
+FactionWars	I_StoneTower2	Tower2	interaction_range	9	11
+FactionWars	I_StoneTower3	Tower3	cost	800	5
+FactionWars	I_StoneTower3	Tower3	build_time	1260	5
+FactionWars	I_StoneTower3	Tower3	health	700	600
+FactionWars	I_StoneTower3	Tower3	projectile	186	194
+FactionWars	I_StoneTower3	Tower3	attack_interval	60	30
+FactionWars	I_StoneTower3	Tower3	attack_range	7	10
+FactionWars	I_StoneTower3	Tower3	interaction_range	11	15
+FactionWars	I_Swordsman	Melee	cost	100	250
+FactionWars	I_Swordsman	Melee	build_time	270	390
+FactionWars	I_Swordsman	Melee	health	250	400
+FactionWars	I_Swordsman	Melee	melee_damage	20	35
+FactionWars	I_Swordsman	Melee	melee_damage_max	25	45
+FactionWars	I_Swordsman	Melee	melee_spread	5	10
+FactionWars	I_Swordsman	Melee	attack_interval	30	24
+FactionWars	I_Swordsman	Melee	field_70	15	22
+FactionWars	I_Swordsman	Melee	interaction_range	5	7
+FactionWars	I_Tavern	Farm	health	350	450
+FactionWars	I_TransportShip	Transport	cost	250	750
+FactionWars	I_TransportShip	Transport	build_time	540	840
+FactionWars	I_TransportShip	Transport	projectile	192	195
+FactionWars	I_TransportShip	Transport	attack_interval	42	30
+FactionWars	I_TransportShip	Transport	attack_range	4	7
+FactionWars	I_TransportShip	Transport	field_70	10	55
+FactionWars	I_TransportShip	Transport	interaction_range	6	8
+FactionWars	ImperialShot		damage_min	15	30
+FactionWars	ImperialShot		damage_max	20	35
+FactionWars	ImperialShot		damage_min_2	15	30
+FactionWars	ImperialShot		damage_max_2	20	35
+FactionWars	Islander	Ranged	cost	100	250
+FactionWars	Islander	Ranged	health	250	350
+FactionWars	Islander	Ranged	attack_interval	24	20
+FactionWars	Islander	Ranged	attack_range	5	7
+FactionWars	Islander	Ranged	interaction_range	7	11
+FactionWars	IslanderChief	Hero	cost	500	300
+FactionWars	IslanderChief	Hero	build_time	600	480
+FactionWars	IslanderChief	Hero	health	1000	500
+FactionWars	IslanderWarCanoe	Siege	cost	500	650
+FactionWars	IslanderWarCanoe	Siege	health	550	600
+FactionWars	IslanderWarCanoe	Siege	attack_interval	30	24
+FactionWars	IslanderWarCanoe	Siege	field_70	65	55
+FactionWars	IslanderWarCanoe	Siege	interaction_range	7	12
+FactionWars	K_Archer	Ranged	cost	150	250
+FactionWars	K_Archer	Ranged	health	300	400
+FactionWars	K_Archer	Ranged	attack_range	5	7
+FactionWars	K_Ballista	Siege	cost	350	750
+FactionWars	K_Ballista	Siege	build_time	600	840
+FactionWars	K_Ballista	Siege	health	450	600
+FactionWars	K_Ballista	Siege	attack_interval	24	15
+FactionWars	K_Ballista	Siege	attack_range	7	8
+FactionWars	K_Ballista	Siege	field_70	45	55
+FactionWars	K_Ballista	Siege	interaction_range	7	8
+FactionWars	K_Catapult	Siege	cost	500	750
+FactionWars	K_Catapult	Siege	health	550	600
+FactionWars	K_Gryphon	Siege	cost	900	750
+FactionWars	K_Gryphon	Siege	build_time	1140	840
+FactionWars	K_Gryphon	Siege	attack_range	3	5
+FactionWars	K_Gryphon	Siege	field_70	65	55
+FactionWars	K_King	Hero	cost	500	300
+FactionWars	K_King	Hero	build_time	600	480
+FactionWars	K_King	Hero	health	1000	500
+FactionWars	K_King_F	Hero	cost	500	300
+FactionWars	K_King_F	Hero	build_time	600	480
+FactionWars	K_King_F	Hero	health	1000	500
+FactionWars	K_Knight	Mounted	build_time	480	390
+FactionWars	K_Knight	Mounted	health	300	400
+FactionWars	K_Knight	Mounted	melee_damage	40	35
+FactionWars	K_Knight	Mounted	melee_damage_max	50	45
+FactionWars	K_Swordsman	Melee	cost	100	250
+FactionWars	K_Swordsman	Melee	build_time	270	390
+FactionWars	K_Swordsman	Melee	health	350	500
+FactionWars	K_Swordsman	Melee	melee_damage	10	25
+FactionWars	K_Swordsman	Melee	melee_damage_max	15	35
+FactionWars	K_Swordsman	Melee	melee_spread	5	10
+FactionWars	K_Swordsman	Melee	attack_interval	30	24
+FactionWars	K_Swordsman	Melee	field_70	15	22
+FactionWars	K_Swordsman	Melee	interaction_range	5	7
+FactionWars	K_Tower	Tower	health	400	500
+FactionWars	K_Tower	Tower	attack_range	5	7
+FactionWars	K_Tower	Tower	interaction_range	7	9
+FactionWars	K_Tower2	Tower2	cost	500	5
+FactionWars	K_Tower2	Tower2	build_time	840	5
+FactionWars	K_Tower3	Tower3	cost	800	5
+FactionWars	K_Tower3	Tower3	build_time	1260	5
+FactionWars	K_Tower3	Tower3	health	700	500
+FactionWars	K_Tower3	Tower3	projectile	186	184
+FactionWars	K_Tower3	Tower3	attack_interval	60	30
+FactionWars	K_Tower3	Tower3	attack_range	7	10
+FactionWars	K_Tower3	Tower3	interaction_range	11	13
+FactionWars	K_TransportShip	Transport	cost	250	750
+FactionWars	K_TransportShip	Transport	build_time	540	840
+FactionWars	K_TransportShip	Transport	health	850	750
+FactionWars	K_TransportShip	Transport	attack_interval	42	15
+FactionWars	K_TransportShip	Transport	attack_range	4	8
+FactionWars	K_TransportShip	Transport	field_70	10	55
+FactionWars	K_TransportShip	Transport	interaction_range	6	8
+FactionWars	Ninja	Ranged	cost	100	250
+FactionWars	Ninja	Ranged	health	200	350
+FactionWars	Ninja	Ranged	attack_range	5	7
+FactionWars	NinjaKing	Hero	cost	500	300
+FactionWars	NinjaKing	Hero	build_time	600	480
+FactionWars	NinjaKing	Hero	health	900	350
+FactionWars	OgreBoulder		damage_min	50	65
+FactionWars	OgreBoulder		damage_max	60	75
+FactionWars	OgreBoulder		damage_min_2	50	65
+FactionWars	OgreBoulder		damage_max_2	60	75
+FactionWars	PCannonBall		damage_min	50	65
+FactionWars	PCannonBall		damage_min_2	50	65
+FactionWars	P_Barracuda	Siege	cost	350	750
+FactionWars	P_Barracuda	Siege	build_time	600	840
+FactionWars	P_Barracuda	Siege	health	550	600
+FactionWars	P_Barracuda	Siege	attack_interval	40	15
+FactionWars	P_Barracuda	Siege	attack_range	5	9
+FactionWars	P_Barracuda	Siege	field_70	45	55
+FactionWars	P_Barracuda	Siege	interaction_range	8	12
+FactionWars	P_Battleship	Siege	cost	500	750
+FactionWars	P_Battleship	Siege	health	650	600
+FactionWars	P_Battleship	Siege	attack_interval	30	20
+FactionWars	P_Battleship	Siege	attack_range	6	12
+FactionWars	P_Battleship	Siege	interaction_range	8	12
+FactionWars	P_Captain	Hero	cost	500	300
+FactionWars	P_Captain	Hero	build_time	600	480
+FactionWars	P_Captain	Hero	health	1000	500
+FactionWars	P_Captain	Hero	melee_damage	50	30
+FactionWars	P_Captain	Hero	melee_damage_max	60	40
+FactionWars	P_Captain_F	Hero	cost	500	300
+FactionWars	P_Captain_F	Hero	build_time	600	480
+FactionWars	P_Captain_F	Hero	health	1000	500
+FactionWars	P_Captain_F	Hero	melee_damage	40	20
+FactionWars	P_Captain_F	Hero	melee_damage_max	50	30
+FactionWars	P_Crossbowman	Ranged	cost	150	250
+FactionWars	P_Crossbowman	Ranged	health	200	300
+FactionWars	P_Crossbowman	Ranged	attack_interval	24	20
+FactionWars	P_Crossbowman	Ranged	interaction_range	7	11
+FactionWars	P_FlyingDutchman	Siege	speed	478	683
+FactionWars	P_FlyingDutchman	Siege	speed_tiles_per_sec	3.5	5.0
+FactionWars	P_FlyingDutchman	Siege	build_time	1140	840
+FactionWars	P_FlyingDutchman	Siege	attack_interval	30	20
+FactionWars	P_FlyingDutchman	Siege	attack_range	7	10
+FactionWars	P_FlyingDutchman	Siege	field_70	65	55
+FactionWars	P_FlyingDutchman	Siege	interaction_range	8	12
+FactionWars	P_Horseman	Mounted	build_time	480	390
+FactionWars	P_Horseman	Mounted	melee_damage	30	35
+FactionWars	P_Horseman	Mounted	melee_damage_max	40	45
+FactionWars	P_Horseman	Mounted	interaction_range	7	11
+FactionWars	P_Jetty	VehicleCenter	cost	350	300
+FactionWars	P_Jetty	VehicleCenter	build_time	600	480
+FactionWars	P_Jetty	VehicleCenter	health	1000	800
+FactionWars	P_LogTower	Tower	health	400	500
+FactionWars	P_LogTower	Tower	attack_range	6	7
+FactionWars	P_LogTower	Tower	interaction_range	7	9
+FactionWars	P_LogTower2	Tower2	cost	500	5
+FactionWars	P_LogTower2	Tower2	build_time	840	5
+FactionWars	P_LogTower3	Tower3	cost	800	5
+FactionWars	P_LogTower3	Tower3	build_time	1260	5
+FactionWars	P_LogTower3	Tower3	health	700	500
+FactionWars	P_LogTower3	Tower3	projectile	186	194
+FactionWars	P_LogTower3	Tower3	attack_interval	60	30
+FactionWars	P_LogTower3	Tower3	attack_range	7	10
+FactionWars	P_LogTower3	Tower3	interaction_range	11	13
+FactionWars	P_LumberShack	Mill	cost	400	300
+FactionWars	P_LumberShack	Mill	build_time	540	480
+FactionWars	P_LumberShack	Mill	health	750	600
+FactionWars	P_Oarsman	Melee	cost	120	250
+FactionWars	P_Oarsman	Melee	build_time	270	390
+FactionWars	P_Oarsman	Melee	health	300	350
+FactionWars	P_Oarsman	Melee	melee_damage	10	40
+FactionWars	P_Oarsman	Melee	melee_damage_max	15	50
+FactionWars	P_Oarsman	Melee	melee_spread	5	10
+FactionWars	P_Oarsman	Melee	attack_interval	30	24
+FactionWars	P_Oarsman	Melee	field_70	15	22
+FactionWars	P_Oarsman	Melee	interaction_range	5	11
+FactionWars	P_PiratesHold	Base	cost	1000	750
+FactionWars	P_PiratesHold	Base	build_time	900	750
+FactionWars	P_PiratesHold	Base	health	1500	1000
+FactionWars	P_Quarry	Mine	cost	600	500
+FactionWars	P_Quarry	Mine	build_time	690	560
+FactionWars	P_Quarry	Mine	health	1250	1000
+FactionWars	P_Quarry	Mine	resource_yield	25	50
+FactionWars	P_ShantyShack	Farm	cost	75	65
+FactionWars	P_ShantyShack	Farm	build_time	360	300
+FactionWars	P_ShantyShack	Farm	health	350	275
+FactionWars	P_Shipyard	Shipyard	cost	350	300
+FactionWars	P_Shipyard	Shipyard	build_time	600	480
+FactionWars	P_Shipyard	Shipyard	health	1000	800
+FactionWars	P_Tavern	Barracks	cost	200	150
+FactionWars	P_Tavern	Barracks	build_time	450	380
+FactionWars	P_Tavern	Barracks	health	750	650
+FactionWars	P_TransportShip	Transport	speed	546	819
+FactionWars	P_TransportShip	Transport	speed_tiles_per_sec	4.0	6.0
+FactionWars	P_TransportShip	Transport	cost	250	750
+FactionWars	P_TransportShip	Transport	build_time	540	840
+FactionWars	P_TransportShip	Transport	projectile	193	196
+FactionWars	P_TransportShip	Transport	attack_interval	60	30
+FactionWars	P_TransportShip	Transport	attack_range	4	8
+FactionWars	P_TransportShip	Transport	field_70	10	55
+FactionWars	P_TransportShip	Transport	interaction_range	6	12
+FactionWars	PirateShot		damage_min	15	30
+FactionWars	PirateShot		damage_max	20	35
+FactionWars	PirateShot		damage_min_2	15	30
+FactionWars	PirateShot		damage_max_2	20	35
+FactionWars	PlasmaBall		damage_min	85	95
+FactionWars	PlasmaBall		damage_max	95	105
+FactionWars	PlasmaBall		damage_min_2	85	95
+FactionWars	PlasmaBall		damage_max_2	95	105
+FactionWars	Santa	Hero	cost	500	300
+FactionWars	Santa	Hero	build_time	600	480
+FactionWars	Santa	Hero	health	900	450
+FactionWars	Sheriff	Hero	cost	500	300
+FactionWars	Sheriff	Hero	build_time	600	480
+FactionWars	Sheriff	Hero	health	900	450
+FactionWars	SiegeBolt		damage_min	65	95
+FactionWars	SiegeBolt		damage_max	75	105
+FactionWars	SiegeBolt		damage_min_2	65	95
+FactionWars	SiegeBolt		damage_max_2	75	105
+FactionWars	SpaceCriminal	Ranged	cost	100	250
+FactionWars	SpaceCriminal	Ranged	build_time	390	5
+FactionWars	SpaceCriminalLeader	Hero	cost	500	300
+FactionWars	SpaceCriminalLeader	Hero	build_time	600	480
+FactionWars	SpaceCriminalLeader	Hero	health	1100	550
+FactionWars	SpaceCriminalLeader	Hero	projectile	198	197
+FactionWars	SpaceCriminalShip	Siege	speed	478	683
+FactionWars	SpaceCriminalShip	Siege	speed_tiles_per_sec	3.5	5.0
+FactionWars	SpaceCriminalShip	Siege	cost	500	650
+FactionWars	SpaceCriminalShip	Siege	health	550	600
+FactionWars	SpaceCriminalShip	Siege	field_70	65	55
+FactionWars	SpaceCriminalShip	Siege	interaction_range	7	5
+FactionWars	SpacePolice	Ranged	cost	100	250
+FactionWars	SpacePolice	Ranged	health	250	300
+FactionWars	SpacePolice	Ranged	attack_range	5	8
+FactionWars	SpacePoliceCaptain	Hero	cost	500	300
+FactionWars	SpacePoliceCaptain	Hero	build_time	600	480
+FactionWars	SpacePoliceCaptain	Hero	health	1000	500
+FactionWars	SpacePoliceShip	Siege	cost	500	1500
+FactionWars	SpacePoliceShip	Siege	build_time	840	1500
+FactionWars	SpacePoliceShip	Siege	health	550	850
+FactionWars	SpacePoliceShip	Siege	projectile	201	200
+FactionWars	SpacePoliceShip	Siege	field_70	65	55
+FactionWars	SpacePoliceShip	Siege	interaction_range	7	8
+FactionWars	TBolt		damage_min	35	65
+FactionWars	TBolt		damage_max	45	75
+FactionWars	TBolt		damage_min_2	35	65
+FactionWars	TBolt		damage_max_2	45	75
+FactionWars	TLaser		damage_min	35	65
+FactionWars	TLaser		damage_max	45	75
+FactionWars	TLaser		damage_min_2	35	65
+FactionWars	TLaser		damage_max_2	45	75
+FactionWars	TPirateShot		damage_min	45	65
+FactionWars	TPirateShot		damage_max	50	75
+FactionWars	TPirateShot		damage_min_2	45	65
+FactionWars	TPirateShot		damage_max_2	50	75
+FactionWars	Troll	Melee	cost	100	250
+FactionWars	Troll	Melee	build_time	270	390
+FactionWars	Troll	Melee	health	250	300
+FactionWars	Troll	Melee	melee_damage	15	40
+FactionWars	Troll	Melee	melee_damage_max	20	50
+FactionWars	Troll	Melee	melee_spread	5	10
+FactionWars	Troll	Melee	attack_interval	30	24
+FactionWars	Troll	Melee	field_70	15	22
+FactionWars	TrollBattleWheel	Siege	cost	500	750
+FactionWars	TrollBattleWheel	Siege	health	550	600
+FactionWars	TrollBattleWheel	Siege	projectile	188	187
+FactionWars	TrollBattleWheel	Siege	attack_interval	40	20
+FactionWars	TrollBattleWheel	Siege	attack_range	6	10
+FactionWars	TrollBattleWheel	Siege	field_70	65	55
+FactionWars	TrollBattleWheel	Siege	interaction_range	7	8
+FactionWars	TrollKing	Hero	cost	500	300
+FactionWars	TrollKing	Hero	build_time	600	48
+FactionWars	TrollKing	Hero	health	1100	550
+FactionWars	TrollKing	Hero	melee_damage	40	25
+FactionWars	TrollKing	Hero	melee_damage_max	50	35
+FactionWars	W_Ballista	Siege	cost	350	750
+FactionWars	W_Ballista	Siege	build_time	600	840
+FactionWars	W_Ballista	Siege	health	450	600
+FactionWars	W_Ballista	Siege	projectile	188	187
+FactionWars	W_Ballista	Siege	attack_interval	24	15
+FactionWars	W_Ballista	Siege	attack_range	7	8
+FactionWars	W_Ballista	Siege	field_70	45	55
+FactionWars	W_Crossbowman	Ranged	cost	150	250
+FactionWars	W_Crossbowman	Ranged	health	250	300
+FactionWars	W_Crossbowman	Ranged	attack_range	4	6
+FactionWars	W_Dragon	Siege	cost	900	750
+FactionWars	W_Dragon	Siege	build_time	1140	840
+FactionWars	W_Dragon	Siege	attack_range	3	5
+FactionWars	W_Dragon	Siege	field_70	65	55
+FactionWars	W_Engineer	Builder	cost	55	5
+FactionWars	W_Giant	Siege	cost	500	750
+FactionWars	W_Giant	Siege	health	550	600
+FactionWars	W_Giant	Siege	attack_interval	40	30
+FactionWars	W_Skeleknight	Mounted	build_time	480	390
+FactionWars	W_Skeleknight	Mounted	melee_damage	30	40
+FactionWars	W_Skeleknight	Mounted	melee_damage_max	40	50
+FactionWars	W_Swordsman	Melee	cost	110	5
+FactionWars	W_Swordsman	Melee	build_time	270	5
+FactionWars	W_Swordsman	Melee	attack_interval	30	24
+FactionWars	W_Swordsman	Melee	field_70	15	22
+FactionWars	W_Swordsman	Melee	interaction_range	5	7
+FactionWars	W_Tower	Tower	health	400	500
+FactionWars	W_Tower	Tower	attack_range	6	7
+FactionWars	W_Tower	Tower	interaction_range	7	9
+FactionWars	W_Tower2	Tower2	cost	500	5
+FactionWars	W_Tower2	Tower2	build_time	840	5
+FactionWars	W_Tower3	Tower3	cost	800	5
+FactionWars	W_Tower3	Tower3	build_time	1260	5
+FactionWars	W_Tower3	Tower3	health	700	500
+FactionWars	W_Tower3	Tower3	projectile	186	184
+FactionWars	W_Tower3	Tower3	attack_interval	60	30
+FactionWars	W_Tower3	Tower3	attack_range	7	10
+FactionWars	W_Tower3	Tower3	interaction_range	11	13
+FactionWars	W_TransportShip	Transport	cost	250	750
+FactionWars	W_TransportShip	Transport	build_time	540	840
+FactionWars	W_TransportShip	Transport	health	850	750
+FactionWars	W_TransportShip	Transport	attack_interval	42	15
+FactionWars	W_TransportShip	Transport	attack_range	4	8
+FactionWars	W_TransportShip	Transport	field_70	10	55
+FactionWars	W_TransportShip	Transport	interaction_range	6	8
+FactionWars	W_Wizard	Hero	cost	500	300
+FactionWars	W_Wizard	Hero	build_time	600	480
+FactionWars	W_Wizard	Hero	health	1100	550
+FactionWars	W_Wizard	Hero	melee_damage	30	35
+FactionWars	W_Wizard	Hero	melee_damage_max	40	45
+FactionWars	W_Wizard_F	Hero	cost	500	300
+FactionWars	W_Wizard_F	Hero	build_time	600	480
+FactionWars	W_Wizard_F	Hero	health	900	450
+FactionWars	W_Wizard_F	Hero	melee_damage	30	35
+FactionWars	W_Wizard_F	Hero	melee_damage_max	40	45
+FactionWars	WarJunk	Siege	speed	410	819
+FactionWars	WarJunk	Siege	speed_tiles_per_sec	3.0	6.0
+FactionWars	WarJunk	Siege	cost	500	650
+FactionWars	WarJunk	Siege	health	550	800
+FactionWars	WarJunk	Siege	projectile	188	187
+FactionWars	WarJunk	Siege	field_70	65	55
+FactionWars	WarJunk	Siege	interaction_range	7	8
+FUNLite	ALaser		damage_min	10	15
+FUNLite	ALaser		damage_max	15	25
+FUNLite	ALaser		damage_min_2	10	15
+FUNLite	ALaser		damage_max_2	15	25
+FUNLite	ALaser		flags	11110111101100	11110111000100
+FUNLite	A_AlienKing	Hero	speed	341	546
+FUNLite	A_AlienKing	Hero	speed_tiles_per_sec	2.5	4.0
+FUNLite	A_AlienKing	Hero	health	1000	1300
+FUNLite	A_AlienKing	Hero	attack_range	1	5
+FUNLite	A_AlienKing	Hero	interaction_range	7	9
+FUNLite	A_AlienKing_F	Hero	speed	410	853
+FUNLite	A_AlienKing_F	Hero	speed_tiles_per_sec	3.0	6.25
+FUNLite	A_AlienKing_F	Hero	health	900	1100
+FUNLite	A_AlienKing_F	Hero	mana	1000	1100
+FUNLite	A_AlienKing_F	Hero	attack_interval	20	15
+FUNLite	A_AlienKing_F	Hero	attack_range	1	4
+FUNLite	A_AlienKing_F	Hero	interaction_range	7	8
+FUNLite	A_Engineer	Builder	speed	444	853
+FUNLite	A_Engineer	Builder	speed_tiles_per_sec	3.25	6.25
+FUNLite	A_Engineer	Builder	cost	50	75
+FUNLite	A_Engineer	Builder	health	140	110
+FUNLite	A_Engineer	Builder	attack_interval	24	12
+FUNLite	A_Engineer	Builder	attack_range	1	2
+FUNLite	A_Engineer	Builder	interaction_range	5	6
+FUNLite	A_Melee	Melee	speed	410	614
+FUNLite	A_Melee	Melee	speed_tiles_per_sec	3.0	4.5
+FUNLite	A_Melee	Melee	cost	90	75
+FUNLite	A_Melee	Melee	build_time	270	110
+FUNLite	A_Melee	Melee	health	225	325
+FUNLite	A_Melee	Melee	attack_range	1	5
+FUNLite	A_Melee	Melee	field_70	15	10
+FUNLite	A_Melee	Melee	interaction_range	5	8
+FUNLite	A_Mounted	Mounted	cost	250	300
+FUNLite	A_Mounted	Mounted	build_time	480	410
+FUNLite	A_Mounted	Mounted	health	350	700
+FUNLite	A_Mounted	Mounted	projectile		198
+FUNLite	A_Mounted	Mounted	melee_damage	35	0
+FUNLite	A_Mounted	Mounted	melee_damage_max	45	0
+FUNLite	A_Mounted	Mounted	melee_spread	10	0
+FUNLite	A_Mounted	Mounted	attack_interval	30	14
+FUNLite	A_Mounted	Mounted	attack_range	1	5
+FUNLite	A_Mounted	Mounted	interaction_range	7	9
+FUNLite	A_Ranged	Ranged	cost	150	175
+FUNLite	A_Ranged	Ranged	build_time	390	480
+FUNLite	A_Ranged	Ranged	health	250	550
+FUNLite	A_Ranged	Ranged	attack_interval	24	12
+FUNLite	A_Ranged	Ranged	attack_range	4	5
+FUNLite	A_Ranged	Ranged	field_70	18	20
+FUNLite	A_Ranged	Ranged	interaction_range	7	10
+FUNLite	A_SiegeOne	Siege	cost	350	400
+FUNLite	A_SiegeOne	Siege	health	450	600
+FUNLite	A_SiegeOne	Siege	projectile	187	
+FUNLite	A_SiegeOne	Siege	melee_damage	0	65
+FUNLite	A_SiegeOne	Siege	melee_damage_max	0	70
+FUNLite	A_SiegeOne	Siege	melee_spread	0	5
+FUNLite	A_SiegeOne	Siege	attack_interval	24	20
+FUNLite	A_SiegeOne	Siege	interaction_range	8	10
+FUNLite	A_SiegeThree	Siege	speed	819	853
+FUNLite	A_SiegeThree	Siege	speed_tiles_per_sec	6.0	6.25
+FUNLite	A_SiegeThree	Siege	cost	750	1000
+FUNLite	A_SiegeThree	Siege	build_time	1140	670
+FUNLite	A_SiegeThree	Siege	health	700	1500
+FUNLite	A_SiegeThree	Siege	projectile	187	203
+FUNLite	A_SiegeThree	Siege	attack_interval	20	15
+FUNLite	A_SiegeThree	Siege	attack_range	7	9
+FUNLite	A_SiegeThree	Siege	field_70	65	60
+FUNLite	A_SiegeThree	Siege	interaction_range	8	11
+FUNLite	A_SiegeTwo	Siege	speed	478	853
+FUNLite	A_SiegeTwo	Siege	speed_tiles_per_sec	3.5	6.25
+FUNLite	A_SiegeTwo	Siege	build_time	840	610
+FUNLite	A_SiegeTwo	Siege	attack_interval	40	12
+FUNLite	A_SiegeTwo	Siege	interaction_range	8	11
+FUNLite	A_Spire	Tower	cost	300	275
+FUNLite	A_Spire	Tower	build_time	420	270
+FUNLite	A_Spire	Tower	health	400	725
+FUNLite	A_Spire	Tower	attack_interval	24	16
+FUNLite	A_Spire2	Tower2	cost	500	375
+FUNLite	A_Spire2	Tower2	build_time	840	410
+FUNLite	A_Spire2	Tower2	health	500	950
+FUNLite	A_Spire2	Tower2	projectile	201	199
+FUNLite	A_Spire2	Tower2	attack_interval	40	12
+FUNLite	A_Spire2	Tower2	attack_range	6	7
+FUNLite	A_Spire3	Tower3	cost	800	625
+FUNLite	A_Spire3	Tower3	build_time	1260	610
+FUNLite	A_Spire3	Tower3	health	700	2100
+FUNLite	A_Spire3	Tower3	projectile	200	203
+FUNLite	A_Spire3	Tower3	attack_interval	60	12
+FUNLite	A_Spire3	Tower3	attack_range	7	11
+FUNLite	A_TransportShip	Transport	build_time	540	410
+FUNLite	A_TransportShip	Transport	health	850	1000
+FUNLite	A_TransportShip	Transport	projectile	198	197
+FUNLite	A_TransportShip	Transport	attack_range	4	7
+FUNLite	A_TransportShip	Transport	interaction_range	6	7
+FUNLite	A_WellCap	Mine	resource_yield	25	30
+FUNLite	AgentChase	Hero	speed	478	853
+FUNLite	AgentChase	Hero	speed_tiles_per_sec	3.5	6.25
+FUNLite	AgentChase	Hero	cost	500	1000
+FUNLite	AgentChase	Hero	build_time	600	1010
+FUNLite	AgentChase	Hero	mana	1000	1100
+FUNLite	AgentChase	Hero	attack_interval	20	24
+FUNLite	AgentChase	Hero	attack_range	5	7
+FUNLite	AgentChase	Hero	interaction_range	7	9
+FUNLite	AirBallistaBolt		flags	11110110100100	11110110000100
+FUNLite	Arrow		flags	11100111101000	11100111001000
+FUNLite	ClassicSpace	Hero	speed	410	683
+FUNLite	ClassicSpace	Hero	speed_tiles_per_sec	3.0	5.0
+FUNLite	ClassicSpace	Hero	cost	500	375
+FUNLite	ClassicSpace	Hero	health	900	1200
+FUNLite	ClassicSpace	Hero	mana	1000	1250
+FUNLite	ClassicSpace	Hero	melee_damage	40	50
+FUNLite	ClassicSpace	Hero	melee_damage_max	50	65
+FUNLite	ClassicSpace	Hero	melee_spread	10	15
+FUNLite	ClassicSpace	Hero	interaction_range	7	9
+FUNLite	Conquistador	Hero	speed	410	683
+FUNLite	Conquistador	Hero	speed_tiles_per_sec	3.0	5.0
+FUNLite	Conquistador	Hero	health	1000	1100
+FUNLite	Conquistador	Hero	mana	1000	1900
+FUNLite	Conquistador	Hero	melee_damage	30	35
+FUNLite	Conquistador	Hero	melee_damage_max	40	45
+FUNLite	Conquistador	Hero	attack_interval	20	12
+FUNLite	Conquistador	Hero	attack_range	1	5
+FUNLite	CrossbowBolt		flags	11100111101000	11100111001000
+FUNLite	Dwarf	Melee	cost	100	75
+FUNLite	Dwarf	Melee	build_time	270	210
+FUNLite	Dwarf	Melee	health	250	375
+FUNLite	Dwarf	Melee	melee_damage	20	25
+FUNLite	Dwarf	Melee	melee_spread	5	0
+FUNLite	Dwarf	Melee	attack_range	1	3
+FUNLite	Dwarf	Melee	field_70	15	11
+FUNLite	Dwarf	Melee	interaction_range	7	9
+FUNLite	DwarfKing	Hero	speed	341	546
+FUNLite	DwarfKing	Hero	speed_tiles_per_sec	2.5	4.0
+FUNLite	DwarfKing	Hero	cost	500	375
+FUNLite	DwarfKing	Hero	mana	1000	1800
+FUNLite	DwarfKing	Hero	melee_damage	50	55
+FUNLite	DwarfKing	Hero	melee_spread	10	5
+FUNLite	DwarfKing	Hero	attack_range	1	4
+FUNLite	DwarfKing	Hero	interaction_range	7	11
+FUNLite	DwarfMineDefender	Siege	speed	410	683
+FUNLite	DwarfMineDefender	Siege	speed_tiles_per_sec	3.0	5.0
+FUNLite	DwarfMineDefender	Siege	cost	500	300
+FUNLite	DwarfMineDefender	Siege	build_time	840	480
+FUNLite	DwarfMineDefender	Siege	projectile	188	207
+FUNLite	DwarfMineDefender	Siege	attack_interval	40	27
+FUNLite	DwarfMineDefender	Siege	attack_range	6	9
+FUNLite	DwarfMineDefender	Siege	interaction_range	7	9
+FUNLite	E_Commander	Hero	speed	478	853
+FUNLite	E_Commander	Hero	speed_tiles_per_sec	3.5	6.25
+FUNLite	E_Commander	Hero	build_time	600	1140
+FUNLite	E_Commander	Hero	melee_damage	40	45
+FUNLite	E_Commander	Hero	melee_spread	10	5
+FUNLite	E_Commander	Hero	attack_interval	20	14
+FUNLite	E_Commander	Hero	attack_range	1	3
+FUNLite	E_Commander_F	Hero	speed	410	853
+FUNLite	E_Commander_F	Hero	speed_tiles_per_sec	3.0	6.25
+FUNLite	E_Commander_F	Hero	build_time	600	1140
+FUNLite	E_Commander_F	Hero	mana	1000	1100
+FUNLite	E_Commander_F	Hero	projectile	197	199
+FUNLite	E_Commander_F	Hero	attack_interval	20	16
+FUNLite	E_Commander_F	Hero	attack_range	5	8
+FUNLite	E_Commander_F	Hero	interaction_range	7	9
+FUNLite	E_Engineer	Builder	speed	410	683
+FUNLite	E_Engineer	Builder	speed_tiles_per_sec	3.0	5.0
+FUNLite	E_Engineer	Builder	health	150	400
+FUNLite	E_Engineer	Builder	attack_interval	40	100
+FUNLite	E_Engineer	Builder	attack_range	1	2
+FUNLite	E_Engineer	Builder	interaction_range	5	6
+FUNLite	E_Melee	Melee	speed	341	375
+FUNLite	E_Melee	Melee	speed_tiles_per_sec	2.5	2.75
+FUNLite	E_Melee	Melee	health	275	425
+FUNLite	E_Melee	Melee	melee_damage	20	25
+FUNLite	E_Melee	Melee	melee_spread	10	5
+FUNLite	E_Melee	Melee	attack_interval	24	20
+FUNLite	E_Melee	Melee	interaction_range	5	6
+FUNLite	E_Mounted	Mounted	speed	546	614
+FUNLite	E_Mounted	Mounted	speed_tiles_per_sec	4.0	4.5
+FUNLite	E_Mounted	Mounted	cost	250	350
+FUNLite	E_Mounted	Mounted	health	400	500
+FUNLite	E_Mounted	Mounted	melee_damage	40	55
+FUNLite	E_Mounted	Mounted	melee_damage_max	50	55
+FUNLite	E_Mounted	Mounted	melee_spread	10	0
+FUNLite	E_Mounted	Mounted	attack_interval	30	27
+FUNLite	E_Mounted	Mounted	attack_range	1	3
+FUNLite	E_Mounted	Mounted	interaction_range	7	9
+FUNLite	E_Ranged	Ranged	speed	410	444
+FUNLite	E_Ranged	Ranged	speed_tiles_per_sec	3.0	3.25
+FUNLite	E_Ranged	Ranged	cost	150	200
+FUNLite	E_Ranged	Ranged	build_time	390	480
+FUNLite	E_Ranged	Ranged	health	300	425
+FUNLite	E_Ranged	Ranged	projectile	197	198
+FUNLite	E_Ranged	Ranged	attack_interval	24	12
+FUNLite	E_Ranged	Ranged	attack_range	5	7
+FUNLite	E_Ranged	Ranged	field_70	18	20
+FUNLite	E_Ranged	Ranged	interaction_range	7	10
+FUNLite	E_RocketTowers	Tower	build_time	420	390
+FUNLite	E_RocketTowers	Tower	health	400	500
+FUNLite	E_RocketTowers2	Tower2	cost	500	425
+FUNLite	E_RocketTowers2	Tower2	build_time	840	670
+FUNLite	E_RocketTowers2	Tower2	health	500	600
+FUNLite	E_RocketTowers2	Tower2	attack_interval	40	24
+FUNLite	E_RocketTowers2	Tower2	attack_range	6	7
+FUNLite	E_RocketTowers3	Tower3	cost	800	750
+FUNLite	E_RocketTowers3	Tower3	build_time	1260	910
+FUNLite	E_RocketTowers3	Tower3	attack_interval	60	112
+FUNLite	E_RocketTowers3	Tower3	attack_range	7	9
+FUNLite	E_SiegeOne	Siege	speed	478	546
+FUNLite	E_SiegeOne	Siege	speed_tiles_per_sec	3.5	4.0
+FUNLite	E_SiegeOne	Siege	cost	350	400
+FUNLite	E_SiegeOne	Siege	build_time	600	650
+FUNLite	E_SiegeOne	Siege	health	450	625
+FUNLite	E_SiegeOne	Siege	projectile	187	203
+FUNLite	E_SiegeThree	Siege	cost	750	1250
+FUNLite	E_SiegeThree	Siege	health	700	800
+FUNLite	E_SiegeThree	Siege	projectile	187	201
+FUNLite	E_SiegeThree	Siege	attack_range	7	8
+FUNLite	E_SiegeThree	Siege	field_70	65	55
+FUNLite	E_SiegeTwo	Siege	cost	500	400
+FUNLite	E_SiegeTwo	Siege	health	550	2100
+FUNLite	E_SiegeTwo	Siege	field_70	55	70
+FUNLite	E_TransportShip	Transport	attack_range	4	8
+FUNLite	E_TransportShip	Transport	interaction_range	6	8
+FUNLite	E_WellCap	Mine	resource_yield	25	30
+FUNLite	Fireball		flags	11110111101101	11100111100001
+FUNLite	ForestMan	Hero	speed	410	683
+FUNLite	ForestMan	Hero	speed_tiles_per_sec	3.0	5.0
+FUNLite	ForestMan	Hero	health	1000	1100
+FUNLite	ForestMan	Hero	mana	1000	2100
+FUNLite	ForestMan	Hero	attack_interval	20	18
+FUNLite	ForestMan	Hero	attack_range	5	9
+FUNLite	ForestMan	Hero	interaction_range	7	11
+FUNLite	Ghost	Hero	speed	478	853
+FUNLite	Ghost	Hero	speed_tiles_per_sec	3.5	6.25
+FUNLite	Ghost	Hero	health	900	1400
+FUNLite	Ghost	Hero	mana	1000	1200
+FUNLite	Ghost	Hero	attack_interval	20	16
+FUNLite	Ghost	Hero	interaction_range	7	9
+FUNLite	Gift		flags	11100111101001	11100110000001
+FUNLite	I_Battleship	Siege	cost	500	350
+FUNLite	I_Battleship	Siege	build_time	840	670
+FUNLite	I_Battleship	Siege	health	650	750
+FUNLite	I_Battleship	Siege	attack_interval	30	24
+FUNLite	I_Cavalry	Mounted	speed	546	683
+FUNLite	I_Cavalry	Mounted	speed_tiles_per_sec	4.0	5.0
+FUNLite	I_Cavalry	Mounted	cost	250	350
+FUNLite	I_Cavalry	Mounted	health	450	550
+FUNLite	I_Cavalry	Mounted	melee_damage	35	45
+FUNLite	I_Cavalry	Mounted	melee_damage_max	45	50
+FUNLite	I_Cavalry	Mounted	melee_spread	10	5
+FUNLite	I_Cavalry	Mounted	attack_interval	30	24
+FUNLite	I_Cavalry	Mounted	attack_range	1	2
+FUNLite	I_Clipper	Siege	cost	350	300
+FUNLite	I_Clipper	Siege	build_time	600	390
+FUNLite	I_Clipper	Siege	attack_interval	30	27
+FUNLite	I_Clipper	Siege	attack_range	5	11
+FUNLite	I_Clipper	Siege	interaction_range	8	11
+FUNLite	I_Dirigible	Siege	speed	410	683
+FUNLite	I_Dirigible	Siege	speed_tiles_per_sec	3.0	5.0
+FUNLite	I_Dirigible	Siege	build_time	1140	840
+FUNLite	I_Dirigible	Siege	health	700	1725
+FUNLite	I_Dirigible	Siege	projectile	195	194
+FUNLite	I_Dirigible	Siege	attack_interval	24	12
+FUNLite	I_Dirigible	Siege	attack_range	7	11
+FUNLite	I_Dirigible	Siege	interaction_range	8	11
+FUNLite	I_Engineer	Builder	speed	375	546
+FUNLite	I_Engineer	Builder	speed_tiles_per_sec	2.75	4.0
+FUNLite	I_Engineer	Builder	cost	55	75
+FUNLite	I_Engineer	Builder	build_time	150	210
+FUNLite	I_Engineer	Builder	attack_interval	30	32
+FUNLite	I_Engineer	Builder	field_70	11	9
+FUNLite	I_Engineer	Builder	interaction_range	5	7
+FUNLite	I_Governor	Hero	speed	341	546
+FUNLite	I_Governor	Hero	speed_tiles_per_sec	2.5	4.0
+FUNLite	I_Governor	Hero	build_time	600	360
+FUNLite	I_Governor	Hero	health	1100	1300
+FUNLite	I_Governor	Hero	melee_damage	40	45
+FUNLite	I_Governor	Hero	melee_damage_max	50	45
+FUNLite	I_Governor	Hero	melee_spread	10	0
+FUNLite	I_Governor	Hero	attack_interval	20	16
+FUNLite	I_Governor_F	Hero	speed	478	853
+FUNLite	I_Governor_F	Hero	speed_tiles_per_sec	3.5	6.25
+FUNLite	I_Governor_F	Hero	build_time	600	360
+FUNLite	I_Governor_F	Hero	health	1000	1200
+FUNLite	I_Governor_F	Hero	melee_damage	30	40
+FUNLite	I_Governor_F	Hero	melee_spread	10	0
+FUNLite	I_Governor_F	Hero	attack_interval	20	16
+FUNLite	I_Quarry	Mine	resource_yield	25	35
+FUNLite	I_Rifleman	Ranged	speed	478	273
+FUNLite	I_Rifleman	Ranged	speed_tiles_per_sec	3.5	2.0
+FUNLite	I_Rifleman	Ranged	health	200	250
+FUNLite	I_Rifleman	Ranged	attack_interval	24	38
+FUNLite	I_Rifleman	Ranged	attack_range	4	10
+FUNLite	I_Rifleman	Ranged	interaction_range	7	9
+FUNLite	I_StoneTower	Tower	build_time	420	390
+FUNLite	I_StoneTower	Tower	projectile	194	192
+FUNLite	I_StoneTower2	Tower2	cost	500	425
+FUNLite	I_StoneTower2	Tower2	build_time	840	670
+FUNLite	I_StoneTower2	Tower2	health	500	550
+FUNLite	I_StoneTower2	Tower2	attack_interval	40	24
+FUNLite	I_StoneTower2	Tower2	attack_range	6	9
+FUNLite	I_StoneTower3	Tower3	cost	800	750
+FUNLite	I_StoneTower3	Tower3	build_time	1260	910
+FUNLite	I_StoneTower3	Tower3	health	700	725
+FUNLite	I_StoneTower3	Tower3	attack_interval	60	18
+FUNLite	I_StoneTower3	Tower3	attack_range	7	11
+FUNLite	I_Swordsman	Melee	speed	341	444
+FUNLite	I_Swordsman	Melee	speed_tiles_per_sec	2.5	3.25
+FUNLite	I_Swordsman	Melee	melee_damage	20	30
+FUNLite	I_Swordsman	Melee	melee_damage_max	25	30
+FUNLite	I_Swordsman	Melee	melee_spread	5	0
+FUNLite	I_Swordsman	Melee	attack_interval	30	12
+FUNLite	I_Swordsman	Melee	attack_range	1	3
+FUNLite	I_Swordsman	Melee	interaction_range	5	6
+FUNLite	I_TransportShip	Transport	speed	546	853
+FUNLite	I_TransportShip	Transport	speed_tiles_per_sec	4.0	6.25
+FUNLite	I_TransportShip	Transport	build_time	540	410
+FUNLite	I_TransportShip	Transport	health	750	850
+FUNLite	I_TransportShip	Transport	projectile	192	193
+FUNLite	I_TransportShip	Transport	attack_range	4	8
+FUNLite	I_TransportShip	Transport	interaction_range	6	8
+FUNLite	ImperialShot		damage_min	15	35
+FUNLite	ImperialShot		damage_max	20	60
+FUNLite	ImperialShot		damage_min_2	15	35
+FUNLite	ImperialShot		damage_max_2	20	60
+FUNLite	ImperialShot		flags	11110111101100	11100111001000
+FUNLite	Islander	Ranged	cost	100	75
+FUNLite	Islander	Ranged	build_time	390	300
+FUNLite	Islander	Ranged	attack_interval	24	16
+FUNLite	Islander	Ranged	attack_range	5	6
+FUNLite	Islander	Ranged	field_70	18	15
+FUNLite	Islander	Ranged	interaction_range	7	11
+FUNLite	IslanderChief	Hero	speed	341	546
+FUNLite	IslanderChief	Hero	speed_tiles_per_sec	2.5	4.0
+FUNLite	IslanderChief	Hero	health	1000	1400
+FUNLite	IslanderChief	Hero	mana	1000	2100
+FUNLite	IslanderChief	Hero	projectile		187
+FUNLite	IslanderChief	Hero	melee_damage	50	0
+FUNLite	IslanderChief	Hero	melee_damage_max	60	0
+FUNLite	IslanderChief	Hero	melee_spread	10	0
+FUNLite	IslanderChief	Hero	attack_range	1	4
+FUNLite	IslanderWarCanoe	Siege	speed	478	683
+FUNLite	IslanderWarCanoe	Siege	speed_tiles_per_sec	3.5	5.0
+FUNLite	IslanderWarCanoe	Siege	cost	500	350
+FUNLite	IslanderWarCanoe	Siege	build_time	840	540
+FUNLite	IslanderWarCanoe	Siege	health	550	1200
+FUNLite	IslanderWarCanoe	Siege	projectile	189	
+FUNLite	IslanderWarCanoe	Siege	melee_damage	0	50
+FUNLite	IslanderWarCanoe	Siege	melee_damage_max	0	60
+FUNLite	IslanderWarCanoe	Siege	melee_spread	0	10
+FUNLite	IslanderWarCanoe	Siege	attack_interval	30	12
+FUNLite	IslanderWarCanoe	Siege	attack_range	6	1
+FUNLite	K_Archer	Ranged	cost	150	125
+FUNLite	K_Archer	Ranged	health	300	400
+FUNLite	K_Archer	Ranged	attack_interval	24	18
+FUNLite	K_Archer	Ranged	attack_range	5	7
+FUNLite	K_Archer	Ranged	field_70	18	15
+FUNLite	K_Archer	Ranged	interaction_range	7	9
+FUNLite	K_Ballista	Siege	cost	350	300
+FUNLite	K_Ballista	Siege	build_time	600	480
+FUNLite	K_Ballista	Siege	health	450	425
+FUNLite	K_Ballista	Siege	attack_interval	24	16
+FUNLite	K_Ballista	Siege	attack_range	7	9
+FUNLite	K_Ballista	Siege	interaction_range	7	9
+FUNLite	K_Catapult	Siege	attack_range	8	11
+FUNLite	K_Catapult	Siege	interaction_range	8	11
+FUNLite	K_Engineer	Builder	speed	410	546
+FUNLite	K_Engineer	Builder	speed_tiles_per_sec	3.0	4.0
+FUNLite	K_Engineer	Builder	build_time	150	210
+FUNLite	K_Engineer	Builder	attack_interval	30	40
+FUNLite	K_Gryphon	Siege	speed	819	956
+FUNLite	K_Gryphon	Siege	speed_tiles_per_sec	6.0	7.0
+FUNLite	K_Gryphon	Siege	build_time	1140	1000
+FUNLite	K_Gryphon	Siege	health	700	2100
+FUNLite	K_Gryphon	Siege	projectile	191	
+FUNLite	K_Gryphon	Siege	melee_damage	0	75
+FUNLite	K_Gryphon	Siege	melee_damage_max	0	75
+FUNLite	K_Gryphon	Siege	attack_interval	30	12
+FUNLite	K_Gryphon	Siege	attack_range	3	2
+FUNLite	K_Gryphon	Siege	field_70	65	55
+FUNLite	K_Gryphon	Siege	interaction_range	8	9
+FUNLite	K_King	Hero	speed	410	683
+FUNLite	K_King	Hero	speed_tiles_per_sec	3.0	5.0
+FUNLite	K_King	Hero	health	1000	1200
+FUNLite	K_King	Hero	mana	1000	1500
+FUNLite	K_King	Hero	attack_interval	20	16
+FUNLite	K_King_F	Hero	speed	478	853
+FUNLite	K_King_F	Hero	speed_tiles_per_sec	3.5	6.25
+FUNLite	K_King_F	Hero	health	1000	1400
+FUNLite	K_King_F	Hero	mana	1000	1500
+FUNLite	K_King_F	Hero	attack_interval	20	14
+FUNLite	K_Knight	Mounted	speed	614	683
+FUNLite	K_Knight	Mounted	speed_tiles_per_sec	4.5	5.0
+FUNLite	K_Knight	Mounted	cost	250	300
+FUNLite	K_Knight	Mounted	build_time	480	410
+FUNLite	K_Knight	Mounted	health	300	600
+FUNLite	K_Knight	Mounted	melee_damage	40	45
+FUNLite	K_Knight	Mounted	melee_damage_max	50	45
+FUNLite	K_Knight	Mounted	melee_spread	10	0
+FUNLite	K_Knight	Mounted	attack_interval	30	26
+FUNLite	K_Knight	Mounted	interaction_range	7	9
+FUNLite	K_Mine	Mine	resource_yield	25	45
+FUNLite	K_Swordsman	Melee	health	350	925
+FUNLite	K_Swordsman	Melee	field_70	15	21
+FUNLite	K_Tower	Tower	build_time	420	390
+FUNLite	K_Tower2	Tower2	cost	500	425
+FUNLite	K_Tower2	Tower2	build_time	840	670
+FUNLite	K_Tower2	Tower2	attack_interval	40	24
+FUNLite	K_Tower3	Tower3	cost	800	750
+FUNLite	K_Tower3	Tower3	build_time	1260	910
+FUNLite	K_Tower3	Tower3	health	700	750
+FUNLite	K_Tower3	Tower3	attack_interval	60	16
+FUNLite	K_Tower3	Tower3	attack_range	7	10
+FUNLite	K_TransportShip	Transport	speed	683	819
+FUNLite	K_TransportShip	Transport	speed_tiles_per_sec	5.0	6.0
+FUNLite	K_TransportShip	Transport	health	850	1050
+FUNLite	K_TransportShip	Transport	attack_range	4	6
+FUNLite	LaserCannon		flags	11100010000001	11100110000001
+FUNLite	Ninja	Ranged	speed	546	614
+FUNLite	Ninja	Ranged	speed_tiles_per_sec	4.0	4.5
+FUNLite	Ninja	Ranged	cost	100	75
+FUNLite	Ninja	Ranged	build_time	300	180
+FUNLite	Ninja	Ranged	projectile	182	
+FUNLite	Ninja	Ranged	melee_damage	0	15
+FUNLite	Ninja	Ranged	melee_damage_max	0	20
+FUNLite	Ninja	Ranged	melee_spread	0	5
+FUNLite	Ninja	Ranged	attack_interval	24	21
+FUNLite	Ninja	Ranged	attack_range	5	6
+FUNLite	Ninja	Ranged	field_70	18	5
+FUNLite	Ninja	Ranged	interaction_range	7	11
+FUNLite	NinjaKing	Hero	speed	478	853
+FUNLite	NinjaKing	Hero	speed_tiles_per_sec	3.5	6.25
+FUNLite	NinjaKing	Hero	mana	1000	1700
+FUNLite	NinjaKing	Hero	attack_interval	20	14
+FUNLite	NinjaKing	Hero	interaction_range	7	8
+FUNLite	P_Barracuda	Siege	cost	350	300
+FUNLite	P_Barracuda	Siege	build_time	600	410
+FUNLite	P_Barracuda	Siege	health	550	800
+FUNLite	P_Barracuda	Siege	projectile	196	195
+FUNLite	P_Barracuda	Siege	attack_interval	40	35
+FUNLite	P_Barracuda	Siege	attack_range	5	11
+FUNLite	P_Barracuda	Siege	interaction_range	8	11
+FUNLite	P_Battleship	Siege	cost	500	350
+FUNLite	P_Battleship	Siege	build_time	840	670
+FUNLite	P_Battleship	Siege	health	650	725
+FUNLite	P_Battleship	Siege	projectile	196	195
+FUNLite	P_Battleship	Siege	attack_interval	30	24
+FUNLite	P_Battleship	Siege	attack_range	6	8
+FUNLite	P_Builder	Builder	speed	444	853
+FUNLite	P_Builder	Builder	speed_tiles_per_sec	3.25	6.25
+FUNLite	P_Builder	Builder	build_time	150	90
+FUNLite	P_Builder	Builder	attack_interval	40	20
+FUNLite	P_Captain	Hero	speed	341	546
+FUNLite	P_Captain	Hero	speed_tiles_per_sec	2.5	4.0
+FUNLite	P_Captain	Hero	health	1000	1100
+FUNLite	P_Captain	Hero	mana	1000	1600
+FUNLite	P_Captain	Hero	attack_interval	20	18
+FUNLite	P_Captain_F	Hero	speed	410	683
+FUNLite	P_Captain_F	Hero	speed_tiles_per_sec	3.0	5.0
+FUNLite	P_Captain_F	Hero	mana	1000	1750
+FUNLite	P_Captain_F	Hero	attack_interval	20	16
+FUNLite	P_Captain_F	Hero	attack_range	1	4
+FUNLite	P_Crossbowman	Ranged	projectile	193	204
+FUNLite	P_Crossbowman	Ranged	attack_interval	24	60
+FUNLite	P_Crossbowman	Ranged	attack_range	5	3
+FUNLite	P_Crossbowman	Ranged	interaction_range	7	9
+FUNLite	P_FlyingDutchman	Siege	speed	478	683
+FUNLite	P_FlyingDutchman	Siege	speed_tiles_per_sec	3.5	5.0
+FUNLite	P_FlyingDutchman	Siege	build_time	1140	670
+FUNLite	P_FlyingDutchman	Siege	health	700	1225
+FUNLite	P_FlyingDutchman	Siege	projectile	196	195
+FUNLite	P_FlyingDutchman	Siege	attack_interval	30	24
+FUNLite	P_FlyingDutchman	Siege	attack_range	7	11
+FUNLite	P_FlyingDutchman	Siege	interaction_range	8	11
+FUNLite	P_Horseman	Mounted	cost	250	350
+FUNLite	P_Horseman	Mounted	build_time	480	540
+FUNLite	P_Horseman	Mounted	health	400	325
+FUNLite	P_Horseman	Mounted	projectile		196
+FUNLite	P_Horseman	Mounted	melee_damage	30	0
+FUNLite	P_Horseman	Mounted	melee_damage_max	40	0
+FUNLite	P_Horseman	Mounted	melee_spread	10	0
+FUNLite	P_Horseman	Mounted	attack_interval	30	60
+FUNLite	P_Horseman	Mounted	attack_range	1	7
+FUNLite	P_Horseman	Mounted	interaction_range	7	8
+FUNLite	P_LogTower	Tower	build_time	420	390
+FUNLite	P_LogTower	Tower	projectile	194	192
+FUNLite	P_LogTower	Tower	attack_interval	24	20
+FUNLite	P_LogTower2	Tower2	cost	500	425
+FUNLite	P_LogTower2	Tower2	build_time	840	670
+FUNLite	P_LogTower2	Tower2	projectile	196	195
+FUNLite	P_LogTower2	Tower2	attack_interval	40	24
+FUNLite	P_LogTower2	Tower2	attack_range	6	7
+FUNLite	P_LogTower3	Tower3	cost	800	750
+FUNLite	P_LogTower3	Tower3	build_time	1260	910
+FUNLite	P_LogTower3	Tower3	attack_interval	60	17
+FUNLite	P_LogTower3	Tower3	attack_range	7	11
+FUNLite	P_Oarsman	Melee	speed	478	546
+FUNLite	P_Oarsman	Melee	speed_tiles_per_sec	3.5	4.0
+FUNLite	P_Oarsman	Melee	health	300	200
+FUNLite	P_Oarsman	Melee	projectile		196
+FUNLite	P_Oarsman	Melee	melee_damage	10	0
+FUNLite	P_Oarsman	Melee	melee_damage_max	15	0
+FUNLite	P_Oarsman	Melee	melee_spread	5	0
+FUNLite	P_Oarsman	Melee	attack_interval	30	80
+FUNLite	P_Oarsman	Melee	attack_range	1	4
+FUNLite	P_TransportShip	Transport	speed	546	956
+FUNLite	P_TransportShip	Transport	speed_tiles_per_sec	4.0	7.0
+FUNLite	P_TransportShip	Transport	build_time	540	270
+FUNLite	P_TransportShip	Transport	health	750	1050
+FUNLite	P_TransportShip	Transport	attack_range	4	8
+FUNLite	P_TransportShip	Transport	interaction_range	6	8
+FUNLite	PlasmaBall		damage_min	85	94
+FUNLite	PlasmaBall		damage_max	95	94
+FUNLite	PlasmaBall		damage_min_2	85	94
+FUNLite	PlasmaBall		damage_max_2	95	94
+FUNLite	PlasmaBall		flags	11100010000001	11100110000001
+FUNLite	Santa	Hero	speed	478	853
+FUNLite	Santa	Hero	speed_tiles_per_sec	3.5	6.25
+FUNLite	Santa	Hero	cost	500	375
+FUNLite	Santa	Hero	build_time	600	360
+FUNLite	Santa	Hero	mana	1000	2100
+FUNLite	Santa	Hero	attack_interval	24	20
+FUNLite	Santa	Hero	attack_range	5	9
+FUNLite	Santa	Hero	interaction_range	7	11
+FUNLite	Sheriff	Hero	speed	341	546
+FUNLite	Sheriff	Hero	speed_tiles_per_sec	2.5	4.0
+FUNLite	Sheriff	Hero	cost	500	375
+FUNLite	Sheriff	Hero	build_time	600	770
+FUNLite	Sheriff	Hero	mana	1000	1650
+FUNLite	Sheriff	Hero	projectile	193	192
+FUNLite	Sheriff	Hero	attack_interval	20	15
+FUNLite	Sheriff	Hero	attack_range	5	8
+FUNLite	Sheriff	Hero	interaction_range	7	9
+FUNLite	SpaceCriminal	Ranged	attack_interval	24	13
+FUNLite	SpaceCriminal	Ranged	attack_range	5	4
+FUNLite	SpaceCriminal	Ranged	interaction_range	7	11
+FUNLite	SpaceCriminalLeader	Hero	speed	341	546
+FUNLite	SpaceCriminalLeader	Hero	speed_tiles_per_sec	2.5	4.0
+FUNLite	SpaceCriminalLeader	Hero	cost	500	1000
+FUNLite	SpaceCriminalLeader	Hero	build_time	600	1140
+FUNLite	SpaceCriminalLeader	Hero	projectile	198	197
+FUNLite	SpaceCriminalShip	Siege	speed	478	546
+FUNLite	SpaceCriminalShip	Siege	speed_tiles_per_sec	3.5	4.0
+FUNLite	SpaceCriminalShip	Siege	attack_interval	30	27
+FUNLite	SpaceCriminalShip	Siege	attack_range	6	3
+FUNLite	SpacePolice	Ranged	health	250	325
+FUNLite	SpacePolice	Ranged	projectile	197	199
+FUNLite	SpacePolice	Ranged	attack_interval	24	40
+FUNLite	SpacePolice	Ranged	attack_range	5	8
+FUNLite	SpacePolice	Ranged	interaction_range	7	11
+FUNLite	SpacePoliceCaptain	Hero	speed	410	614
+FUNLite	SpacePoliceCaptain	Hero	speed_tiles_per_sec	3.0	4.5
+FUNLite	SpacePoliceCaptain	Hero	cost	500	375
+FUNLite	SpacePoliceCaptain	Hero	health	1000	1400
+FUNLite	SpacePoliceCaptain	Hero	mana	1000	1650
+FUNLite	SpacePoliceCaptain	Hero	projectile	197	199
+FUNLite	SpacePoliceCaptain	Hero	attack_interval	20	32
+FUNLite	SpacePoliceCaptain	Hero	attack_range	5	11
+FUNLite	SpacePoliceCaptain	Hero	interaction_range	7	11
+FUNLite	SpacePoliceShip	Siege	attack_range	6	7
+FUNLite	TBolt		flags	11100111001000	11100110000000
+FUNLite	TLaser		flags	11100111001000	11100110000000
+FUNLite	TPirateShot		damage_min	45	50
+FUNLite	TPirateShot		damage_max	50	75
+FUNLite	TPirateShot		damage_min_2	45	50
+FUNLite	TPirateShot		damage_max_2	50	75
+FUNLite	Troll	Melee	speed	410	444
+FUNLite	Troll	Melee	speed_tiles_per_sec	3.0	3.25
+FUNLite	Troll	Melee	cost	100	75
+FUNLite	Troll	Melee	build_time	270	180
+FUNLite	Troll	Melee	health	250	500
+FUNLite	Troll	Melee	attack_range	1	3
+FUNLite	Troll	Melee	field_70	15	11
+FUNLite	Troll	Melee	interaction_range	7	9
+FUNLite	TrollBattleWheel	Siege	speed	410	273
+FUNLite	TrollBattleWheel	Siege	speed_tiles_per_sec	3.0	2.0
+FUNLite	TrollBattleWheel	Siege	cost	500	400
+FUNLite	TrollBattleWheel	Siege	build_time	840	610
+FUNLite	TrollBattleWheel	Siege	health	550	750
+FUNLite	TrollBattleWheel	Siege	projectile	188	203
+FUNLite	TrollBattleWheel	Siege	attack_interval	40	21
+FUNLite	TrollBattleWheel	Siege	attack_range	6	11
+FUNLite	TrollBattleWheel	Siege	interaction_range	7	11
+FUNLite	TrollKing	Hero	speed	341	614
+FUNLite	TrollKing	Hero	speed_tiles_per_sec	2.5	4.5
+FUNLite	TrollKing	Hero	cost	500	375
+FUNLite	TrollKing	Hero	health	1100	1200
+FUNLite	TrollKing	Hero	mana	1000	1950
+FUNLite	TrollKing	Hero	melee_damage_max	50	55
+FUNLite	TrollKing	Hero	melee_spread	10	15
+FUNLite	TrollKing	Hero	attack_range	1	4
+FUNLite	TrollKing	Hero	interaction_range	7	11
+FUNLite	W_Ballista	Siege	build_time	600	480
+FUNLite	W_Ballista	Siege	health	450	600
+FUNLite	W_Ballista	Siege	interaction_range	8	11
+FUNLite	W_Crossbowman	Ranged	cost	150	125
+FUNLite	W_Crossbowman	Ranged	build_time	390	240
+FUNLite	W_Crossbowman	Ranged	health	250	300
+FUNLite	W_Crossbowman	Ranged	attack_interval	24	14
+FUNLite	W_Crossbowman	Ranged	attack_range	4	6
+FUNLite	W_Crossbowman	Ranged	interaction_range	7	9
+FUNLite	W_Dragon	Siege	speed	819	956
+FUNLite	W_Dragon	Siege	speed_tiles_per_sec	6.0	7.0
+FUNLite	W_Dragon	Siege	build_time	1140	1000
+FUNLite	W_Dragon	Siege	health	700	1425
+FUNLite	W_Dragon	Siege	attack_interval	30	18
+FUNLite	W_Dragon	Siege	attack_range	3	5
+FUNLite	W_Dragon	Siege	field_70	65	55
+FUNLite	W_Dragon	Siege	interaction_range	8	9
+FUNLite	W_Engineer	Builder	speed	375	683
+FUNLite	W_Engineer	Builder	speed_tiles_per_sec	2.75	5.0
+FUNLite	W_Engineer	Builder	cost	55	25
+FUNLite	W_Engineer	Builder	build_time	150	90
+FUNLite	W_Engineer	Builder	health	160	175
+FUNLite	W_Engineer	Builder	attack_interval	24	12
+FUNLite	W_Engineer	Builder	attack_range	1	2
+FUNLite	W_Giant	Siege	build_time	840	610
+FUNLite	W_Giant	Siege	attack_interval	40	27
+FUNLite	W_Giant	Siege	attack_range	8	4
+FUNLite	W_Mine	Mine	resource_yield	25	30
+FUNLite	W_Skeleknight	Mounted	speed	614	819
+FUNLite	W_Skeleknight	Mounted	speed_tiles_per_sec	4.5	6.0
+FUNLite	W_Skeleknight	Mounted	cost	250	350
+FUNLite	W_Skeleknight	Mounted	build_time	480	320
+FUNLite	W_Skeleknight	Mounted	projectile		191
+FUNLite	W_Skeleknight	Mounted	melee_damage	30	0
+FUNLite	W_Skeleknight	Mounted	melee_damage_max	40	0
+FUNLite	W_Skeleknight	Mounted	melee_spread	10	0
+FUNLite	W_Skeleknight	Mounted	attack_interval	30	41
+FUNLite	W_Skeleknight	Mounted	attack_range	1	2
+FUNLite	W_Swordsman	Melee	cost	110	90
+FUNLite	W_Swordsman	Melee	build_time	270	110
+FUNLite	W_Swordsman	Melee	health	225	325
+FUNLite	W_Swordsman	Melee	attack_interval	30	17
+FUNLite	W_Swordsman	Melee	interaction_range	5	7
+FUNLite	W_Tower	Tower	build_time	420	390
+FUNLite	W_Tower	Tower	attack_interval	24	20
+FUNLite	W_Tower	Tower	attack_range	6	5
+FUNLite	W_Tower2	Tower2	cost	500	425
+FUNLite	W_Tower2	Tower2	build_time	840	670
+FUNLite	W_Tower2	Tower2	attack_interval	40	16
+FUNLite	W_Tower2	Tower2	attack_range	6	5
+FUNLite	W_Tower3	Tower3	cost	800	750
+FUNLite	W_Tower3	Tower3	build_time	1260	910
+FUNLite	W_Tower3	Tower3	health	700	650
+FUNLite	W_Tower3	Tower3	attack_interval	60	12
+FUNLite	W_TransportShip	Transport	speed	614	683
+FUNLite	W_TransportShip	Transport	speed_tiles_per_sec	4.5	5.0
+FUNLite	W_TransportShip	Transport	build_time	540	270
+FUNLite	W_TransportShip	Transport	health	850	950
+FUNLite	W_TransportShip	Transport	attack_interval	42	36
+FUNLite	W_TransportShip	Transport	attack_range	4	7
+FUNLite	W_TransportShip	Transport	interaction_range	6	7
+FUNLite	W_Wizard	Hero	speed	341	546
+FUNLite	W_Wizard	Hero	speed_tiles_per_sec	2.5	4.0
+FUNLite	W_Wizard	Hero	health	1100	1200
+FUNLite	W_Wizard	Hero	mana	1000	2100
+FUNLite	W_Wizard	Hero	projectile		186
+FUNLite	W_Wizard	Hero	melee_damage	30	0
+FUNLite	W_Wizard	Hero	melee_damage_max	40	0
+FUNLite	W_Wizard	Hero	melee_spread	10	0
+FUNLite	W_Wizard	Hero	attack_interval	20	40
+FUNLite	W_Wizard	Hero	attack_range	1	4
+FUNLite	W_Wizard_F	Hero	speed	478	853
+FUNLite	W_Wizard_F	Hero	speed_tiles_per_sec	3.5	6.25
+FUNLite	W_Wizard_F	Hero	mana	1000	2100
+FUNLite	W_Wizard_F	Hero	projectile		186
+FUNLite	W_Wizard_F	Hero	melee_damage	30	0
+FUNLite	W_Wizard_F	Hero	melee_damage_max	40	0
+FUNLite	W_Wizard_F	Hero	melee_spread	10	0
+FUNLite	W_Wizard_F	Hero	attack_interval	20	36
+FUNLite	W_Wizard_F	Hero	attack_range	1	5
+FUNLite	WarJunk	Siege	speed	410	853
+FUNLite	WarJunk	Siege	speed_tiles_per_sec	3.0	6.25
+FUNLite	WarJunk	Siege	cost	500	400
+FUNLite	WarJunk	Siege	build_time	840	540
+FUNLite	WarJunk	Siege	health	550	900
+FUNLite	WarJunk	Siege	projectile	188	203
+FUNLite	WarJunk	Siege	attack_interval	40	30
+FUNLite	WarJunk	Siege	attack_range	6	8
+FUNLite	WarJunk	Siege	interaction_range	7	8

@@ -1,0 +1,115 @@
+# Build the port and publish it as a GitHub release.
+#
+# Run it from the Actions tab ("Release", Run workflow) with a version such as
+# 0.9.0-playtest1: it builds, tags the commit v<version> and publishes the zip.
+# Pushing a v* tag yourself does the same for that tag.
+#
+# THE BUILD RUNS ON A SELF-HOSTED WINDOWS RUNNER (label `legobattles`). A build
+# is lifted from the European ROM and needs ndsrecomp, MSYS2 and the generated
+# code -- none of which can be on GitHub's runners. Register one under
+# Settings > Actions > Runners > New self-hosted runner, give it the label
+# `legobattles`, and set these repository variables (Settings > Variables):
+#
+#   LB_GENERATED  the lifted title code (port/generated of a working copy that
+#                 has run the lift; regenerate it when port/config or
+#                 port/recomp change)
+#   LB_ROM_EU     the European ROM's path      LB_ROM_US   the USA ROM's path
+#   LB_TOOLS      the folder holding ndsrecomp/ and imgui/, as MSYS2 sees it
+#                 (e.g. /c/tools); or name each with NDSRECOMP and LB_IMGUI
+#   NDSRECOMP     ndsrecomp's path, as MSYS2 sees it (default $LB_TOOLS/ndsrecomp)
+#   LB_BASH       MSYS2's bash.exe (default C:\msys64\usr\bin\bash.exe)
+#
+# The job builds this repository at the commit being released, with the
+# generated code from LB_GENERATED, makes the USA-to-Europe conversion data
+# from the two ROMs (never committed), packages with tools/lb_dist.py and
+# attaches the zip and the runner's corresponding source (GPL-3.0-or-later)
+# to the release.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version, without the leading v (e.g. 0.9.0-playtest1)"
+        required: true
+      prerelease:
+        description: "Mark as a pre-release"
+        type: boolean
+        default: true
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: [self-hosted, windows, legobattles]
+    timeout-minutes: 240
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - name: Version
+        id: v
+        shell: powershell
+        run: |
+          if ("${{ github.event_name }}" -eq "push") { $v = "${{ github.ref_name }}".TrimStart("v") }
+          else { $v = "${{ inputs.version }}" }
+          # (Windows PowerShell's >> writes UTF-16, which GITHUB_OUTPUT cannot read)
+          [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "version=$v`n")
+      - uses: actions/checkout@v4
+      - name: Build at this commit
+        shell: powershell
+        env:
+          LB_GENERATED: ${{ vars.LB_GENERATED }}
+          NDSRECOMP_PATH: ${{ vars.NDSRECOMP }}
+          LB_TOOLS: ${{ vars.LB_TOOLS }}
+          IMGUI_PATH: ${{ vars.LB_IMGUI }}
+          LB_BASH: ${{ vars.LB_BASH }}
+        run: |
+          $bash = if ($env:LB_BASH) { $env:LB_BASH } else { "C:\msys64\usr\bin\bash.exe" }
+          # bash converts the Windows paths itself (cygpath), and reads them
+          # from the environment, so no quoting crosses the two shells.
+          $env:LB_WS = $env:GITHUB_WORKSPACE
+          if ($env:NDSRECOMP_PATH) { $env:NDSRECOMP = $env:NDSRECOMP_PATH }
+          if ($env:IMGUI_PATH) { $env:IMGUI = $env:IMGUI_PATH }
+          $env:LB_NO_DEPLOY = "1"
+          $env:CHERE_INVOKING = "1"
+          & $bash -lc 'cd "$(cygpath -u "$LB_WS")" && LB_GENERATED_DIR="$(cygpath -u "$LB_GENERATED")" bash port/runner/build.sh'
+          if ($LASTEXITCODE -ne 0) { throw "build failed" }
+      - name: Conversion data and package
+        shell: powershell
+        env:
+          LB_ROM_EU: ${{ vars.LB_ROM_EU }}
+          LB_ROM_US: ${{ vars.LB_ROM_US }}
+        run: |
+          py -3.13 tools/lb_region_delta.py port/runner/build/data/usa_to_eur.lbdelta --eu "$env:LB_ROM_EU" --us "$env:LB_ROM_US"
+          if ($LASTEXITCODE -ne 0) { throw "delta failed" }
+          py -3.13 tools/lb_dist.py --version "${{ steps.v.outputs.version }}" --out "$env:GITHUB_WORKSPACE\dist"
+          if ($LASTEXITCODE -ne 0) { throw "packaging failed" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LegoBattles-PC-${{ steps.v.outputs.version }}
+          path: |
+            dist/LegoBattles-PC-${{ steps.v.outputs.version }}.zip
+            dist/LegoBattles-PC-${{ steps.v.outputs.version }}-runner-source.zip
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: LegoBattles-PC-${{ needs.build.outputs.version }}
+      - name: Tag and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
+          PRERELEASE: ${{ github.event_name == 'push' && contains(github.ref_name, '-') || inputs.prerelease }}
+        run: |
+          flags=""
+          if [ "$PRERELEASE" = "true" ]; then flags="--prerelease"; fi
+          gh release create "v$VERSION" "LegoBattles-PC-$VERSION.zip"             "LegoBattles-PC-$VERSION-runner-source.zip" \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "LEGO Battles PC $VERSION" --generate-notes $flags

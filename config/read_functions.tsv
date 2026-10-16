@@ -1,0 +1,146 @@
+> Functions named by reading their disassembly, with the document that shows
+> the evidence. This is the only annotation tier that is hand-written, and every
+> row has to be defensible from the named document alone -- if the doc does not
+> show why the name is right, the row does not belong here.
+>
+> Lines beginning with '>' are comments. Columns: address, name, doc, evidence.
+address	name	doc	evidence
+0x02080F14	AstarSearch_SearchStep	docs/58	the only assert site in the ARM9 names it: "SearchStep", AstarSearch.cpp:198
+0x0211ACF4	Assert_Failed	docs/58	formats "Assertion (%s) failed in \"%s\", function \"%s\", line %d"
+0x02028F6C	ParticleData_Request	docs/56	indexes the path table at 0x02126BB8 and queues an async load
+0x0202914C	ParticleData_Find	docs/56	walks the request list comparing index at +0x14, returns buffer at +0x18
+0x02029DAC	ParticleSystem_Bind	docs/56	stores the buffer at +0x24 and base+8 as the cursor at +0x28
+0x02029FF8	ParticleSystem_SeekToBlock	docs/56	bounds-checks against base[0] and walks 4 + count*16 per block
+0x02029FE0	ParticleSystem_Rewind	docs/56	resets the cursor to base+8
+0x02085DB0	Player_CountCompletedFarms	docs/58	counts category 10 entities whose progress is 100
+0x02085E5C	Player_MinifigureCap	docs/58	farms * 4 + 4
+0x02085E78	Player_MinifigureAllowanceLeft	docs/58	cap minus the in-use and pending counts
+0x02085F74	Player_SpecialAllowanceLeft	docs/58	the same for categories 5 and 6 summed
+0x020859F4	Player_CountEntitiesOfCategory	docs/58	walks the handle list; structures need progress 100; 0x14 is a wildcard
+0x020863D8	Player_SetCategoryAllowance	docs/58	table 0x02126D94 indexed by category, min'd against farms*4 for category 1
+0x02086374	Player_GetCategoryAllowance	docs/58	recomputes if the cached byte is 0xFF, then returns player[0xCF+cat]
+0x020531F8	Harvest_IntervalTicks	docs/58	returns 150 unless RedBrick_FastHarvest is set
+0x0206D0E0	Harvest_PayTree	docs/58	(75 + 25 if a completed Mill) x a multiplier, doubled by DoubleStuds
+0x0206D7F0	Harvest_PayMine	docs/58	pays the entity's stored yield, doubled by FastMining
+0x020866E0	Player_AddBricks	docs/58	adds to player+0x90 and clamps to 500,000
+0x02086634	Player_SetBricks	docs/58	stores player+0x90 and raises a UI event on a threshold crossing
+0x0204F2D8	FixMul_20_12	docs/59	smull, +0x800, lsr #12 -- the 20.12 multiply, rounding to nearest
+0x0206E970	Combat_ApplyDamage	docs/59	rolls in [min,max], scales by target+0x174, subtracts from health
+0x0206E408	Projectile_HitDirect	docs/59	passes blueprint +0x6C/+0x6E to the applier
+0x0206E450	Projectile_OnImpact	docs/59	branches on blueprint+0x6B into the area path, else single target
+0x0206E60C	Combat_ApplyAreaDamage	docs/59	sweeps three rounds with a distance falloff; SuperExplosions doubles
+0x02071DC4	Produce_CanProduce	docs/60	the six preconditions, ending in cost +0x5E against purse +0x90
+0x02000C6C	CollectableBlueprint_UnlockSlot	docs/60	halfword at +0x6C; adjacent to the collectable constructor
+0x0205CC04	EntityStats_GetYield	docs/60	returns the halfword at +0x16, seeded from blueprint+0x6C
+0x0205CC0C	EntityStats_GetHarvestScale	docs/60	returns the halfword at +0x18, the tree payout multiplier
+0x020A15D8	FogMap_Update	docs/63	clears the visible map, then fills a circle per vision source
+0x020A16B4	FogMap_FillCircle	docs/63	midpoint circle: four spans per step, radius plus two footprint extents
+0x020A1670	FogMap_FillSpan	docs/63	clipped horizontal run of BitArray2D::Set
+0x020EEBF4	BitArray2D_Get	docs/63	rows[y][x >> 3] tested against 1 << (x & 7)
+0x020EEC2C	BitArray2D_Set	docs/63	the same addressing, orring or bic-ing the bit
+0x020EEC6C	BitArray2D_InBounds	docs/63	point x at +4 and y at +5 against width +8 and height +0xC
+0x02025C14	Fog_IsEntityVisible	docs/63	BitArray2D_Get on the entity tile, ORed with four override flags
+0x02002AD4	Spell_GetRange	docs/64	returns +0x06, x1.5 via x+(x>>1) when RedBrick_IncreaseSpellRange is set
+0x02002AA8	Spell_GetDuration	docs/64	returns the halfword +0x12, x1.5 the same way under RedBrick_IncreaseSpellTime
+0x020A17C0	Fog_IsAnyCornerVisible	docs/64	BitArray2D_Get on four corner points, plus the same override flags
+0x0205F124	Entity_Tick	docs/64	expires timed effects from the list at +0x1E8/+0x1EC, then regenerates hero mana
+0x0200CE1C	AnimSet_GetFrame	docs/66	mul #0x12 stride, count at +0, halfword frames at +2, index mod count
+0x0200CE4C	AnimSet_GetFlag	docs/66	a per-set byte from a parallel table at 0x0212717C
+0x0203AB00	Projectile_DrawAll	docs/66	skips the draw when blueprint+0x5D is zero
+0x020638C8	CombatHoldPosition_PickTarget	docs/67	keeps the candidate with the highest blueprint+0x70 and stores its tile
+0x02065974	CombatMove_PickTarget	docs/67	the same maximisation in the Move command
+0x0206741C	CombatStandGround_PickTarget	docs/67	the same in Stand Ground
+0x020709BC	Patrol_PickTarget	docs/67	the same in Patrol
+0x020631D4	CombatHoldPosition_ThreatCheck	docs/67	divides the accumulated score total and compares the quotient with 3
+0x020651D0	CombatMove_ThreatCheck	docs/67	the same test in the Move command
+0x02066DD0	CombatStandGround_ThreatCheck	docs/67	the same test in Stand Ground
+0x0206FF04	Patrol_ThreatCheck	docs/67	the same test in Patrol
+0x020A182C	FogMap_AddSource	docs/69	list-contains then push-back, and marks the map dirty
+0x020A184C	FogMap_RemoveSource	docs/69	the erase counterpart
+0x02048A94	FogCircle_SetRadius	docs/69	stores the argument to source+0x10 and sets +0x11 when the tile changed
+0x02049F14	Mission_AddObjective	docs/70	pushes the objective onto the list at mission+8; called by all 91 overlays
+0x02049AD4	Mission_SendLocalPlayerEvent	docs/70	builds a message from the local player id and dispatches it; 88 overlays
+0x0204A070	Mission_LookupByKey	docs/70	walks the list at +0x34 for +0x12 == key and returns the byte at +0x10
+0x02121CBC	Runtime_RegisterStaticObject	docs/70	pushes {arg,dtor} onto a global list; all 91 overlays, 430 ARM9 sites; Metrowerks static-object registration
+0x020EF828	List_PushBack	docs/70	intrusive doubly-linked append: head +4, tail +8, count +0xC, node next +4 prev +8
+0x020EF978	List_Remove	docs/70	unlinks all four cases, clears the node links, decrements the count and RETURNS the node without freeing
+0x0204C6E4	Heap_New	docs/70	operator new(size, file, line); 838 call sites in 557 functions, the most-called function found
+0x0204A0E8	Mission_RemoveByKey	docs/70	removes and virtually destroys every node with +0x12 == key from the lists at +0x08 and +0x30
+0x02049B00	Mission_FirstUnownedEntityAction	docs/70	collects entities, skips those passing a predicate against the local player, acts on the first that fails; interpretation flagged unproven
+0x02047308	New_UserUIPenObjective	docs/32	RTTI: the factory's constructor stores this class's vtable; re-derived from out/eur/rtti.json, matching docs/32
+0x0204732C	New_DestroyMarkedUnitsObjective	docs/32	RTTI: the factory's constructor stores this class's vtable; re-derived from out/eur/rtti.json, matching docs/32; supersedes the structural name Mission_AllocObjective28 from docs/70
+0x02047358	New_RepairMarkedUnitsObjective	docs/32	RTTI: the factory's constructor stores this class's vtable; re-derived from out/eur/rtti.json, matching docs/32
+0x02047384	New_ProtectMarkedUnitsObjective	docs/32	RTTI: the factory's constructor stores this class's vtable; re-derived from out/eur/rtti.json, matching docs/32
+0x020473B0	New_TimerObjective	docs/32	RTTI: the factory's constructor stores this class's vtable; re-derived from out/eur/rtti.json, matching docs/32
+0x020473D8	New_DestroyUnitsObjective	docs/32	RTTI: the factory's constructor stores this class's vtable; re-derived from out/eur/rtti.json, matching docs/32
+0x0204740C	New_CreateUnitsObjective	docs/32	RTTI: the factory's constructor stores this class's vtable; re-derived from out/eur/rtti.json, matching docs/32
+0x02047444	New_CollectSomeItemsObjective	docs/32	RTTI: the factory's constructor stores this class's vtable; re-derived from out/eur/rtti.json, matching docs/32
+0x0204746C	New_CollectMarkedItemsObjective	docs/32	RTTI: the factory's constructor stores this class's vtable; re-derived from out/eur/rtti.json, matching docs/32
+0x02047494	New_CollectMarkedUnitsObjective	docs/32	RTTI: the factory's constructor stores this class's vtable; re-derived from out/eur/rtti.json, matching docs/32
+0x020474C0	New_RetrieveMarkedUnitsObjective	docs/32	RTTI: the factory's constructor stores this class's vtable; re-derived from out/eur/rtti.json, matching docs/32
+0x020474EC	New_TriggerAreaObjective	docs/32	RTTI: the factory's constructor stores this class's vtable; re-derived from out/eur/rtti.json, matching docs/32; supersedes the structural name Mission_AllocObjective20 from docs/70
+0x02047514	New_ManualCompletionObjective	docs/32	RTTI: the factory's constructor stores this class's vtable; re-derived from out/eur/rtti.json, matching docs/32
+0x0204FA88	Save_SaveGame	docs/23	named in docs/23 from the save-format analysis; not RTTI-derived
+0x020A3A08	Map_LoadTerrain	docs/15	named in docs/15 from the map-format analysis; not RTTI-derived
+0x020472E4	Objective_MarkComplete	docs/71	guards on +0x10, sets it to 1 and calls func_02049F50; completing twice is a no-op
+0x020484E4	GetPlayerByIndex	docs/71	builds the player vector, indexes it by the u8 argument and frees the vector
+0x0204A08C	Mission_CompleteObjectiveByKey	docs/71	walks the objective list at +0x0C for +0x12 == key with +0x10 == 0, then Objective_MarkComplete
+0x02048228	Mission_SetPlayerFlag32	docs/71	GetPlayerByIndex then player+0x32 = v and player[0x50]+0x15 = v
+0x0204835C	Mission_SetPlayerFlag33	docs/71	GetPlayerByIndex then player+0x33 = v, player[0x50]+0x14 = v, player[0x4C]+0x3E = v
+0x02048380	Mission_SetPlayerFlag3A	docs/71	GetPlayerByIndex then player[0x4C]+0x3A = v, and only if v is nonzero also player+0x32 and player[0x50]+0x15
+0x0208AA34	Player_OnUnitCountChanged	docs/72	dispatches on blueprint+0x5C: category 1 (Builder) maintains the pair on player+0x4C, categories 0 and 2-6 notify player+0x50, categories 7-19 do nothing
+0x02048324	Mission_SetBuilderCount	docs/72	GetPlayerByIndex then the same +0x2C/+0x2D maintenance as Player_OnUnitCountChanged; missions pass 0, 2, 3 and 4
+0x020482D4	Mission_SetBuilderLimit	docs/72	raises +0x2D to value+1 when below, then sets +0x2C = value unconditionally; missions pass 0 and 2
+0x020ED678	Vector_Init	docs/72	stores a vtable, zeroes +4/+8/+0xC, sets growth 0x10 at +0x10, elem size 1 at +0x14 and the u8 argument at +0x15
+0x020ED71C	Vector_Free	docs/72	restores the vtable, calls func_020ED7D8 to release storage and returns the object
+0x020883F4	GetPlayerList	docs/72	forwarding thunk: moves the out-parameter to r1 and tail-calls through a literal-pool pointer with the world in r0
+0x0208B30C	Player_UpsertUnitRequest	docs/73	finds the User::RequestItem for the entity type and updates +0xC, else allocates 0x18 bytes, runs the SListItem then RequestItem constructors and pushes onto the vector at obj50+0x54
+0x0208B378	Player_FindUnitRequest	docs/73	linear search of obj50+0x54 comparing the u16 at entity->[+4]->+4; returns the value at +0xC and the index, or -1
+0x020F11F8	Random_Next	docs/75	64-bit LCG: umull/mla over state words at +4..+0x18, guarded by func_0208330C
+0x0208AF10	Random_Below	docs/75	fetches the generator and calls Random_Next with the caller's bound; the AI's only source of choice
+0x02090A00	GetJobOwner	docs/75	12-byte getter returning the global dereferenced once; called immediately before every job construction
+0x0208B950	AI_DecideDefend	docs/75	collects candidates, picks one with Random_Below when there is more than one, then New_JobDefend
+0x02094938	AI_DecideRepair	docs/75	caches a tile from +0x4C/+0x4D, resolves the target, then New_JobRepair
+0x02090AA8	New_JobContractBuild	docs/75	one-line factory; sixth of six at consecutive addresses in source order
+0x02090AC8	New_JobRepair	docs/75	one-line factory in the same family
+0x02090AE8	New_JobScout	docs/75	one-line factory in the same family
+0x02090B08	New_JobAttackTaskForce	docs/75	one-line factory in the same family
+0x02090B28	New_JobAttack	docs/75	one-line factory in the same family
+0x02090B4C	New_JobDefend	docs/75	one-line factory in the same family
+0x0208B460	AI_DecideScoutOrTaskForce	docs/75	the only decision site building two job kinds, Scout and AttackTaskForce
+0x0208B460	AI_Think	docs/76	the AI's top-level think: raises Scout and AttackTaskForce itself and calls AI_DecideDefend and AI_DecideAttack; 39 distinct callees, seven real thresholds
+0x0209DE9C	AI_CountByKind	docs/76	counts elements of obj->[4] whose [+0x38]+0x24 word equals the key; starts at index 1 and truncates the accumulator to 8 bits each step
+0x0208C1C0	AI_GetField44	docs/76	returns x->[4]->[0x44]; byte-identical to func_02096578, one inline accessor emitted into two translation units
+0x0208C1C8	AI_GetField48	docs/76	returns x->[4]->[0x48], sibling of AI_GetField44
+0x020880A4	GetGlobalField8B4	docs/76	guarded fetch of the global then its word at +0x8B4
+0x0209B378	Squad_Destroy	docs/77	cancels and deletes the job at +0x38 unless its state is already 4, drains the containers at +0x20 and +0x24; proves a squad owns exactly one job
+0x020984CC	ArmySquad_Ctor	docs/77	runs the Squad constructor, installs the ArmySquad vtable, copies two bytes from a global into +0x93/+0x94 and sets +0x54 to 1
+0x0209C524	Squad_GetOwner	docs/77	returns the object whose +0x28 the squad destructor adjusts by 0x14
+0x0208FD78	Job_Detach	docs/77	called on a job immediately before Heap_Delete during squad teardown
+0x0211FDB4	__aeabi_idivmod	docs/78	signed divide with remainder, sign taken by eor/and #0x80000000; quotient in r0 and remainder in r1; 115 ARM9 call sites
+0x02090250	JobContractBuild_Tick	docs/78	five-state machine on +0x18; +0x30 counts ticks, +0x36 counts attempts with a limit of 2; proposes squad modes 7 and 2 through the slot-0 veto
+0x0208FDF4	Job_Periodic	docs/78	the work the build job runs when its tick counter is divisible by 10 in state 0 and by 20 in state 2
+0x0208FEE8	Job_TestSubject	docs/78	returns non-zero to select the state-0 branch that proposes mode 7 rather than mode 2; also called from JobContractBuild's slot 0 arm for code 3
+0x0209B6F4	Squad_TryAdvance	docs/78	called on the squad in states 2 and 3; a zero result increments the job's attempt counter at +0x36
+0x0208C830	Job_ResolveFromPrevMode	docs/78	called with the squad's previous mode at +0x14 once the attempt counter passes 2
+0x020988F6	Squad_Tick	docs/79	the squad's own update: three two-level dispatches over the twelve modes, reads +0x38 forty-nine times and +0x10 thirty-five times
+0x0209C4D0	Squad_OnModeLeave	docs/79	called from the second-level mode table before the new mode is stored
+0x02099CC8	Squad_AssignJob	docs/79	called by AI_DecideDefend with the target and the new job; proposes modes 2 and 3
+0x0209A6D8	Squad_ProposeCombatMode	docs/79	the only site proposing modes 8 and 5, the two the attack jobs alone allow
+0x020999CC	Squad_PreModeChange	docs/80	called immediately before the mode-change block with the squad and a field from the caller's +0x30
+0x020872DC	HotWire_ResolveTarget	docs/84	resolves the entity at the target tile and returns it only when entity->[0xE0]->[4]->+8 is zero; the single branch behind both the hotwire bug fix and the anything-can-hotwire cheat
+0x02087350	EntityAtTile	docs/84	looks the tile up through func_0205C9B4 and, on a miss, writes a fallback tile back into the caller's point
+0x02078D5C	HotWireSpell_Tick	docs/84	three-state machine on +0x54: cast, wait on the +0x5C timer, then done; spawns effect 0x2A and reassigns the resolved target
+0x02004768	Stream_Write32	docs/87	pushes the value and writes four unrolled WriteByte calls, least-significant byte first
+0x020047B0	Stream_Read32	docs/87	four unrolled ReadByte calls into out+0..3, returning false on any failure
+0x020045E4	Stream_WriteByte	docs/87	appends to the primary buffer while its count is below the threshold at g[0], otherwise to the overflow buffer at g[8]
+0x02004618	Stream_ReadByte	docs/87	returns false when the buffer is empty, else pops the front byte into *out and returns true
+0x020043F8	CommandBase_Dtor	docs/87	bare bx lr; the base destructor body every command's slot 0 and slot 1 call
+0x02004350	CommandBase_Ctor	docs/88	lays out the command header: vtable at +0, 0 at +4, 2 at +8, the TYPE ID at +0x0C from r1, and a u16 owner at +0x10 resolved from the context argument
+0x020871F8	Command_ResolveOwner	docs/88	called by CommandBase's constructor with the context; its first halfword becomes command+0x10
+0x020044BC	Command_Send	docs/89	installs the primary buffer, threshold and overflow into the stream globals, writes the header, calls vtable offset 0xC (slot 3), then clears the globals
+0x02004588	Command_WriteHeader	docs/89	writes command+0x0C masked to one byte as the type tag, then the u16 owner at +0x10
+0x02004504	Command_Receive	docs/89	brackets the read, notes the cursor, reads the header, calls vtable offset 0x10 (slot 4), and records the byte count as the cursor delta
+0x020045AC	Command_ReadHeader	docs/89	reads the tag byte into a discarded stack local then the u16 owner; returns false if the stream is exhausted
+0x0200484C	Stream_WriteU16	docs/89	loads the halfword at the pointer and tail-calls the 16-bit writer
+0x02111B64	Boot_WaitLoop	docs/91	initialises a 32-entry table and writes [r0,#0x388], then spins at +0xB0 on a halfword that never changes; where the recomp boot stops after 13.7M instructions

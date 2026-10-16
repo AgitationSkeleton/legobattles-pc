@@ -1,0 +1,9 @@
+symbol	address	size	source	route	graded	found	a0	a1	result
+Battles_SplitArrayElem	0x020EF1E0	32	battles/leaf.c	user-combat-2026-09-14	235136	230171	32	32	PASS
+Battles_DivMod	0x0211FDB4	132	battles/divmod.c	user-combat-2026-09-14	67395	67387	32	31	PASS
+Battles_RegistryFind	0x02016A00	68	battles/registry.c	user-combat-2026-09-14	1470	1338	32	1	PASS
+Battles_FMul	0x0211F748	480	battles/softfloat.c	user-combat-2026-09-14	11905	11880	1	14	REFUSED-THIN
+Battles_FAdd	0x0211F324	540	battles/softfloat.c	user-combat-2026-09-14	11358	11358	1	5	REFUSED-THIN
+Battles_FSub	0x0211F934	608	battles/softfloat.c	user-combat-2026-09-14	39	39	9	1	REFUSED-THIN
+Battles_ListFindByKey	0x0206AC2C	44	battles/leaf.c	user-combat-2026-09-14	5536	2219	32	3	UNGRADED-STALE
+Battles_IndirectU16IsSet	0x0205E638	36	battles/leaf.c	user-combat-2026-09-14	16	9	3	1	REFUSED-THIN

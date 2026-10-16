@@ -1,0 +1,1169 @@
+// legobattles-decomp: Team Builder and Ban Units (docs/384).
+//
+// The feature: a "Team Builder"
+// tab whose grid of unit icons mimics the Free Play army screen, with presets,
+// Randomize, Set Team and Set Enemy Team, Custom and Random opponents in Free
+// Play, and a "Ban Units" tab whose bans switch an offending online player to
+// King as the match starts. The tabs themselves are in lb_overlay.cpp; this
+// file is what they stand on:
+//
+//   * the ROM: NitroFS, the COMP/LZ11 wrapper, NCGR/NCLR, and the army
+//     screen's own heads (UI/MiniHeads) with the army screen's own palettes;
+//   * the unit table: each slot's candidates, in the order the army screen
+//     lists them;
+//   * the save's army record, its unlock state, and Set Team's refusals;
+//   * the Custom/Random opponent's army, and the ban rules and their journey
+//     from the host to the clients over the wireless bridge.
+//
+// Nothing here is cartridge DATA: images, palettes and names are read from the
+// player's own ROM and from guest RAM at run time. What is written down is what
+// the code says -- addresses, offsets, and the order the army screen's own rule
+// produces -- each with where it was read (docs/384).
+
+#include "lb_overlay.h"
+
+#include <algorithm>   // docs/387: std::min in lb_rom_read
+#include <chrono>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <mutex>
+#include <random>
+#include <string>
+#include <vector>
+
+extern "C" {
+#include "runtime_arm.h"
+}
+
+extern "C" unsigned int lb_patches_blueprint_base(void);   /* lb_patches.cpp */
+
+namespace {
+
+// ---- the player's ROM -------------------------------------------------------
+//
+// main.cpp reads the whole cartridge into one vector that lives for the
+// session (the frontend loop runs inside main); apply_hooks hands it over the
+// moment it is read. Only one ROM can run (port/game.toml's sha1 pin), so the
+// EUR addresses below are exact.
+const uint8_t* g_rom = nullptr;
+size_t g_rom_size = 0;
+
+uint16_t rd16(const uint8_t* p) { return (uint16_t)(p[0] | (p[1] << 8)); }
+uint32_t rd32(const uint8_t* p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
+           ((uint32_t)p[3] << 24);
+}
+
+bool ci_equal(const char* a, size_t na, const char* b, size_t nb) {
+    if (na != nb) return false;
+    for (size_t i = 0; i < na; ++i) {
+        char x = a[i], y = b[i];
+        if (x >= 'A' && x <= 'Z') x = (char)(x - 'A' + 'a');
+        if (y >= 'A' && y <= 'Z') y = (char)(y - 'A' + 'a');
+        if (x != y) return false;
+    }
+    return true;
+}
+
+// A NitroFS path, e.g. "UI/MiniHeads.NCGR", to its bytes. FNT at header 0x40,
+// FAT at 0x48; directory d's main entry is FNT + (d & 0xFFF) * 8: u32 subtable
+// offset, u16 first file id. A subtable entry is u8 t (0 ends), t & 0x7F name
+// bytes, and a u16 directory id when t & 0x80. Files number consecutively.
+bool nitro_file(const char* path, std::vector<uint8_t>* out) {
+    if (!g_rom || g_rom_size < 0x200) return false;
+    const uint32_t fnt = rd32(g_rom + 0x40), fat = rd32(g_rom + 0x48);
+    const uint32_t fat_size = rd32(g_rom + 0x4C);
+    if (fnt >= g_rom_size || fat >= g_rom_size) return false;
+    uint32_t dir = 0xF000u;
+    const char* part = path;
+    for (;;) {
+        const char* slash = std::strchr(part, '/');
+        const bool last = slash == nullptr;
+        const size_t plen = last ? std::strlen(part) : (size_t)(slash - part);
+        const uint32_t main_at = fnt + (dir & 0xFFFu) * 8u;
+        if (main_at + 8u > g_rom_size) return false;
+        uint32_t p = fnt + rd32(g_rom + main_at);
+        uint32_t fid = rd16(g_rom + main_at + 4u);
+        bool found = false;
+        uint32_t found_id = 0;
+        while (p < g_rom_size) {
+            const uint8_t t = g_rom[p++];
+            if (t == 0) break;
+            const uint32_t n = t & 0x7Fu;
+            if (p + n > g_rom_size) return false;
+            const char* name = (const char*)(g_rom + p);
+            p += n;
+            if (t & 0x80u) {
+                if (p + 2u > g_rom_size) return false;
+                const uint16_t sub = rd16(g_rom + p);
+                p += 2u;
+                if (!last && ci_equal(name, n, part, plen)) {
+                    found = true;
+                    found_id = sub;
+                    break;
+                }
+            } else {
+                if (last && ci_equal(name, n, part, plen)) {
+                    found = true;
+                    found_id = fid;
+                    break;
+                }
+                ++fid;
+            }
+        }
+        if (!found) return false;
+        if (!last) {
+            dir = found_id;
+            part = slash + 1;
+            continue;
+        }
+        if ((found_id + 1u) * 8u > fat_size) return false;
+        const uint32_t s = rd32(g_rom + fat + found_id * 8u);
+        const uint32_t e = rd32(g_rom + fat + found_id * 8u + 4u);
+        if (e < s || e > g_rom_size) return false;
+        out->assign(g_rom + s, g_rom + e);
+        return true;
+    }
+}
+
+// Nintendo LZ11 (type byte 0x11). The three token forms by the high nibble.
+bool lz11(const uint8_t* b, size_t n, size_t o, std::vector<uint8_t>* out) {
+    if (o + 4u > n || b[o] != 0x11) return false;
+    size_t size = rd32(b + o) >> 8;
+    o += 4u;
+    if (size == 0) {
+        if (o + 4u > n) return false;
+        size = rd32(b + o);
+        o += 4u;
+    }
+    const size_t start = out->size();
+    out->reserve(start + size);
+    while (out->size() - start < size) {
+        if (o >= n) return false;
+        const uint8_t flags = b[o++];
+        for (int bit = 0; bit < 8 && out->size() - start < size; ++bit) {
+            if (!(flags & (0x80 >> bit))) {
+                if (o >= n) return false;
+                out->push_back(b[o++]);
+                continue;
+            }
+            if (o + 2u > n) return false;
+            const uint8_t b0 = b[o];
+            size_t len, dist;
+            switch (b0 >> 4) {
+            case 0:
+                if (o + 3u > n) return false;
+                len = (size_t)((((b0 & 15) << 4) | (b[o + 1] >> 4)) + 0x11);
+                dist = (size_t)((((b[o + 1] & 15) << 8) | b[o + 2]) + 1);
+                o += 3u;
+                break;
+            case 1:
+                if (o + 4u > n) return false;
+                len = (size_t)((((b0 & 15) << 12) | (b[o + 1] << 4) |
+                                (b[o + 2] >> 4)) + 0x111);
+                dist = (size_t)((((b[o + 2] & 15) << 8) | b[o + 3]) + 1);
+                o += 4u;
+                break;
+            default:
+                len = (size_t)((b0 >> 4) + 1);
+                dist = (size_t)((((b0 & 15) << 8) | b[o + 1]) + 1);
+                o += 2u;
+                break;
+            }
+            if (dist > out->size() - start) return false;
+            for (size_t k = 0; k < len; ++k) {
+                const uint8_t v = (*out)[out->size() - dist];   // copy first:
+                out->push_back(v);                              // no aliasing
+            }
+        }
+    }
+    out->resize(start + size);
+    return true;
+}
+
+// The game's own wrapper: "PMOC", u32 size, u32 block count N, i32 hint,
+// i32 block[N]; a positive block is an LZ11 stream, a negative one |n| raw
+// bytes. A file without it is returned as it is.
+bool comp_unwrap(std::vector<uint8_t>* b) {
+    if (b->size() < 16 || std::memcmp(b->data(), "PMOC", 4) != 0) return true;
+    const uint32_t size = rd32(b->data() + 4), cnt = rd32(b->data() + 8);
+    size_t p = 16u + 4u * cnt;
+    if (p > b->size()) return false;
+    std::vector<uint8_t> out;
+    out.reserve(size);
+    for (uint32_t i = 0; i < cnt; ++i) {
+        const int32_t n = (int32_t)rd32(b->data() + 16u + 4u * i);
+        if (n < 0) {
+            const size_t k = (size_t)(-(int64_t)n);
+            if (p + k > b->size()) return false;
+            out.insert(out.end(), b->data() + p, b->data() + p + k);
+            p += k;
+        } else {
+            if (!lz11(b->data(), b->size(), p, &out)) return false;
+            p += (size_t)n;
+        }
+    }
+    if (out.size() != size) return false;
+    b->swap(out);
+    return true;
+}
+
+// A Nitro section by its (byte-reversed) magic: header size at +0x0C, section
+// count at +0x0E, then {magic, u32 size} chained.
+long section(const std::vector<uint8_t>& b, const char* magic) {
+    if (b.size() < 16) return -1;
+    size_t o = rd16(b.data() + 0x0C);
+    const unsigned count = rd16(b.data() + 0x0E);
+    for (unsigned i = 0; i < count && o + 8u <= b.size(); ++i) {
+        if (std::memcmp(b.data() + o, magic, 4) == 0) return (long)o;
+        const uint32_t sz = rd32(b.data() + o + 4u);
+        if (sz == 0) break;
+        o += sz;
+    }
+    return -1;
+}
+
+// ---- the army screen's units --------------------------------------------------
+//
+// Each slot's candidates, in the order FUN_020B96FC (T) lists them: every
+// minifig collectable (blueprints 356..440) whose unit fits the slot -- the
+// unit's category for slots 0-4, FUN_020EB21C's tier for the sieges and the
+// transport. Evaluated over the ROM's blueprints (docs/384); each entry is
+// checked at run time against the minifig record in guest RAM (+0x60 the unit,
+// +0x6C its unlock bit), so a table that disagreed with the cartridge would
+// say so instead of mislabelling.
+struct Cand {
+    uint16_t unit;      // blueprint index
+    uint16_t minifig;   // blueprint index of its minifig collectable
+    uint8_t faction;    // 0 King 1 Wizard 2 Pirate 3 Imperial 4 Earth 5 Alien
+};
+
+const Cand kHero[] = {
+    {0, 356, 0},   {1, 357, 0},   {161, 366, 0}, {20, 369, 1},  {21, 370, 1},
+    {165, 379, 1}, {40, 382, 2},  {41, 383, 2},  {145, 392, 2}, {60, 395, 3},
+    {61, 396, 3},  {149, 405, 3}, {80, 408, 4},  {81, 409, 4},  {129, 418, 4},
+    {100, 421, 5}, {101, 422, 5}, {133, 431, 5}, {175, 434, 0}, {176, 435, 1},
+    {177, 436, 2}, {178, 437, 3}, {179, 438, 5}, {180, 439, 4}, {181, 440, 0},
+};
+const Cand kBuilder[] = {
+    {2, 358, 0}, {22, 371, 1}, {42, 384, 2}, {62, 397, 3}, {82, 410, 4},
+    {102, 423, 5},
+};
+const Cand kMelee[] = {
+    {3, 359, 0},  {162, 367, 0}, {23, 372, 1}, {166, 380, 1}, {43, 385, 2},
+    {63, 398, 3}, {83, 411, 4},  {103, 424, 5},
+};
+const Cand kRanged[] = {
+    {4, 360, 0},   {24, 373, 1}, {44, 386, 2},  {146, 393, 2}, {64, 399, 3},
+    {150, 406, 3}, {84, 412, 4}, {130, 419, 4}, {104, 425, 5}, {134, 432, 5},
+};
+const Cand kMounted[] = {
+    {5, 361, 0}, {25, 374, 1}, {45, 387, 2}, {65, 400, 3}, {85, 413, 4},
+    {105, 426, 5},
+};
+const Cand kSiege1[] = {
+    {6, 362, 0}, {26, 375, 1}, {46, 388, 2}, {66, 401, 3}, {86, 414, 4},
+    {106, 427, 5},
+};
+const Cand kSiege2[] = {
+    {7, 363, 0},   {163, 368, 0}, {27, 376, 1},  {167, 381, 1},
+    {47, 389, 2},  {147, 394, 2}, {67, 402, 3},  {151, 407, 3},
+    {87, 415, 4},  {131, 420, 4}, {107, 428, 5}, {135, 433, 5},
+};
+const Cand kSiege3[] = {
+    {8, 364, 0}, {28, 377, 1}, {48, 390, 2}, {68, 403, 3}, {88, 416, 4},
+    {108, 429, 5},
+};
+const Cand kTransport[] = {
+    {9, 365, 0}, {29, 378, 1}, {49, 391, 2}, {69, 404, 3}, {89, 417, 4},
+    {109, 430, 5},
+};
+
+struct Slot {
+    const Cand* c;
+    int n;
+    uint32_t rec_off;    // the army record field (0x02154E40 layout)
+    int x, y;            // the button on UI/FE/CustomizeArmy.bin, native px
+    uint32_t loc;        // the game's name for the category
+    const char* fallback;
+};
+#define LB_N(a) (int)(sizeof(a) / sizeof((a)[0]))
+const Slot kSlots[LB_TEAM_SLOTS] = {
+    {kHero, LB_N(kHero), 0x08u, 36, 11, 245u, "Hero"},
+    {kBuilder, LB_N(kBuilder), 0x0Au, 20, 40, 246u, "Builder"},
+    {kMelee, LB_N(kMelee), 0x0Cu, 52, 40, 242u, "Close Combat"},
+    {kRanged, LB_N(kRanged), 0x0Eu, 20, 69, 243u, "Ranged"},
+    {kMounted, LB_N(kMounted), 0x10u, 52, 69, 244u, "Mounted"},
+    {kSiege1, LB_N(kSiege1), 0x00u, 20, 98, 248u, "Special One"},
+    {kSiege2, LB_N(kSiege2), 0x02u, 52, 98, 249u, "Special Two"},
+    {kSiege3, LB_N(kSiege3), 0x04u, 20, 127, 250u, "Special Three"},
+    {kTransport, LB_N(kTransport), 0x06u, 52, 127, 251u, "Transport"},
+};
+#undef LB_N
+
+// FUN_020B83D4's rebuild from GetFaction(0x7C) when the record's flag is
+// clear: the first unit of categories 0..4, the first three sieges, the
+// first transport. That is Free Play's default army.
+const uint16_t kKingDefault[LB_TEAM_SLOTS] = {0, 2, 3, 4, 5, 6, 7, 8, 9};
+
+const Cand* find_cand(int unit, int* slot_out) {
+    for (int s = 0; s < LB_TEAM_SLOTS; ++s)
+        for (int k = 0; k < kSlots[s].n; ++k)
+            if (kSlots[s].c[k].unit == unit) {
+                if (slot_out) *slot_out = s;
+                return &kSlots[s].c[k];
+            }
+    return nullptr;
+}
+
+bool guest_ptr(uint32_t p) { return p >= 0x02000000u && p < 0x02400000u; }
+
+constexpr uint32_t kArmyRecord = 0x02154E40u;   // record 0, the only one
+constexpr uint32_t kUnlockMgr = 0x021585A8u;    // Battles::User::UnlockableManager
+constexpr uint32_t kViewSlot = 0x02157FACu;     // screen registry 0x5C: the battle view
+constexpr uint32_t kArmySlot = 0x02157E7Cu;     // screen registry 16: CustomizeArmy
+constexpr uint32_t kHeadCount = 0x0214E41Cu;    // FUN_020B8538's literals:
+constexpr uint32_t kHeadKeys = 0x0214E4E0u;     //   166 blueprint keys
+constexpr uint32_t kHeadRecBase = 0x252u;       //   UIMgrData record 0x252 + head
+
+// Where blueprint `index` is in RAM. BP/Entities.ebp is "BPNZ" then 551
+// records whose size is set by the kind byte at +8: 0x7C for a unit, 0x74 and
+// 0x70 for the other kinds -- the minifig collectables are 0x70 -- so only the
+// units, which come first, are at base + 4 + index * 0x7C. The loader
+// (func_02001F3C) fixes the file up in place without moving records, so the
+// walk is made over guest RAM once per block.
+constexpr int kBlueprints = 551;
+std::vector<uint32_t> g_rec_addr;
+uint32_t g_rec_base = 0u;
+uint32_t bp_addr(int index) {
+    const uint32_t base = lb_patches_blueprint_base();
+    if (!base || index < 0 || index >= kBlueprints) return 0u;
+    if (base != g_rec_base) {
+        g_rec_addr.assign(kBlueprints, 0u);
+        g_rec_base = base;
+        uint32_t o = base + 4u;
+        for (int i = 0; i < kBlueprints; ++i) {
+            g_rec_addr[(size_t)i] = o;
+            const uint8_t kind = bus_read_u8(o + 8u);
+            const uint32_t size = kind == 0 ? 0x7Cu : kind == 1 ? 0x74u
+                                  : kind == 2 ? 0x70u : 0u;
+            if (!size) {   // not the layout this was read from: use none
+                std::fprintf(stderr, "[lb_teams] blueprint %d has kind %u; "
+                             "the record walk stops\n", i, (unsigned)kind);
+                for (int j = i; j < kBlueprints; ++j) g_rec_addr[(size_t)j] = 0u;
+                break;
+            }
+            o += size;
+        }
+    }
+    return g_rec_addr[(size_t)index];
+}
+
+// The runtime check of the table: every minifig record names its unit at +0x60
+// and its unlock bit at +0x6C (FUN_02000C6C; = minifig - 260). -1 not checked
+// yet (blueprints not in RAM), 0 a mismatch (logged once), 1 agreed.
+int g_table_ok = -1;
+void check_table() {
+    if (g_table_ok >= 0 || !lb_patches_blueprint_base()) return;
+    int bad = 0;
+    for (int s = 0; s < LB_TEAM_SLOTS; ++s)
+        for (int k = 0; k < kSlots[s].n; ++k) {
+            const Cand& c = kSlots[s].c[k];
+            const uint32_t mf = bp_addr(c.minifig);
+            // +0x60 names the unit: its index in the file, or, if the loader
+            // fixed it up, the address of its record.
+            const uint32_t unit = mf ? bus_read_u32(mf + 0x60u) : 0u;
+            const bool names_unit = unit == c.unit || unit == bp_addr(c.unit);
+            if (!mf || bus_read_u8(mf + 8u) != 2u || !names_unit ||
+                bus_read_u16(mf + 0x6Cu) != (uint32_t)(c.minifig - 260)) {
+                if (++bad <= 4)
+                    std::fprintf(stderr, "[lb_teams] minifig %u does not name "
+                                 "unit %u (kind %u, +0x60 %08X, +0x6C %u)\n",
+                                 c.minifig, c.unit,
+                                 mf ? (unsigned)bus_read_u8(mf + 8u) : 0u,
+                                 (unsigned)unit,
+                                 mf ? (unsigned)bus_read_u16(mf + 0x6Cu) : 0u);
+            }
+        }
+    g_table_ok = bad ? 0 : 1;
+    std::fprintf(stderr, "[lb_teams] unit table: %s against the blueprints "
+                 "in RAM\n", bad ? "DISAGREES" : "agrees");
+    std::fflush(stderr);
+}
+
+// BitArray::Get (020EE9A0): data = [ba + 0xC], then bit i.
+bool bit_get(uint32_t ba, uint32_t i) {
+    const uint32_t data = bus_read_u32(ba + 0x0Cu);
+    if (!guest_ptr(data)) return false;
+    return ((bus_read_u8(data + (i >> 3)) >> (i & 7u)) & 1u) != 0;
+}
+
+// ---- names, from the game's live LOC table (docs/356's reader) --------------
+constexpr uint32_t kLangManager = 0x0215378Cu;
+constexpr uint32_t kLangMagic = 0x474E414Cu;   // "LANG"
+constexpr uint32_t kLangIds = 0xBF8u;
+constexpr uint32_t kLangStrings = 0x0Cu + kLangIds * 4u;
+constexpr uint32_t kLangMaxBytes = 0x20000u;
+
+uint32_t lang_table() {
+    if (bus_read_u16(kLangManager) != 0u) return 0u;
+    if (bus_read_u32(kLangManager + 4u) != bus_read_u32(kLangManager + 8u))
+        return 0u;
+    const uint32_t file = bus_read_u32(kLangManager + 0x0Cu);
+    if (file < 0x02000000u || file > 0x02400000u - kLangMaxBytes) return 0u;
+    if (bus_read_u32(file) != kLangMagic) return 0u;
+    if (bus_read_u32(file + 8u) != file + 0x0Cu) return 0u;
+    return file;
+}
+
+// Text id `id` as UTF-8 (the .lng text is 8-bit; bytes past 0x7F are taken
+// as Latin-1). Empty while the table is not settled.
+std::string loc_text(uint32_t id) {
+    const uint32_t file = lang_table();
+    if (!file || id >= kLangIds) return std::string();
+    const uint32_t at = bus_read_u32(file + 0x0Cu + id * 4u);
+    if (at < file + kLangStrings || at >= file + kLangMaxBytes) return std::string();
+    std::string s;
+    for (uint32_t i = 0; i < 96u; ++i) {
+        const uint8_t c = bus_read_u8(at + i);
+        if (c == 0) break;
+        if (c < 0x20) { s.push_back(' '); continue; }
+        if (c < 0x80) { s.push_back((char)c); continue; }
+        s.push_back((char)(0xC0 | (c >> 6)));
+        s.push_back((char)(0x80 | (c & 0x3F)));
+    }
+    return s;
+}
+
+struct NameCache {
+    uint32_t file = 0;
+    std::string unit[192];
+    std::string slot[LB_TEAM_SLOTS];
+};
+NameCache g_names;
+
+void names_refresh() {
+    const uint32_t file = lang_table();
+    if (file == g_names.file) return;
+    g_names = NameCache();
+    g_names.file = file;
+}
+
+// ---- the head atlas ---------------------------------------------------------
+//
+// UI/MiniHeads.NCGR: 4bpp, tiled, 48x30 tiles = 16x10 heads of 24x24, loaded by
+// FUN_02030DA4 (A) as resource 0x2C with UI/WorldViewTop_Back.NCLR. A unit's
+// head position is its blueprint's index in the u32 key table at 0x0214E4E0
+// (FUN_020E0784); its sub-palette is byte +0x0F of the first frame of
+// UI/FE/UIMgrData.bin record 0x252 + position (FUN_020E06FC).
+constexpr int kAtlasW = 384, kAtlasH = 240;
+std::vector<uint32_t> g_rgba, g_grey;   // RGBA32, one row after another
+int g_pos[192];                         // blueprint -> head position, -1 none
+int g_atlas_state = 0;                  // 0 not yet, 1 built, -1 failed
+std::string g_atlas_msg = "Waiting for the ROM.";
+SDL_Texture* g_tex[2] = {nullptr, nullptr};
+SDL_Renderer* g_tex_owner = nullptr;
+
+uint32_t rgb555_to_rgba(uint16_t c) {
+    uint32_t out = 0xFF000000u;
+    for (int ch = 0; ch < 3; ++ch) {
+        const uint32_t v = ((c >> (5 * ch)) & 31u) * 2u;
+        out |= (((v << 2) | (v >> 4)) & 0xFFu) << (8 * ch);
+    }
+    return out;
+}
+
+bool build_atlas() {
+    if (g_atlas_state != 0) return g_atlas_state > 0;
+    if (!g_rom) return false;
+    // The key table is in the ARM9's data, valid once the ARM9 is in RAM.
+    const uint32_t count = bus_read_u32(kHeadCount);
+    if (count == 0 || count > 551u || bus_read_u32(kHeadKeys) != 0u ||
+        bus_read_u32(kHeadKeys + 4u) != 2u) {
+        g_atlas_msg = "Waiting for the game's head table.";
+        return false;
+    }
+    std::vector<uint8_t> ncgr, nclr, ui;
+    if (!nitro_file("UI/MiniHeads.NCGR", &ncgr) || !comp_unwrap(&ncgr) ||
+        !nitro_file("UI/WorldViewTop_Back.NCLR", &nclr) || !comp_unwrap(&nclr) ||
+        !nitro_file("UI/FE/UIMgrData.bin", &ui) || !comp_unwrap(&ui)) {
+        g_atlas_state = -1;
+        g_atlas_msg = "Could not read the heads from the ROM.";
+        std::fprintf(stderr, "[lb_teams] %s\n", g_atlas_msg.c_str());
+        return false;
+    }
+    const long c = section(ncgr, "RAHC"), pl = section(nclr, "TTLP");
+    if (c < 0 || pl < 0 || ui.size() < 8) {
+        g_atlas_state = -1;
+        g_atlas_msg = "The heads' files are not the expected format.";
+        return false;
+    }
+    const uint8_t* cb = ncgr.data() + c;
+    const unsigned th = rd16(cb + 8), tw = rd16(cb + 10);
+    const uint32_t dsz = rd32(cb + 24), doff = rd32(cb + 28);
+    if (tw * 8u != (unsigned)kAtlasW || th * 8u != (unsigned)kAtlasH ||
+        rd32(cb + 12) != 3u || (size_t)c + 8u + doff + dsz > ncgr.size() ||
+        dsz < (size_t)tw * th * 32u) {
+        g_atlas_state = -1;
+        g_atlas_msg = "UI/MiniHeads is not the expected 4bpp sheet.";
+        return false;
+    }
+    const uint8_t* pix = cb + 8 + doff;
+    const uint8_t* pb = nclr.data() + pl;
+    const uint32_t pdsz = rd32(pb + 16), pdoff = rd32(pb + 20);
+    if ((size_t)pl + 8u + pdoff + pdsz > nclr.size()) {
+        g_atlas_state = -1;
+        g_atlas_msg = "UI/WorldViewTop_Back.NCLR is short.";
+        return false;
+    }
+    const uint8_t* pal = pb + 8 + pdoff;
+    const unsigned pal_n = pdsz / 2u;
+    const unsigned ui_n = rd16(ui.data());
+
+    for (int& p : g_pos) p = -1;
+    for (uint32_t k = 0; k < count && k < 160u; ++k) {
+        const uint32_t key = bus_read_u32(kHeadKeys + 4u * k);
+        if (key < 192u && g_pos[key] < 0) g_pos[key] = (int)k;
+    }
+    g_rgba.assign((size_t)kAtlasW * kAtlasH, 0u);
+    g_grey.assign((size_t)kAtlasW * kAtlasH, 0u);
+    int drawn = 0;
+    for (unsigned h = 0; h < 160u; ++h) {
+        const unsigned rec = kHeadRecBase + h;
+        if (rec >= ui_n || 8u + (rec + 1u) * 0x1Cu > ui.size()) break;
+        const uint32_t frame = rd32(ui.data() + 8u + rec * 0x1Cu);
+        const uint32_t res = rd32(ui.data() + 8u + rec * 0x1Cu + 24u);
+        if (frame == 0 || res != 0x2Cu || frame + 0x10u > ui.size()) continue;
+        const unsigned sub = ui[frame + 0x0Fu];
+        const int x0 = (int)(h % 16u) * 24, y0 = (int)(h / 16u) * 24;
+        for (int y = y0; y < y0 + 24; ++y)
+            for (int x = x0; x < x0 + 24; ++x) {
+                const uint8_t byte =
+                    pix[((y >> 3) * tw + (x >> 3)) * 32 + (y & 7) * 4 + ((x & 7) >> 1)];
+                const unsigned v = (x & 1) ? (byte >> 4) : (byte & 15u);
+                if (!v || sub * 16u + v >= pal_n) continue;   // 0 is clear
+                const uint32_t rgba = rgb555_to_rgba(rd16(pal + 2u * (sub * 16u + v)));
+                const size_t at = (size_t)y * kAtlasW + x;
+                g_rgba[at] = rgba;
+                const uint32_t r = rgba & 0xFFu, g = (rgba >> 8) & 0xFFu,
+                               b = (rgba >> 16) & 0xFFu;
+                const uint32_t yv = (77u * r + 150u * g + 29u * b) >> 8;
+                g_grey[at] = 0xFF000000u | (yv << 16) | (yv << 8) | yv;
+            }
+        ++drawn;
+    }
+    g_atlas_state = 1;
+    g_atlas_msg.clear();
+    std::fprintf(stderr, "[lb_teams] %d heads read from UI/MiniHeads, %u keys\n",
+                 drawn, (unsigned)count);
+    std::fflush(stderr);
+    return true;
+}
+
+// ---- the enemy -------------------------------------------------------------
+LbTeam g_enemy = {{0, 2, 3, 4, 5, 6, 7, 8, 9}};
+bool g_enemy_set = false;
+
+// ---- bans ------------------------------------------------------------------
+constexpr int kBanBytes = 24;              // blueprints 0..191
+std::mutex g_rules_mu;                     // the overlay, the bridge, the hook
+uint8_t g_bans_local[kBanBytes] = {};      // under g_rules_mu
+uint8_t g_bans_recv[kBanBytes] = {};       // under g_rules_mu
+bool g_bans_recv_ok = false;               // under g_rules_mu
+unsigned g_bans_recv_from = 0;             // under g_rules_mu
+// When they last arrived. A host sends them every 250 ms from opening its
+// lobby to the end of the match, so rules older than a few seconds belong to
+// a lobby this player has left and are not applied.
+std::chrono::steady_clock::time_point g_bans_recv_at{};   // under g_rules_mu
+bool rules_fresh() {
+    return g_bans_recv_ok &&
+           std::chrono::steady_clock::now() - g_bans_recv_at <
+               std::chrono::seconds(3);
+}
+
+bool ban_bit(const uint8_t* bits, int bp) {
+    return bp >= 0 && bp < kBanBytes * 8 && ((bits[bp >> 3] >> (bp & 7)) & 1);
+}
+
+bool king_default(int bp) {
+    for (uint16_t k : kKingDefault)
+        if (k == bp) return true;
+    return false;
+}
+
+// The cartridge's own network state (lb_net_guest_update, from its task
+// object): 10/2/3/4/11 hosting, 9/6/7/5/12 joining, 0/-1 idle.
+bool net_hosting(int s) { return s == 10 || s == 2 || s == 3 || s == 4 || s == 11; }
+bool net_joined(int s) { return s == 9 || s == 6 || s == 7 || s == 5 || s == 12; }
+
+}  // namespace
+
+// ---- the C API (lb_overlay.h) -----------------------------------------------
+
+extern "C" void lb_rom_attach(const unsigned char* data, size_t size) {
+    g_rom = data;
+    g_rom_size = size;
+    std::fprintf(stderr, "[lb_teams] ROM attached: %zu bytes\n", size);
+    std::fflush(stderr);
+}
+
+// docs/387: a NitroFS file of the player's own ROM, as stored (not
+// decompressed), for lb_palette.cpp. Returns its size, or -1; copies at most
+// `cap` bytes into `out`.
+extern "C" int lb_rom_read(const char* path, unsigned char* out, int cap) {
+    std::vector<uint8_t> v;
+    if (!path || !nitro_file(path, &v)) return -1;
+    const size_t n = cap > 0 ? std::min(v.size(), (size_t)cap) : 0u;
+    if (out && n) std::memcpy(out, v.data(), n);
+    return (int)v.size();
+}
+
+extern "C" int lb_teams_slot_count(int slot) {
+    return (slot >= 0 && slot < LB_TEAM_SLOTS) ? kSlots[slot].n : 0;
+}
+
+extern "C" int lb_teams_slot_unit(int slot, int k) {
+    if (slot < 0 || slot >= LB_TEAM_SLOTS || k < 0 || k >= kSlots[slot].n)
+        return -1;
+    return kSlots[slot].c[k].unit;
+}
+
+extern "C" void lb_teams_slot_pos(int slot, int* x, int* y) {
+    if (slot < 0 || slot >= LB_TEAM_SLOTS) return;
+    if (x) *x = kSlots[slot].x;
+    if (y) *y = kSlots[slot].y;
+}
+
+extern "C" const char* lb_teams_slot_label(int slot) {
+    if (slot < 0 || slot >= LB_TEAM_SLOTS) return "";
+    names_refresh();
+    std::string& s = g_names.slot[slot];
+    if (s.empty()) s = loc_text(kSlots[slot].loc);
+    return s.empty() ? kSlots[slot].fallback : s.c_str();
+}
+
+extern "C" const char* lb_teams_unit_name(int bp) {
+    if (bp < 0 || bp >= 192) return "?";
+    names_refresh();
+    std::string& s = g_names.unit[bp];
+    if (s.empty()) {
+        const uint32_t rec = bp_addr(bp);
+        if (rec) s = loc_text(bus_read_u16(rec + 0x06u));   // display name id
+    }
+    if (s.empty()) {
+        static char buf[24];
+        std::snprintf(buf, sizeof buf, "unit %d", bp);
+        return buf;
+    }
+    return s.c_str();
+}
+
+// docs/385: the unit's display-name id (its blueprint's +0x06), -1 if the
+// blueprints are not in RAM.
+extern "C" int lb_teams_unit_name_id(int bp) {
+    if (bp < 0 || bp >= 192) return -1;
+    const uint32_t rec = bp_addr(bp);
+    return rec ? (int)bus_read_u16(rec + 0x06u) : -1;
+}
+
+extern "C" int lb_teams_unit_faction(int bp) {
+    const Cand* c = find_cand(bp, nullptr);
+    return c ? c->faction : -1;
+}
+
+extern "C" int lb_teams_unit_slot(int bp) {
+    int s = -1;
+    return find_cand(bp, &s) ? s : -1;
+}
+
+extern "C" int lb_teams_is_king_default(int bp) { return king_default(bp) ? 1 : 0; }
+
+// -1 unknown (no profile or blueprints yet), 0 not unlocked, 1 unlocked but
+// not bought, 2 fieldable. The army screen's own tests: unlocked is FUN_020EB658
+// (the minifig's +0x6B clear, or its bit in mgr+4 or mgr+0x24), bought is
+// FUN_020EB5B4 (its bit in mgr+0x34).
+extern "C" int lb_teams_unit_state(int bp) {
+    const Cand* c = find_cand(bp, nullptr);
+    const uint32_t mgr = bus_read_u32(kUnlockMgr);
+    if (!c || !guest_ptr(mgr) || !lb_patches_blueprint_base()) return -1;
+    check_table();
+    const uint32_t mf = bp_addr(c->minifig);
+    const uint32_t bit = bus_read_u16(mf + 0x6Cu);
+    const bool unlocked = bus_read_u8(mf + 0x6Bu) == 0 ||
+                          bit_get(mgr + 4u, bit) || bit_get(mgr + 0x24u, bit);
+    if (!unlocked) return 0;
+    return bit_get(mgr + 0x34u, bit) ? 2 : 1;
+}
+
+extern "C" SDL_Texture* lb_teams_atlas(SDL_Renderer* r, int grey) {
+    if (!r || !build_atlas()) return nullptr;
+    if (g_tex_owner != r) {
+        for (SDL_Texture*& t : g_tex)
+            if (t) { SDL_DestroyTexture(t); t = nullptr; }
+        g_tex_owner = r;
+    }
+    const int which = grey ? 1 : 0;
+    if (!g_tex[which]) {
+        SDL_Texture* t = SDL_CreateTexture(r, SDL_PIXELFORMAT_RGBA32,
+                                           SDL_TEXTUREACCESS_STATIC, kAtlasW,
+                                           kAtlasH);
+        if (!t) return nullptr;
+        SDL_UpdateTexture(t, nullptr, (which ? g_grey : g_rgba).data(),
+                          kAtlasW * 4);
+        SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
+        SDL_SetTextureScaleMode(t, SDL_ScaleModeNearest);
+        g_tex[which] = t;
+    }
+    return g_tex[which];
+}
+
+extern "C" int lb_teams_icon_uv(int bp, float* u0, float* v0, float* u1,
+                                float* v1) {
+    if (g_atlas_state <= 0 || bp < 0 || bp >= 192 || g_pos[bp] < 0) return 0;
+    const int p = g_pos[bp];
+    *u0 = (float)((p % 16) * 24) / kAtlasW;
+    *v0 = (float)((p / 16) * 24) / kAtlasH;
+    *u1 = *u0 + 24.0f / kAtlasW;
+    *v1 = *v0 + 24.0f / kAtlasH;
+    return 1;
+}
+
+extern "C" const char* lb_teams_icons_status(void) {
+    return g_atlas_msg.c_str();
+}
+
+extern "C" void lb_teams_shutdown(void) {
+    for (SDL_Texture*& t : g_tex)
+        if (t) { SDL_DestroyTexture(t); t = nullptr; }
+    g_tex_owner = nullptr;
+}
+
+extern "C" void lb_teams_king_default(LbTeam* t) {
+    if (!t) return;
+    for (int s = 0; s < LB_TEAM_SLOTS; ++s) t->pick[s] = kKingDefault[s];
+}
+
+extern "C" int lb_teams_valid(const LbTeam* t) {
+    if (!t) return 0;
+    for (int s = 0; s < LB_TEAM_SLOTS; ++s) {
+        int in = -1;
+        if (!find_cand(t->pick[s], &in) || in != s) return 0;
+    }
+    return 1;
+}
+
+extern "C" int lb_teams_is_default(const LbTeam* t) {
+    for (int s = 0; s < LB_TEAM_SLOTS; ++s)
+        if (t->pick[s] != kKingDefault[s]) return 0;
+    return 1;
+}
+
+// The loaded profile's army, record 0 at 0x02154E40. Returns 1 when a profile
+// is loaded and the record holds a valid army; *confirmed is its +0x12 flag,
+// which the commit sets on every Continue (docs/384: not "non-default").
+extern "C" int lb_teams_read_save(LbTeam* t, int* confirmed) {
+    char name[16];
+    if (lb_net_profile_name(name, (int)sizeof name) <= 0) return 0;
+    LbTeam r;
+    for (int s = 0; s < LB_TEAM_SLOTS; ++s)
+        r.pick[s] = (unsigned short)bus_read_u16(kArmyRecord + kSlots[s].rec_off);
+    if (confirmed) *confirmed = bus_read_u8(kArmyRecord + 0x12u) ? 1 : 0;
+    if (!lb_teams_valid(&r)) return 0;
+    if (t) *t = r;
+    return 1;
+}
+
+// Why Set Team may not apply now, or null. The rule: only when the player
+// is not in gameplay, the pause menu counting as gameplay, and never while
+// connected to a lobby or viewing the master server.
+extern "C" const char* lb_teams_set_team_blocked(void) {
+    char name[16];
+    if (lb_net_profile_name(name, (int)sizeof name) <= 0)
+        return "No profile is loaded yet.";
+    const int net = lb_net_guest_state();
+    if (net != 0 && net != -1)
+        return "Not while hosting, in a lobby, or browsing games.";
+    // The battle view, registry slot 0x5C: it exists from the battle's first
+    // frame to its end, under the pause menu too, and the slot is cleared
+    // when its layout goes (docs/384).
+    const uint32_t view = bus_read_u32(kViewSlot);
+    if (guest_ptr(view) && bus_read_u32(view + 0x1Cu) != 0u)
+        return "Not during a battle (the pause menu counts).";
+    // The army screen keeps its own two copies of the record (+0x64, +0x78)
+    // and writes them back on Continue, which would undo Set Team.
+    const uint32_t army = bus_read_u32(kArmySlot);
+    if (guest_ptr(army) && bus_read_u32(army + 0x1Cu) != 0u)
+        return "Close the game's army screen first.";
+    return nullptr;
+}
+
+// Write the team into record 0 as the army screen's commit would
+// (FUN_020B8EB4 -> FUN_0204FED8: the picks, +0x12 = 1, +0x13 = 0x7C), after
+// the army screen's own refusal: a unit must be unlocked and bought.
+extern "C" int lb_teams_set_team(const LbTeam* t, char* msg, int cap) {
+    auto say = [&](const char* fmt, const char* a) {
+        if (msg && cap > 0) std::snprintf(msg, (size_t)cap, fmt, a);
+    };
+    if (!t || !lb_teams_valid(t)) { say("%s", "That team is not valid."); return 0; }
+    if (const char* why = lb_teams_set_team_blocked()) { say("%s", why); return 0; }
+    for (int s = 0; s < LB_TEAM_SLOTS; ++s) {
+        const int st = lb_teams_unit_state(t->pick[s]);
+        if (st < 0) { say("%s", "The game's unlock state is not readable yet."); return 0; }
+        if (st < 2) {
+            say(st == 0 ? "%s is not unlocked on this save."
+                        : "%s is not bought on this save.",
+                lb_teams_unit_name(t->pick[s]));
+            return 0;
+        }
+    }
+    for (int s = 0; s < LB_TEAM_SLOTS; ++s)
+        bus_write_u16(kArmyRecord + kSlots[s].rec_off, t->pick[s]);
+    bus_write_u8(kArmyRecord + 0x12u, 1u);
+    bus_write_u8(kArmyRecord + 0x13u, 0x7Cu);
+    std::fprintf(stderr, "[lb_teams] Set Team: record 0 = %u %u %u %u %u | %u "
+                 "%u %u %u\n", t->pick[0], t->pick[1], t->pick[2], t->pick[3],
+                 t->pick[4], t->pick[5], t->pick[6], t->pick[7], t->pick[8]);
+    std::fflush(stderr);
+    say("%s", "Set. The game uses it now; it is saved with the game's next save.");
+    return 1;
+}
+
+extern "C" void lb_teams_set_enemy(const LbTeam* t) {
+    if (!t || !lb_teams_valid(t)) return;
+    g_enemy = *t;
+    g_enemy_set = true;
+}
+
+extern "C" void lb_teams_get_enemy(LbTeam* t) {
+    if (t) *t = g_enemy;
+}
+
+// Each slot independently: "all categories shuffled eg random hero, random
+// builder". fieldable_only keeps to units this save can field.
+extern "C" void lb_teams_randomize(LbTeam* t, int fieldable_only) {
+    static std::mt19937 rng(std::random_device{}());
+    for (int s = 0; s < LB_TEAM_SLOTS; ++s) {
+        std::vector<int> pool;
+        for (int k = 0; k < kSlots[s].n; ++k) {
+            const int u = kSlots[s].c[k].unit;
+            if (fieldable_only && lb_teams_unit_state(u) != 2) continue;
+            pool.push_back(u);
+        }
+        if (pool.empty()) pool.push_back(kKingDefault[s]);
+        t->pick[s] = (unsigned short)pool[std::uniform_int_distribution<int>(
+            0, (int)pool.size() - 1)(rng)];
+    }
+}
+
+// ---- the Custom and Random opponents (lb_patches.cpp's hooks) ---------------
+//
+// OpponentSetup's button frame is the choice. Frames 0x38..0x3D are the six
+// factions (FUN_020C0374); the two new choices use frames the screen already
+// has loaded from its common atlas: 0x8F, the crown, for Custom, and 0x15,
+// the "?", for Random (docs/384).
+constexpr int kFrameCustom = 0x8F, kFrameRandom = 0x15;
+
+// docs/390: PORTRAITS OF THEIR OWN, 56x56 like the six factions: existing UI
+// elements the same size as the Free Play mugshots -- the settings cog for
+// Custom, a question mark for Random.
+//
+// The six portraits are 56x56 cells of UI/AllInOne/Iconic_FreeplayFaction
+// (256x256, 8bpp, resource 0x4F), drawn as 3D quads through frame records
+// 0x38..0x3D of the FE UIMgrData. The Options cog (Iconic_MainMenu, record
+// 0x4C state 1, cell 0,64) and the LEGO Store "?" (Iconic_LegoStore, 0x50
+// state 1, cell 64,0) are the same size in the same style. They are pasted,
+// remapped to the faction atlas's palette, into two cells OpponentSetup never
+// draws -- the grey Wizard (0,128) and the grey King (64,128) -- in the
+// decoded file just before the game uploads it (lb_patches.cpp,
+// xfer_override). Two unused records, 0x4A and 0x4B, are given the frame
+// blocks of 0x31 and 0x30 state 2 (those same two cells) and resource 0x4F.
+// The cartridge then draws them through its own button and quad path.
+// Until both are in place the selector keeps the 24x24 crown and "?".
+constexpr int kPortraitCustom = 0x4A, kPortraitRandom = 0x4B;
+bool g_portrait_records = false;   // 0x4A/0x4B hold the frames now
+bool g_portrait_pasted = false;    // the last faction atlas upload was patched
+
+extern "C" int lb_teams_enemy_frame(int choice) {
+    if (choice >= 0 && choice < 6) return 0x38 + choice;
+    if (g_portrait_records && g_portrait_pasted)
+        return choice == 6 ? kPortraitCustom : kPortraitRandom;
+    return choice == 6 ? kFrameCustom : kFrameRandom;
+}
+
+extern "C" int lb_teams_enemy_choice(int frame) {
+    if (frame >= 0x38 && frame <= 0x3D) return frame - 0x38;
+    if (frame == kFrameCustom || frame == kPortraitCustom) return 6;
+    if (frame == kFrameRandom || frame == kPortraitRandom) return 7;
+    return -1;
+}
+
+// 1 for the two 24x24 frames, which need the button's rect shrunk.
+extern "C" int lb_teams_enemy_frame_small(int frame) {
+    return (frame == kFrameCustom || frame == kFrameRandom) ? 1 : 0;
+}
+
+namespace {
+// The two portraits as indices into the faction atlas's palette, 56x56 each
+// (cog first). 0 stays 0: the atlases share transparent index 0.
+std::vector<uint8_t> g_cells;
+int g_cells_state = 0;   // 0 not tried, 1 built, -1 failed
+
+struct Bitmap { std::vector<uint8_t> px; uint16_t pal[256]; };
+
+bool load_atlas(const char* stem, Bitmap* out) {
+    std::string base = std::string("UI/AllInOne/") + stem;
+    std::vector<uint8_t> ncbr, nclr;
+    if (!nitro_file((base + ".NCBR").c_str(), &ncbr) || !comp_unwrap(&ncbr) ||
+        !nitro_file((base + ".NCLR").c_str(), &nclr) || !comp_unwrap(&nclr))
+        return false;
+    const long c = section(ncbr, "RAHC"), pl = section(nclr, "TTLP");
+    if (c < 0 || pl < 0) return false;
+    const uint8_t* cb = ncbr.data() + c;
+    const uint32_t dsz = rd32(cb + 24), doff = rd32(cb + 28);
+    // 32x32 tiles, 8bpp (code 4), linear (+0x14 = 1): a 256x256 bitmap.
+    if (rd16(cb + 8) != 32u || rd16(cb + 10) != 32u || rd32(cb + 12) != 4u ||
+        rd32(cb + 20) != 1u || dsz < 65536u ||
+        (size_t)c + 8u + doff + 65536u > ncbr.size())
+        return false;
+    out->px.assign(cb + 8 + doff, cb + 8 + doff + 65536);
+    const uint8_t* pb = nclr.data() + pl;
+    const uint32_t pdsz = rd32(pb + 16), pdoff = rd32(pb + 20);
+    if (pdsz < 512u || (size_t)pl + 8u + pdoff + 512u > nclr.size()) return false;
+    for (int i = 0; i < 256; ++i) out->pal[i] = rd16(pb + 8 + pdoff + 2 * i);
+    return true;
+}
+
+bool build_cells() {
+    if (g_cells_state != 0) return g_cells_state > 0;
+    if (!g_rom) return false;
+    Bitmap ff, mm, ls;
+    if (!load_atlas("Iconic_FreeplayFaction", &ff) ||
+        !load_atlas("Iconic_MainMenu", &mm) ||
+        !load_atlas("Iconic_LegoStore", &ls)) {
+        g_cells_state = -1;
+        std::fprintf(stderr, "[lb_enemy] portraits: the Iconic atlases are "
+                     "not the expected format; keeping the 24x24 frames\n");
+        std::fflush(stderr);
+        return false;
+    }
+    auto nearest = [&](uint16_t c) -> uint8_t {
+        const int r = c & 31, g = (c >> 5) & 31, b = (c >> 10) & 31;
+        int best = 1, bd = 1 << 30;
+        for (int i = 1; i < 256; ++i) {
+            const uint16_t p = ff.pal[i];
+            const int dr = r - (p & 31), dg = g - ((p >> 5) & 31),
+                      db = b - ((p >> 10) & 31);
+            const int d = dr * dr + dg * dg + db * db;
+            if (d < bd) { bd = d; best = i; }
+        }
+        return (uint8_t)best;
+    };
+    g_cells.assign(2u * 56u * 56u, 0u);
+    const struct { const Bitmap* src; int sx, sy; } cell[2] = {
+        {&mm, 0, 64},    // the Options cog: Custom
+        {&ls, 64, 0},    // the LEGO Store "?": Random
+    };
+    for (int k = 0; k < 2; ++k)
+        for (int y = 0; y < 56; ++y)
+            for (int x = 0; x < 56; ++x) {
+                const uint8_t i = cell[k].src->px[(size_t)(cell[k].sy + y) * 256u +
+                                                  (size_t)(cell[k].sx + x)];
+                g_cells[(size_t)k * 3136u + (size_t)y * 56u + (size_t)x] =
+                    i ? nearest(cell[k].src->pal[i]) : 0u;
+            }
+    g_cells_state = 1;
+    return true;
+}
+
+// The FE UIMgrData's records: u16 count at +0, record i at +8 + i*0x1C, six
+// u32 frame pointers (one per button state) and the u32 resource. The loaded
+// copy's address is the word at 0x021581C0 (found live at the opponent
+// screen: table 022464FC, 1,277 records; docs/390). An unused record has no
+// frames and resource 0xFFFF.
+constexpr uint32_t kUiTablePtr = 0x021581C0u;
+constexpr uint32_t kRecSize = 0x1Cu;
+}  // namespace
+
+// docs/390: paste the two portraits into a decoded faction atlas at guest
+// address `buf` (65,536 bytes). Returns 1 when done.
+extern "C" int lb_teams_paste_portraits(uint32_t buf) {
+    if (!build_cells() || !guest_ptr(buf) || !guest_ptr(buf + 65535u)) return 0;
+    // Custom at the grey Wizard (0,128), Random at the grey King (64,128):
+    // the cells of records 0x31 and 0x30 state 2.
+    const uint32_t at[2] = {buf + 128u * 256u + 0u, buf + 128u * 256u + 64u};
+    for (int k = 0; k < 2; ++k)
+        for (uint32_t y = 0; y < 56u; ++y)
+            for (uint32_t x = 0; x < 56u; x += 4u) {
+                const uint8_t* s = &g_cells[(size_t)k * 3136u + y * 56u + x];
+                bus_write_u32(at[k] + y * 256u + x,
+                              (uint32_t)s[0] | ((uint32_t)s[1] << 8) |
+                              ((uint32_t)s[2] << 16) | ((uint32_t)s[3] << 24));
+            }
+    g_portrait_pasted = true;
+    return 1;
+}
+
+// docs/390: once a frame, make sure records 0x4A/0x4B carry the portraits'
+// frames whenever the FE UIMgrData is loaded (it is reloaded after a battle,
+// and the load fixup never fills a record the file leaves empty).
+extern "C" void lb_teams_portrait_tick(void) {
+    static int tick = 0;
+    if (++tick < 15) return;
+    tick = 0;
+    const uint32_t base = bus_read_u32(kUiTablePtr);
+    if (!guest_ptr(base) || bus_read_u16(base) <= 0x4Bu) {
+        g_portrait_records = false;
+        return;
+    }
+    auto rec = [&](uint32_t i) { return base + 8u + i * kRecSize; };
+    // The faction portraits must be what this code expects, or nothing is
+    // touched: 0x38 on resource 0x4F, 0x30/0x31 with a state-2 frame.
+    const uint32_t f30 = bus_read_u32(rec(0x30) + 8u);
+    const uint32_t f31 = bus_read_u32(rec(0x31) + 8u);
+    if (bus_read_u32(rec(0x38) + 24u) != 0x4Fu || !guest_ptr(f30) ||
+        !guest_ptr(f31)) {
+        g_portrait_records = false;
+        return;
+    }
+    const struct { uint32_t r, frame; } put[2] = {
+        {(uint32_t)kPortraitCustom, f31}, {(uint32_t)kPortraitRandom, f30}};
+    bool wrote = false;
+    for (const auto& p : put) {
+        const uint32_t a = rec(p.r);
+        const uint32_t res = bus_read_u32(a + 24u);
+        if (res == 0x4Fu && bus_read_u32(a) == p.frame) continue;
+        if (res != 0xFFFFu && res != 0x4Fu) {   // not an empty record: leave it
+            g_portrait_records = false;
+            return;
+        }
+        for (uint32_t s = 0; s < 6u; ++s) bus_write_u32(a + 4u * s, p.frame);
+        bus_write_u32(a + 24u, 0x4Fu);
+        wrote = true;
+    }
+    if (wrote) {
+        std::fprintf(stderr, "[lb_enemy] portrait records 0x4A/0x4B set "
+                     "(UIMgrData %08X; frames %08X %08X)\n", base, f31, f30);
+        std::fflush(stderr);
+    }
+    g_portrait_records = true;
+}
+
+// The 20-byte record for an opponent: the picks in the army record's layout,
+// +0x12 = 1, and +0x13 the builder's faction. FUN_02000E78 takes the buildings
+// from the builder's faction (FUN_02002C78), and the Start handler names the
+// opponent from +0x13 (GetFaction of the roster's +0x31), so both follow the
+// builder. Returns 0 if the team is not valid.
+extern "C" int lb_teams_enemy_army(int choice, unsigned char rec[20]) {
+    LbTeam t = g_enemy;
+    if (choice == 7) lb_teams_randomize(&t, 0);
+    if (!lb_teams_valid(&t)) lb_teams_king_default(&t);
+    std::memset(rec, 0, 20);
+    for (int s = 0; s < LB_TEAM_SLOTS; ++s) {
+        rec[kSlots[s].rec_off] = (unsigned char)(t.pick[s] & 0xFF);
+        rec[kSlots[s].rec_off + 1] = (unsigned char)(t.pick[s] >> 8);
+    }
+    const Cand* b = find_cand(t.pick[1], nullptr);
+    rec[0x12] = 1;
+    rec[0x13] = (unsigned char)(0x7C + (b ? b->faction : 0));
+    return 1;
+}
+
+// ---- bans ------------------------------------------------------------------
+
+extern "C" void lb_teams_set_bans(const unsigned char* bits, int nbytes) {
+    uint8_t next[kBanBytes] = {};
+    if (bits && nbytes > 0)
+        std::memcpy(next, bits, (size_t)(nbytes < kBanBytes ? nbytes : kBanBytes));
+    for (uint16_t k : kKingDefault)   // "The King team cannot be banned"
+        next[k >> 3] &= (uint8_t)~(1u << (k & 7));
+    std::lock_guard<std::mutex> lk(g_rules_mu);
+    std::memcpy(g_bans_local, next, sizeof next);
+}
+
+extern "C" int lb_teams_received_bans(unsigned char* bits, int nbytes,
+                                      unsigned* from) {
+    std::lock_guard<std::mutex> lk(g_rules_mu);
+    if (!rules_fresh()) return 0;
+    if (bits && nbytes > 0)
+        std::memcpy(bits, g_bans_recv, (size_t)(nbytes < kBanBytes ? nbytes : kBanBytes));
+    if (from) *from = g_bans_recv_from;
+    return 1;
+}
+
+// The rules a HOST sends its players, from the wireless bridge's drain every
+// 250 ms (apply_hooks, wifi_net.cpp): "LBR1", a version byte, the byte count,
+// then the ban bits for blueprints 0..191. Nothing while not hosting.
+extern "C" int lb_rules_outgoing(unsigned char* buf, int cap) {
+    if (!net_hosting(lb_net_guest_state())) return 0;
+    const int n = 6 + kBanBytes;
+    if (!buf || cap < n) return 0;
+    std::memcpy(buf, "LBR1", 4);
+    buf[4] = 1;
+    buf[5] = (unsigned char)kBanBytes;
+    std::lock_guard<std::mutex> lk(g_rules_mu);
+    std::memcpy(buf + 6, g_bans_local, kBanBytes);
+    return n;
+}
+
+extern "C" void lb_rules_incoming(const unsigned char* buf, int len,
+                                  unsigned int sender) {
+    if (!buf || len < 6 || std::memcmp(buf, "LBR1", 4) != 0) return;
+    const int n = buf[5];
+    if (n != kBanBytes || len < 6 + n) return;
+    // Only a player who is joining or joined takes a host's rules.
+    if (!net_joined(lb_net_guest_state())) return;
+    std::lock_guard<std::mutex> lk(g_rules_mu);
+    const bool changed = !g_bans_recv_ok ||
+                         std::memcmp(g_bans_recv, buf + 6, kBanBytes) != 0;
+    std::memcpy(g_bans_recv, buf + 6, kBanBytes);
+    for (uint16_t k : kKingDefault)
+        g_bans_recv[k >> 3] &= (uint8_t)~(1u << (k & 7));
+    g_bans_recv_ok = true;
+    g_bans_recv_from = sender;
+    g_bans_recv_at = std::chrono::steady_clock::now();
+    if (changed) {
+        int count = 0;
+        for (int b = 0; b < kBanBytes * 8; ++b) count += ban_bit(g_bans_recv, b);
+        std::fprintf(stderr, "[lb_teams] rules from instance %u: %d unit(s) "
+                     "banned\n", sender, count);
+        std::fflush(stderr);
+    }
+}
+
+// At a multiplayer match's start, for one player's army record (the one
+// FUN_020F5168 built on its stack for FUN_02000E78): if any pick is banned,
+// the whole army becomes Free Play's default King army -- "they are then
+// changed to King once the game starts". Every machine makes this decision
+// from the HOST's list (its own on the host, the received one on a client),
+// so every machine builds the same rosters. Returns 1 when it replaced.
+extern "C" int lb_teams_enforce_bans(unsigned char rec[20], char* why, int cap) {
+    uint8_t bits[kBanBytes];
+    const int net = lb_net_guest_state();
+    {
+        std::lock_guard<std::mutex> lk(g_rules_mu);
+        if (net_hosting(net)) {
+            std::memcpy(bits, g_bans_local, sizeof bits);
+        } else {
+            if (!rules_fresh()) return 0;
+            std::memcpy(bits, g_bans_recv, sizeof bits);
+        }
+    }
+    std::string names;
+    for (int s = 0; s < LB_TEAM_SLOTS; ++s) {
+        const int bp = rec[kSlots[s].rec_off] | (rec[kSlots[s].rec_off + 1] << 8);
+        if (!king_default(bp) && ban_bit(bits, bp)) {
+            if (!names.empty()) names += ", ";
+            names += lb_teams_unit_name(bp);
+        }
+    }
+    if (names.empty()) return 0;
+    for (int s = 0; s < LB_TEAM_SLOTS; ++s) {
+        rec[kSlots[s].rec_off] = (unsigned char)(kKingDefault[s] & 0xFF);
+        rec[kSlots[s].rec_off + 1] = (unsigned char)(kKingDefault[s] >> 8);
+    }
+    rec[0x12] = 1;
+    rec[0x13] = 0x7C;
+    if (why && cap > 0) std::snprintf(why, (size_t)cap, "%s", names.c_str());
+    return 1;
+}

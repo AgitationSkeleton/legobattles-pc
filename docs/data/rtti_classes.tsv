@@ -1,0 +1,518 @@
+class_name	mangled_name	rtti_kind	vtable_address	num_slots	typeinfo_address	name_string_address	num_vtables	secondary_vtables	num_bases	base_classes	pure_virtual_slots
+Battles::EntityBlueprint	N7Battles15EntityBlueprintE	class	0x0213ab24	2	0x0213aa00	0x0213aa24	1		0		0
+Battles::CollectableItemBlueprint	N7Battles24CollectableItemBlueprintE	si	0x0213aa1c	2	0x0213aa08	0x0213aa40	1		1	Battles::EntityBlueprint	0
+Battles::FactionBlueprint	N7Battles16FactionBlueprintE	class	0x0213abd0	2	0x0213aa68	0x0213aa8c	1		0		0
+Battles::CustomFactionBlueprint	N7Battles22CustomFactionBlueprintE	si	0x0213aa84	2	0x0213aa70	0x0213aaac	1		1	Battles::FactionBlueprint	0
+Battles::ProjectileBlueprint	N7Battles19ProjectileBlueprintE	si	0x0213ac04	2	0x0213abf0	0x0213ac0c	1		1	Battles::EntityBlueprint	0
+Battles::UnitBlueprint	N7Battles13UnitBlueprintE	si	0x0213ac40	2	0x0213ac2c	0x0213ac48	1		1	Battles::EntityBlueprint	0
+Battles::UnitFactionBlueprint	N7Battles20UnitFactionBlueprintE	si	0x0213ac7c	2	0x0213ac68	0x0213ac84	1		1	Battles::UnitBlueprint	0
+Battles::UpgradeBlueprint	N7Battles16UpgradeBlueprintE	class	0x0213acb8	2	0x0213aca8	0x0213acc0	1		0		0
+Battles::DListItem	N7Battles9DListItemE	class	0x0213ad20	2	0x0213ace4	0x0213ad48	1		0		0
+Battles::SListItem	N7Battles9SListItemE	class	0x0213b090	2	0x0213acec	0x0213ad78	1		0		0
+Battles::CallbackInfo	N7Battles12CallbackInfoE	si	0x0213ad40	2	0x0213acf4	0x0213adac	1		1	Battles::DListItem	0
+Battles::CallbackBase	N7Battles12CallbackBaseE	si	0x0213ad30	2	0x0213ad00	0x0213ad90	1		1	Battles::EventBase	0
+Battles::EventBase	N7Battles9EventBaseE	si	0x0213b888	2	0x0213ad0c	0x0213ad60	1		1	Battles::SListItem	0
+Battles::FileLoadedCallback	N7Battles18FileLoadedCallbackE	si	0x0213ade0	2	0x0213adcc	0x0213ade8	1		1	Battles::CallbackBase	0
+Battles::UIDialogClosedCallback	N7Battles22UIDialogClosedCallbackE	si	0x0213ae20	2	0x0213ae0c	0x0213ae28	1		1	Battles::CallbackBase	0
+Battles::CommandBase	N7Battles11CommandBaseE	si	0x0213b0a0	5	0x0213ae4c	0x0213ae64	1		1	Battles::SListItem	0
+Battles::AssistStructureCommand	N7Battles22AssistStructureCommandE	si	0x0213ae84	5	0x0213ae58	0x0213ae98	1		1	Battles::CommandBase	0
+Battles::AttackCommand	N7Battles13AttackCommandE	si	0x0213aeec	5	0x0213aebc	0x0213aec8	1		1	Battles::CommandBase	0
+Battles::CancelProduceQueueItemCommand	N7Battles29CancelProduceQueueItemCommandE	si	0x0213af14	5	0x0213af00	0x0213af28	1		1	Battles::CommandBase	0
+Battles::CastSpellCommand	N7Battles16CastSpellCommandE	si	0x0213af68	5	0x0213af54	0x0213af7c	1		1	Battles::CommandBase	0
+Battles::ChangeAllianceCommand	N7Battles21ChangeAllianceCommandE	si	0x0213afb0	5	0x0213af9c	0x0213afc4	1		1	Battles::CommandBase	0
+Battles::CombatHoldPositionCommand	N7Battles25CombatHoldPositionCommandE	si	0x0213affc	5	0x0213afe8	0x0213b010	1		1	Battles::CommandBase	0
+Battles::CombatStandGroundCommand	N7Battles24CombatStandGroundCommandE	si	0x0213b04c	5	0x0213b038	0x0213b060	1		1	Battles::CommandBase	0
+Battles::ConstructMultipleCommand	N7Battles24ConstructMultipleCommandE	si	0x0213b0cc	5	0x0213b0b8	0x0213b0e0	1		1	Battles::CommandBase	0
+Battles::ConstructStructureCommand	N7Battles25ConstructStructureCommandE	si	0x0213b11c	5	0x0213b108	0x0213b130	1		1	Battles::CommandBase	0
+Battles::CreateCollectableItemCommand	N7Battles28CreateCollectableItemCommandE	si	0x0213b16c	5	0x0213b158	0x0213b180	1		1	Battles::CommandBase	0
+Battles::CreateUnitFactionCommand	N7Battles24CreateUnitFactionCommandE	si	0x0213b1c0	5	0x0213b1ac	0x0213b1d4	1		1	Battles::CommandBase	0
+Battles::GarrisonCommand	N7Battles15GarrisonCommandE	si	0x0213b210	5	0x0213b1fc	0x0213b224	1		1	Battles::CommandBase	0
+Battles::HarvestResourceCommand	N7Battles22HarvestResourceCommandE	si	0x0213b254	5	0x0213b240	0x0213b268	1		1	Battles::CommandBase	0
+Battles::MoveEntitiesCommand	N7Battles19MoveEntitiesCommandE	si	0x0213b2a0	5	0x0213b28c	0x0213b2b4	1		1	Battles::CommandBase	0
+Battles::PatrolCommand	N7Battles13PatrolCommandE	si	0x0213b304	5	0x0213b2d4	0x0213b2e0	1		1	Battles::CommandBase	0
+Battles::ProduceEntityCommand	N7Battles20ProduceEntityCommandE	si	0x0213b32c	5	0x0213b318	0x0213b340	1		1	Battles::CommandBase	0
+Battles::RallyPointCommand	N7Battles17RallyPointCommandE	si	0x0213b378	5	0x0213b364	0x0213b38c	1		1	Battles::CommandBase	0
+Battles::RepairStructureCommand	N7Battles22RepairStructureCommandE	si	0x0213b3c0	5	0x0213b3ac	0x0213b3d4	1		1	Battles::CommandBase	0
+Battles::ResearchUpgradeCommand	N7Battles22ResearchUpgradeCommandE	si	0x0213b40c	5	0x0213b3f8	0x0213b420	1		1	Battles::CommandBase	0
+Battles::RetireCommand	N7Battles13RetireCommandE	si	0x0213b474	5	0x0213b444	0x0213b450	1		1	Battles::CommandBase	0
+Battles::StopCommand	N7Battles11StopCommandE	si	0x0213b4b4	5	0x0213b488	0x0213b494	1		1	Battles::CommandBase	0
+Battles::SyncCheckCommand	N7Battles16SyncCheckCommandE	si	0x0213b4dc	5	0x0213b4c8	0x0213b4f0	1		1	Battles::CommandBase	0
+Battles::SyncStatusCommand	N7Battles17SyncStatusCommandE	si	0x0213b524	5	0x0213b510	0x0213b538	1		1	Battles::CommandBase	0
+Battles::TeamCommand	N7Battles11TeamCommandE	si	0x0213b584	5	0x0213b558	0x0213b564	1		1	Battles::CommandBase	0
+Battles::TeleportUnitCommand	N7Battles19TeleportUnitCommandE	si	0x0213b5ac	5	0x0213b598	0x0213b5c0	1		1	Battles::CommandBase	0
+Battles::UngarrisonCommand	N7Battles17UngarrisonCommandE	si	0x0213b5f4	5	0x0213b5e0	0x0213b608	1		1	Battles::CommandBase	0
+Battles::WaitingToDieCommand	N7Battles19WaitingToDieCommandE	si	0x0213b63c	5	0x0213b628	0x0213b650	1		1	Battles::CommandBase	0
+Battles::EventListener	N7Battles13EventListenerE	si	0x0213b6a4	2	0x0213b690	0x0213b6ac	1		1	Battles::SListItem	0
+Battles::ButtonEvent	N7Battles11ButtonEventE	si	0x0213b6e0	2	0x0213b6cc	0x0213b6e8	1		1	Battles::EventBase	0
+Battles::SaveGameEvent::SaveableGameParametersType	N7Battles13SaveGameEvent26SaveableGameParametersTypeE	class	0x0213b9c8	2	0x0213b700	0x0213b78c	1		0		0
+Battles::CreateGameEvent	N7Battles15CreateGameEventE	si	0x0213b738	2	0x0213b708	0x0213b740	1		1	Battles::EventBase	0
+Battles::CreateGameEvent::GameParametersType	N7Battles15CreateGameEvent18GameParametersTypeE	si	0x0213b728	2	0x0213b714	0x0213b75c	1		1	Battles::SaveGameEvent::SaveableGameParametersType	0
+Battles::CreateGameResultEvent	N7Battles21CreateGameResultEventE	si	0x0213b7d8	2	0x0213b7c4	0x0213b7e0	1		1	Battles::EventBase	0
+Battles::DestroyGameEvent	N7Battles16DestroyGameEventE	si	0x0213b818	2	0x0213b804	0x0213b820	1		1	Battles::EventBase	0
+Battles::DestroyGameResultEvent	N7Battles22DestroyGameResultEventE	si	0x0213b854	2	0x0213b840	0x0213b85c	1		1	Battles::EventBase	0
+Battles::GameMenuEvent	N7Battles13GameMenuEventE	si	0x0213b8a8	2	0x0213b894	0x0213b8b0	1		1	Battles::EventBase	0
+Battles::KillMarkedTimerEvent	N7Battles20KillMarkedTimerEventE	si	0x0213b8e0	2	0x0213b8cc	0x0213b8e8	1		1	Battles::EventBase	0
+Battles::PauseGameEvent	N7Battles14PauseGameEventE	si	0x0213b920	2	0x0213b90c	0x0213b928	1		1	Battles::EventBase	0
+Battles::PauseGameResultEvent	N7Battles20PauseGameResultEventE	si	0x0213b958	2	0x0213b944	0x0213b960	1		1	Battles::EventBase	0
+Battles::PenEvent	N7Battles8PenEventE	si	0x0213b998	2	0x0213b984	0x0213b9a0	1		1	Battles::EventBase	0
+Battles::SaveGameEvent::GameParametersType	N7Battles13SaveGameEvent18GameParametersTypeE	si	0x0213b9d8	2	0x0213b9b4	0x0213b9e0	1		1	Battles::SaveGameEvent::SaveableGameParametersType	0
+Battles::TeamWonEvent	N7Battles12TeamWonEventE	si	0x0213ba24	2	0x0213ba10	0x0213ba2c	1		1	Battles::EventBase	0
+Battles::UnpauseGameEvent	N7Battles16UnpauseGameEventE	si	0x0213ba5c	2	0x0213ba48	0x0213ba64	1		1	Battles::EventBase	0
+Battles::UnpauseGameResultEvent	N7Battles22UnpauseGameResultEventE	si	0x0213ba98	2	0x0213ba84	0x0213baa0	1		1	Battles::EventBase	0
+Battles::UserAcknowledgedEvent	N7Battles21UserAcknowledgedEventE	si	0x0213bad8	2	0x0213bac4	0x0213bae0	1		1	Battles::EventBase	0
+Battles::UserCommandEvent	N7Battles16UserCommandEventE	si	0x0213bb18	2	0x0213bb04	0x0213bb20	1		1	Battles::EventBase	0
+Battles::WiFiClientDroppedEvent	N7Battles22WiFiClientDroppedEventE	si	0x0213bb54	2	0x0213bb40	0x0213bb5c	1		1	Battles::EventBase	0
+Battles::WiFiErrorEvent	N7Battles14WiFiErrorEventE	si	0x0213bb94	2	0x0213bb80	0x0213bb9c	1		1	Battles::EventBase	0
+Battles::WiFiScanForParentsEvent	N7Battles23WiFiScanForParentsEventE	si	0x0213bbcc	2	0x0213bbb8	0x0213bbd4	1		1	Battles::EventBase	0
+Battles::VramTransferFunctorImpl	N7Battles23VramTransferFunctorImplE	si	0x02148a90	4	0x0213bc04	0x0213bc50	1		1	Battles::SListItem	0
+Battles::FontClearFlagu8	N7Battles15FontClearFlagu8E	si	0x0213bc24	4	0x0213bc10	0x0213bc34	1		1	Battles::VramTransferFunctorImpl	0
+Battles::FontFillData	N7Battles12FontFillDataE	si	0x0213bc88	4	0x0213bc74	0x0213bc98	1		1	Battles::VramTransferFunctorImpl	0
+Battles::AnimationInstance	N7Battles17AnimationInstanceE	class	0x02142a74	8	0x021429c0	0x021429e0	1		0		3
+Battles::AnimationInstance2D	N7Battles19AnimationInstance2DE	si	0x02142a48	9	0x021429c8	0x02142a00	1		1	Battles::AnimationInstance	0
+Battles::AnimationInstance3D	N7Battles19AnimationInstance3DE	si	0x02142aa0	9	0x021429d4	0x02142a20	1		1	Battles::AnimationInstance	0
+Battles::BrightnessFadeEvent	N7Battles19BrightnessFadeEventE	si	0x02142ae0	2	0x02142acc	0x02142ae8	1		1	Battles::EventBase	0
+Battles::ArrowHighLightEffect	N7Battles20ArrowHighLightEffectE	si	0x02142b94	11	0x02142b08	0x02142b34	1		1	Battles::Effect	0
+Battles::Effect	N7Battles6EffectE	si	0x02142b60	11	0x02142b14	0x02142b20	1		1	Battles::DListItem	6
+Battles::ArrowVolleyEffect	N7Battles17ArrowVolleyEffectE	si	0x02142bf8	11	0x02142bc4	0x02142bd0	1		1	Battles::Effect	0
+Battles::ArtilleryEffect	N7Battles15ArtilleryEffectE	si	0x02142c5c	11	0x02142c2c	0x02142c38	1		1	Battles::Effect	0
+Battles::BridgeConstructionEffect	N7Battles24BridgeConstructionEffectE	si	0x02142ccc	11	0x02142c90	0x02142c9c	1		1	Battles::Effect	0
+Battles::BuildConstructionEffect	N7Battles23BuildConstructionEffectE	si	0x02142d34	11	0x02142cfc	0x02142d08	1		1	Battles::Effect	0
+Battles::ClusterBombEffect	N7Battles17ClusterBombEffectE	si	0x02142d98	11	0x02142d64	0x02142d70	1		1	Battles::Effect	0
+Battles::CoconutStormEffect	N7Battles18CoconutStormEffectE	si	0x02142dfc	11	0x02142dc8	0x02142dd4	1		1	Battles::Effect	0
+Battles::CrabSwarmAnimation	N7Battles18CrabSwarmAnimationE	si	0x02142e54	2	0x02142e34	0x02142e78	1		1	Battles::DListItem	0
+Battles::CrabSwarmEffect	N7Battles15CrabSwarmEffectE	si	0x02142ea0	11	0x02142e40	0x02142e5c	1		1	Battles::Effect	0
+Battles::DrawBoxEffect	N7Battles13DrawBoxEffectE	si	0x02142f00	11	0x02142ed0	0x02142edc	1		1	Battles::Effect	0
+Battles::EAttackAnimation	N7Battles16EAttackAnimationE	si	0x02142f50	2	0x02142f30	0x02142f74	1		1	Battles::DListItem	0
+Battles::EAttackEffect	N7Battles13EAttackEffectE	si	0x02142f9c	11	0x02142f3c	0x02142f58	1		1	Battles::Effect	0
+Battles::EarthQuakeEffect	N7Battles16EarthQuakeEffectE	si	0x02143000	11	0x02142fcc	0x02142fd8	1		1	Battles::Effect	0
+Battles::RegisteredCreateInfo	N7Battles20RegisteredCreateInfoE	si	0x02143090	2	0x0214307c	0x02143098	1		1	Battles::SListItem	0
+Battles::FireBallAnimation	N7Battles17FireBallAnimationE	si	0x021430e0	2	0x021430c0	0x02143104	1		1	Battles::DListItem	0
+Battles::FireBallEffect	N7Battles14FireBallEffectE	si	0x0214312c	11	0x021430cc	0x021430e8	1		1	Battles::Effect	0
+Battles::FlashEffect	N7Battles11FlashEffectE	si	0x0214319c	11	0x0214315c	0x0214317c	1		1	Battles::Effect	0
+Battles::ForrestSpawnEffect	N7Battles18ForrestSpawnEffectE	si	0x02143238	11	0x021431cc	0x02143210	1		1	Battles::Effect	0
+Battles::SpawnAnimation	N7Battles14SpawnAnimationE	si	0x021431ec	2	0x021431d8	0x021431f4	1		1	Battles::DListItem	0
+Battles::FreezeAnimation	N7Battles15FreezeAnimationE	si	0x0214328c	2	0x0214326c	0x021432b0	1		1	Battles::DListItem	0
+Battles::FreezeEffect	N7Battles12FreezeEffectE	si	0x021432d4	11	0x02143278	0x02143294	1		1	Battles::Effect	0
+Battles::ExplosionAnimation	N7Battles18ExplosionAnimationE	si	0x02143324	2	0x02143304	0x0214332c	1		1	Battles::DListItem	0
+Battles::GenericExplosionEffect	N7Battles22GenericExplosionEffectE	si	0x02143378	11	0x02143310	0x0214334c	1		1	Battles::Effect	0
+Battles::StarTrailAnimation	N7Battles18StarTrailAnimationE	si	0x021433c8	2	0x021433a8	0x021433d0	1		1	Battles::DListItem	0
+Battles::HealthBoostTrailStarEffect	N7Battles26HealthBoostTrailStarEffectE	si	0x02143420	11	0x021433b4	0x021433f0	1		1	Battles::Effect	0
+Battles::HeroStartSpellEffect	N7Battles20HeroStartSpellEffectE	si	0x02143488	11	0x02143450	0x0214345c	1		1	Battles::Effect	0
+Battles::HotWireEffect	N7Battles13HotWireEffectE	si	0x021434e8	11	0x021434b8	0x021434c4	1		1	Battles::Effect	0
+Battles::JiggleEffect	N7Battles12JiggleEffectE	si	0x02143570	11	0x02143518	0x02143524	1		1	Battles::Effect	0
+Battles::LightningBoltAnimation	N7Battles22LightningBoltAnimationE	si	0x021435c0	2	0x021435a0	0x021435e8	1		1	Battles::DListItem	0
+Battles::LightningBoltEffect	N7Battles19LightningBoltEffectE	si	0x02143614	11	0x021435ac	0x021435c8	1		1	Battles::Effect	0
+Battles::MonkeySwarmAnimation	N7Battles20MonkeySwarmAnimationE	si	0x02143664	2	0x02143644	0x0214368c	1		1	Battles::DListItem	0
+Battles::MonkeySwarmEffect	N7Battles17MonkeySwarmEffectE	si	0x021436b8	11	0x02143650	0x0214366c	1		1	Battles::Effect	0
+Battles::RoarAnimation	N7Battles13RoarAnimationE	si	0x02143708	2	0x021436e8	0x02143728	1		1	Battles::DListItem	0
+Battles::RoarEffect	N7Battles10RoarEffectE	si	0x0214374c	11	0x021436f4	0x02143710	1		1	Battles::Effect	0
+Battles::SpaceLaserEffect	N7Battles16SpaceLaserEffectE	si	0x021437ec	11	0x0214377c	0x021437a4	1		1	Battles::Effect	0
+Battles::LaserBeamAnimation	N7Battles18LaserBeamAnimationE	si	0x0214379c	2	0x02143788	0x021437c4	1		1	Battles::DListItem	0
+Battles::SpellIconsMiningEffect	N7Battles22SpellIconsMiningEffectE	si	0x02143b78	11	0x0214381c	0x02143944	1		1	Battles::SpellIconsEffect	0
+Battles::SpellIconsSwordEffect	N7Battles21SpellIconsSwordEffectE	si	0x02143b44	11	0x02143828	0x021438fc	1		1	Battles::SpellIconsEffect	0
+Battles::SpellIconsEffect	N7Battles16SpellIconsEffectE	si	0x02143b10	11	0x02143834	0x02143894	1		1	Battles::Effect	0
+Battles::SpellIconsSpeedEffect	N7Battles21SpellIconsSpeedEffectE	si	0x02143be0	11	0x02143840	0x021438b4	1		1	Battles::SpellIconsEffect	0
+Battles::SpellIconsChoppingEffect	N7Battles24SpellIconsChoppingEffectE	si	0x02143bac	11	0x0214384c	0x021439b4	1		1	Battles::SpellIconsEffect	0
+Battles::SpellIconsArmourEffect	N7Battles22SpellIconsArmourEffectE	si	0x02143adc	11	0x02143858	0x02143920	1		1	Battles::SpellIconsEffect	0
+Battles::SpellIconsHeartEffect	N7Battles21SpellIconsHeartEffectE	si	0x02143a74	11	0x02143864	0x021438d8	1		1	Battles::SpellIconsEffect	0
+Battles::SpellIconsHotWireEffect	N7Battles23SpellIconsHotWireEffectE	si	0x02143aa8	11	0x02143870	0x02143968	1		1	Battles::SpellIconsEffect	0
+Battles::SpellIconsTrackingEffect	N7Battles24SpellIconsTrackingEffectE	si	0x02143a40	11	0x0214387c	0x0214398c	1		1	Battles::SpellIconsEffect	0
+Battles::SpellIconsTradeWindEffect	N7Battles25SpellIconsTradeWindEffectE	si	0x02143a0c	11	0x02143888	0x021439dc	1		1	Battles::SpellIconsEffect	0
+Battles::TeleportEffect	N7Battles14TeleportEffectE	si	0x02143c40	11	0x02143c10	0x02143c1c	1		1	Battles::Effect	0
+Battles::ThunderHammerEffect	N7Battles19ThunderHammerEffectE	si	0x02143ca8	11	0x02143c74	0x02143c80	1		1	Battles::Effect	0
+Battles::TrackingEffect	N7Battles14TrackingEffectE	si	0x02143d08	11	0x02143cd8	0x02143ce4	1		1	Battles::Effect	0
+Battles::UpgradeEffect	N7Battles13UpgradeEffectE	si	0x02143da4	11	0x02143d38	0x02143d60	1		1	Battles::Effect	0
+Battles::UpgradeAnimation	N7Battles16UpgradeAnimationE	si	0x02143d58	2	0x02143d44	0x02143d7c	1		1	Battles::DListItem	0
+Battles::VictoryEffect	N7Battles13VictoryEffectE	si	0x02143e08	11	0x02143dd8	0x02143de4	1		1	Battles::Effect	0
+Battles::UnitContainer	N7Battles13UnitContainerE	si	0x02143e68	2	0x02143e44	0x02143e90	1		1	Battles::SListItem	0
+Battles::MovieVramTransfer	N7Battles17MovieVramTransferE	si	0x02143ec4	4	0x02143eb0	0x02143ed4	1		1	Battles::VramTransferFunctorImpl	0
+Battles::ClearPaletteFlagu8	N7Battles18ClearPaletteFlagu8E	si	0x02143f60	4	0x02143f4c	0x02143f70	1		1	Battles::VramTransferFunctorImpl	0
+Battles::Palette::Cycle	N7Battles7Palette5CycleE	si	0x02143fc0	2	0x02143f90	0x02143fe0	1		1	Battles::SListItem	0
+Battles::PalettePtr	N7Battles10PalettePtrE	si	0x02143fb0	2	0x02143f9c	0x02143fc8	1		1	Battles::SListItem	0
+Battles::ParticleDataEffect	N7Battles18ParticleDataEffectE	si	0x02144020	2	0x0214400c	0x02144028	1		1	Battles::DListItem	0
+Battles::ParticleSystem	N7Battles14ParticleSystemE	si	0x02144060	2	0x0214404c	0x02144068	1		1	Battles::DListItem	0
+Battles::Screen	N7Battles6ScreenE	class	0x02144098	2	0x02144088	0x021440a0	1		0		0
+Battles::SpriteMgrFillData	N7Battles17SpriteMgrFillDataE	si	0x02144110	4	0x021440fc	0x02144120	1		1	Battles::VramTransferFunctorImpl	0
+Battles::InitProxyFunctor	N7Battles16InitProxyFunctorE	si	0x021449c0	4	0x021449ac	0x021449d0	1		1	Battles::VramTransferFunctorImpl	0
+Battles::Texture	N7Battles7TextureE	vmi	0x021449f8	2	0x02144a14	0x02144a00	1		1	Battles::SListItem	0
+Battles::SpriteUIEngine	N7Battles14SpriteUIEngineE	class	0x02144aa4	3	0x02144a94	0x02144ab0	1		0		0
+Battles::DoResDefaultSetup	N7Battles17DoResDefaultSetupE	si	0x02144b14	4	0x02144aec	0x02144b24	1		1	Battles::VramTransferFunctorImpl	0
+Battles::LERP	N7Battles4LERPE	class	0x02144e04	2	0x02144df4	0x02144e0c	1		0		0
+Battles::CampaignBase	N7Battles12CampaignBaseE	class	0x02145640	2	0x02144e1c	0x02144e44	1		0		0
+Battles::AlienCampaign	N7Battles13AlienCampaignE	si	0x02144e38	3	0x02144e24	0x02144e60	1		1	Battles::CampaignBase	0
+Battles::MissionBase	N7Battles11MissionBaseE	class	0x02147c6c	8	0x02144e80	0x02144ea0	1		0		1
+Battles::CampaignMission1_CriminalMindsAct2	N7Battles34CampaignMission1_CriminalMindsAct2E	si	0x02144f10	12	0x02144e88	0x02144ed8	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMissionBase	N7Battles19CampaignMissionBaseE	si	0x0214565c	11	0x02144e94	0x02144eb8	1		1	Battles::MissionBase	2
+Battles::CampaignMission1_PoweringUpStageOneAct3	N7Battles39CampaignMission1_PoweringUpStageOneAct3E	si	0x02144f90	12	0x02144f48	0x02144f54	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission1_SayHelloAct1	N7Battles29CampaignMission1_SayHelloAct1E	si	0x02145008	12	0x02144fc8	0x02144fd4	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission2_SpacecraftDownAlphaAct2	N7Battles40CampaignMission2_SpacecraftDownAlphaAct2E	si	0x0214508c	12	0x02145040	0x0214504c	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission2_TelemetryAct3	N7Battles30CampaignMission2_TelemetryAct3E	si	0x02145104	12	0x021450c4	0x021450d0	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission3_PreemptiveStrikeAct1	N7Battles37CampaignMission3_PreemptiveStrikeAct1E	si	0x02145184	12	0x0214513c	0x02145148	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission3_TechThiefAct2	N7Battles30CampaignMission3_TechThiefAct2E	si	0x021451fc	12	0x021451bc	0x021451c8	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission4_FreeOurBrethrenTacticalAct1	N7Battles44CampaignMission4_FreeOurBrethrenTacticalAct1E	si	0x02145248	12	0x02145234	0x02145278	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission4_FreedomAct3	N7Battles28CampaignMission4_FreedomAct3E	si	0x021452fc	12	0x021452bc	0x021452c8	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission5_BiodoomAct2	N7Battles28CampaignMission5_BiodoomAct2E	si	0x02145374	12	0x02145334	0x02145340	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission5_PoweringUpStageThreeAct3	N7Battles41CampaignMission5_PoweringUpStageThreeAct3E	si	0x021453f8	12	0x021453ac	0x021453b8	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission6_FreeOurBrethrenCommunicationsAct1	N7Battles50CampaignMission6_FreeOurBrethrenCommunicationsAct1E	si	0x02145444	12	0x02145430	0x02145474	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission6_ProtectTheMothershipAct3	N7Battles41CampaignMission6_ProtectTheMothershipAct3E	si	0x02145508	12	0x021454bc	0x021454c8	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission6_SpacecraftDownGammaAct2	N7Battles40CampaignMission6_SpacecraftDownGammaAct2E	si	0x0214558c	12	0x02145540	0x0214554c	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission7_ExodusAct1	N7Battles27CampaignMission7_ExodusAct1E	si	0x02145600	12	0x021455c4	0x021455d0	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission1_CargoPodsAct1	N7Battles30CampaignMission1_CargoPodsAct1E	si	0x021456cc	12	0x0214568c	0x02145698	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission1_LeaveNoOneBehindAct2	N7Battles37CampaignMission1_LeaveNoOneBehindAct2E	si	0x0214574c	12	0x02145704	0x02145710	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission2_ThePurpleLodeSevenAct3	N7Battles39CampaignMission2_ThePurpleLodeSevenAct3E	si	0x021457cc	12	0x02145784	0x02145790	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission2_TheresSomethingOutThereAct1	N7Battles44CampaignMission2_TheresSomethingOutThereAct1E	si	0x02145818	12	0x02145804	0x02145848	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission3_DropZoneAct3	N7Battles29CampaignMission3_DropZoneAct3E	si	0x021458cc	12	0x0214588c	0x02145898	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission3_SearchForScumAct2	N7Battles34CampaignMission3_SearchForScumAct2E	si	0x02145948	12	0x02145904	0x02145910	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission3_ThePurpleLodeOneAct1	N7Battles37CampaignMission3_ThePurpleLodeOneAct1E	si	0x021459c8	12	0x02145980	0x0214598c	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission4_ThePurpleLodeFiveAct2	N7Battles38CampaignMission4_ThePurpleLodeFiveAct2E	si	0x02145a48	12	0x02145a00	0x02145a0c	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission5_StrandroidAct2	N7Battles31CampaignMission5_StrandroidAct2E	si	0x02145ac0	12	0x02145a80	0x02145a8c	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission5_ThePurpleLodeNineAct3	N7Battles38CampaignMission5_ThePurpleLodeNineAct3E	si	0x02145b40	12	0x02145af8	0x02145b04	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission5_ThePurpleLodeTwoAct1	N7Battles37CampaignMission5_ThePurpleLodeTwoAct1E	si	0x02145bc0	12	0x02145b78	0x02145b84	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission6_AttackTheMothershipAct3	N7Battles40CampaignMission6_AttackTheMothershipAct3E	si	0x02145c44	12	0x02145bf8	0x02145c04	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission6_CommStationAttackAct1	N7Battles38CampaignMission6_CommStationAttackAct1E	si	0x02145cc4	12	0x02145c7c	0x02145c88	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission6_ThePurpleLodeSixAct2	N7Battles37CampaignMission6_ThePurpleLodeSixAct2E	si	0x02145d44	12	0x02145cfc	0x02145d08	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission7_ThePurpleLodeThreeAct1	N7Battles39CampaignMission7_ThePurpleLodeThreeAct1E	si	0x02145dc4	12	0x02145d7c	0x02145d88	1		1	Battles::CampaignMissionBase	0
+Battles::EarthCampaign	N7Battles13EarthCampaignE	si	0x02145e10	3	0x02145dfc	0x02145e1c	1		1	Battles::CampaignBase	0
+Battles::CampaignMission1_HeyHeyTheyreTheMonkeysAct3	N7Battles43CampaignMission1_HeyHeyTheyreTheMonkeysAct3E	si	0x02145e50	12	0x02145e3c	0x02145e80	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission1_NinjasAct2	N7Battles27CampaignMission1_NinjasAct2E	si	0x02145efc	12	0x02145ec0	0x02145ecc	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission1_RoyalCommissionAct1	N7Battles36CampaignMission1_RoyalCommissionAct1E	si	0x02145f7c	12	0x02145f34	0x02145f40	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission2_BridgeTheIslandsAct3	N7Battles37CampaignMission2_BridgeTheIslandsAct3E	si	0x02145ffc	12	0x02145fb4	0x02145fc0	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission2_ClearTheLanesAct2	N7Battles34CampaignMission2_ClearTheLanesAct2E	si	0x02146078	12	0x02146034	0x02146040	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission2_LostAtSeaAct1	N7Battles30CampaignMission2_LostAtSeaAct1E	si	0x021460f0	12	0x021460b0	0x021460bc	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission3_AbandonedOutpostAct2	N7Battles37CampaignMission3_AbandonedOutpostAct2E	si	0x02146170	12	0x02146128	0x02146134	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission3_PirateRaidsAct1	N7Battles32CampaignMission3_PirateRaidsAct1E	si	0x021461ec	12	0x021461a8	0x021461b4	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission3_SneakAttackAct3	N7Battles32CampaignMission3_SneakAttackAct3E	si	0x02146268	12	0x02146224	0x02146230	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission4_MineFieldAct1	N7Battles30CampaignMission4_MineFieldAct1E	si	0x021462e0	12	0x021462a0	0x021462ac	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission4_TempleRaidAct2	N7Battles31CampaignMission4_TempleRaidAct2E	si	0x02146358	12	0x02146318	0x02146324	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission5_CanYouDigItAct3	N7Battles32CampaignMission5_CanYouDigItAct3E	si	0x021463d4	12	0x02146390	0x0214639c	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission5_FreebootersAct2	N7Battles32CampaignMission5_FreebootersAct2E	si	0x02146450	12	0x0214640c	0x02146418	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission5_OverboardAct1	N7Battles30CampaignMission5_OverboardAct1E	si	0x021464c8	12	0x02146488	0x02146494	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission6_AttackTheCoveAct3	N7Battles34CampaignMission6_AttackTheCoveAct3E	si	0x02146544	12	0x02146500	0x0214650c	1		1	Battles::CampaignMissionBase	0
+Battles::ImperialCampaign	N7Battles16ImperialCampaignE	si	0x02146590	3	0x0214657c	0x0214659c	1		1	Battles::CampaignBase	0
+Battles::CampaignMission1_LorzidonsMazeAct3	N7Battles34CampaignMission1_LorzidonsMazeAct3E	si	0x02146604	12	0x021465c0	0x021465cc	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission1_RepairTheGarrisonAct1	N7Battles38CampaignMission1_RepairTheGarrisonAct1E	si	0x02146684	12	0x0214663c	0x02146648	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission1_TheDwarvenHallsAct2	N7Battles36CampaignMission1_TheDwarvenHallsAct2E	si	0x02146704	12	0x021466bc	0x021466c8	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission2_BreakOnThroughAct2	N7Battles35CampaignMission2_BreakOnThroughAct2E	si	0x02146780	12	0x0214673c	0x02146748	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission2_FarmAttackAct1	N7Battles31CampaignMission2_FarmAttackAct1E	si	0x021467f8	12	0x021467b8	0x021467c4	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission2_GraveMissionAct3	N7Battles33CampaignMission2_GraveMissionAct3E	si	0x02146874	12	0x02146830	0x0214683c	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission3_100TreeWoodsAct1	N7Battles33CampaignMission3_100TreeWoodsAct1E	si	0x021468f0	12	0x021468ac	0x021468b8	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission3_GatesToTheWizardsKeepAct3	N7Battles42CampaignMission3_GatesToTheWizardsKeepAct3E	si	0x02146974	12	0x02146928	0x02146934	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission3_GreatWallOfBricksAct2	N7Battles38CampaignMission3_GreatWallOfBricksAct2E	si	0x021469f4	12	0x021469ac	0x021469b8	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission4_CathedralOnTheHillAct1	N7Battles39CampaignMission4_CathedralOnTheHillAct1E	si	0x02146a74	12	0x02146a2c	0x02146a38	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission4_FinalFightAct3	N7Battles31CampaignMission4_FinalFightAct3E	si	0x02146aec	12	0x02146aac	0x02146ab8	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission4_SeekTheKnowledgeAct2	N7Battles37CampaignMission4_SeekTheKnowledgeAct2E	si	0x02146b6c	12	0x02146b24	0x02146b30	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission5_BackDoorAct2	N7Battles29CampaignMission5_BackDoorAct2E	si	0x02146be4	12	0x02146ba4	0x02146bb0	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission6_DeathsValleyAct2	N7Battles33CampaignMission6_DeathsValleyAct2E	si	0x02146c60	12	0x02146c1c	0x02146c28	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission6_TheBridgeAct1	N7Battles30CampaignMission6_TheBridgeAct1E	si	0x02146cd8	12	0x02146c98	0x02146ca4	1		1	Battles::CampaignMissionBase	0
+Battles::KingCampaign	N7Battles12KingCampaignE	si	0x02146d24	3	0x02146d10	0x02146d30	1		1	Battles::CampaignBase	0
+Battles::CampaignMission1_GetYourFeetWetAct1	N7Battles35CampaignMission1_GetYourFeetWetAct1E	si	0x02146d94	12	0x02146d50	0x02146d5c	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission1_MissingPersonsAct3	N7Battles35CampaignMission1_MissingPersonsAct3E	si	0x02146e10	12	0x02146dcc	0x02146dd8	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission1_TradeWindsBlowAct2	N7Battles35CampaignMission1_TradeWindsBlowAct2E	si	0x02146e8c	12	0x02146e48	0x02146e54	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission2_OutTheOutpostAct1	N7Battles34CampaignMission2_OutTheOutpostAct1E	si	0x02146f08	12	0x02146ec4	0x02146ed0	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission2_ProtectTheIslandersAct2	N7Battles40CampaignMission2_ProtectTheIslandersAct2E	si	0x02146f8c	12	0x02146f40	0x02146f4c	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission3_BlowingItAllSkyAct3	N7Battles36CampaignMission3_BlowingItAllSkyAct3E	si	0x0214700c	12	0x02146fc4	0x02146fd0	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission3_HeadsUpAct2	N7Battles28CampaignMission3_HeadsUpAct2E	si	0x02147084	12	0x02147044	0x02147050	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission3_TempleRaidAct1	N7Battles31CampaignMission3_TempleRaidAct1E	si	0x021470fc	12	0x021470bc	0x021470c8	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission4_NavalBlockadeAct3	N7Battles34CampaignMission4_NavalBlockadeAct3E	si	0x02147178	12	0x02147134	0x02147140	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission4_PillagePlunderAndStealAct2	N7Battles43CampaignMission4_PillagePlunderAndStealAct2E	si	0x021471c4	12	0x021471b0	0x021471f4	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission4_TempleReconstructionAct1	N7Battles41CampaignMission4_TempleReconstructionAct1E	si	0x02147280	12	0x02147234	0x02147240	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission5_SaveTheMatesAct3	N7Battles33CampaignMission5_SaveTheMatesAct3E	si	0x021472fc	12	0x021472b8	0x021472c4	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission5_ShipwreckedAct1	N7Battles32CampaignMission5_ShipwreckedAct1E	si	0x02147378	12	0x02147334	0x02147340	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission5_TheSetupAct2	N7Battles29CampaignMission5_TheSetupAct2E	si	0x021473f0	12	0x021473b0	0x021473bc	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission6_TheManorAct3	N7Battles29CampaignMission6_TheManorAct3E	si	0x02147468	12	0x02147428	0x02147434	1		1	Battles::CampaignMissionBase	0
+Battles::PiratesCampaign	N7Battles15PiratesCampaignE	si	0x021474b4	3	0x021474a0	0x021474c0	1		1	Battles::CampaignBase	0
+Battles::CampaignMission1_NoBonesAboutItAct1	N7Battles35CampaignMission1_NoBonesAboutItAct1E	si	0x02147524	12	0x021474e0	0x021474ec	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission1_ProtectTheWheelAct3	N7Battles36CampaignMission1_ProtectTheWheelAct3E	si	0x021475a4	12	0x0214755c	0x02147568	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission1_TrollingAct2	N7Battles29CampaignMission1_TrollingAct2E	si	0x0214761c	12	0x021475dc	0x021475e8	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission2_BringItDownAct3	N7Battles32CampaignMission2_BringItDownAct3E	si	0x02147698	12	0x02147654	0x02147660	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission2_GoodKnightAct2	N7Battles31CampaignMission2_GoodKnightAct2E	si	0x02147710	12	0x021476d0	0x021476dc	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission2_WitchesBrewAct1	N7Battles32CampaignMission2_WitchesBrewAct1E	si	0x0214778c	12	0x02147748	0x02147754	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission3_OutForAScrollAct1	N7Battles34CampaignMission3_OutForAScrollAct1E	si	0x02147808	12	0x021477c4	0x021477d0	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission3_PieceOfTheSceptre1Act2	N7Battles39CampaignMission3_PieceOfTheSceptre1Act2E	si	0x02147888	12	0x02147840	0x0214784c	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission3_ShootTheMessengersAct3	N7Battles39CampaignMission3_ShootTheMessengersAct3E	si	0x02147908	12	0x021478c0	0x021478cc	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission4_MausoleumsAct1	N7Battles31CampaignMission4_MausoleumsAct1E	si	0x02147980	12	0x02147940	0x0214794c	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission4_TheFinalCountDownAct3	N7Battles38CampaignMission4_TheFinalCountDownAct3E	si	0x02147a00	12	0x021479b8	0x021479c4	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission4_ToweringAchievementAct2	N7Battles40CampaignMission4_ToweringAchievementAct2E	si	0x02147a84	12	0x02147a38	0x02147a44	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission5_UnderfootAct1	N7Battles30CampaignMission5_UnderfootAct1E	si	0x02147afc	12	0x02147abc	0x02147ac8	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission6_BattleRoyalAct2	N7Battles32CampaignMission6_BattleRoyalAct2E	si	0x02147b78	12	0x02147b34	0x02147b40	1		1	Battles::CampaignMissionBase	0
+Battles::CampaignMission6_SwarmAct1	N7Battles26CampaignMission6_SwarmAct1E	si	0x02147bec	12	0x02147bb0	0x02147bbc	1		1	Battles::CampaignMissionBase	0
+Battles::WizardCampaign	N7Battles14WizardCampaignE	si	0x02147c38	3	0x02147c24	0x02147c44	1		1	Battles::CampaignBase	0
+Battles::MultiplayerMissionBase	N7Battles22MultiplayerMissionBaseE	si	0x02147ccc	8	0x02147c94	0x02147ca0	1		1	Battles::MissionBase	0
+Battles::CollectMarkedItemsObjective	N7Battles27CollectMarkedItemsObjectiveE	si	0x02148164	5	0x02148128	0x02148178	1		1	Battles::ObjectiveBase	0
+Battles::ObjectiveBase	N7Battles13ObjectiveBaseE	si	0x02148398	3	0x02148134	0x02148140	1		1	Battles::DListItem	0
+Battles::CollectMarkedUnitsObjective	N7Battles27CollectMarkedUnitsObjectiveE	si	0x021481b8	5	0x021481a4	0x021481cc	1		1	Battles::ObjectiveBase	0
+Battles::CollectSomeItemsObjective	N7Battles25CollectSomeItemsObjectiveE	si	0x0214820c	5	0x021481f8	0x02148220	1		1	Battles::ObjectiveBase	0
+Battles::CreateUnitsObjective	N7Battles20CreateUnitsObjectiveE	si	0x02148260	5	0x0214824c	0x02148274	1		1	Battles::ObjectiveBase	0
+Battles::DestroyMarkedUnitsObjective	N7Battles27DestroyMarkedUnitsObjectiveE	si	0x021482b0	5	0x0214829c	0x021482c4	1		1	Battles::ObjectiveBase	0
+Battles::DestroyUnitsObjective	N7Battles21DestroyUnitsObjectiveE	si	0x02148304	5	0x021482f0	0x02148318	1		1	Battles::ObjectiveBase	0
+Battles::ManualCompletionObjective	N7Battles25ManualCompletionObjectiveE	si	0x02148354	5	0x02148340	0x02148368	1		1	Battles::ObjectiveBase	0
+Battles::ProtectMarkedUnitsObjective	N7Battles27ProtectMarkedUnitsObjectiveE	si	0x021483c4	5	0x021483b0	0x021483d8	1		1	Battles::ObjectiveBase	0
+Battles::RepairMarkedUnitsObjective	N7Battles26RepairMarkedUnitsObjectiveE	si	0x02148418	5	0x02148404	0x0214842c	1		1	Battles::ObjectiveBase	0
+Battles::RetrieveMarkedUnitsObjective	N7Battles28RetrieveMarkedUnitsObjectiveE	si	0x0214846c	5	0x02148458	0x02148480	1		1	Battles::ObjectiveBase	0
+Battles::TimerObjective	N7Battles14TimerObjectiveE	si	0x021484e0	5	0x021484b0	0x021484bc	1		1	Battles::ObjectiveBase	0
+Battles::TriggerAreaObjective	N7Battles20TriggerAreaObjectiveE	si	0x02148508	5	0x021484f4	0x0214851c	1		1	Battles::ObjectiveBase	0
+Battles::UserUIPenObjective	N7Battles18UserUIPenObjectiveE	si	0x02148554	5	0x02148540	0x02148568	1		1	Battles::ObjectiveBase	0
+Battles::ScriptingMacros::Timer::TimeNode	N7Battles15ScriptingMacros5Timer8TimeNodeE	si	0x021485a0	2	0x0214858c	0x021485a8	1		1	Battles::DListItem	0
+Battles::User::FogCircle	N7Battles4User9FogCircleE	si	0x021485f0	2	0x021485dc	0x021485f8	1		1	Battles::SListItem	0
+Battles::ScriptingMacros::MissionObjectives	N7Battles15ScriptingMacros17MissionObjectivesE	class	0x02148628	2	0x02148618	0x02148630	1		0		0
+Battles::ScriptingMacros::Timer	N7Battles15ScriptingMacros5TimerE	class	0x0214867c	2	0x0214866c	0x02148684	1		0		0
+Battles::CardPage	N7Battles8CardPageE	si	0x021486e4	2	0x021486d0	0x021486ec	1		1	Battles::SListItem	0
+Battles::Overlay	N7Battles7OverlayE	class	0x021487e4	2	0x02148780	0x021487a4	1		0		0
+Battles::CampaignMissionOverlay	N7Battles22CampaignMissionOverlayE	si	0x0214879c	2	0x02148788	0x021487b8	1		1	Battles::Overlay	0
+Battles::PowerManager	N7Battles12PowerManagerE	class	0x021487fc	2	0x021487ec	0x021488bc	1		0		0
+Battles::DeleteDataWhenUploaded	N7Battles22DeleteDataWhenUploadedE	si	0x02148914	4	0x02148900	0x02148924	1		1	Battles::VramTransferFunctorImpl	0
+Battles::VramTransferData	N7Battles16VramTransferDataE	si	0x02148a60	3	0x02148948	0x02148974	1		1	Battles::DListItem	0
+Battles::GXVramTransferData	N7Battles18GXVramTransferDataE	si	0x02148968	3	0x02148954	0x02148994	1		1	Battles::VramTransferData	0
+Battles::NNSImageVramTransferData	N7Battles24NNSImageVramTransferDataE	si	0x021489c8	3	0x021489b4	0x021489d4	1		1	Battles::VramTransferData	0
+Battles::NNSVramTransferData	N7Battles19NNSVramTransferDataE	si	0x02148a10	3	0x021489fc	0x02148a1c	1		1	Battles::VramTransferData	0
+Battles::SListObjectItem	N7Battles15SListObjectItemE	si	0x02148a50	2	0x02148a3c	0x02148a6c	1		1	Battles::SListItem	0
+Battles::Sim::ActionBase	N7Battles3Sim10ActionBaseE	si	0x02148adc	2	0x02148aac	0x02148ab8	1		1	Battles::SListItem	0
+Battles::Sim::AttackAction	N7Battles3Sim12AttackActionE	si	0x02148b08	5	0x02148af4	0x02148b1c	1		1	Battles::Sim::ActionBase	0
+Battles::Sim::BounceAction	N7Battles3Sim12BounceActionE	si	0x02148b54	5	0x02148b40	0x02148b68	1		1	Battles::Sim::ActionBase	0
+Battles::Sim::ConstructProgressAction	N7Battles3Sim23ConstructProgressActionE	si	0x02148bc4	5	0x02148bb0	0x02148bd8	1		1	Battles::Sim::ActionBase	0
+Battles::Sim::DelayAction	N7Battles3Sim11DelayActionE	si	0x02148c18	5	0x02148c04	0x02148c2c	1		1	Battles::Sim::ActionBase	0
+Battles::Sim::HarvestAction	N7Battles3Sim13HarvestActionE	si	0x02148c5c	5	0x02148c48	0x02148c70	1		1	Battles::Sim::ActionBase	0
+Battles::Sim::LoadAction	N7Battles3Sim10LoadActionE	si	0x02148cc0	5	0x02148c90	0x02148c9c	1		1	Battles::Sim::ActionBase	0
+Battles::Sim::MoveActionBase	N7Battles3Sim14MoveActionBaseE	si	0x02148ce8	5	0x02148cd4	0x02148cfc	1		1	Battles::Sim::ActionBase	0
+Battles::Sim::MoveArcProjectileAction	N7Battles3Sim23MoveArcProjectileActionE	si	0x02148d30	5	0x02148d1c	0x02148d44	1		1	Battles::Sim::MoveActionBase	0
+Battles::Sim::MoveDirectVectorProjectileAction	N7Battles3Sim32MoveDirectVectorProjectileActionE	si	0x02148d80	5	0x02148d6c	0x02148d94	1		1	Battles::Sim::MoveActionBase	0
+Battles::Sim::MoveProjectileSpellAction	N7Battles3Sim25MoveProjectileSpellActionE	si	0x02148ddc	5	0x02148dc8	0x02148df0	1		1	Battles::Sim::MoveActionBase	0
+Battles::Sim::MoveUnitAction	N7Battles3Sim14MoveUnitActionE	si	0x02148e30	5	0x02148e1c	0x02148e44	1		1	Battles::Sim::MoveActionBase	0
+Battles::Sim::RepairStructureAction	N7Battles3Sim21RepairStructureActionE	si	0x02148e78	5	0x02148e64	0x02148e8c	1		1	Battles::Sim::ActionBase	0
+Battles::Sim::SeekerBase	N7Battles3Sim10SeekerBaseE	class	0x02148fb8	4	0x02148eb4	0x02148eec	1		0		1
+Battles::Sim::AlignToTileSeeker	N7Battles3Sim17AlignToTileSeekerE	si	0x02148edc	4	0x02148ebc	0x02148f08	1		1	Battles::Sim::DirectVectorSeeker	0
+Battles::Sim::DirectVectorSeeker	N7Battles3Sim18DirectVectorSeekerE	si	0x02148f9c	4	0x02148ec8	0x02148f2c	1		1	Battles::Sim::SeekerBase	0
+Battles::Sim::ArcSeeker	N7Battles3Sim9ArcSeekerE	si	0x02148f64	4	0x02148f50	0x02148f74	1		1	Battles::Sim::SeekerBase	0
+Battles::Sim::UnloadAction	N7Battles3Sim12UnloadActionE	si	0x02148fdc	5	0x02148fc8	0x02148ff0	1		1	Battles::Sim::ActionBase	0
+Battles::Sim::WaypointPlotterBase	N7Battles3Sim19WaypointPlotterBaseE	class	0x021492ec	7	0x02149010	0x02149018	1		0		1
+Battles::Sim::SidestepAvoidancePlotter	N7Battles3Sim24SidestepAvoidancePlotterE	si	0x0214929c	7	0x0214903c	0x02149100	1		1	Battles::Sim::WaitForObstaclePlotter	0
+Battles::Sim::WaitForObstaclePlotter	N7Battles3Sim22WaitForObstaclePlotterE	si	0x021492c0	7	0x02149048	0x021490b0	1		1	Battles::Sim::SegmentedVectorPlotter	0
+Battles::Sim::AstarPlotter	N7Battles3Sim12AstarPlotterE	si	0x02149094	7	0x02149054	0x0214906c	1		1	Battles::Sim::SidestepAvoidancePlotter	0
+Battles::Sim::SegmentedVectorPlotter	N7Battles3Sim22SegmentedVectorPlotterE	si	0x02149184	7	0x02149060	0x021490d8	1		1	Battles::Sim::WaypointPlotterBase	0
+Battles::Sim::EndpointPlotter	N7Battles3Sim15EndpointPlotterE	si	0x02149160	7	0x0214912c	0x02149138	1		1	Battles::Sim::WaypointPlotterBase	0
+Battles::Sim::Continent	N7Battles3Sim9ContinentE	class	0x021491b0	2	0x021491a0	0x02149278	1		0		0
+Battles::Sim::ContinentManager	N7Battles3Sim16ContinentManagerE	class	0x02149320	2	0x02149310	0x02149328	1		0		0
+Battles::Sim::ContinentListItem	N7Battles3Sim17ContinentListItemE	si	0x02149364	2	0x02149350	0x0214936c	1		1	Battles::SListItem	0
+Battles::Sim::Entity	N7Battles3Sim6EntityE	class	0x0214956c	4	0x02149390	0x021493c4	1		0		0
+Battles::Sim::Bridge	N7Battles3Sim6BridgeE	si	0x021493fc	8	0x02149398	0x021493dc	1		1	Battles::Sim::Unit	0
+Battles::Sim::Unit	N7Battles3Sim4UnitE	si	0x02149728	8	0x021493a4	0x021493b0	1		1	Battles::Sim::Entity	0
+Battles::Sim::CollectableItem	N7Battles3Sim15CollectableItemE	si	0x02149434	5	0x02149420	0x02149448	1		1	Battles::Sim::Entity	0
+Battles::Sim::IndexAndInstancePool	N7Battles3Sim20IndexAndInstancePoolE	class	0x0214afd4	2	0x021495e0	0x02149628	1		0		0
+Battles::Sim::EntityPool	N7Battles3Sim10EntityPoolE	si	0x021495fc	4	0x021495e8	0x0214960c	1		1	Battles::Sim::IndexAndInstancePool	0
+Battles::Sim::Gate	N7Battles3Sim4GateE	si	0x0214967c	8	0x02149654	0x02149660	1		1	Battles::Sim::Unit	0
+Battles::Sim::MagicInfluencedUnitStats	N7Battles3Sim24MagicInfluencedUnitStatsE	class	0x021496ac	2	0x0214969c	0x021496b4	1		0		0
+Battles::Sim::Projectile	N7Battles3Sim10ProjectileE	si	0x021496f4	4	0x021496e0	0x02149704	1		1	Battles::Sim::Entity	0
+Battles::Sim::EntityCommandBase	N7Battles3Sim17EntityCommandBaseE	class	0x02149b64	14	0x02149754	0x02149768	1		0		5
+Battles::Sim::AssistStructureEntityCommand	N7Battles3Sim28AssistStructureEntityCommandE	si	0x021497c4	14	0x0214975c	0x0214978c	1		1	Battles::Sim::EntityCommandBase	0
+Battles::Sim::AttackEntityCommand	N7Battles3Sim19AttackEntityCommandE	si	0x02149838	14	0x02149800	0x0214980c	1		1	Battles::Sim::EntityCommandBase	0
+Battles::Sim::CombatHoldPositionEntityCommand	N7Battles3Sim31CombatHoldPositionEntityCommandE	si	0x021498b8	14	0x02149874	0x02149880	1		1	Battles::Sim::EntityCommandBase	0
+Battles::Sim::CombatMoveEntityCommand	N7Battles3Sim23CombatMoveEntityCommandE	si	0x02149930	14	0x021498f4	0x02149900	1		1	Battles::Sim::EntityCommandBase	0
+Battles::Sim::CombatStandGroundEntityCommand	N7Battles3Sim30CombatStandGroundEntityCommandE	si	0x021499ac	14	0x02149968	0x02149974	1		1	Battles::Sim::EntityCommandBase	0
+Battles::Sim::ConstructMultipleEntityCommand	N7Battles3Sim30ConstructMultipleEntityCommandE	si	0x02149a2c	14	0x021499e8	0x021499f4	1		1	Battles::Sim::EntityCommandBase	0
+Battles::Sim::ConstructStructureEntityCommand	N7Battles3Sim31ConstructStructureEntityCommandE	si	0x02149aac	14	0x02149a68	0x02149a74	1		1	Battles::Sim::EntityCommandBase	0
+Battles::Sim::DieEntityCommand	N7Battles3Sim16DieEntityCommandE	si	0x02149b20	14	0x02149ae8	0x02149af4	1		1	Battles::Sim::EntityCommandBase	0
+Battles::Sim::FiringManager	N7Battles3Sim13FiringManagerE	class	0x02149bb4	2	0x02149ba4	0x02149bbc	1		0		0
+Battles::Sim::FreezeEntityCommand	N7Battles3Sim19FreezeEntityCommandE	si	0x02149c18	14	0x02149be0	0x02149bec	1		1	Battles::Sim::EntityCommandBase	0
+Battles::Sim::GarrisonEntityCommand	N7Battles3Sim21GarrisonEntityCommandE	si	0x02149c90	14	0x02149c54	0x02149c60	1		1	Battles::Sim::EntityCommandBase	0
+Battles::Sim::HarvestEngineerEntityCommand	N7Battles3Sim28HarvestEngineerEntityCommandE	si	0x02149d0c	14	0x02149cc8	0x02149cd4	1		1	Battles::Sim::EntityCommandBase	0
+Battles::Sim::IdleEngineerEntityCommand	N7Battles3Sim25IdleEngineerEntityCommandE	si	0x02149d84	14	0x02149d44	0x02149d50	1		1	Battles::Sim::EntityCommandBase	0
+Battles::Sim::IdleMineEntityCommand	N7Battles3Sim21IdleMineEntityCommandE	si	0x02149dfc	14	0x02149dc0	0x02149dcc	1		1	Battles::Sim::EntityCommandBase	0
+Battles::Sim::IdleNoActionEntityCommand	N7Battles3Sim25IdleNoActionEntityCommandE	si	0x02149e74	14	0x02149e34	0x02149e40	1		1	Battles::Sim::EntityCommandBase	0
+Battles::Sim::IdleProductionStructureEntityCommand	N7Battles3Sim36IdleProductionStructureEntityCommandE	si	0x02149ef8	14	0x02149eac	0x02149eb8	1		1	Battles::Sim::EntityCommandBase	0
+Battles::Sim::MarkForDestructionEntityCommand	N7Battles3Sim31MarkForDestructionEntityCommandE	si	0x02149f78	14	0x02149f34	0x02149f40	1		1	Battles::Sim::EntityCommandBase	0
+Battles::Sim::MoveEngineerEntityCommand	N7Battles3Sim25MoveEngineerEntityCommandE	si	0x02149ff0	14	0x02149fb0	0x02149fbc	1		1	Battles::Sim::EntityCommandBase	0
+Battles::Sim::MoveProjectileArcEntityCommand	N7Battles3Sim30MoveProjectileArcEntityCommandE	si	0x0214a0a8	17	0x0214a028	0x0214a040	1		1	Battles::Sim::MoveProjectileBaseEntityCommand	0
+Battles::Sim::MoveProjectileBaseEntityCommand	N7Battles3Sim31MoveProjectileBaseEntityCommandE	si	0x0214a0f4	17	0x0214a034	0x0214a070	1		1	Battles::Sim::EntityCommandBase	2
+Battles::Sim::MoveProjectileDirectVectorEntityCommand	N7Battles3Sim39MoveProjectileDirectVectorEntityCommandE	si	0x0214a188	17	0x0214a13c	0x0214a148	1		1	Battles::Sim::MoveProjectileBaseEntityCommand	0
+Battles::Sim::MoveProjectileSpellEntityCommand	N7Battles3Sim32MoveProjectileSpellEntityCommandE	si	0x0214a214	17	0x0214a1cc	0x0214a1d8	1		1	Battles::Sim::MoveProjectileBaseEntityCommand	0
+Battles::Sim::PatrolEntityCommand	N7Battles3Sim19PatrolEntityCommandE	si	0x0214a290	14	0x0214a258	0x0214a264	1		1	Battles::Sim::EntityCommandBase	0
+Battles::Sim::ProduceUnitEntityCommand	N7Battles3Sim24ProduceUnitEntityCommandE	si	0x0214a30c	14	0x0214a2cc	0x0214a2d8	1		1	Battles::Sim::EntityCommandBase	0
+Battles::Sim::RepairStructureEntityCommand	N7Battles3Sim28RepairStructureEntityCommandE	si	0x0214a38c	14	0x0214a348	0x0214a354	1		1	Battles::Sim::EntityCommandBase	0
+Battles::Sim::ResearchUpgradeEntityCommand	N7Battles3Sim28ResearchUpgradeEntityCommandE	si	0x0214a408	14	0x0214a3c4	0x0214a3d0	1		1	Battles::Sim::EntityCommandBase	0
+Battles::Sim::RetireEntityCommand	N7Battles3Sim19RetireEntityCommandE	si	0x0214a480	14	0x0214a448	0x0214a454	1		1	Battles::Sim::EntityCommandBase	0
+Battles::Sim::Scan	N7Battles3Sim4ScanE	class	0x0214a4cc	2	0x0214a4bc	0x0214a4d4	1		0		0
+Battles::Sim::ScanManager	N7Battles3Sim11ScanManagerE	class	0x0214a4f8	2	0x0214a4e8	0x0214a500	1		0		0
+Battles::Sim::StopEntityCommand	N7Battles3Sim17StopEntityCommandE	si	0x0214a558	14	0x0214a520	0x0214a52c	1		1	Battles::Sim::EntityCommandBase	0
+Battles::Sim::TeleportEntityCommand	N7Battles3Sim21TeleportEntityCommandE	si	0x0214a5cc	14	0x0214a590	0x0214a59c	1		1	Battles::Sim::EntityCommandBase	0
+Battles::Sim::UngarrisonEntityCommand	N7Battles3Sim23UngarrisonEntityCommandE	si	0x0214a640	14	0x0214a604	0x0214a610	1		1	Battles::Sim::EntityCommandBase	0
+Battles::Sim::WaitingToDieEntityCommand	N7Battles3Sim25WaitingToDieEntityCommandE	si	0x0214a6b8	14	0x0214a678	0x0214a684	1		1	Battles::Sim::EntityCommandBase	0
+Battles::Sim::GameRuleManager	N7Battles3Sim15GameRuleManagerE	class	0x0214a700	2	0x0214a6f0	0x0214a708	1		0		0
+Battles::Sim::AreaOfInfluenceManager	N7Battles3Sim22AreaOfInfluenceManagerE	class	0x0214a740	2	0x0214a730	0x0214a748	1		0		0
+Battles::Sim::SpellBase	N7Battles3Sim9SpellBaseE	class	0x0214aab4	6	0x0214a774	0x0214a788	1		0		0
+Battles::Sim::DamageSpell	N7Battles3Sim11DamageSpellE	si	0x0214a7c8	6	0x0214a77c	0x0214a7a4	1		1	Battles::Sim::SpellBase	0
+Battles::Sim::EAttackSpell	N7Battles3Sim12EAttackSpellE	si	0x0214a818	6	0x0214a7e4	0x0214a7f0	1		1	Battles::Sim::SpellBase	0
+Battles::Sim::ForrestSpell	N7Battles3Sim12ForrestSpellE	si	0x0214a888	6	0x0214a834	0x0214a840	1		1	Battles::Sim::SpellBase	0
+Battles::Sim::HealSpell	N7Battles3Sim9HealSpellE	si	0x0214a8d4	6	0x0214a8a4	0x0214a8b0	1		1	Battles::Sim::SpellBase	0
+Battles::Sim::HotWireSpell	N7Battles3Sim12HotWireSpellE	si	0x0214a920	6	0x0214a8ec	0x0214a8f8	1		1	Battles::Sim::SpellBase	0
+Battles::Sim::ProjectileSpell	N7Battles3Sim15ProjectileSpellE	si	0x0214a970	6	0x0214a93c	0x0214a948	1		1	Battles::Sim::SpellBase	0
+Battles::Sim::ProjectileSpellFireBall	N7Battles3Sim23ProjectileSpellFireBallE	si	0x0214a9a0	7	0x0214a98c	0x0214a9bc	1		1	Battles::Sim::ProjectileSpell	0
+Battles::Sim::ProjectileSpellLightningBolt	N7Battles3Sim28ProjectileSpellLightningBoltE	si	0x0214a9fc	7	0x0214a9e8	0x0214aa18	1		1	Battles::Sim::ProjectileSpell	0
+Battles::Sim::ProjectileSpellThunderHammer	N7Battles3Sim28ProjectileSpellThunderHammerE	si	0x0214aa5c	7	0x0214aa48	0x0214aa78	1		1	Battles::Sim::ProjectileSpell	0
+Battles::Sim::SpellPool	N7Battles3Sim9SpellPoolE	si	0x0214aae0	4	0x0214aacc	0x0214aaf0	1		1	Battles::Sim::IndexAndInstancePool	0
+Battles::Sim::StatBufSpell	N7Battles3Sim12StatBufSpellE	si	0x0214ab44	6	0x0214ab10	0x0214ab1c	1		1	Battles::Sim::SpellBase	0
+Battles::Sim::TeleportSpell	N7Battles3Sim13TeleportSpellE	si	0x0214ab90	6	0x0214ab5c	0x0214ab68	1		1	Battles::Sim::SpellBase	0
+Battles::Sim::TrackingSpell	N7Battles3Sim13TrackingSpellE	si	0x0214abe0	6	0x0214abac	0x0214abb8	1		1	Battles::Sim::SpellBase	0
+Battles::Sim::MagicInfluenceBase	N7Battles3Sim18MagicInfluenceBaseE	class	0x0214ac08	2	0x0214abf8	0x0214ac10	1		0		0
+Battles::Sim::MagicInfluencePool	N7Battles3Sim18MagicInfluencePoolE	si	0x0214ac48	4	0x0214ac34	0x0214ac58	1		1	Battles::Sim::IndexAndInstancePool	0
+Battles::Sim::StatBufMagicInfluence	N7Battles3Sim21StatBufMagicInfluenceE	si	0x0214ac94	2	0x0214ac80	0x0214ac9c	1		1	Battles::Sim::MagicInfluenceBase	0
+Battles::Sim::UpgradeMagicInfluence	N7Battles3Sim21UpgradeMagicInfluenceE	si	0x0214acd8	2	0x0214acc4	0x0214ace0	1		1	Battles::Sim::MagicInfluenceBase	0
+Battles::Sim::OccupationGrid::MatchFunc	N7Battles3Sim14OccupationGrid9MatchFuncE	class		0	0x0214ad0c	0x0214ad74	0		0		0
+Battles::Sim::OccupationGrid::FindNearestEntityMatchFunc$20644OccupationGrid_cpp	N7Battles3Sim14OccupationGrid50FindNearestEntityMatchFunc$20644OccupationGrid_cppE	si	0x0214ad64	1	0x0214ad20	0x0214ae40	1		1	Battles::Sim::OccupationGrid::MatchFunc	0
+Battles::Sim::OccupationGrid::GetLocationForMatchFunc$20814OccupationGrid_cpp	N7Battles3Sim14OccupationGrid47GetLocationForMatchFunc$20814OccupationGrid_cppE	si	0x0214ad1c	1	0x0214ad2c	0x0214ada0	1		1	Battles::Sim::OccupationGrid::MatchFunc	0
+Battles::Sim::OccupationGrid::GetLocationForMatchFunc$20718OccupationGrid_cpp	N7Battles3Sim14OccupationGrid47GetLocationForMatchFunc$20718OccupationGrid_cppE	si	0x0214ad40	1	0x0214ad44	0x0214adf0	1		1	Battles::Sim::OccupationGrid::MatchFunc	0
+Battles::Sim::OccupationGrid::FindNearestGroundTypeMatchFunc$21263OccupationGrid_cpp	N7Battles3Sim14OccupationGrid54FindNearestGroundTypeMatchFunc$21263OccupationGrid_cppE	si	0x0214ad58	1	0x0214ad68	0x0214ae94	1		1	Battles::Sim::OccupationGrid::MatchFunc	0
+Battles::Sim::PathFinding::QueueInfo	N7Battles3Sim11PathFinding9QueueInfoE	si	0x0214af98	2	0x0214af84	0x0214afa0	1		1	Battles::DListItem	0
+Battles::Random	N7Battles6RandomE	class	0x0214b010	2	0x0214afe8	0x0214b018	1		0		0
+Battles::Sim::Simulation	N7Battles3Sim10SimulationE	class	0x0214b000	2	0x0214aff0	0x0214b02c	1		0		0
+Battles::Sim::AppliedUpgrade	N7Battles3Sim14AppliedUpgradeE	class	0x0214b074	2	0x0214b04c	0x0214b090	1		0		0
+Battles::Sim::Team	N7Battles3Sim4TeamE	class	0x0214b064	2	0x0214b054	0x0214b07c	1		0		0
+Battles::Sim::TeamPool	N7Battles3Sim8TeamPoolE	class	0x0214b0c4	2	0x0214b0b4	0x0214b0cc	1		0		0
+Battles::CollectedCoinSimEvent	N7Battles21CollectedCoinSimEventE	si	0x0214b108	2	0x0214b0e8	0x0214b12c	1		1	Battles::SimEventBase	0
+Battles::SimEventBase	N7Battles12SimEventBaseE	si	0x0214b2dc	2	0x0214b0f4	0x0214b110	1		1	Battles::EventBase	0
+Battles::CommandExecutedSimEvent	N7Battles23CommandExecutedSimEventE	si	0x0214b164	2	0x0214b150	0x0214b16c	1		1	Battles::SimEventBase	0
+Battles::ConstructedStructureSimEvent	N7Battles28ConstructedStructureSimEventE	si	0x0214b1a4	2	0x0214b190	0x0214b1ac	1		1	Battles::SimEventBase	0
+Battles::EntitySimEvent	N7Battles14EntitySimEventE	si	0x0214b1ec	2	0x0214b1d8	0x0214b1f4	1		1	Battles::SimEventBase	0
+Battles::LoadNewSpriteSimEvent	N7Battles21LoadNewSpriteSimEventE	si	0x0214b224	2	0x0214b210	0x0214b22c	1		1	Battles::SimEventBase	0
+Battles::ProducedUnitSimEvent	N7Battles20ProducedUnitSimEventE	si	0x0214b264	2	0x0214b250	0x0214b26c	1		1	Battles::SimEventBase	0
+Battles::ResourceCollectedSimEvent	N7Battles25ResourceCollectedSimEventE	si	0x0214b2a4	2	0x0214b290	0x0214b2ac	1		1	Battles::SimEventBase	0
+Battles::TerrainTileSimEvent	N7Battles19TerrainTileSimEventE	si	0x0214b314	2	0x0214b2e4	0x0214b33c	1		1	Battles::SimEventBase	0
+Battles::MapChangedSimEvent	N7Battles18MapChangedSimEventE	si	0x0214b304	2	0x0214b2f0	0x0214b31c	1		1	Battles::SimEventBase	0
+Battles::SimulationPausedSimEvent	N7Battles24SimulationPausedSimEventE	si	0x0214b374	2	0x0214b360	0x0214b37c	1		1	Battles::SimEventBase	0
+Battles::StudNoticeEvent	N7Battles15StudNoticeEventE	si	0x0214b3b8	2	0x0214b3a4	0x0214b3c0	1		1	Battles::SimEventBase	0
+Battles::TeamSimEvent	N7Battles12TeamSimEventE	si	0x0214b3f0	2	0x0214b3dc	0x0214b3f8	1		1	Battles::SimEventBase	0
+Battles::Task	N7Battles4TaskE	si	0x0214b474	2	0x0214b450	0x0214b45c	1		1	Battles::SListItem	0
+Battles::User::RequestItem	N7Battles4User11RequestItemE	si	0x0214b49c	2	0x0214b488	0x0214b4a4	1		1	Battles::SListItem	0
+Battles::User::BuildCommandItem	N7Battles4User16BuildCommandItemE	si	0x0214b4dc	2	0x0214b4c8	0x0214b4e4	1		1	Battles::SListItem	0
+Battles::User::JobBase	N7Battles4User7JobBaseE	class	0x0214b620	6	0x0214b510	0x0214b540	1		0		0
+Battles::User::UnitsRequired	N7Battles4User13UnitsRequiredE	si	0x0214b538	2	0x0214b518	0x0214b574	1		1	Battles::SListItem	0
+Battles::User::JobAttack	N7Battles4User9JobAttackE	si	0x0214b59c	6	0x0214b524	0x0214b558	1		1	Battles::User::JobBase	0
+Battles::User::JobAttackTaskForce	N7Battles4User18JobAttackTaskForceE	si	0x0214b5d0	6	0x0214b5bc	0x0214b5e8	1		1	Battles::User::JobBase	0
+Battles::User::JobContractBuild	N7Battles4User16JobContractBuildE	si	0x0214b650	6	0x0214b63c	0x0214b668	1		1	Battles::User::JobBase	0
+Battles::User::JobDefend	N7Battles4User9JobDefendE	si	0x0214b6c0	6	0x0214b690	0x0214b69c	1		1	Battles::User::JobBase	0
+Battles::User::JobRepair	N7Battles4User9JobRepairE	si	0x0214b714	6	0x0214b6e4	0x0214b6f0	1		1	Battles::User::JobBase	0
+Battles::User::JobScout	N7Battles4User8JobScoutE	si	0x0214b760	6	0x0214b730	0x0214b73c	1		1	Battles::User::JobBase	0
+Battles::User::DesiredSpellCategory	N7Battles4User20DesiredSpellCategoryE	si	0x0214b79c	2	0x0214b788	0x0214b7a4	1		1	Battles::SListItem	0
+Battles::User::ArmySquad	N7Battles4User9ArmySquadE	si	0x0214b7f0	2	0x0214b7d0	0x0214b810	1		1	Battles::User::Squad	0
+Battles::User::Squad	N7Battles4User5SquadE	si	0x0214b910	2	0x0214b7dc	0x0214b7f8	1		1	Battles::SListItem	0
+Battles::User::SquadManager	N7Battles4User12SquadManagerE	class	0x0214b924	1	0x0214b83c	0x0214b85c	1		0		0
+Battles::User::ArmySquadManager	N7Battles4User16ArmySquadManagerE	si	0x0214b858	1	0x0214b844	0x0214b87c	1		1	Battles::User::SquadManager	0
+Battles::User::ResourceSquadManager	N7Battles4User20ResourceSquadManagerE	si	0x0214b8b8	1	0x0214b8a4	0x0214b8bc	1		1	Battles::User::SquadManager	0
+Battles::User::TargetItem	N7Battles4User10TargetItemE	si	0x0214b940	2	0x0214b92c	0x0214b948	1		1	Battles::SListItem	0
+Battles::User::TransportRequestItem	N7Battles4User20TransportRequestItemE	si	0x0214b990	2	0x0214b97c	0x0214b998	1		1	Battles::SListItem	0
+Battles::User::Map::OnEventData	N7Battles4User3Map11OnEventDataE	class	0x0214ba78	2	0x0214ba68	0x0214ba80	1		0		0
+Battles::User::Map::TriggerData	N7Battles4User3Map11TriggerDataE	class	0x0214bab8	2	0x0214baa8	0x0214bac0	1		0		0
+Battles::User::ActionMap::TriggerType	N7Battles4User9ActionMap11TriggerTypeE	si	0x0214bb1c	2	0x0214bb08	0x0214bb24	1		1	Battles::SListItem	0
+Battles::User::ActionType	N7Battles4User10ActionTypeE	class	0x0214bb60	2	0x0214bb50	0x0214bb68	1		0		0
+Battles::User::Widget	N7Battles4User6WidgetE	class	0x0214f76c	5	0x0214bbb0	0x0214bbe8	1		0		0
+Battles::User::RadioButtonWidget	N7Battles4User17RadioButtonWidgetE	si	0x0214f614	5	0x0214bbb8	0x0214bc54	1		1	Battles::User::ButtonWidget	0
+Battles::User::Options	N7Battles4User7OptionsE	si	0x0214bc80	13	0x0214bbc4	0x0214bc00	1		1	Battles::User::ScreenType	0
+Battles::User::ButtonWidget	N7Battles4User12ButtonWidgetE	si	0x0214f508	5	0x0214bbd0	0x0214bc34	1		1	Battles::User::Widget	0
+Battles::User::ScreenType	N7Battles4User10ScreenTypeE	si	0x0214f3a8	13	0x0214bbdc	0x0214bc18	1		1	Battles::SListItem	0
+Battles::User::QuickDialog	N7Battles4User11QuickDialogE	si	0x0214bd04	13	0x0214bcd0	0x0214bcdc	1		1	Battles::User::ScreenType	0
+Battles::User::WiFiScreen	N7Battles4User10WiFiScreenE	si	0x0214bd88	13	0x0214bd58	0x0214bd64	1		1	Battles::User::ScreenType	0
+Battles::User::DragManager	N7Battles4User11DragManagerE	class	0x0214bdec	2	0x0214bddc	0x0214bdf4	1		0		0
+Battles::User::Achievements	N7Battles4User12AchievementsE	si	0x0214be48	13	0x0214be14	0x0214be20	1		1	Battles::User::ScreenType	0
+Battles::User::AchievementsTopScreen	N7Battles4User21AchievementsTopScreenE	si	0x0214bf7c	13	0x0214bf40	0x0214bf4c	1		1	Battles::User::ScreenType	0
+Battles::User::CampaignBriefing	N7Battles4User16CampaignBriefingE	si	0x0214c00c	13	0x0214bfd4	0x0214bfe0	1		1	Battles::User::ScreenType	0
+Battles::User::CampaignBriefingTopScreen	N7Battles4User25CampaignBriefingTopScreenE	si	0x0214c0a0	13	0x0214c060	0x0214c06c	1		1	Battles::User::ScreenType	0
+Battles::User::CampaignFactionSelect	N7Battles4User21CampaignFactionSelectE	si	0x0214c164	13	0x0214c128	0x0214c134	1		1	Battles::User::ScreenType	0
+Battles::User::CampaignScore	N7Battles4User13CampaignScoreE	si	0x0214c1f8	13	0x0214c1c4	0x0214c1d0	1		1	Battles::User::ScreenType	0
+Battles::User::CampaignSetup	N7Battles4User13CampaignSetupE	si	0x0214c29c	13	0x0214c268	0x0214c274	1		1	Battles::User::ScreenType	0
+Battles::User::CheatKeyboardScreen	N7Battles4User19CheatKeyboardScreenE	si	0x0214c328	13	0x0214c2ec	0x0214c2f8	1		1	Battles::User::ScreenType	0
+Battles::User::CheatKeyboardTopScreen	N7Battles4User22CheatKeyboardTopScreenE	si	0x0214c3c4	13	0x0214c388	0x0214c394	1		1	Battles::User::ScreenType	0
+Battles::User::ClientLobby	N7Battles4User11ClientLobbyE	si	0x0214c454	13	0x0214c420	0x0214c42c	1		1	Battles::User::ScreenType	0
+Battles::User::CreateNewProfile	N7Battles4User16CreateNewProfileE	si	0x0214c4f8	13	0x0214c4c0	0x0214c4cc	1		1	Battles::User::ScreenType	0
+Battles::User::Credits	N7Battles4User7CreditsE	si	0x0214c6a8	13	0x0214c55c	0x0214c598	1		1	Battles::User::ScreenType	0
+Battles::User::CustomizeArmy	N7Battles4User13CustomizeArmyE	si	0x0214c960	13	0x0214c8d4	0x0214c904	1		1	Battles::User::ScreenType	0
+Battles::User::CustomizeArmyVramTransferCallback	N7Battles4User33CustomizeArmyVramTransferCallbackE	si	0x0214c8f4	4	0x0214c8e0	0x0214c924	1		1	Battles::VramTransferFunctorImpl	0
+Battles::User::DefaultTopScreen	N7Battles4User16DefaultTopScreenE	si	0x0214ca00	13	0x0214c9c8	0x0214c9d4	1		1	Battles::User::ScreenType	0
+Battles::User::HostLobby	N7Battles4User9HostLobbyE	si	0x0214ca84	13	0x0214ca54	0x0214ca60	1		1	Battles::User::ScreenType	0
+Battles::User::JoinWifiGame	N7Battles4User12JoinWifiGameE	si	0x0214cb3c	13	0x0214cb08	0x0214cb14	1		1	Battles::User::ScreenType	0
+Battles::User::LanguageSelect	N7Battles4User14LanguageSelectE	si	0x0214cc0c	13	0x0214cbac	0x0214cbe4	1		1	Battles::User::ScreenType	0
+Battles::User::FormatDialog	N7Battles4User12FormatDialogE	si	0x0214cc48	13	0x0214cbb8	0x0214cbc4	1		1	Battles::User::QuickDialog	0
+Battles::User::Legal	N7Battles4User5LegalE	si	0x0214ccd4	13	0x0214cca8	0x0214ccb4	1		1	Battles::User::ScreenType	0
+Battles::User::LegoStore	N7Battles4User9LegoStoreE	si	0x0214cd60	13	0x0214cd30	0x0214cd3c	1		1	Battles::User::ScreenType	0
+Battles::User::LegoStoreTop	N7Battles4User12LegoStoreTopE	si	0x0214cde0	13	0x0214cdac	0x0214cdb8	1		1	Battles::User::ScreenType	0
+Battles::User::LobbySettings	N7Battles4User13LobbySettingsE	si	0x0214ce7c	13	0x0214ce48	0x0214ce54	1		1	Battles::User::ScreenType	0
+Battles::User::LogoHB	N7Battles4User6LogoHBE	si	0x0214cef8	13	0x0214cecc	0x0214ced8	1		1	Battles::User::ScreenType	0
+Battles::User::LogoWB	N7Battles4User6LogoWBE	si	0x0214cf84	13	0x0214cf58	0x0214cf64	1		1	Battles::User::ScreenType	0
+Battles::User::MainMenu	N7Battles4User8MainMenuE	si	0x0214d00c	13	0x0214cfdc	0x0214cfe8	1		1	Battles::User::ScreenType	0
+Battles::User::MovieScreen	N7Battles4User11MovieScreenE	si	0x0214d0a4	13	0x0214d070	0x0214d07c	1		1	Battles::User::ScreenType	0
+Battles::User::MultiplayerMenu	N7Battles4User15MultiplayerMenuE	si	0x0214d138	13	0x0214d100	0x0214d10c	1		1	Battles::User::ScreenType	0
+Battles::User::OpponentSetup	N7Battles4User13OpponentSetupE	si	0x0214d1c0	13	0x0214d18c	0x0214d198	1		1	Battles::User::ScreenType	0
+Battles::User::ProfileCard	N7Battles4User11ProfileCardE	si	0x0214d244	13	0x0214d210	0x0214d21c	1		1	Battles::User::ScreenType	0
+Battles::User::ProfileSelect	N7Battles4User13ProfileSelectE	si	0x0214d314	13	0x0214d2e0	0x0214d2ec	1		1	Battles::User::ScreenType	0
+Battles::User::RedBrickReward	N7Battles4User14RedBrickRewardE	si	0x0214d39c	13	0x0214d368	0x0214d374	1		1	Battles::User::ScreenType	0
+Battles::User::RewardsSlideshow	N7Battles4User16RewardsSlideshowE	si	0x0214d430	13	0x0214d3f8	0x0214d404	1		1	Battles::User::ScreenType	0
+Battles::User::SinglePlayerMenu	N7Battles4User16SinglePlayerMenuE	si	0x0214d4bc	13	0x0214d484	0x0214d490	1		1	Battles::User::ScreenType	0
+Battles::User::SkirmishFactionSelect	N7Battles4User21SkirmishFactionSelectE	si	0x0214d54c	13	0x0214d510	0x0214d51c	1		1	Battles::User::ScreenType	0
+Battles::User::SkirmishScore	N7Battles4User13SkirmishScoreE	si	0x0214d5dc	13	0x0214d5a8	0x0214d5b4	1		1	Battles::User::ScreenType	0
+Battles::User::SkirmishScoreTopScreen	N7Battles4User22SkirmishScoreTopScreenE	si	0x0214d698	13	0x0214d65c	0x0214d668	1		1	Battles::User::ScreenType	0
+Battles::User::SkirmishSetup	N7Battles4User13SkirmishSetupE	si	0x0214da50	13	0x0214da1c	0x0214da28	1		1	Battles::User::ScreenType	0
+Battles::User::SkirmishSetupTopScreen	N7Battles4User22SkirmishSetupTopScreenE	si	0x0214dadc	13	0x0214daa0	0x0214daac	1		1	Battles::User::ScreenType	0
+Battles::User::SplashScreen	N7Battles4User12SplashScreenE	si	0x0214dc5c	13	0x0214db78	0x0214dbd4	1		1	Battles::User::ScreenType	0
+Battles::User::StartScreen	N7Battles4User11StartScreenE	si	0x0214ddf4	13	0x0214ddc0	0x0214ddcc	1		1	Battles::User::ScreenType	0
+Battles::User::StatsScreen	N7Battles4User11StatsScreenE	si	0x0214de78	13	0x0214de44	0x0214de50	1		1	Battles::User::ScreenType	0
+Battles::User::StoreConceptArt	N7Battles4User15StoreConceptArtE	si	0x0214df14	13	0x0214dedc	0x0214dee8	1		1	Battles::User::ScreenType	0
+Battles::User::StoreConceptArtTop	N7Battles4User18StoreConceptArtTopE	si	0x0214e0fc	13	0x0214e0c4	0x0214e0d0	1		1	Battles::User::ScreenType	0
+Battles::User::StoreHints	N7Battles4User10StoreHintsE	si	0x0214e184	13	0x0214e154	0x0214e160	1		1	Battles::User::ScreenType	0
+Battles::User::StoreHintsTop	N7Battles4User13StoreHintsTopE	si	0x0214e2b0	13	0x0214e27c	0x0214e288	1		1	Battles::User::ScreenType	0
+Battles::User::StoreMaps	N7Battles4User9StoreMapsE	si	0x0214e330	13	0x0214e300	0x0214e30c	1		1	Battles::User::ScreenType	0
+Battles::User::StoreMiniFigs	N7Battles4User13StoreMiniFigsE	si	0x0214e4ac	13	0x0214e420	0x0214e450	1		1	Battles::User::ScreenType	0
+Battles::User::StoreMiniFigsVramTransferCallback	N7Battles4User33StoreMiniFigsVramTransferCallbackE	si	0x0214e440	4	0x0214e42c	0x0214e470	1		1	Battles::VramTransferFunctorImpl	0
+Battles::User::StoreMovies	N7Battles4User11StoreMoviesE	si	0x0214e800	13	0x0214e7cc	0x0214e7d8	1		1	Battles::User::ScreenType	0
+Battles::User::BuildTab	N7Battles4User8BuildTabE	si	0x0214e8f4	13	0x0214e8c4	0x0214e8d0	1		1	Battles::User::ScreenType	0
+Battles::User::CheatsScreen	N7Battles4User12CheatsScreenE	si	0x0214e984	13	0x0214e950	0x0214e95c	1		1	Battles::User::ScreenType	0
+Battles::User::InfoTab	N7Battles4User7InfoTabE	si	0x0214ea04	13	0x0214e9d8	0x0214e9e4	1		1	Battles::User::ScreenType	0
+Battles::User::MapTab	N7Battles4User6MapTabE	si	0x0214ea84	13	0x0214ea58	0x0214ea64	1		1	Battles::User::ScreenType	0
+Battles::User::ObjectivesScreen	N7Battles4User16ObjectivesScreenE	si	0x0214eb14	13	0x0214eadc	0x0214eae8	1		1	Battles::User::ScreenType	0
+Battles::User::ObjectivesTab	N7Battles4User13ObjectivesTabE	si	0x0214eba0	13	0x0214eb6c	0x0214eb78	1		1	Battles::User::ScreenType	0
+Battles::User::PauseMenu	N7Battles4User9PauseMenuE	si	0x0214ec24	13	0x0214ebf4	0x0214ec00	1		1	Battles::User::ScreenType	0
+Battles::User::PauseMenuTopScreen	N7Battles4User18PauseMenuTopScreenE	si	0x0214ecb4	13	0x0214ec7c	0x0214ec88	1		1	Battles::User::ScreenType	0
+Battles::User::ScoreScreen	N7Battles4User11ScoreScreenE	si	0x0214ed64	13	0x0214ed30	0x0214ed3c	1		1	Battles::User::ScreenType	0
+Battles::User::ScoreTab	N7Battles4User8ScoreTabE	si	0x0214edf8	13	0x0214edc8	0x0214edd4	1		1	Battles::User::ScreenType	0
+Battles::User::UnitsTab	N7Battles4User8UnitsTabE	si	0x0214ee78	13	0x0214ee48	0x0214ee54	1		1	Battles::User::ScreenType	0
+Battles::User::WorldViewScreen	N7Battles4User15WorldViewScreenE	si	0x0214f0ec	13	0x0214ef8c	0x0214f0c0	1		1	Battles::User::ScreenType	0
+Battles::User::WorldViewTopScreen	N7Battles4User18WorldViewTopScreenE	si	0x0214f200	13	0x0214f1c8	0x0214f1d4	1		1	Battles::User::ScreenType	0
+Battles::SelectionChangedEvent	N7Battles21SelectionChangedEventE	si	0x0214f418	2	0x0214f404	0x0214f420	1		1	Battles::EventBase	0
+Battles::User::BackgroundWidget	N7Battles4User16BackgroundWidgetE	si	0x0214f4b4	5	0x0214f4a0	0x0214f4c8	1		1	Battles::User::Widget	0
+Battles::User::ComboWidget	N7Battles4User11ComboWidgetE	si	0x0214f534	5	0x0214f520	0x0214f548	1		1	Battles::User::Widget	0
+Battles::User::ListWidget	N7Battles4User10ListWidgetE	si	0x0214f584	5	0x0214f570	0x0214f598	1		1	Battles::User::Widget	0
+Battles::User::PaletteButtonWidget	N7Battles4User19PaletteButtonWidgetE	si	0x0214f5cc	5	0x0214f5b8	0x0214f5e0	1		1	Battles::User::ButtonWidget	0
+Battles::User::ScrollWidget	N7Battles4User12ScrollWidgetE	si	0x0214f640	5	0x0214f62c	0x0214f654	1		1	Battles::User::Widget	0
+Battles::User::SlidingSpriteWidget	N7Battles4User19SlidingSpriteWidgetE	si	0x0214f68c	5	0x0214f678	0x0214f6a0	1		1	Battles::User::Widget	0
+Battles::User::SpriteWidget	N7Battles4User12SpriteWidgetE	si	0x0214f6e0	5	0x0214f6cc	0x0214f6f4	1		1	Battles::User::Widget	0
+Battles::User::TextWidget	N7Battles4User10TextWidgetE	si	0x0214f730	5	0x0214f71c	0x0214f744	1		1	Battles::User::Widget	0
+Battles::User::UnlockableManager	N7Battles4User17UnlockableManagerE	class	0x0214f790	2	0x0214f780	0x0214f798	1		0		0
+Battles::ArrayCommandRef	N7Battles15ArrayCommandRefE	class	0x0214f874	2	0x0214f864	0x0214f87c	1		0		0
+Battles::ArrayEntityRef	N7Battles14ArrayEntityRefE	class	0x0214f8ac	2	0x0214f89c	0x0214f8b4	1		0		0
+Battles::ArrayMagicInfluenceRef	N7Battles22ArrayMagicInfluenceRefE	class	0x0214f8e4	2	0x0214f8d4	0x0214f8ec	1		0		0
+Battles::ArrayRect2u8	N7Battles12ArrayRect2u8E	class	0x0214f924	2	0x0214f914	0x0214f92c	1		0		0
+Battles::ArraySpellRef	N7Battles13ArraySpellRefE	class	0x0214f95c	2	0x0214f94c	0x0214f964	1		0		0
+Battles::ArrayTeamRef	N7Battles12ArrayTeamRefE	class	0x0214f994	2	0x0214f984	0x0214f99c	1		0		0
+Battles::ArrayU32	N7Battles8ArrayU32E	class	0x0214f9cc	2	0x0214f9bc	0x0214f9d4	1		0		0
+Battles::ArrayU8	N7Battles7ArrayU8E	class	0x0214f9fc	2	0x0214f9ec	0x0214fa04	1		0		0
+Battles::ArrayVector2u8	N7Battles14ArrayVector2u8E	class	0x0214fa2c	2	0x0214fa1c	0x0214fa34	1		0		0
+Battles::BitArray	N7Battles8BitArrayE	class	0x0214fa64	2	0x0214fa54	0x0214fa6c	1		0		0
+Battles::BitArray2D	N7Battles10BitArray2DE	class	0x0214fa94	2	0x0214fa84	0x0214fa9c	1		0		0
+Battles::PtrArray	N7Battles8PtrArrayE	class	0x0214fac8	2	0x0214fab8	0x0214fad0	1		0		0
+Battles::StackArrayEntityRef	N7Battles19StackArrayEntityRefE	class	0x0214faf4	2	0x0214fae4	0x0214fafc	1		0		0
+Battles::StackArrayVector2u8	N7Battles19StackArrayVector2u8E	class	0x0214fb2c	2	0x0214fb1c	0x0214fb34	1		0		0
+Battles::DList	N7Battles5DListE	class	0x0214fb68	2	0x0214fb58	0x0214fb70	1		0		0
+Battles::FileLoader	N7Battles10FileLoaderE	si	0x0214fbb8	3	0x0214fb88	0x0214fbc4	1		1	Battles::FileInfoType	0
+Battles::FileInfoType	N7Battles12FileInfoTypeE	si	0x0214fba8	2	0x0214fb94	0x0214fbdc	1		1	Battles::SListItem	0
+Battles::Rect2u16	N7Battles8Rect2u16E	class	0x0214fc20	2	0x0214fc10	0x0214fc28	1		0		0
+Battles::Rect2u8	N7Battles7Rect2u8E	class	0x0214fc4c	2	0x0214fc3c	0x0214fc54	1		0		0
+Battles::SList	N7Battles5SListE	class	0x0214fc78	2	0x0214fc68	0x0214fc80	1		0		0
+Battles::TimerBase	N7Battles9TimerBaseE	si	0x0214fd0c	4	0x0214fc98	0x0214fcb0	1		1	Battles::DListItem	0
+Battles::RealTimeTimer	N7Battles13RealTimeTimerE	si	0x0214fcec	6	0x0214fca4	0x0214fcc8	1		1	Battles::TimerBase	0
+Battles::Vector2f	N7Battles8Vector2fE	class	0x0214fd38	2	0x0214fd28	0x0214fd40	1		0		0
+Battles::Vector2s16	N7Battles10Vector2s16E	class	0x0214fd64	2	0x0214fd54	0x0214fd6c	1		0		0
+Battles::Vector2s8	N7Battles9Vector2s8E	class	0x0214fd94	2	0x0214fd84	0x0214fd9c	1		0		0
+Battles::Vector2u16	N7Battles10Vector2u16E	class	0x0214fdc4	2	0x0214fdb4	0x0214fdcc	1		0		0
+Battles::Vector2u8	N7Battles9Vector2u8E	class	0x0214fdf4	2	0x0214fde4	0x0214fdfc	1		0		0
+Battles::Vector3u8	N7Battles9Vector3u8E	class	0x0214fe24	2	0x0214fe14	0x0214fe2c	1		0		0
+std::type_info	St9type_info	class		0	0x0215077c	0x021507a8	0		0		0
+__cxxabiv1::__vmi_class_type_info	N10__cxxabiv121__vmi_class_type_infoE	si	0x021507c0	2	0x02150784	0x02150834	1		1	__cxxabiv1::__class_type_info	0
+__cxxabiv1::__si_class_type_info	N10__cxxabiv120__si_class_type_infoE	si	0x021507d0	2	0x02150790	0x0215080c	1		1	__cxxabiv1::__class_type_info	0
+__cxxabiv1::__class_type_info	N10__cxxabiv117__class_type_infoE	si	0x021507e0	2	0x0215079c	0x021507e8	1		1	std::type_info	0

@@ -1,0 +1,21 @@
+{
+  "_comment": "LEGO Battles port settings. Written beside the executable.",
+  "enhanced": true,
+  "ui_scale": 1.0000,
+  "pixel_scale": 2.0000,
+  "hud_scale": 1.0000,
+  "balance_patch": 0,
+  "hotwire_mode": 0,
+  "hotwire_transport": 0,
+  "attack_boost_ranged": 0,
+  "fix_hotwired_healing": false,
+  "same_builders": false,
+  "cap": [1, 20, 4, 7, 14, 29, 20, 8, 0, 5],
+  "cheat": [false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false],
+  "unlock_units": false,
+  "unlock_extras": false,
+  "music_mode": 2,
+  "master_host": "127.0.0.1",
+  "master_port": 28555,
+  "player_name": "Player"
+}

@@ -1,0 +1,31 @@
+rule_id	flag_offset	kind	blueprint	display_name	toggle_func	debug_text	readers
+0	0x00	red_brick	RedBrick_TurnOffFow	Reveal Map	0x020092D4		func_02025c14;func_020267f8;func_02034b44;func_02036d1c;func_020370b4;func_02037b9c;func_0203a318;func_020a17c0;func_020a9570;func_020d28ec;func_020e2408
+1	0x01	red_brick	RedBrick_OneHitKill	One Hit Kill (Heroes)	0x020092F8		func_0205079c;func_0206e970;func_020d28ec
+2	0x02	red_brick	RedBrick_FastProduction	Fast Building	0x0200931C		Battles::Sim::ConstructProgressAction::virtual_02;Battles::Sim::RepairStructureAction::virtual_02;func_020d28ec
+3	0x03	red_brick	RedBrick_QuickMagic	Fast Magic	0x02009340		func_0205f124;func_020d28ec
+4	0x04	red_brick	RedBrick_DoubleStuds	Double LEGO Bricks	0x02009364		func_0206d0e0;func_020d28ec
+5	0x05	red_brick	RedBrick_RevealMinikit	Show Minikit	0x02009388		func_020a6138;func_020d28ec
+6	0x06	red_brick	RedBrick_RevealCoins	Show LEGO Studs	0x020093AC		func_020a6138;func_020d28ec
+7	0x07	red_brick	RedBrick_Regeneration	Regenerating Health	0x020093D0		func_0205f124;func_020d28ec
+8	0x08	red_brick	RedBrick_IncreaseSpellRange	Long Range Magic	0x020093F4		func_02002ad4;func_020d28ec
+9	0x09	red_brick	RedBrick_IncreaseSpellTime	Super Magic	0x02009418		func_02002aa8;func_020d28ec
+10	0x0A	red_brick	RedBrick_RevealRedBrick	Show Red Bricks	0x0200943C		func_020a6138;func_020d28ec
+11	0x10	red_brick	RedBrick_AutoUpgrade	Upgraded Towers	0x02009514		Battles::Sim::ConstructStructureEntityCommand::virtual_09;func_020d28ec
+12	0x11	red_brick	RedBrick_SuperExplosions	Super Explosions	0x02009538		func_0206e60c;func_020d28ec
+13	0x0B	red_brick	RedBrick_FastHarvest	Fast Harvesting	0x02009460		func_020531f8;func_020d28ec
+14	0x0C	red_brick	RedBrick_FullAllowance	Full Unit Cap	0x02009484		Battles::User::WorldViewTopScreen::virtual_09;func_02085e78;func_02085f74;func_020863d8;func_020d28ec
+15	0x0D	red_brick	RedBrick_InvincibleHero	Invincible Hero	0x020094A8		func_020587ac;func_0205b384;func_0205b8a8;func_0205e7f4;func_0206e970;func_020d28ec
+16	0x0E	red_brick	RedBrick_FastMining	Fast Mining	0x020094CC		func_0206d7f0;func_020d28ec
+17	0x0F	red_brick	RedBrick_EnemiesOnMinimap	Show Enemies	0x020094F0		func_02025c14;func_020d28ec
+78	0x13	other			0x02009580		Battles::Sim::ConstructMultipleEntityCommand::virtual_09;Battles::Sim::ConstructProgressAction::virtual_02;Battles::Sim::ConstructStructureEntityCommand::virtual_08;Battles::Sim::ConstructStructureEntityCommand::virtual_09;Battles::Sim::RepairStructureAction::virtual_02;Battles::Sim::ResearchUpgradeEntityCommand::virtual_08;Battles::Sim::ResearchUpgradeEntityCommand::virtual_09;func_020687e4;func_02069d38;func_02071dc4;func_02071eb4;func_020725ac;func_020d0cf8;func_020da10c
+80	0x16	other			0x020095EC	FPS:%d	func_020f6730
+81	0x17	other			0x02009610	Free Memory:%ld	func_020f6730
+82	0x18	other			0x02009634	Build:%d	func_020f6730
+91	0x19	other			0x02009658		func_020f6730
+92	0x1A	other			0x0200967C	UserID 0 queued CMDs:%d;UserID 1 queued CMDs:%d;Balance count:%d	func_020f6730
+97	0x12	other			0x0200955C		func_020531f8
+98	0x15	other			0x020095C8		func_02085e78;func_02085f74;func_020863d8
+99	0x1C	other			0x020096C4	Spell: %s (%d);Spell: On	func_020dc004;func_020f6730
+101	0x14	other			0x020095A4		Battles::Sim::ConstructProgressAction::virtual_02;Battles::Sim::RepairStructureAction::virtual_02;func_0205cb94
+103	0x1D	other			0x020096E8		
+104	0x1E	other			0x0200970C		func_02025c14

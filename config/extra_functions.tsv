@@ -1,0 +1,19 @@
+address	mode	size	name	evidence
+# Function entry points this project verified from the ROM that the third-party
+# ds-decomp configuration does not carry. Merged by tools/build_corpus.py.
+#
+# A row here is a CLAIM WITH EVIDENCE, not a guess. The evidence column says how
+# the entry was established, and tools/lb_verify.py re-derives the consequence
+# (ARM9 .text coverage) on every run, so a wrong row shows up as a coverage
+# figure that stops making sense rather than as a silent inflation.
+#
+# These two are alternate entry points. Each is a run of the ARM XOR-swap idiom
+# (eor a,a,b / eor b,a,b / eor a,a,b) that FALLS THROUGH into the function the
+# config records at the next address -- so the callable code physically starts
+# earlier than the recorded entry. Nothing branches into either from the
+# preceding function, which rules out their being tails of it. This is the
+# ordinary shape of a library helper with two entries, one of which normalises
+# argument order before joining the common body.
+0x0211EF58	arm	0x18	alt_entry_0211EF70	swaps r1<->r3 and r0<->r2, then falls through into func_0211EF70
+0x0211F928	arm	0xC	alt_entry_0211F934	swaps r0<->r1, then falls through into func_0211F934
+0x020EB940	thumb	0x2	alt_entry_020EB942	shifts r0 left by 4 into r1 then falls through into func_020EB942; two bl sites target 0x020EB940 and zero target 0x020EB942, found by the docs/80 call-graph check

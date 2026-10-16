@@ -1,0 +1,121 @@
+faction	slot	kind	bank_symbol	blueprint	display_name	category	is_structure	cost	health	mana	build_time	melee_damage	attack_range	attack_interval	speed_tiles_per_sec	resource_yield	projectile	asset	unlock_slot
+Alien	HEROM	unit	BANK_UNIT__ALIEN_HEROM	A_AlienKing	Alien Commander	Hero	False	500	1000	1000	600	50	1	20	2.5	0		Sprites/a_hrm	
+Alien	HEROF	unit	BANK_UNIT__ALIEN_HEROF	A_AlienKing_F	Alien Queen	Hero	False	500	900	1000	600	50	1	20	3.0	0		Sprites/a_hrf	
+Alien	BUILDER	unit	BANK_UNIT__ALIEN_BUILDER	A_Engineer	Builder	Builder	False	50	140	0	150	5	1	24	3.25	0		Sprites/a_eng	
+Alien	MELEE	unit	BANK_UNIT__ALIEN_MELEE	A_Melee	Drone	Melee	False	90	225	0	270	20	1	30	3.0	0		Sprites/a_mel	
+Alien	RANGED	unit	BANK_UNIT__ALIEN_RANGED	A_Ranged	Laser Trooper	Ranged	False	150	250	0	390	0	4	24	4.0	0	ELaser	Sprites/a_rgd	
+Alien	MOUNTED	unit	BANK_UNIT__ALIEN_MOUNTED	A_Mounted	Grav Runner	Mounted	False	250	350	0	480	35	1	30	5.0	0		Sprites/a_bld_mtd	
+Alien	SIEGEONE	unit	BANK_UNIT__ALIEN_SIEGEONE	A_SiegeOne	Alien Attack Ship	Siege	False	350	450	0	600	0	5	24	3.0	0	BallistaBolt	Models/A_Ship	
+Alien	SIEGETWO	unit	BANK_UNIT__ALIEN_SIEGETWO	A_SiegeTwo	Alien Strike Ship	Siege	False	500	550	0	840	0	6	40	3.5	0	BallistaBolt	Models/A_Scout	
+Alien	SIEGETHREE	unit	BANK_UNIT__ALIEN_SIEGETHREE	A_SiegeThree	Alien Assault Ship	Siege	False	750	700	0	1140	0	7	20	6.0	0	BallistaBolt	Models/A_Fighter	
+Alien	TRANSPORT	unit	BANK_UNIT__ALIEN_TRANSPORT	A_TransportShip	Transport Ship	Transport	False	250	850	0	540	0	4	42	4.5	0	ALaser	Models/A_Transport	
+Alien	BASE	structure	BANK_STRUCTURE__ALIEN_BASE	A_CraterBase	Crater Base	Base	True	1000	1500	65535	900	0	1	30	0	0		Sprites/a_bld_mtd	
+Alien	MILL	structure	BANK_STRUCTURE__ALIEN_MILL	A_Harvester	Harvester	Mill	True	400	750	0	540	0	1	30	0	0		Sprites/a_bld_mtd	
+Alien	MINE	structure	BANK_STRUCTURE__ALIEN_MINE	A_WellCap	Well Cap	Mine	True	600	1250	0	690	0	1	30	0	25		Sprites/a_bld_mtd	
+Alien	FARM	structure	BANK_STRUCTURE__ALIEN_FARM	A_Hatchery	Hatchery	Farm	True	75	350	0	360	0	1	30	0	0		Sprites/a_bld_mtd	
+Alien	BARRACKS	structure	BANK_STRUCTURE__ALIEN_BARRACKS	A_BreedingPit	Breeding Pit	Barracks	True	200	750	0	450	0	1	30	0	0		Sprites/a_bld_mtd	
+Alien	VEHICLECENTER	structure	BANK_STRUCTURE__ALIEN_VEHICLECENTER	A_CreationPit	Creation Pit	VehicleCenter	True	350	1000	0	600	0	1	30	0	0		Sprites/a_bld_mtd	
+Alien	TOWER	structure	BANK_STRUCTURE__ALIEN_TOWER	A_Spire	Spire	Tower	True	300	400	0	420	0	6	24	0	0	TLaser	Sprites/a_bld_mtd	
+Alien	TOWER2	structure	BANK_STRUCTURE__ALIEN_TOWER2	A_Spire2	Spire II	Tower2	True	500	500	0	840	0	6	40	0	0	LaserCannon	Sprites/a_bld_mtd	
+Alien	TOWER3	structure	BANK_STRUCTURE__ALIEN_TOWER3	A_Spire3	Spire III	Tower3	True	800	700	0	1260	0	7	60	0	0	PlasmaBall	Sprites/a_bld_mtd	
+Alien	SHIPYARD	structure	BANK_STRUCTURE__ALIEN_SHIPYARD	A_Shipyard	Shipyard	Shipyard	True	350	1000	0	600	0	1	30	0	0		Sprites/a_bld_mtd	
+Earth	HEROM	unit	BANK_UNIT__EARTH_HEROM	E_Commander	Biff	Hero	False	500	1000	1000	600	40	1	20	3.5	0		Sprites/h_hrm	
+Earth	HEROF	unit	BANK_UNIT__EARTH_HEROF	E_Commander_F	Gemma	Hero	False	500	900	1000	600	0	5	20	3.0	0	ELaser	Sprites/h_hrf	
+Earth	BUILDER	unit	BANK_UNIT__EARTH_BUILDER	E_Engineer	Builder	Builder	False	45	150	0	150	5	1	40	3.0	0		Sprites/h_eng	
+Earth	MELEE	unit	BANK_UNIT__EARTH_MELEE	E_Melee	Trooper	Melee	False	90	275	0	270	20	1	24	2.5	0		Sprites/h_mel	
+Earth	RANGED	unit	BANK_UNIT__EARTH_RANGED	E_Ranged	Commando	Ranged	False	150	300	0	390	0	5	24	3.0	0	ELaser	Sprites/h_rgd	
+Earth	MOUNTED	unit	BANK_UNIT__EARTH_MOUNTED	E_Mounted	Gripley	Mounted	False	250	400	0	480	40	1	30	4.0	0		Sprites/h_bld_mtd	
+Earth	SIEGEONE	unit	BANK_UNIT__EARTH_SIEGEONE	E_SiegeOne	Claw Tank	Siege	False	350	450	0	600	0	5	24	3.5	0	BallistaBolt	Models/E_Clawtank	
+Earth	SIEGETWO	unit	BANK_UNIT__EARTH_SIEGETWO	E_SiegeTwo	Starfighter	Siege	False	500	550	0	840	0	6	30	3.0	0	BallistaBolt	Models/E_Heroship	
+Earth	SIEGETHREE	unit	BANK_UNIT__EARTH_SIEGETHREE	E_SiegeThree	Starship 1	Siege	False	750	700	0	1140	0	7	20	6.0	0	BallistaBolt	Models/E_EagleBase	
+Earth	TRANSPORT	unit	BANK_UNIT__EARTH_TRANSPORT	E_TransportShip	Transport Ship	Transport	False	250	850	0	540	0	4	42	5.0	0	ELaser	Models/E_Reconship	
+Earth	BASE	structure	BANK_STRUCTURE__EARTH_BASE	E_EagleCommandBase	Eagle Command	Base	True	1000	1500	65535	900	0	1	30	0	0		Sprites/h_bld_mtd	
+Earth	MILL	structure	BANK_STRUCTURE__EARTH_MILL	E_Harvester	Harvester	Mill	True	400	750	0	540	0	1	30	0	0		Sprites/h_bld_mtd	
+Earth	MINE	structure	BANK_STRUCTURE__EARTH_MINE	E_WellCap	Well Cap	Mine	True	600	1250	0	690	0	1	30	0	25		Sprites/h_bld_mtd	
+Earth	FARM	structure	BANK_STRUCTURE__EARTH_FARM	E_Biodome	Biodome	Farm	True	75	350	0	360	0	1	30	0	0		Sprites/h_bld_mtd	
+Earth	BARRACKS	structure	BANK_STRUCTURE__EARTH_BARRACKS	E_Barracks	Barracks	Barracks	True	200	750	0	450	0	1	30	0	0		Sprites/h_bld_mtd	
+Earth	VEHICLECENTER	structure	BANK_STRUCTURE__EARTH_VEHICLECENTER	E_VehicleFactory	Vehicle Factory	VehicleCenter	True	350	1000	0	600	0	1	30	0	0		Sprites/h_bld_mtd	
+Earth	TOWER	structure	BANK_STRUCTURE__EARTH_TOWER	E_RocketTowers	Tower	Tower	True	300	400	0	420	0	6	24	0	0	TLaser	Sprites/h_bld_mtd	
+Earth	TOWER2	structure	BANK_STRUCTURE__EARTH_TOWER2	E_RocketTowers2	Tower II	Tower2	True	500	500	0	840	0	6	40	0	0	LaserCannon	Sprites/h_bld_mtd	
+Earth	TOWER3	structure	BANK_STRUCTURE__EARTH_TOWER3	E_RocketTowers3	Tower III	Tower3	True	800	700	0	1260	0	7	60	0	0	PlasmaBall	Sprites/h_bld_mtd	
+Earth	SHIPYARD	structure	BANK_STRUCTURE__EARTH_SHIPYARD	E_Shipyard	Shipyard	Shipyard	True	350	1000	0	600	0	1	30	0	0		Sprites/h_bld_mtd	
+Imperial	HEROM	unit	BANK_UNIT__IMPERIAL_HEROM	I_Governor	Governor Broadside	Hero	False	500	1100	1000	600	40	1	20	2.5	0		Sprites/i_hrm	
+Imperial	HEROF	unit	BANK_UNIT__IMPERIAL_HEROF	I_Governor_F	Camilla	Hero	False	500	1000	1000	600	30	1	20	3.5	0		Sprites/i_hrf	
+Imperial	BUILDER	unit	BANK_UNIT__IMPERIAL_BUILDER	I_Engineer	Builder	Builder	False	55	160	0	150	5	1	30	2.75	0		Sprites/i_eng	
+Imperial	MELEE	unit	BANK_UNIT__IMPERIAL_MELEE	I_Swordsman	Swordsman	Melee	False	100	250	0	270	20	1	30	2.5	0		Sprites/i_mel	
+Imperial	RANGED	unit	BANK_UNIT__IMPERIAL_RANGED	I_Rifleman	Rifleman	Ranged	False	150	200	0	390	0	4	24	3.5	0	ImperialShot	Sprites/i_rgd	
+Imperial	MOUNTED	unit	BANK_UNIT__IMPERIAL_MOUNTED	I_Cavalry	Cavalry	Mounted	False	250	450	0	480	35	1	30	4.0	0		Sprites/i_bld_mtd	
+Imperial	SIEGEONE	unit	BANK_UNIT__IMPERIAL_SIEGEONE	I_Clipper	Clipper	Siege	False	350	550	0	600	0	5	30	6.25	0	ICannonBall	Models/I_Clipper	
+Imperial	SIEGETWO	unit	BANK_UNIT__IMPERIAL_SIEGETWO	I_Battleship	Battleship	Siege	False	500	650	0	840	0	6	30	4.5	0	ICannonBall	Models/I_Battleship	
+Imperial	SIEGETHREE	unit	BANK_UNIT__IMPERIAL_SIEGETHREE	I_Dirigible	Flagship	Siege	False	750	700	0	1140	0	7	24	3.0	0	ICannonBall	Models/I_Flagship	
+Imperial	TRANSPORT	unit	BANK_UNIT__IMPERIAL_TRANSPORT	I_TransportShip	Transport Ship	Transport	False	250	750	0	540	0	4	42	4.0	0	ImperialShot	Models/I_Transport	
+Imperial	BASE	structure	BANK_STRUCTURE__IMPERIAL_BASE	I_Fortress	Fortress	Base	True	1000	1500	65535	900	0	1	30	0	0		Sprites/i_bld_mtd	
+Imperial	MILL	structure	BANK_STRUCTURE__IMPERIAL_MILL	I_LumberMill	Lumber Mill	Mill	True	400	750	0	540	0	1	30	0	0		Sprites/i_bld_mtd	
+Imperial	MINE	structure	BANK_STRUCTURE__IMPERIAL_MINE	I_Quarry	Quarry	Mine	True	600	1250	0	690	0	1	30	0	25		Sprites/i_bld_mtd	
+Imperial	FARM	structure	BANK_STRUCTURE__IMPERIAL_FARM	I_Tavern	Quarters	Farm	True	75	350	0	360	0	1	30	0	0		Sprites/i_bld_mtd	
+Imperial	BARRACKS	structure	BANK_STRUCTURE__IMPERIAL_BARRACKS	I_Barracks	Barracks	Barracks	True	200	750	0	450	0	1	30	0	0		Sprites/i_bld_mtd	
+Imperial	VEHICLECENTER	structure	BANK_STRUCTURE__IMPERIAL_VEHICLECENTER	I_Drydock	Drydock	VehicleCenter	True	350	1000	0	600	0	1	30	0	0		Sprites/i_bld_mtd	
+Imperial	TOWER	structure	BANK_STRUCTURE__IMPERIAL_TOWER	I_StoneTower	Tower	Tower	True	300	400	0	420	0	6	24	0	0	TPirateShot	Sprites/i_bld_mtd	
+Imperial	TOWER2	structure	BANK_STRUCTURE__IMPERIAL_TOWER2	I_StoneTower2	Tower II	Tower2	True	500	500	0	840	0	6	40	0	0	ICannonBall	Sprites/i_bld_mtd	
+Imperial	TOWER3	structure	BANK_STRUCTURE__IMPERIAL_TOWER3	I_StoneTower3	Tower III	Tower3	True	800	700	0	1260	0	7	60	0	0	TFireball	Sprites/i_bld_mtd	
+Imperial	SHIPYARD	structure	BANK_STRUCTURE__IMPERIAL_SHIPYARD	I_Shipyard	Shipyard	Shipyard	True	350	1000	0	600	0	1	30	0	0		Sprites/i_bld_mtd	
+King	HEROM	unit	BANK_UNIT__KING_HEROM	K_King	King	Hero	False	500	1000	1000	600	40	1	20	3.0	0		Sprites/k_hrm	
+King	HEROF	unit	BANK_UNIT__KING_HEROF	K_King_F	Queen	Hero	False	500	1000	1000	600	30	1	20	3.5	0		Sprites/k_hrf	
+King	BUILDER	unit	BANK_UNIT__KING_BUILDER	K_Engineer	Builder	Builder	False	50	150	0	150	5	1	30	3.0	0		Sprites/k_eng	
+King	MELEE	unit	BANK_UNIT__KING_MELEE	K_Swordsman	Guardsman	Melee	False	100	350	0	270	10	1	30	3.0	0		Sprites/k_mel	
+King	RANGED	unit	BANK_UNIT__KING_RANGED	K_Archer	Archer	Ranged	False	150	300	0	390	0	5	24	3.5	0	Arrow	Sprites/k_rgd	
+King	MOUNTED	unit	BANK_UNIT__KING_MOUNTED	K_Knight	Knight	Mounted	False	250	300	0	480	40	1	30	4.5	0		Sprites/k_bld_mtd	
+King	SIEGEONE	unit	BANK_UNIT__KING_SIEGEONE	K_Ballista	Ballista	Siege	False	350	450	0	600	0	7	24	3.5	0	BallistaBolt	Models/K_Ballista	
+King	SIEGETWO	unit	BANK_UNIT__KING_SIEGETWO	K_Catapult	Catapult	Siege	False	500	550	0	840	0	8	30	3.0	0	Boulder	Models/K_Catapult	
+King	SIEGETHREE	unit	BANK_UNIT__KING_SIEGETHREE	K_Gryphon	King's Dragon	Siege	False	900	700	0	1140	0	3	30	6.0	0	Fireball	Models/K_Dragon	
+King	TRANSPORT	unit	BANK_UNIT__KING_TRANSPORT	K_TransportShip	Transport Ship	Transport	False	250	850	0	540	0	4	42	5.0	0	Arrow	Models/K_TransportShip	
+King	BASE	structure	BANK_STRUCTURE__KING_BASE	K_Castle	Castle	Base	True	1000	1500	65535	900	0	1	30	0	0		Sprites/k_bld_mtd	
+King	MILL	structure	BANK_STRUCTURE__KING_MILL	K_LumberMill	Lumber Mill	Mill	True	400	750	0	540	0	1	30	0	0		Sprites/k_bld_mtd	
+King	MINE	structure	BANK_STRUCTURE__KING_MINE	K_Mine	Mine	Mine	True	600	1250	0	690	0	1	30	0	25		Sprites/k_bld_mtd	
+King	FARM	structure	BANK_STRUCTURE__KING_FARM	K_Farm	Farm	Farm	True	75	350	0	360	0	1	30	0	0		Sprites/k_bld_mtd	
+King	BARRACKS	structure	BANK_STRUCTURE__KING_BARRACKS	K_Barracks	Barracks	Barracks	True	200	750	0	450	0	1	30	0	0		Sprites/k_bld_mtd	
+King	VEHICLECENTER	structure	BANK_STRUCTURE__KING_VEHICLECENTER	K_Stables	Special Factory	VehicleCenter	True	350	1000	0	600	0	1	30	0	0		Sprites/k_bld_mtd	
+King	TOWER	structure	BANK_STRUCTURE__KING_TOWER	K_Tower	Tower	Tower	True	300	400	0	420	0	5	24	0	0	TBolt	Sprites/k_bld_mtd	
+King	TOWER2	structure	BANK_STRUCTURE__KING_TOWER2	K_Tower2	Tower II	Tower2	True	500	500	0	840	0	6	40	0	0	TBoulder	Sprites/k_bld_mtd	
+King	TOWER3	structure	BANK_STRUCTURE__KING_TOWER3	K_Tower3	Tower III	Tower3	True	800	700	0	1260	0	7	60	0	0	TFireball	Sprites/k_bld_mtd	
+King	SHIPYARD	structure	BANK_STRUCTURE__KING_SHIPYARD	K_Shipyard	Shipyard	Shipyard	True	350	1000	0	600	0	1	30	0	0		Sprites/k_bld_mtd	
+Pirate	HEROM	unit	BANK_UNIT__PIRATE_HEROM	P_Captain	Captain Brickbeard	Hero	False	500	1000	1000	600	50	1	20	2.5	0		Sprites/p_hrm	
+Pirate	HEROF	unit	BANK_UNIT__PIRATE_HEROF	P_Captain_F	Lady Pirate	Hero	False	500	1000	1000	600	40	1	20	3.0	0		Sprites/p_hrf	
+Pirate	BUILDER	unit	BANK_UNIT__PIRATE_BUILDER	P_Builder	Builder	Builder	False	45	140	0	150	5	1	40	3.25	0		Sprites/p_eng	
+Pirate	MELEE	unit	BANK_UNIT__PIRATE_MELEE	P_Oarsman	Oarsman	Melee	False	120	300	0	270	10	1	30	3.5	0		Sprites/p_mel	
+Pirate	RANGED	unit	BANK_UNIT__PIRATE_RANGED	P_Crossbowman	Gunman	Ranged	False	150	200	0	390	0	5	24	4.0	0	PirateShot	Sprites/p_rgd	
+Pirate	MOUNTED	unit	BANK_UNIT__PIRATE_MOUNTED	P_Horseman	Horseman	Mounted	False	250	400	0	480	30	1	30	5.0	0		Sprites/p_bld_mtd	
+Pirate	SIEGEONE	unit	BANK_UNIT__PIRATE_SIEGEONE	P_Barracuda	Barracuda	Siege	False	350	550	0	600	0	5	40	6.0	0	PCannonBall	Models/P_Clipper	
+Pirate	SIEGETWO	unit	BANK_UNIT__PIRATE_SIEGETWO	P_Battleship	Battleship	Siege	False	500	650	0	840	0	6	30	5.0	0	PCannonBall	Models/P_Battleship	
+Pirate	SIEGETHREE	unit	BANK_UNIT__PIRATE_SIEGETHREE	P_FlyingDutchman	Brickbeard's Bounty	Siege	False	750	700	0	1140	0	7	30	3.5	0	PCannonBall	Models/P_Flagship	
+Pirate	TRANSPORT	unit	BANK_UNIT__PIRATE_TRANSPORT	P_TransportShip	Transport Ship	Transport	False	250	750	0	540	0	4	60	4.0	0	PirateShot	Models/P_Transport	
+Pirate	BASE	structure	BANK_STRUCTURE__PIRATE_BASE	P_PiratesHold	Pirate's Hold	Base	True	1000	1500	65535	900	0	1	30	0	0		Sprites/p_bld_mtd	
+Pirate	MILL	structure	BANK_STRUCTURE__PIRATE_MILL	P_LumberShack	Lumber Shack	Mill	True	400	750	0	540	0	1	30	0	0		Sprites/p_bld_mtd	
+Pirate	MINE	structure	BANK_STRUCTURE__PIRATE_MINE	P_Quarry	Quarry	Mine	True	600	1250	0	690	0	1	30	0	25		Sprites/p_bld_mtd	
+Pirate	FARM	structure	BANK_STRUCTURE__PIRATE_FARM	P_ShantyShack	Plantation	Farm	True	75	350	0	360	0	1	30	0	0		Sprites/p_bld_mtd	
+Pirate	BARRACKS	structure	BANK_STRUCTURE__PIRATE_BARRACKS	P_Tavern	Shanty Shack	Barracks	True	200	750	0	450	0	1	30	0	0		Sprites/p_bld_mtd	
+Pirate	VEHICLECENTER	structure	BANK_STRUCTURE__PIRATE_VEHICLECENTER	P_Jetty	Jetty	VehicleCenter	True	350	1000	0	600	0	1	30	0	0		Sprites/p_bld_mtd	
+Pirate	TOWER	structure	BANK_STRUCTURE__PIRATE_TOWER	P_LogTower	Tower	Tower	True	300	400	0	420	0	6	24	0	0	TPirateShot	Sprites/p_bld_mtd	
+Pirate	TOWER2	structure	BANK_STRUCTURE__PIRATE_TOWER2	P_LogTower2	Tower II	Tower2	True	500	500	0	840	0	6	40	0	0	PCannonBall	Sprites/p_bld_mtd	
+Pirate	TOWER3	structure	BANK_STRUCTURE__PIRATE_TOWER3	P_LogTower3	Tower III	Tower3	True	800	700	0	1260	0	7	60	0	0	TFireball	Sprites/p_bld_mtd	
+Pirate	SHIPYARD	structure	BANK_STRUCTURE__PIRATE_SHIPYARD	P_Shipyard	Shipyard	Shipyard	True	350	1000	0	600	0	1	30	0	0		Sprites/p_bld_mtd	
+Wizard	HEROM	unit	BANK_UNIT__WIZARD_HEROM	W_Wizard	Wizard	Hero	False	500	1100	1000	600	30	1	20	2.5	0		Sprites/w_hrm	
+Wizard	HEROF	unit	BANK_UNIT__WIZARD_HEROF	W_Wizard_F	Sorceress	Hero	False	500	900	1000	600	30	1	20	3.5	0		Sprites/w_hrf	
+Wizard	BUILDER	unit	BANK_UNIT__WIZARD_BUILDER	W_Engineer	Builder	Builder	False	55	160	0	150	5	1	24	2.75	0		Sprites/w_eng	
+Wizard	MELEE	unit	BANK_UNIT__WIZARD_MELEE	W_Swordsman	Skeleton	Melee	False	110	225	0	270	15	1	30	3.5	0		Sprites/w_mel	
+Wizard	RANGED	unit	BANK_UNIT__WIZARD_RANGED	W_Crossbowman	Crossbowman	Ranged	False	150	250	0	390	0	4	24	3.0	0	CrossbowBolt	Sprites/w_rgd	
+Wizard	MOUNTED	unit	BANK_UNIT__WIZARD_MOUNTED	W_Skeleknight	Skeleknight	Mounted	False	250	300	0	480	30	1	30	4.5	0		Sprites/w_bld_mtd	
+Wizard	SIEGEONE	unit	BANK_UNIT__WIZARD_SIEGEONE	W_Ballista	Siege Tower	Siege	False	350	450	0	600	0	7	24	3.0	0	SiegeBolt	Models/W_Ballista	
+Wizard	SIEGETWO	unit	BANK_UNIT__WIZARD_SIEGETWO	W_Giant	Troll Giant	Siege	False	500	550	0	840	0	8	40	3.5	0	OgreBoulder	Models/W_Giant	
+Wizard	SIEGETHREE	unit	BANK_UNIT__WIZARD_SIEGETHREE	W_Dragon	Wizard's Dragon	Siege	False	900	700	0	1140	0	3	30	6.0	0	Fireball	Models/W_Dragon	
+Wizard	TRANSPORT	unit	BANK_UNIT__WIZARD_TRANSPORT	W_TransportShip	Transport Ship	Transport	False	250	850	0	540	0	4	42	4.5	0	CrossbowBolt	Models/W_TransportShip	
+Wizard	BASE	structure	BANK_STRUCTURE__WIZARD_BASE	W_SkeletonTower	Skeleton Tower	Base	True	1000	1500	65535	900	0	1	30	0	0		Sprites/w_bld_mtd	
+Wizard	MILL	structure	BANK_STRUCTURE__WIZARD_MILL	W_LumberShack	Lumber Shack	Mill	True	400	750	0	540	0	1	30	0	0		Sprites/w_bld_mtd	
+Wizard	MINE	structure	BANK_STRUCTURE__WIZARD_MINE	W_Mine	Mine	Mine	True	600	1250	0	690	0	1	30	0	25		Sprites/w_bld_mtd	
+Wizard	FARM	structure	BANK_STRUCTURE__WIZARD_FARM	W_Graveyard	Graveyard	Farm	True	75	350	0	360	0	1	30	0	0		Sprites/w_bld_mtd	
+Wizard	BARRACKS	structure	BANK_STRUCTURE__WIZARD_BARRACKS	W_Mousoleum	Mausoleum	Barracks	True	200	750	0	450	0	1	30	0	0		Sprites/w_bld_mtd	
+Wizard	VEHICLECENTER	structure	BANK_STRUCTURE__WIZARD_VEHICLECENTER	W_Cauldron	Cauldron	VehicleCenter	True	350	1000	0	600	0	1	30	0	0		Sprites/w_bld_mtd	
+Wizard	TOWER	structure	BANK_STRUCTURE__WIZARD_TOWER	W_Tower	Tower	Tower	True	300	400	0	420	0	6	24	0	0	TBolt	Sprites/w_bld_mtd	
+Wizard	TOWER2	structure	BANK_STRUCTURE__WIZARD_TOWER2	W_Tower2	Tower II	Tower2	True	500	500	0	840	0	6	40	0	0	TBoulder	Sprites/w_bld_mtd	
+Wizard	TOWER3	structure	BANK_STRUCTURE__WIZARD_TOWER3	W_Tower3	Tower III	Tower3	True	800	700	0	1260	0	7	60	0	0	TFireball	Sprites/w_bld_mtd	
+Wizard	SHIPYARD	structure	BANK_STRUCTURE__WIZARD_SHIPYARD	W_Shipyard	Shipyard	Shipyard	True	350	1000	0	600	0	1	30	0	0		Sprites/w_bld_mtd	
