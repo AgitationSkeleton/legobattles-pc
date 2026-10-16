@@ -75,7 +75,9 @@ jobs:
           if ($env:IMGUI_PATH) { $env:IMGUI = $env:IMGUI_PATH }
           $env:LB_NO_DEPLOY = "1"
           $env:CHERE_INVOKING = "1"
-          & $bash -lc 'cd "$(cygpath -u "$LB_WS")" && LB_GENERATED_DIR="$(cygpath -u "$LB_GENERATED")" bash port/runner/build.sh'
+          # (A script file: Windows PowerShell drops the double quotes of an
+          # inline bash -c command line.)
+          & $bash -l (($env:LB_WS -replace '\\', '/') + '/tools/lb_release_build.sh')
           if ($LASTEXITCODE -ne 0) { throw "build failed" }
       - name: Conversion data and package
         shell: powershell
