@@ -66,7 +66,11 @@ def main():
     # Credits and licences (docs/395): the executable links GPL-3.0-or-later
     # melonDS code and is built on ndsrecomp, so the notices and every licence
     # text travel with it.
+    # (Here they are in the public repository's template; in that repository,
+    # at its root.)
     pub = os.path.join(ROOT, "publish", "legobattles-pc")
+    if not os.path.isdir(pub):
+        pub = ROOT
     shutil.copy2(os.path.join(pub, "THIRD_PARTY_NOTICES.md"), dest)
     shutil.copytree(os.path.join(pub, "LICENSES"), os.path.join(dest, "LICENSES"))
     zpath = os.path.join(args.out, name + ".zip")

@@ -306,6 +306,8 @@ def main():
         blob += struct.pack("<II", a, b - a) + eu[a:b]
     img = convert(us, bytes(blob))
     assert hashlib.sha1(img).hexdigest() == EU_SHA1, "the conversion does not rebuild the European image"
+    # (A fresh checkout's build has no data/ folder yet.)
+    os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
     open(args.out, "wb").write(blob)
     print("wrote %s: %d bytes -- %d modules, %d parse bytes (no literals), %d control triples, "
           "%d difference bytes in %d runs, %d inserted bytes, %d ROM bytes in %d runs "
