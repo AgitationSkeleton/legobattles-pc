@@ -2738,8 +2738,37 @@ extern "C" int lb_hud_hit_live(void) {
     return lb_demo_play_hudhit() != 0 ? 1 : 0;
 }
 
+// docs/396: ONLY THE BATTLE VIEW'S OWN WIDGETS. The HUD faces are scanned in
+// the battle composite alone, so in every other screen the last battle
+// frame's boxes stayed published -- and FUN_020EA1A4 tests every screen's
+// buttons. A menu button whose rectangle matched a moved HUD element's
+// source -- the back arrow, 4..28 x 168..192, is exactly where the deselect
+// icon sits -- was taken for that element and missed every press: the back
+// arrow after a battle, the Free Play army builder's slots, at the sizes
+// where those HUD elements had moved. So the correction applies only to a
+// widget in the layout of the battle view (registry slot 0x5C, 02157FAC,
+// vtable 0214F0EC: kViewSlot/kViewVtable below), whose HUD it describes.
+static bool widget_in_battle_view(uint32_t w) {
+    // LB_HUDHITOWN=0 restores the old rule (every screen's widgets), for the
+    // A/B that shows what this fixes.
+    static const bool any = [] {
+        const char* v = std::getenv("LB_HUDHITOWN");
+        return v && v[0] == '0';
+    }();
+    if (any) return true;
+    const uint32_t screen = bus_read_u32(0x02157FACu);
+    if (screen < 0x02000000u || screen >= 0x02400000u) return false;
+    if (bus_read_u32(screen) != 0x0214F0ECu) return false;
+    const uint32_t layout = bus_read_u32(screen + 0x1Cu);
+    if (layout < 0x02000000u || layout >= 0x02400000u) return false;
+    const unsigned n = bus_read_u8(layout + 2u);
+    for (unsigned i = 0; i < n && i < 128u; ++i)
+        if (bus_read_u32(layout + 0xCu + 4u * i) == w) return true;
+    return false;
+}
+
 void widget_rect_observer(void) {
-    if (lb_hud_hit_live()) {
+    if (lb_hud_hit_live() && widget_in_battle_view(g_cpu.R[1])) {
         const uint32_t w = g_cpu.R[1];
         const uint32_t rec = (w >= 0x02000000u && w < 0x02400000u)
                                  ? bus_read_u32(w + 4u) : 0u;
@@ -2954,6 +2983,12 @@ const char* quick_gate(uint32_t screen, int action, uint32_t* w_out,
 // follows when that returns, or on a later update if the list is not shown
 // yet (a few updates, then it gives up).
 constexpr int kQuickItem = 10;
+// docs/398: 21..29 are item 1..9 of the BLUE brick's list (g0: ids 614..623,
+// which FUN_020DA2B8 gives to list 0). A number key becomes one of these when
+// the option is on and the blue list is the open one (screen+0x26C == 0; 5 is
+// none, FUN_020DA6BC). The choice is made here and recorded as made, so a
+// recording replays the same whatever the setting.
+constexpr int kQuickBlueItem = 20;
 
 struct QuickItem {
     int n = 0;                 // 1..9 while one is wanted
@@ -3018,9 +3053,11 @@ extern "C" void lb_quick_replay(int action) {
         return;
     }
     if ((action >= 0 && action <= 2) ||
-        (action > kQuickItem && action <= kQuickItem + 9))
+        (action > kQuickItem && action <= kQuickItem + 9) ||
+        (action > kQuickBlueItem && action <= kQuickBlueItem + 9))
         g_quick_req.store(action);
 }
+extern "C" int lb_setting_quick_blue(void);   /* lb_overlay.cpp */
 
 namespace {
 // The update's registers, kept for when the callback returns.
@@ -3159,8 +3196,31 @@ void view_update_override(void) {
         // unless the view it was made for is gone.
         if (bus_read_u32(kViewSlot) != g_qc.screen) g_qc.active = false;
     } else {
-        const int want = g_quick_req.exchange(-1);
-        if (want > kQuickItem) {
+        int want = g_quick_req.exchange(-1);
+        const uint32_t vs = g_cpu.R[0];
+        // docs/398: a live number key with the blue list open picks from it.
+        if (want > kQuickItem && want <= kQuickItem + 9 && !lb_demo_playing() &&
+            lb_setting_quick_blue() && !quick_screen_gate(vs) &&
+            quick_list_open(vs, 0))
+            want = want - kQuickItem + kQuickBlueItem;
+        if (want > kQuickBlueItem) {
+            const int n = want - kQuickBlueItem;
+            const char* why = quick_screen_gate(vs);
+            if (!why && !quick_list_open(vs, 0)) why = "the blue list is closed";
+            if (why) {
+                if (quick_log())
+                    std::fprintf(stderr, "[lb_quick] blue item %d: declined, %s\n",
+                                 n, why);
+            } else {
+                lb_demo_note_quick(want);
+                g_qitem.n = n;
+                g_qitem.group = 0;
+                g_qitem.screen = vs;
+                g_qitem.updates = 6;
+                quick_save();
+                if (quick_item_step(vs)) return;
+            }
+        } else if (want > kQuickItem) {
             // docs/385: item N of the second brick's list.
             const uint32_t screen = g_cpu.R[0];
             uint32_t w = 0;
@@ -3711,6 +3771,79 @@ struct KeyCall {
     uint32_t r12 = 0, lr = 0, sp = 0, sp_call = 0, screen = 0;
 };
 KeyCall g_kc;
+}  // namespace
+
+// docs/397: A RENAME IS SAVED BY THE GAME ITSELF. The rename (docs/396) only
+// changed the name in RAM, and the game writes it at its next save -- which a
+// player who renames and quits never reaches, so the save kept the old name.
+// The record is bit-packed (SaveGame writes field after field through
+// FUN_0204BA48/FUN_0204BAB0) and its checksum is unknown (docs/97, docs/176),
+// so the port does not write the file. It runs the game's own save instead:
+// FUN_0204FA6C(0), the very call User::MainMenu's virtual_12 makes after the
+// 12/25 unlock (ARM: SaveGame FUN_0204FA88 with R0 passed through, then
+// FUN_0204B538(0)).
+//
+// It runs on the MAIN MENU only, in front of User::MainMenu::virtual_09
+// (020BF230, vtable 0214D00C, reached only through the vtable), as a tail
+// call that returns there -- the docs/383 mechanism. The main menu is where a
+// profile is certainly loaded and the game itself saves; the shared menu
+// update (020E1BF4) would not do, because MainMenu's own update calls it
+// directly, past any override. A rename asked for anywhere else waits there.
+constexpr uint32_t kMainMenuUpdate = 0x020BF230u;   // thumb
+constexpr uint32_t kMainMenuVtable = 0x0214D00Cu;
+constexpr uint32_t kSaveProfile = 0x0204FA6Cu;      // ARM
+static bool g_profile_save_pending = false;
+static KeyCall g_save_call;
+
+extern "C" void lb_request_profile_rename(const char* name);
+void main_menu_update_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kMainMenuUpdate);
+    // TEST AID: LB_TEST_RENAME=<name> asks for the rename once, the first
+    // time the main menu is up, as the menu's button does.
+    static bool test_renamed = false;
+    if (!test_renamed) {
+        test_renamed = true;
+        if (const char* s = std::getenv("LB_TEST_RENAME")) lb_request_profile_rename(s);
+    }
+    if (g_save_call.active && g_cpu.R[13] == g_save_call.sp_call) {
+        g_save_call.active = false;   // the save returned here
+        std::fprintf(stderr, "[lb_name] the game saved the profile (result %u)\n",
+                     (unsigned)g_cpu.R[0]);
+        g_cpu.R[0] = g_save_call.r[0];
+        g_cpu.R[1] = g_save_call.r[1];
+        g_cpu.R[2] = g_save_call.r[2];
+        g_cpu.R[3] = g_save_call.r[3];
+        g_cpu.R[12] = g_save_call.r12;
+        g_cpu.R[14] = g_save_call.lr;
+        g_cpu.R[13] = g_save_call.sp;
+        if (original) original();
+        return;
+    }
+    const uint32_t net = bus_read_u32(0x0215B7BCu);   // 0 or -1: no session
+    if (g_profile_save_pending && !g_save_call.active &&
+        guest_ptr(g_cpu.R[0]) && bus_read_u32(g_cpu.R[0]) == kMainMenuVtable &&
+        (net == 0u || net == 0xFFFFFFFFu)) {
+        g_profile_save_pending = false;
+        g_save_call.r[0] = g_cpu.R[0];
+        g_save_call.r[1] = g_cpu.R[1];
+        g_save_call.r[2] = g_cpu.R[2];
+        g_save_call.r[3] = g_cpu.R[3];
+        g_save_call.r12 = g_cpu.R[12];
+        g_save_call.lr = g_cpu.R[14];
+        g_save_call.sp = g_cpu.R[13];
+        g_save_call.sp_call = (g_save_call.sp - 0x40u) & ~7u;
+        g_save_call.active = true;
+        g_cpu.R[0] = 0u;
+        g_cpu.R[13] = g_save_call.sp_call;
+        g_cpu.R[14] = kMainMenuUpdate | 1u;   // back here, in Thumb
+        g_cpu.R[15] = kSaveProfile;
+        runtime_dispatch_with_exchange(kSaveProfile);
+        return;
+    }
+    if (original) original();
+}
+
+namespace {
 
 const KeyboardKind* keyboard_of(uint32_t screen) {
     if (!guest_ptr(screen)) return nullptr;
@@ -4620,6 +4753,9 @@ const NdsDispatchEntry kOverrideTable[] = {
     /* Observer only, and only speaks with LB_MARKERLOG=1. */
     /* Thumb. Free Play's opponent mapper: Custom and Random answer 133 and
        queue their army; the six factions are a pure tail call. docs/384. */
+    /* Thumb. User::MainMenu::virtual_09: a requested rename is saved by the
+       game's own save in front of it; otherwise a pure tail call. docs/397. */
+    {kMainMenuUpdate, 1u, main_menu_update_override, nullptr}, /* 0x020BF230 */
     {kEnemyMap, 1u, enemy_map_override, nullptr},          /* 0x020C0374 */
     /* Thumb. Its cycler: eight ways instead of six, live and in recordings
        that say enemy8=1; otherwise a pure tail call. docs/384. */
@@ -4667,7 +4803,8 @@ const NdsDispatchEntry kOverrideTable[] = {
 // fault after shipping; this refuses to build. Every future entry must be
 // inserted in address order or the build stops here with this message.
 static_assert(kRosterBuild < kRegistryFind &&
-              kSelRect < kEnemyMap && kEnemyMap < kOppSetupLabel &&
+              kSelRect < kMainMenuUpdate && kMainMenuUpdate < kEnemyMap &&
+              kEnemyMap < kOppSetupLabel &&
               kOppSetupLabel < kEnemyCycle &&
               kEnemyCycle < kMarkerPlace && kMarkerPlace < kHeroHud &&
               kHeroHud < kViewUpdate && kViewUpdate < kScreenUpdate &&
@@ -10795,8 +10932,9 @@ static void apply_player_name(void) {
         g_rename_pending = false;
         for (uint32_t i = 0; i < 11u; ++i)
             bus_write_u8(kProfileName + i, (uint8_t)g_rename[i]);
-        std::fprintf(stderr, "[lb_name] profile renamed to \"%s\"; the game keeps "
-                             "it at its next save\n", g_rename);
+        g_profile_save_pending = true;   // docs/397: saved by the game, next menu
+        std::fprintf(stderr, "[lb_name] profile renamed to \"%s\"; saving it at "
+                             "the next menu screen\n", g_rename);
     }
     char want[32], name[11];
     if (lb_setting_mp_name(want, (int)sizeof want) <= 0) return;
@@ -10841,6 +10979,9 @@ extern "C" void lb_port_on_guest_reset(void) {
     g_fp_applied = 0;
     g_fp_applied_y = 0;
     g_rename_pending = false;
+    g_profile_save_pending = false;
+    g_save_call.active = false;
+    g_kc.active = false;
     lb_demo_on_reset();
     std::fprintf(stderr, "[lb_reset] the game was reset to its title screen "
                          "(generation %u)\n", g_boot_gen);

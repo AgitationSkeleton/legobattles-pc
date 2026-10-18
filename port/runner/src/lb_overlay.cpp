@@ -169,6 +169,9 @@ struct Settings {
     // view_update_override), not a tap. On by default; false leaves those
     // inputs alone.
     bool quick_keys = true;
+    // docs/398: while the blue brick's list is the open one, 1-9 pick from it
+    // instead of the second brick's list. On by default.
+    bool quick_keys_blue = true;
     // docs/384, the Team Builder and Ban Units tabs. A team is the army
     // screen's nine slots as blueprint indices (lb_overlay.h, LbTeam); both
     // start as Free Play's default, King's. Presets are "Name=p0,...,p8;..."
@@ -480,6 +483,8 @@ extern "C" void lb_settings_save(void) {
                   g_set.force_tileset); o += buf;
     std::snprintf(buf, sizeof buf, "  \"quick_keys\": %s,\n",
                   g_set.quick_keys ? "true" : "false"); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"quick_keys_blue\": %s,\n",
+                  g_set.quick_keys_blue ? "true" : "false"); o += buf;
     // docs/384
     for (int which = 0; which < 2; ++which) {
         const int* t = which ? g_set.enemy_team : g_set.team_working;
@@ -581,6 +586,7 @@ extern "C" void lb_settings_load(void) {
     if (g_set.level_palette < 0 || g_set.level_palette > 3) g_set.level_palette = 0;
     if (g_set.force_tileset < 0 || g_set.force_tileset > 4) g_set.force_tileset = 0;
     json_get_bool(s, "quick_keys", &g_set.quick_keys);   // docs/383, default on
+    json_get_bool(s, "quick_keys_blue", &g_set.quick_keys_blue);   // docs/398
     // docs/384; a file without them keeps King's team and no presets or bans.
     json_get_ints(s, "team_working", g_set.team_working, LB_TEAM_SLOTS);
     json_get_ints(s, "enemy_team", g_set.enemy_team, LB_TEAM_SLOTS);
@@ -1539,6 +1545,10 @@ void tab_input() {
          "Each runs the game's own function for that button, without\n"
          "touching the screen, and does nothing when it is not shown.\n"
          "A key bound to a DS button above stays that DS button.");
+    ImGui::Checkbox("Number keys pick from the open blue menu", &g_set.quick_keys_blue);
+    help("While the blue brick's menu is the open one, 1-9 pick from it\n"
+         "instead of the red, yellow or white brick's. Off: 1-9 always\n"
+         "pick from the red, yellow or white brick's menu.");
     ImGui::Separator();
 
     if (ImGui::BeginTable("binds", 4,
@@ -2001,6 +2011,7 @@ void tab_saves() {
 // them, beside a 5x5 grid of the selected slot's other units, in the order the
 // game lists them, with the game's own head icons (lb_teams.cpp).
 SDL_Renderer* g_team_renderer = nullptr;   // this frame's, from lb_overlay_draw
+SDL_Renderer* g_overlay_renderer = nullptr;   // docs/396: for event coordinates
 
 struct TeamPreset {
     std::string name;
@@ -2816,6 +2827,8 @@ static void top_screen_size_cb(ImGuiSizeCallbackData* data) {
 
 void draw_top_screen(SDL_Renderer* renderer) {
     if (!g_top_visible || !g_top_pixels || g_top_w <= 0 || g_top_h <= 0) return;
+    // DS Vanilla shows the top screen above the bottom one already.
+    if (!g_set.enhanced) return;
 
     if (!g_top_tex || g_top_tex_w != g_top_w || g_top_tex_h != g_top_h) {
         if (g_top_tex) SDL_DestroyTexture(g_top_tex);
@@ -4609,7 +4622,19 @@ extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
                      draw->DisplaySize.x, draw->DisplaySize.y);
     }
 
+    // docs/396: IN WINDOW PIXELS, WHATEVER LOGICAL SIZE THE FRONTEND SET.
+    // DS Vanilla presents through SDL_RenderSetLogicalSize, which also scaled
+    // this draw: ImGui laid itself out for the whole window and was then drawn
+    // at the logical scale (2x on a 1920x1080 screen), so the panel ran off
+    // the window and the control to turn Enhanced back on could be out of
+    // reach -- a player had to delete settings.json. The logical size is
+    // lifted for the overlay and put back after it.
+    int lw = 0, lh = 0;
+    SDL_RenderGetLogicalSize(renderer, &lw, &lh);
+    if (lw > 0 && lh > 0) SDL_RenderSetLogicalSize(renderer, 0, 0);
+    g_overlay_renderer = renderer;
     ImGui_ImplSDLRenderer2_RenderDrawData(draw, renderer);
+    if (lw > 0 && lh > 0) SDL_RenderSetLogicalSize(renderer, lw, lh);
 }
 
 // ---- docs/383: BATTLE SHORTCUTS ------------------------------------------
@@ -4758,7 +4783,30 @@ extern "C" bool lb_overlay_event(const SDL_Event* event) {
         }
     }
 
-    ImGui_ImplSDL2_ProcessEvent(const_cast<SDL_Event*>(event));
+    // docs/396: the overlay is drawn in window pixels (lb_overlay_draw), but
+    // under a logical size (DS Vanilla) SDL hands mouse events over in
+    // LOGICAL coordinates -- half the window's on a 1920x1080 screen -- so
+    // ImGui's idea of the cursor was elsewhere. Its copy of the event goes back
+    // to window pixels; the game's is untouched.
+    SDL_Event lb_ev = *event;
+    if (g_overlay_renderer) {
+        int lw = 0, lh = 0;
+        SDL_RenderGetLogicalSize(g_overlay_renderer, &lw, &lh);
+        if (lw > 0 && lh > 0) {
+            auto to_window = [](int* x, int* y) {
+                int wx = *x, wy = *y;
+                SDL_RenderLogicalToWindow(g_overlay_renderer, (float)*x, (float)*y,
+                                          &wx, &wy);
+                *x = wx;
+                *y = wy;
+            };
+            if (lb_ev.type == SDL_MOUSEMOTION)
+                to_window(&lb_ev.motion.x, &lb_ev.motion.y);
+            else if (lb_ev.type == SDL_MOUSEBUTTONDOWN || lb_ev.type == SDL_MOUSEBUTTONUP)
+                to_window(&lb_ev.button.x, &lb_ev.button.y);
+        }
+    }
+    ImGui_ImplSDL2_ProcessEvent(&lb_ev);
 
     const ImGuiIO& io = ImGui::GetIO();
     if (quick_event(event, io)) return true;   // docs/383
@@ -4969,6 +5017,11 @@ extern "C" int lb_setting_balance_patch(void) {
 
 extern "C" int lb_setting_enhanced(void) {
     return g_set.enhanced ? 1 : 0;
+}
+
+// docs/398: number keys pick from the blue brick's list while it is open.
+extern "C" int lb_setting_quick_blue(void) {
+    return g_set.quick_keys_blue ? 1 : 0;
 }
 
 // docs/351: steady 30 Hz game pacing. Read every VBlank by apply_cadence
