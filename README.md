@@ -16,8 +16,14 @@ the cartridge (the Europe or the USA release).
 3. The first time, choose your LEGO Battles ROM (`.nds`). A USA ROM is converted
    to the European image the port is built on; your file is only read.
 
-F1 or Esc opens the settings panel (display, enhancements, cheats, Team Builder,
-multiplayer). Settings are saved beside the executable.
+F1 or Esc opens the settings menu (display, enhancements, cheats, Team Builder,
+multiplayer); Ctrl+R restarts the game from its title. Settings are saved
+beside the executable.
+
+**Keys:** the mouse is the stylus; arrows or W/A/S/D move the camera and the
+wheel zooms; Space or right-click deselects; Z/X/C/V are A/B/X/Y, Q/E are L/R,
+Enter is Start and Backspace Select (all rebindable). On the profile-name and
+cheat-code screens, just type.
 
 **Multiplayer** uses the game's own Multiplayer menu. Hosting advertises your
 lobby on the public lobby server (`lbserver.viosarcade.xyz`); the Join screen

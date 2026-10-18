@@ -140,6 +140,10 @@ void nds_set_touch(uint16_t x, uint16_t y, bool down);
 void nds_set_key_mask(uint32_t mask);
 
 extern "C" {
+// The guest clock (io.cpp, added by apply_hooks.py; docs/396).
+void lb_rtc_get(unsigned char out[7]);
+void lb_rtc_set(const unsigned char in[7]);
+int lb_rtc_is_host(void);
 void lb_touch_set_extended(int x);
 void lb_touch_set_extended_y(int y);   /* docs/383 */
 void lb_touch_clear_extended(void);
@@ -215,6 +219,8 @@ int g_demo_tileset = 0;    // playback: the header's tileset= (docs/387)
 int g_demo_palette = 0;    // playback: the header's palette= (docs/387)
 unsigned g_demo_seed = 0;  // playback: the header's pickseed= (docs/387)
 int g_demo_music = -1;     // playback: music=, then `s 2` lines (docs/388)
+unsigned char g_demo_rtc[7] = {};   // playback: the header's rtc= (docs/396)
+bool g_demo_has_rtc = false;
 // docs/388: a replay that ran to its end. The level a recording's last
 // input starts loads after that input -- a Free Play recording ends on the
 // Start press -- so its Force Tileset, Level Palettes and Music stay in
@@ -272,6 +278,7 @@ bool load(const char* path) {
     g_demo_seed = 0u;
     g_demo_music = -1;            // and this machine's Music mode
     g_demo_oppdef = g_demo_hwtransport = g_demo_hwmode = -1;   // docs/392
+    g_demo_has_rtc = false;       // and the clock the replaying run has
     g_armies.clear();
     g_army_at = 0;
     g_army_last_frame = 0;
@@ -323,6 +330,14 @@ bool load(const char* path) {
                 if (const char* m = std::strstr(line, "music=")) {
                     const int v = std::atoi(m + 6);
                     g_demo_music = (v >= 0 && v <= 9) ? v : -1;
+                }
+                if (const char* r = std::strstr(line, "rtc=")) {   // docs/396
+                    unsigned v[7];
+                    if (std::sscanf(r + 4, "%2x%2x%2x%2x%2x%2x%2x", &v[0], &v[1],
+                                    &v[2], &v[3], &v[4], &v[5], &v[6]) == 7) {
+                        for (int k = 0; k < 7; ++k) g_demo_rtc[k] = (unsigned char)v[k];
+                        g_demo_has_rtc = true;
+                    }
                 }
                 if (const char* s2 = std::strstr(line, "sets="))   // docs/392
                     if (std::atoi(s2 + 5) >= 2) {
@@ -505,17 +520,26 @@ extern "C" void lb_demo_start_record(const char* path) {
     g_rec_oppdef = 1;
     g_rec_hwtransport = 0;
     g_rec_hwmode = 0;
+    // docs/396: a session on the PC's clock records the guest clock as it
+    // stands now, so a replay runs on the same date (the 12/25 unlock).
+    char rtc[24] = "";
+    if (lb_rtc_is_host()) {
+        unsigned char r[7];
+        lb_rtc_get(r);
+        std::snprintf(rtc, sizeof rtc, " rtc=%02X%02X%02X%02X%02X%02X%02X",
+                      r[0], r[1], r[2], r[3], r[4], r[5], r[6]);
+    }
     std::fprintf(g_rec, "lbdemo 1 cadence=%d hudhit=%d camedge=%d camgrid=1 snd=%d "
                  "depth=%d exty=1 hudmemo=1 fp2d=1 fpline=1 quick=1 enemy8=1 cage=%d "
                  "ownhero=%d oppname=2 tileset=%d palette=%d pickseed=%u "
-                 "music=%d sets=2\n",
+                 "music=%d sets=2%s\n",
                  g_rec_cadence, lb_hud_hit_live() ? 1 : 0,
                  lb_camera_edge_live() ? 1 : 0,
                  lb_snd_cull_live() ? 1 : 0,
                  lb_depth_unwrap_live() ? 1 : 0,
                  g_rec_cage, g_rec_ownhero,
                  g_rec_tileset, g_rec_palette, lb_demo_pick_seed(),
-                 g_rec_music);
+                 g_rec_music, rtc);
     std::fflush(g_rec);
     g_mode = Mode::Record;
     g_frame = 0;
@@ -537,6 +561,15 @@ extern "C" void lb_demo_start_play(const char* path) {
     g_frame = 0;
     g_replay_done = false;
     g_mode = Mode::Play;
+    // docs/396: the clock the recording ran on, set on the frame recording
+    // began (both happen in lb_demo_apply_env, on the first VBlank).
+    if (g_demo_has_rtc) {
+        lb_rtc_set(g_demo_rtc);
+        std::fprintf(stderr, "[lb_demo] guest clock set to the recording's: "
+                     "20%02X-%02X-%02X %02X:%02X:%02X\n", g_demo_rtc[0],
+                     g_demo_rtc[1], g_demo_rtc[2], g_demo_rtc[4] & 0x3F,
+                     g_demo_rtc[5], g_demo_rtc[6]);
+    }
     char buf[96];
     std::snprintf(buf, sizeof buf, "playing %u event(s)",
                   unsigned(g_events.size()));
@@ -737,6 +770,21 @@ extern "C" void lb_demo_tick(void) {
         std::fprintf(stderr, "[lb_demo] finished at frame %u\n",
                      unsigned(g_frame));
         std::fflush(stderr);
+    }
+}
+
+// docs/396: a game reset starts the guest's frames over, so a recording
+// cannot run on across it -- its frame numbers would no longer mean the same
+// frames. A replay stops; a recording closes and a new one begins, from the
+// title screen, exactly as a fresh launch would make it.
+extern "C" void lb_demo_on_reset(void) {
+    const Mode was = g_mode;
+    lb_demo_stop();
+    if (was == Mode::Record && !std::getenv("LB_DEMO_NOREC")) {
+        char name[64];
+        std::snprintf(name, sizeof name, "lb-session-%llu.lbdemo",
+                      (unsigned long long)std::time(nullptr));
+        lb_demo_start_record(name);
     }
 }
 

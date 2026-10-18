@@ -96,7 +96,7 @@ REM binds loopback only until a lobby is advertised or joined, and a second
 REM copy started from here takes the next free instance index by itself.
 LegoBattles.exe dummy 4000000000 --rom "!ROM!" --config "game.toml" ^
   --boot direct --save-path "!SAVE!" --interactive ^
-  --generated-firmware --network off --local-wireless on --freebios %* 2>"!LOGFILE!"
+  --generated-firmware --network off --local-wireless on --freebios --rtc-host %* 2>"!LOGFILE!"
 if errorlevel 1 (
   echo.
   echo The game exited with an error. The log is at !LOGFILE!
@@ -138,7 +138,12 @@ same network need nothing.
   settings.json  written beside the executable when a setting changes.
   imgui.ini      window layout, likewise.
 
-F1 or Esc opens the settings panel.
+F1 or Esc opens the settings menu; Ctrl+R restarts the game from its title.
+
+Keys: mouse = the stylus; arrows or W/A/S/D move the camera; mouse wheel
+zooms; Space or right-click deselects; Z = A, X = B, C = X, V = Y, Q = L,
+E = R, Enter = Start, Backspace = Select (all rebindable). On the name and
+cheat-code screens, just type.
 
 The title screen takes a few seconds to appear; a black window at startup is
 the game booting, not a hang.

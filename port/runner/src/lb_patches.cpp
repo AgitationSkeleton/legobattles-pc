@@ -24,6 +24,7 @@
 // logic, the port is a different game whether or not anyone notices.
 
 #include <cstring>      // std::strstr, for LB_TOUCHSKIP
+#include <cctype>       // std::tolower: docs/396's keyboards
 
 #include "lb_overlay.h"
 #include "gpu3d.h"
@@ -3009,7 +3010,13 @@ extern "C" void lb_quick_request(int action) {
     g_quick_req.store(action);
 }
 // A replayed `q` event (lb_demo_tick): run it in this frame, as recorded.
+extern "C" void lb_keyboard_type(int ch);   /* docs/396, below */
 extern "C" void lb_quick_replay(int action) {
+    // docs/396: a key typed on one of the game's keyboards (0x10000 | char).
+    if (action >= 0x10000) {
+        lb_keyboard_type(action);
+        return;
+    }
     if ((action >= 0 && action <= 2) ||
         (action > kQuickItem && action <= kQuickItem + 9))
         g_quick_req.store(action);
@@ -3656,6 +3663,198 @@ uint32_t loc_text_addr(uint32_t id) {
     if (!guest_ptr(table)) return 0u;
     const uint32_t at = bus_read_u32(table + 4u * id);
     return guest_ptr(at) ? at : 0u;
+}
+
+// ---- docs/396: TYPING ON THE GAME'S OWN KEYBOARDS ---------------------------
+//
+// The profile-name keyboard (User::CreateNewProfile) and the cheat-code one
+// (User::CheatKeyboardScreen) are two copies of one design, read from their
+// virtual_08 (020B6D4C, 020B4B14) and their button callbacks (020B71A4,
+// 020B4FDC, Thumb):
+//   * 29 key widgets, ids 0x23D..0x259, kept at screen + id*4 - 0x89C; the
+//     text being typed is a String at screen+0x44, shown by the widget at
+//     +0x50; +0x54 is the OK button (id 0x23C); 0x147 is Back.
+//   * every key has the same callback, stored in W+8 for button widgets,
+//     which (on a click) appends the key's label, or for 0x258 erases one,
+//     0x250 toggles the case (name keyboard), 0x259 adds a space. At most 10
+//     characters for a name, 7 for a code.
+//   * a key's label is a LOC string id from an 8-byte-per-key table:
+//     02128220/0212821C (name, +0x40 clear/set), 02128138/02128134 (code).
+// So a typed character becomes the key whose label is that character, and
+// the key is pressed by running its own callback with the PenEvent of a
+// click -- the docs/383 mechanism, in front of these screens' update
+// (ScreenType::virtual_09, 020E1BF4, which ~30 screens share and which only
+// their vtables reach), as a tail call that returns into it. The game does
+// the typing, the limits, the case and the sound exactly as for a tap.
+constexpr uint32_t kScreenUpdate = 0x020E1BF4u;   // thumb
+
+namespace {
+struct KeyboardKind {
+    uint32_t vtable, callback, table_lower, table_upper;
+};
+const KeyboardKind kKeyboards[2] = {
+    {0x0214C328u, 0x020B4FDCu, 0x02128138u, 0x02128134u},   // cheat codes
+    {0x0214C4F8u, 0x020B71A4u, 0x02128220u, 0x0212821Cu},   // profile name
+};
+
+// Typed keys, the frontend's thread to the guest's update: printable ASCII,
+// '\b' erase, '\r' OK. The two run on one thread today; the ring keeps it
+// correct if that changes.
+std::atomic<unsigned> g_kb_head{0}, g_kb_tail{0};
+char g_kb_ring[64];
+std::atomic<unsigned> g_kb_seen{0};   // VBlank count of the last keyboard update
+unsigned g_kb_vblanks = 0;
+
+struct KeyCall {
+    bool active = false;
+    uint32_t r[4] = {0, 0, 0, 0};
+    uint32_t r12 = 0, lr = 0, sp = 0, sp_call = 0, screen = 0;
+};
+KeyCall g_kc;
+
+const KeyboardKind* keyboard_of(uint32_t screen) {
+    if (!guest_ptr(screen)) return nullptr;
+    const uint32_t vt = bus_read_u32(screen);
+    for (const KeyboardKind& k : kKeyboards)
+        if (vt == k.vtable) return &k;
+    return nullptr;
+}
+
+// The shown key widget for a typed character, or 0.
+uint32_t keyboard_key_for(uint32_t screen, const KeyboardKind& k, char c) {
+    auto shown = [&](uint32_t w) {
+        if (!guest_ptr(w)) return false;
+        const uint32_t rec = bus_read_u32(w + 4u);
+        return guest_ptr(rec) && !(bus_read_u8(rec) & 2u);
+    };
+    if (c == '\r') {
+        const uint32_t w = bus_read_u32(screen + 0x54u);
+        return shown(w) ? w : 0u;
+    }
+    const int want = c == '\b' ? 0x258 : c == ' ' ? 0x259 : -1;
+    const bool upper = bus_read_u8(screen + 0x40u) != 0;
+    for (int id = 0x23D; id <= 0x259; ++id) {
+        const uint32_t w = bus_read_u32(screen + (uint32_t)id * 4u - 0x89Cu);
+        if (!shown(w)) continue;
+        if (want >= 0) {
+            if (id == want) return w;
+            continue;
+        }
+        if (id == 0x250 || id >= 0x258) continue;   // case, erase, space
+        const uint32_t loc = bus_read_u32((upper ? k.table_upper : k.table_lower) +
+                                          (uint32_t)(id - 0x23D) * 8u);
+        const uint32_t text = loc_text_addr(loc);
+        if (!text) continue;
+        const int ch = bus_read_u8(text);
+        if (ch && bus_read_u8(text + 1u) == 0 &&
+            std::tolower(ch) == std::tolower((unsigned char)c))
+            return w;
+    }
+    return 0u;
+}
+}  // namespace
+
+extern "C" void lb_quick_replay(int action);
+// The frontend's request. A replay owns the input; a recording keeps it.
+extern "C" void lb_keyboard_type(int ch) {
+    if (lb_demo_playing() && ch < 0x10000) return;
+    ch &= 0xFF;
+    const unsigned h = g_kb_head.load();
+    if (h - g_kb_tail.load() >= sizeof g_kb_ring) return;
+    g_kb_ring[h % sizeof g_kb_ring] = (char)ch;
+    g_kb_head.store(h + 1u);
+}
+// True while one of the two keyboards is the screen being updated.
+extern "C" int lb_keyboard_screen_active(void) {
+    return g_kb_vblanks - g_kb_seen.load() < 10u ? 1 : 0;
+}
+
+void screen_update_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kScreenUpdate);
+    ++g_kb_vblanks;   // (counts updates; only the difference matters)
+    if (g_kc.active) {
+        if (g_cpu.R[13] == g_kc.sp_call) {   // the key's callback returned
+            g_kc.active = false;
+            g_cpu.R[0] = g_kc.r[0];
+            g_cpu.R[1] = g_kc.r[1];
+            g_cpu.R[2] = g_kc.r[2];
+            g_cpu.R[3] = g_kc.r[3];
+            g_cpu.R[12] = g_kc.r12;
+            g_cpu.R[14] = g_kc.lr;
+            g_cpu.R[13] = g_kc.sp;
+            if (original) original();
+            return;
+        }
+        if (!keyboard_of(g_kc.screen)) g_kc.active = false;
+    } else if (const KeyboardKind* k = keyboard_of(g_cpu.R[0])) {
+        g_kb_seen.store(g_kb_vblanks);
+        // TEST AID: LB_TEST_TYPE=<text> types it once, the first time a
+        // keyboard is up ('\' then 'b' or 'r' for erase or OK), because the
+        // debug server can send keys but not text.
+        static bool test_typed = false;
+        if (!test_typed) {
+            test_typed = true;
+            if (const char* s = std::getenv("LB_TEST_TYPE")) {
+                for (; *s; ++s) {
+                    if (s[0] == '\\' && (s[1] == 'b' || s[1] == 'r')) {
+                        lb_keyboard_type(s[1] == 'b' ? '\b' : '\r');
+                        ++s;
+                    } else {
+                        lb_keyboard_type(*s);
+                    }
+                }
+                std::fprintf(stderr, "[lb_kb] LB_TEST_TYPE queued\n");
+            }
+        }
+        const uint32_t screen = g_cpu.R[0];
+        // The pen path's own gates (docs/383): UI input off, a button held.
+        const bool gated = bus_read_u8(0x021581A5u) || bus_read_u32(0x021581ACu) == 1u;
+        unsigned t = g_kb_tail.load();
+        if (!gated && t != g_kb_head.load()) {
+            const char c = g_kb_ring[t % sizeof g_kb_ring];
+            g_kb_tail.store(t + 1u);
+            const uint32_t w = keyboard_key_for(screen, *k, c);
+            if (w) {
+                lb_demo_note_quick(0x10000 | (unsigned char)c);
+                g_kc.r[0] = g_cpu.R[0];
+                g_kc.r[1] = g_cpu.R[1];
+                g_kc.r[2] = g_cpu.R[2];
+                g_kc.r[3] = g_cpu.R[3];
+                g_kc.r12 = g_cpu.R[12];
+                g_kc.lr = g_cpu.R[14];
+                g_kc.sp = g_cpu.R[13];
+                // The click's PenEvent, as quick_enter builds it.
+                const uint32_t ev = (g_kc.sp - 0x40u) & ~7u;
+                const uint32_t rec = bus_read_u32(w + 4u);
+                const int cx = ((int16_t)bus_read_u16(rec + 6u) +
+                                (int16_t)bus_read_u16(rec + 0xAu)) / 2;
+                const int cy = ((int16_t)bus_read_u16(rec + 4u) +
+                                (int16_t)bus_read_u16(rec + 8u)) / 2;
+                bus_write_u32(ev + 0x00u, kPenEventVtable);
+                bus_write_u32(ev + 0x04u, 0u);
+                bus_write_u32(ev + 0x08u, 0u);
+                bus_write_u32(ev + 0x0Cu, 1u);
+                bus_write_u32(ev + 0x10u, 0u);
+                bus_write_u32(ev + 0x14u, 0u);
+                bus_write_u32(ev + 0x18u, 1u);
+                bus_write_u16(ev + 0x1Cu, (uint16_t)cx);
+                bus_write_u16(ev + 0x1Eu, (uint16_t)cy);
+                g_kc.sp_call = ev - 8u;
+                g_kc.screen = screen;
+                g_kc.active = true;
+                g_cpu.R[0] = w;
+                g_cpu.R[1] = ev;
+                g_cpu.R[2] = screen;
+                g_cpu.R[3] = 1u;
+                g_cpu.R[13] = g_kc.sp_call;
+                g_cpu.R[14] = kScreenUpdate | 1u;   // back here, in Thumb
+                g_cpu.R[15] = k->callback;
+                runtime_dispatch_with_exchange(k->callback | 1u);
+                return;
+            }
+        }
+    }
+    if (original) original();
 }
 
 void string_from_id_override(void) {
@@ -4438,6 +4637,10 @@ const NdsDispatchEntry kOverrideTable[] = {
        pending battle shortcut's button callback in front of it, as a tail
        call that returns here; otherwise a pure tail call. docs/383. */
     {kViewUpdate, 1u, view_update_override, nullptr},      /* 0x020DD708 */
+    /* Thumb. ScreenType::virtual_09, the shared menu-screen update. On the
+       two keyboards, presses a typed key's own button in front of it; a pure
+       tail call everywhere else. docs/396. */
+    {kScreenUpdate, 1u, screen_update_override, nullptr},  /* 0x020E1BF4 */
     /* Thumb. The widget rectangle test, answered for where the port drew the
        widget; a pure tail call unless lb_hud_hit_live(). docs/371. */
     {kWidgetRect, 1u, widget_rect_observer, nullptr},      /* 0x020EA1A4 */
@@ -4467,7 +4670,8 @@ static_assert(kRosterBuild < kRegistryFind &&
               kSelRect < kEnemyMap && kEnemyMap < kOppSetupLabel &&
               kOppSetupLabel < kEnemyCycle &&
               kEnemyCycle < kMarkerPlace && kMarkerPlace < kHeroHud &&
-              kHeroHud < kViewUpdate && kViewUpdate < kWidgetRect &&
+              kHeroHud < kViewUpdate && kViewUpdate < kScreenUpdate &&
+              kScreenUpdate < kWidgetRect &&
               kRegistryFind < kMapLoad && kMapLoad < kFpPost &&
               kFpPost < kFpPaint && kFpPaint < kMarquee &&
               kMarquee < kFpCell && kFpCell < kStringFromId &&
@@ -4521,6 +4725,10 @@ constexpr uint32_t kRecordSize = 0x7Cu;
 constexpr uint32_t kFirstRecord = 4u;
 constexpr int kImperialBuilder = 62;
 constexpr int kOtherBuilders[] = {2, 22, 42, 82, 102};
+// docs/396: the setting chooses WHICH builder the others match (it was the
+// Imperial one only): 1..6 = King, Wizard, Pirate, Imperial, Earth, Alien,
+// the records below in that order. 0 is off.
+constexpr int kBuilders[6] = {2, 22, 42, 62, 82, 102};
 
 struct StatField {
     uint32_t off;
@@ -4549,7 +4757,11 @@ constexpr uint16_t kImperialHealth = 160u;
 constexpr uint32_t kImperialSpeed = 375u;
 
 uint32_t g_blueprint_base = 0u;   // guest address of the 'BPNZ' magic
-bool g_builders_patched = false;
+int g_builders_patched = 0;       // docs/396: the source applied, 1..6; 0 none
+// docs/396: bumped by a game reset (the menu's Reset): every one-shot patch
+// site compares it with the generation it last applied in and starts over,
+// because the reset reloaded the stock ARM9 image under it.
+unsigned g_boot_gen = 0u;
 
 uint32_t record_addr(uint32_t base, int index) {
     return base + kFirstRecord + (uint32_t)index * kRecordSize;
@@ -4583,7 +4795,7 @@ std::vector<BuilderByte> g_builders_loaded;
 
 void snapshot_same_builders() {
     g_builders_loaded.clear();
-    for (int which : kOtherBuilders) {
+    for (int which : kBuilders) {   // docs/396: all six; any can be overwritten
         const uint32_t dst = record_addr(g_blueprint_base, which);
         for (const StatField& f : kStatFields)
             for (uint32_t b = 0; b < f.width; ++b)
@@ -4622,9 +4834,12 @@ void revert_same_builders() {
         if (bus_read_u8(b.addr) != b.loaded) bus_write_u8(b.addr, b.loaded);
 }
 
-void apply_same_builders() {
-    const uint32_t imp = record_addr(g_blueprint_base, kImperialBuilder);
-    for (int which : kOtherBuilders) {
+// docs/396: from the chosen builder (1..6), as the game has it now -- so with
+// a balance pack that is the PATCHED one, the pack being applied first.
+void apply_same_builders(int from) {
+    const uint32_t imp = record_addr(g_blueprint_base, kBuilders[from - 1]);
+    for (int which : kBuilders) {
+        if (which == kBuilders[from - 1]) continue;
         const uint32_t dst = record_addr(g_blueprint_base, which);
         for (const StatField& f : kStatFields) {
             switch (f.width) {
@@ -4709,7 +4924,7 @@ extern "C" unsigned int lb_patches_blueprint_base(void) {
     return (unsigned int)g_blueprint_base;
 }
 // docs/386: whether the builders are equalised in the game right now.
-extern "C" int lb_same_builders_applied(void) { return g_builders_patched ? 1 : 0; }
+extern "C" int lb_same_builders_applied(void) { return g_builders_patched; }
 
 // docs/386: WHEN THE BLUEPRINTS MAY CHANGE UNDER THE GAME. The rebalance
 // setting takes effect immediately when the player is not in gameplay or a
@@ -8267,6 +8482,9 @@ static void apply_touch_extension(void) {
 
     static int state = 0;             // 0 = untried, 1 = patched, -1 = refused
     static int waited = 0;
+    // docs/396: a game reset reloads the ARM9 image, and these sites with it.
+    static unsigned gen = 0;
+    if (gen != g_boot_gen) { gen = g_boot_gen; state = 0; waited = 0; }
     if (state == 0) {
         const int total = (int)(sizeof kTouchPatches /
                                 sizeof kTouchPatches[0]);
@@ -8369,8 +8587,15 @@ static void apply_touch_extension(void) {
     // menus, the route, and every click inside the band behave exactly as they
     // always did. NOT the struct's own +0x0A -- see g_native_touch_x.
     if (x == INT32_MIN) x = g_native_touch_x;
-    if (x < -512) x = -512;
-    if (x > 1023) x = 1023;
+    // docs/396: the range is the halfword's, not the old 1024-column
+    // surface's. Zoomed fully out the surface is the whole map (1536 columns
+    // and more) and the DS's own 256 can sit 740 columns from the window's
+    // left edge; clamped at -512, a click on the HUD bricks anchored there
+    // arrived 228 columns away from them and became a move order (run t396hud3,
+    // LB_HUDHITLOG: "press -512,-214"). The readers take it as a signed
+    // halfword, so +-4096 leaves room for any surface the frontend can make.
+    if (x < -4096) x = -4096;
+    if (x > 4095) x = 4095;
     bus_write_u16(kTouchSlot, (uint16_t)(int16_t)x);
 
     // AND THE Y, THROUGH THE SAME DOOR.
@@ -8392,8 +8617,10 @@ static void apply_touch_extension(void) {
     // would publish its own last output and freeze. That is not hypothetical:
     // it is the exact failure the X path hit and documented above.
     if (y == INT32_MIN) y = g_native_touch_y;
-    if (y < -512) y = -512;
-    if (y > 1023) y = 1023;
+    // docs/396: as the x above; a 768-row surface puts the band up to 576
+    // rows below the top edge.
+    if (y < -4096) y = -4096;
+    if (y > 4095) y = 4095;
     bus_write_u16(kTouchYSlot, (uint16_t)(int16_t)y);
 
     // FINDING A FREE HALFWORD FOR THE Y SHADOW, BY MEASUREMENT.
@@ -9513,6 +9740,8 @@ static void apply_order_fix(void) {
     }
     if (!groups || !lb_setting_enhanced()) return;
     static int done = 0;
+    static unsigned gen = 0;   // docs/396: re-armed by a game reset
+    if (gen != g_boot_gen) { gen = g_boot_gen; done = 0; }
     if (done) return;
 
     // Every selected site must read its stock encoding before anything is
@@ -9540,6 +9769,8 @@ static void apply_order_fix(void) {
 
 static void apply_hotwire_anything(void) {
     static int applied = 0;           // 0 = stock, 1 = patched
+    static unsigned gen = 0;          // docs/396: a reset restores stock
+    if (gen != g_boot_gen) { gen = g_boot_gen; applied = 0; }
     const int want = lb_setting_hotwire_anything();
     if (want == applied) return;
 
@@ -9567,6 +9798,8 @@ static void apply_hotwire_anything(void) {
 
 static void apply_hotwire_specials_only(void) {
     static int applied = 0;           // 0 = stock, 1 = patched
+    static unsigned gen = 0;          // docs/396: a reset restores stock
+    if (gen != g_boot_gen) { gen = g_boot_gen; applied = 0; }
     // docs/392: RETIRED, kept only to put the word back. Its redirect also
     // refused category 5, and vanilla hotwires an enemy transport directly
     // (the tap's 0x3B tag is given to 5 and 6). cast_spell_override does the
@@ -10520,6 +10753,100 @@ static void report_net_state(void) {
     lb_net_guest_update((int)bus_read_u32(kNetState), name);
 }
 
+// ── docs/396: THE PLAYER NAME ───────────────────────────────────────────────
+//
+// The name the other players see is not the profile's but its two 11-byte
+// copies, 0x0215B7D4 and 0x0215B7E4: FUN_020F5EC8 copies the profile name
+// into both when the Multiplayer menu opens and on a network reset, and the
+// host's lobby record is built from the second (FUN_020F5FC0). So a typed
+// multiplayer name (the setting with "Use the save's profile name" off) is
+// written into both, every VBlank they differ, which is after any copy the
+// game makes. Nothing in the simulation reads them, so this cannot desync a
+// match.
+//
+// A RENAME is different: the profile's own name, 0x02154E2D, which
+// SaveGame (FUN_0204FA88) writes into the save -- its literal pool names
+// that address, 11 bytes -- so the game keeps it the next time it saves. Done
+// once, on request, never continuously: a continuous write would rename every
+// profile the player loads.
+extern "C" int lb_setting_mp_name(char* out, int cap);   /* lb_overlay.cpp */
+static const uint32_t kLobbyName[2] = {0x0215B7D4u, 0x0215B7E4u};
+static char g_rename[11];
+static bool g_rename_pending = false;
+
+// The game's name-entry keyboard spends a 10-byte budget on whole
+// characters; plain printable ASCII is what this accepts.
+static void clean_name(const char* in, char out[11]) {
+    std::memset(out, 0, 11);
+    int n = 0;
+    for (int i = 0; in && in[i] && n < 10; ++i) {
+        const unsigned char c = (unsigned char)in[i];
+        if (c >= 0x20 && c < 0x7F) out[n++] = (char)c;
+    }
+}
+
+extern "C" void lb_request_profile_rename(const char* name) {
+    clean_name(name, g_rename);
+    g_rename_pending = g_rename[0] != 0;
+}
+
+static void apply_player_name(void) {
+    if (g_rename_pending) {
+        g_rename_pending = false;
+        for (uint32_t i = 0; i < 11u; ++i)
+            bus_write_u8(kProfileName + i, (uint8_t)g_rename[i]);
+        std::fprintf(stderr, "[lb_name] profile renamed to \"%s\"; the game keeps "
+                             "it at its next save\n", g_rename);
+    }
+    char want[32], name[11];
+    if (lb_setting_mp_name(want, (int)sizeof want) <= 0) return;
+    clean_name(want, name);
+    if (!name[0]) return;
+    for (uint32_t c = 0; c < 2u; ++c) {
+        bool same = true;
+        for (uint32_t i = 0; i < 11u; ++i)
+            if (bus_read_u8(kLobbyName[c] + i) != (uint8_t)name[i]) { same = false; break; }
+        if (same) continue;
+        for (uint32_t i = 0; i < 11u; ++i)
+            bus_write_u8(kLobbyName[c] + i, (uint8_t)name[i]);
+        static unsigned logged = 0;
+        if (++logged <= 4u)
+            std::fprintf(stderr, "[lb_name] multiplayer name -> \"%s\" (copy %u)\n",
+                         name, c);
+    }
+}
+
+// ── docs/396: A GAME RESET ─────────────────────────────────────────────────
+//
+// The menu's Reset (and Ctrl+R) runs the runner's own power-on boot() at the
+// frontend's between-frames safe point, so the cartridge starts over from its
+// title screen in the same window. Everything the port wrote into guest
+// memory is gone with it -- boot() reloads the ARM9 image -- so this puts the
+// port's own once-only state back where a fresh start has it: the one-shot
+// patch sites (through g_boot_gen), the blueprint search the balance patch
+// and the builders hang off, the per-level tables, and the recording, which
+// starts a new file because its frame count starts again. The gameplay
+// overrides live in the dispatch table, not in guest memory, and stay.
+extern "C" void lb_balance_on_reset(void);   /* lb_balance.cpp */
+extern "C" void lb_demo_on_reset(void);      /* lb_demo.cpp */
+extern "C" void lb_port_on_guest_reset(void) {
+    ++g_boot_gen;
+    g_blueprint_base = 0u;
+    g_bp_settled = false;
+    g_builders_patched = false;
+    lb_balance_on_reset();
+    g_detail_done = false;
+    g_leader_done = false;
+    g_plant_done = false;
+    g_fp_applied = 0;
+    g_fp_applied_y = 0;
+    g_rename_pending = false;
+    lb_demo_on_reset();
+    std::fprintf(stderr, "[lb_reset] the game was reset to its title screen "
+                         "(generation %u)\n", g_boot_gen);
+    std::fflush(stderr);
+}
+
 extern "C" void lb_patches_on_vblank(void) {
     // Before anything reads the camera. See the note above.
     //
@@ -10609,6 +10936,7 @@ extern "C" void lb_patches_on_vblank(void) {
     // master-server client. Before the blueprint check below, which returns
     // early in every menu -- and the menus are where multiplayer happens.
     report_net_state();
+    apply_player_name();       // docs/396
     apply_view_width();
     apply_view_height();
     apply_cull_width();
@@ -10696,7 +11024,8 @@ extern "C" void lb_patches_on_vblank(void) {
     // LB_AUTOPLAY).
     int slot = lb_setting_balance_patch();
     if (const char* spec = std::getenv("LB_BALANCE")) slot = std::atoi(spec);
-    const bool builders = lb_setting_same_builders() != 0;
+    int builders = lb_setting_same_builders();   // docs/396: 0, or the source
+    if (builders < 0 || builders > 6) builders = 0;
     if (slot == lb_balance_applied_slot() && builders == g_builders_patched)
         return;
 
@@ -10707,9 +11036,9 @@ extern "C" void lb_patches_on_vblank(void) {
     if (!discovered) {
         static int said_slot = -1, said_builders = -1;
         if (const char* why = lb_blueprint_edit_blocked()) {
-            if (said_slot != slot || said_builders != (int)builders) {
+            if (said_slot != slot || said_builders != builders) {
                 said_slot = slot;
-                said_builders = builders ? 1 : 0;
+                said_builders = builders;
                 std::fprintf(stderr, "[lb_balance] the change waits: %s\n", why);
             }
             return;
@@ -10724,7 +11053,7 @@ extern "C" void lb_patches_on_vblank(void) {
     // equalisation.
     if (g_builders_patched) {
         revert_same_builders();
-        g_builders_patched = false;
+        g_builders_patched = 0;
         if (!builders)
             std::fprintf(stderr, "[lb_patch] same-builders off: the builders' "
                                  "loaded stats are back\n");
@@ -10742,13 +11071,15 @@ extern "C" void lb_patches_on_vblank(void) {
             std::fprintf(stderr, "[lb_balance] apply failed: %s\n", err);
     }
     if (builders) {
-        apply_same_builders();
-        g_builders_patched = true;
+        static const char* const kNames[6] = {"King", "Wizard", "Pirate",
+                                              "Imperial", "Earth", "Alien"};
+        apply_same_builders(builders);
+        g_builders_patched = builders;
         std::fprintf(stderr,
                      "[lb_patch] same-builders applied: %u stat fields copied "
-                     "from the Imperial builder to %u others\n",
+                     "from the %s builder to the 5 others\n",
                      (unsigned)(sizeof(kStatFields) / sizeof(kStatFields[0])),
-                     (unsigned)(sizeof(kOtherBuilders) / sizeof(kOtherBuilders[0])));
+                     kNames[builders - 1]);
     }
 }
 

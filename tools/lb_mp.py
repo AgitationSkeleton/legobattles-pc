@@ -65,7 +65,10 @@ def launch(out, index, port, extra_env, base_port=None):
 
     env = dict(os.environ)
     env["NDS_DEBUG_ALLOW_WRITES"] = "1"
-    env["PATH"] = (os.path.join(ROOT, "build") + os.pathsep +
+    # On the test display, as lb_exp.py (docs/396).
+    env.setdefault("LB_DISPLAY_W", "1920")
+    env.setdefault("LB_DISPLAY_H", "1080")
+    env["PATH"] =(os.path.join(ROOT, "build") + os.pathsep +
                    "C:\\devkitPro\\msys2\\usr\\bin" + os.pathsep +
                    env.get("PATH", ""))
     for kv in extra_env:
@@ -813,7 +816,37 @@ def main():
                           "moment apart, not a desync. The rest were in sync.")
         elif args.linger:
             print("linger: %ds" % args.linger)
+            # docs/396: EACH INSTANCE'S FRAME RATE IN THE MATCH, and where its
+            # frame goes, over the linger -- the measurement the first online
+            # playtest ("both dip to 30 fps") needed and this tool did not take.
+            # Ticks are SDL performance-counter ticks; the counter's rate is
+            # read from frontend_stats when it reports one, else 10 MHz.
+            keys = ("emu_ticks", "present_ticks", "drain_ticks", "swap_ticks")
+            before = []
+            for d in dbgs:
+                try:
+                    before.append(d.cmd("frontend_stats"))
+                except Exception:              # noqa: BLE001
+                    before.append({})
+            t0 = time.time()
             time.sleep(args.linger)
+            dt = time.time() - t0
+            for i, d in enumerate(dbgs):
+                try:
+                    b = d.cmd("frontend_stats")
+                except Exception:              # noqa: BLE001
+                    continue
+                a = before[i]
+                frames = b.get("frames", 0) - a.get("frames", 0)
+                hz = float(b.get("perf_freq", 10_000_000) or 10_000_000)
+                parts = []
+                for k in keys:
+                    if k in b and k in a and frames > 0:
+                        parts.append("%s %.2f ms" % (
+                            k.replace("_ticks", ""),
+                            (b[k] - a[k]) / hz * 1000.0 / frames))
+                print("inst%d: %.1f fps over %.0fs; per frame: %s"
+                      % (i, frames / dt if dt else 0.0, dt, ", ".join(parts)))
         for i, d in enumerate(dbgs):
             d.shot(os.path.join(out, "i%d-final.png" % i))
 

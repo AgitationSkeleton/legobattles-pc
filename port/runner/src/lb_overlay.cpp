@@ -76,6 +76,8 @@ int lb_widemap_cam_px(int* x, int* y);     /* src/lb_widemap.cpp */
 #include <cmath>    // std::floor/std::ceil: the Top Screen panel's 4:3 snap
 #include <chrono>   /* legobattles-decomp: lb_field_bench_tick */
 #include <ctime>    /* docs/388: the save cache's timestamps */
+#include <atomic>   /* docs/396: the Reset request */
+extern "C" int lb_demo_playing(void);   /* lb_demo.cpp */
 
 namespace {
 
@@ -226,7 +228,9 @@ struct Settings {
     // the hero from this player's own army, not the first one selected
     // (lb_patches.cpp, hero_hud_override). On by default.
     bool own_hero_spells = true;
-    bool same_builders = false;
+    // docs/396: WHICH builder the others match -- 0 off, 1..6 King, Wizard,
+    // Pirate, Imperial, Earth, Alien. It was a checkbox for the Imperial one.
+    int same_builders = 0;
     // Per build-limit class, defaulted to the SHIPPED bytes rather than to 0.
     //
     // 0 still means "keep the cartridge's byte", and apply_caps() still
@@ -503,8 +507,8 @@ extern "C" void lb_settings_save(void) {
                   g_set.fix_monkey_cage ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"own_hero_spells\": %s,\n",
                   g_set.own_hero_spells ? "true" : "false"); o += buf;
-    std::snprintf(buf, sizeof buf, "  \"same_builders\": %s,\n",
-                  g_set.same_builders ? "true" : "false"); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"same_builders_from\": %d,\n",
+                  g_set.same_builders); o += buf;   // docs/396
     o += "  \"cap\": [";
     for (int i = 0; i < 10; ++i) {
         std::snprintf(buf, sizeof buf, "%s%d", i ? ", " : "", g_set.cap[i]);
@@ -591,7 +595,13 @@ extern "C" void lb_settings_load(void) {
     json_get_bool(s, "fix_hotwired_healing", &g_set.fix_hotwired_healing);
     json_get_bool(s, "fix_monkey_cage", &g_set.fix_monkey_cage);   // docs/385
     json_get_bool(s, "own_hero_spells", &g_set.own_hero_spells);   // docs/385
-    json_get_bool(s, "same_builders", &g_set.same_builders);
+    {   // docs/396: the old checkbox meant "match the Imperial builder" (4)
+        bool old = false;
+        json_get_bool(s, "same_builders", &old);
+        if (old) g_set.same_builders = 4;
+        json_get_int(s, "same_builders_from", &g_set.same_builders);
+        if (g_set.same_builders < 0 || g_set.same_builders > 6) g_set.same_builders = 0;
+    }
     json_get_ints(s, "cap", g_set.cap, 10);
     json_get_bools(s, "cheat", g_set.cheat, 18);
     json_get_bool(s, "unlock_units", &g_set.unlock_units);
@@ -747,10 +757,12 @@ struct KeyAction {
 const KeyAction kActions[] = {
     {"A",      "a",      1u << 0,  SDL_SCANCODE_Z,         SDL_CONTROLLER_BUTTON_A},
     {"B",      "b",      1u << 1,  SDL_SCANCODE_X,         SDL_CONTROLLER_BUTTON_B},
-    {"X",      "x",      1u << 10, SDL_SCANCODE_S,         SDL_CONTROLLER_BUTTON_X},
-    {"Y",      "y",      1u << 11, SDL_SCANCODE_A,         SDL_CONTROLLER_BUTTON_Y},
+    // docs/396: X, Y and R moved off S, A and W, which are the camera's
+    // W/A/S/D aliases for the D-pad (lb_binding_key_bit).
+    {"X",      "x",      1u << 10, SDL_SCANCODE_C,         SDL_CONTROLLER_BUTTON_X},
+    {"Y",      "y",      1u << 11, SDL_SCANCODE_V,         SDL_CONTROLLER_BUTTON_Y},
     {"L",      "l",      1u << 9,  SDL_SCANCODE_Q,         SDL_CONTROLLER_BUTTON_LEFTSHOULDER},
-    {"R",      "r",      1u << 8,  SDL_SCANCODE_W,         SDL_CONTROLLER_BUTTON_RIGHTSHOULDER},
+    {"R",      "r",      1u << 8,  SDL_SCANCODE_E,         SDL_CONTROLLER_BUTTON_RIGHTSHOULDER},
     {"Start",  "start",  1u << 3,  SDL_SCANCODE_RETURN,    SDL_CONTROLLER_BUTTON_START},
     {"Select", "select", 1u << 2,  SDL_SCANCODE_BACKSPACE, SDL_CONTROLLER_BUTTON_BACK},
     {"Up",     "up",     1u << 6,  SDL_SCANCODE_UP,        SDL_CONTROLLER_BUTTON_DPAD_UP},
@@ -776,6 +788,23 @@ void bindings_init_once() {
     }
     g_bindings_ready = true;
     settings_load();         // a saved file overrides the defaults
+    // docs/396: a file saved with the OLD defaults for X, Y and R (S, A, W)
+    // moves to the new ones, so W/A/S/D become the camera keys there too. A
+    // binding the player chose themselves is anything else, and is kept.
+    int ix = -1, iy = -1, ir = -1;
+    for (int i = 0; i < kActionCount; ++i) {
+        if (kActions[i].bit == (1u << 10)) ix = i;
+        if (kActions[i].bit == (1u << 11)) iy = i;
+        if (kActions[i].bit == (1u << 8)) ir = i;
+    }
+    if (ix >= 0 && iy >= 0 && ir >= 0 && g_binding[ix] == SDL_SCANCODE_S &&
+        g_binding[iy] == SDL_SCANCODE_A && g_binding[ir] == SDL_SCANCODE_W) {
+        g_binding[ix] = kActions[ix].default_scancode;
+        g_binding[iy] = kActions[iy].default_scancode;
+        g_binding[ir] = kActions[ir].default_scancode;
+        std::fprintf(stderr, "[lb_overlay] bindings: X/Y/R moved from S/A/W to "
+                             "C/V/E; W/A/S/D now move the camera\n");
+    }
 }
 
 // ── Settings persistence ───────────────────────────────────────────────────
@@ -879,7 +908,12 @@ void host_note() {
 // that invalidates later runs without anyone noticing.
 //
 // Naming the tab removes the aiming problem entirely.
+// docs/396: the menu draws one section at a time (draw_panels), and names it
+// here while it does; then a "tab" is simply that section's controls.
+const char* g_menu_id = nullptr;
+
 bool tab_begin(const char* label) {
+    if (g_menu_id) return std::strcmp(g_menu_id, label) == 0;
     static const char* want = nullptr;
     static bool resolved = false, applied = false;
     if (!resolved) { want = std::getenv("LB_PANEL_TAB"); resolved = true; }
@@ -889,6 +923,11 @@ bool tab_begin(const char* label) {
         applied = true;                 // first frame only, or it cannot be left
     }
     return ImGui::BeginTabItem(label, nullptr, flags);
+}
+
+// docs/396: the other half -- a menu section has no tab item to end.
+void tab_end() {
+    if (!g_menu_id) ImGui::EndTabItem();
 }
 
 void tab_display() {
@@ -1031,7 +1070,7 @@ void tab_display() {
          "the game starts. Not offered when hosting a multiplayer game yet:\n"
          "every player would need the same maps.");
     badge(WIRED);
-    ImGui::EndTabItem();
+    tab_end();
 }
 
 void tab_enhancements() {
@@ -1138,13 +1177,18 @@ void tab_enhancements() {
     ImGui::Checkbox("Fix Hotwired Healing", &g_set.fix_hotwired_healing);
     help("HealSpell skips hotwired units; On removes that filter.");
     badge(WIRED);
-    ImGui::Checkbox("Make All Builders The Same", &g_set.same_builders);
-    // With a balance patch active this equalises to the PATCHED Imperial
-    // builder, because the patch is applied first. See apply_same_builders.
+    {   // docs/396: a choice of builder, not only the Imperial one
+        static const char* const kFrom[7] = {"Off", "King", "Wizard", "Pirate",
+                                             "Imperial", "Earth", "Alien"};
+        ImGui::Combo("Make All Builders The Same", &g_set.same_builders, kFrom, 7);
+    }
+    // With a balance patch active this equalises to the PATCHED builder,
+    // because the patch is applied first. See apply_same_builders.
     help(g_set.balance_patch != 0
-         ? "Copies 14 stat fields from the Imperial builder, as patched.\n"
+         ? "Every builder takes the chosen one's 14 stats, as patched.\n"
            "Takes effect at once outside a battle or lobby; Off undoes it."
-         : "Copies 14 stat fields from the Imperial builder.\n"
+         : "Every builder takes the chosen one's 14 stats (speed, cost,\n"
+           "build time, health, damage, yield, range...).\n"
            "Takes effect at once outside a battle or lobby; Off undoes it.");
     badge(WIRED);
     // docs/386: a change made in a battle or lobby waits; say so.
@@ -1336,7 +1380,7 @@ void tab_enhancements() {
          "where the box was dragged.\n"
          "Only this player's menu changes; no rule of the match does.");
     badge(WIRED);
-    ImGui::EndTabItem();
+    tab_end();
 }
 
 // The cartridge's 18 cheats, in the order the record table gives them, so the
@@ -1471,7 +1515,7 @@ void tab_cheats() {
     // against a run with neither, which prints no such line. A button whose
     // only effect is to set two controls that are themselves WIRED is wired.
     badge(WIRED);
-    ImGui::EndTabItem();
+    tab_end();
 }
 
 void tab_input() {
@@ -1562,7 +1606,7 @@ void tab_input() {
     badge(WIRED);
     ImGui::SameLine();
     ImGui::TextDisabled("to %s", kSettingsFile);
-    ImGui::EndTabItem();
+    tab_end();
 }
 
 void tab_multiplayer() {
@@ -1592,8 +1636,18 @@ void tab_multiplayer() {
                          ImGuiInputTextFlags_ReadOnly);
         ImGui::EndDisabled();
     } else {
-        ImGui::InputText("Player name", g_set.player_name,
-                         IM_ARRAYSIZE(g_set.player_name));
+        // docs/396: up to 10 characters, as the game's own name entry.
+        ImGui::InputText("Player name", g_set.player_name, 11);
+        help("The name the other players see in the game's lobby and in\n"
+             "the match. Your save keeps its own name unless you write\n"
+             "this one into it below.");
+        if (ImGui::Button("Write this name into the save")) {
+            lb_request_profile_rename(g_set.player_name);
+            g_set.name_from_save = true;   // the profile now carries it
+        }
+        help("Renames the loaded profile. The game shows it at once and\n"
+             "keeps it the next time it saves (finishing a battle, or\n"
+             "changing an option in the game's own menus).");
     }
     ImGui::InputText("Room code", g_set.room_code, IM_ARRAYSIZE(g_set.room_code));
     help("Name is how an advertised lobby is listed.\n"
@@ -1717,7 +1771,7 @@ void tab_multiplayer() {
     // Two instances on ONE machine need no peer at all: different
     // --instance-index values find each other over loopback, which is how
     // docs/216 got two players into one battle.
-    ImGui::EndTabItem();
+    tab_end();
 }
 
 // ── Save manager ───────────────────────────────────────────────────────────
@@ -1794,7 +1848,7 @@ void tab_demo() {
                 lb_demo_status(), lb_demo_frame(), lb_demo_event_count());
     ImGui::TextDisabled("  start from the title screen to reproduce a whole "
                         "session");
-    ImGui::EndTabItem();
+    tab_end();
 }
 
 void tab_saves() {
@@ -1804,7 +1858,7 @@ void tab_saves() {
     const uint8_t* live = live_save(&live_size);
     if (!live) {
         ImGui::TextDisabled("No cartridge save is loaded yet.");
-        ImGui::EndTabItem();
+        tab_end();
         return;
     }
 
@@ -1937,7 +1991,7 @@ void tab_saves() {
     // safe way to change unlocks; the checksum travels with its own data.
     ImGui::TextDisabled("After importing, return to the title screen for the "
                         "save to appear.");
-    ImGui::EndTabItem();
+    tab_end();
 }
 
 // ---- docs/384: TEAM BUILDER AND BAN UNITS ---------------------------------
@@ -2302,7 +2356,7 @@ void tab_team_builder() {
     }
     badge(WIRED);
     team_put(g_set.team_working, team);
-    ImGui::EndTabItem();
+    tab_end();
 }
 
 // The ban list as bits over blueprints 0..191, from g_set.banned_units.
@@ -2391,7 +2445,7 @@ void tab_ban_units() {
     ImGui::EndDisabled();
     badge(WIRED);
     if (changed) bans_store(bits);
-    ImGui::EndTabItem();
+    tab_end();
 }
 
 void tab_music() {
@@ -2451,7 +2505,7 @@ void tab_music() {
     // including that Imperial has seven calm tracks and nine battle ones. The
     // side it is called with is one word at 0x0214B41C+0x0C, and that word is
     // what this setting writes.
-    ImGui::EndTabItem();
+    tab_end();
 }
 
 // ── The top screen, as an overlay panel ────────────────────────────────────
@@ -4147,36 +4201,26 @@ void draw_battlefield(SDL_Renderer* renderer) {
     ImGui::End();
 }
 
-void draw_panels() {
-    // Fit the viewport rather than assuming one. The DS bottom screen at 3.5x
-    // is 896x384, and a fixed 560x460 default is TALLER than that, so the
-    // panel opened clamped and half off-screen. Size to what is actually
-    // there, leaving room for the top-screen panel in the opposite corner.
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
-    const float w = (vp->WorkSize.x * 0.55f < 560.0f) ? vp->WorkSize.x * 0.55f : 560.0f;
-    const float h = (vp->WorkSize.y - 48.0f < 460.0f) ? vp->WorkSize.y - 48.0f : 460.0f;
-    ImGui::SetNextWindowSize(ImVec2(w > 320.0f ? w : 320.0f,
-                                    h > 200.0f ? h : 200.0f),
-                             ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + 24.0f, vp->WorkPos.y + 24.0f),
-                            ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("LEGO Battles", &g_visible)) {
-        keep_on_screen();
-        if (ImGui::BeginTabBar("lb_tabs")) {
-            tab_display();
-            tab_enhancements();
-            tab_cheats();
-            tab_input();
-            tab_multiplayer();
-            tab_team_builder();   // docs/384
-            tab_ban_units();      // docs/384
-            tab_saves();
-            tab_music();
-            tab_demo();
-            ImGui::EndTabBar();
-        }
-        ImGui::Separator();
-        ImGui::Checkbox("Show the top screen overlay", &g_top_visible);
+// ---- docs/396: THE MENU, laid out as Ship of Harkinian's ------------------
+//
+// One floating window of ten tabs became SoH's modern menu (soh/SohGui/
+// Menu.cpp, Menu::DrawElement): the whole window dimmed behind it, a block
+// centred in it (90% of a large window, never wider than 16:9), a header row
+// of categories with Quit, Reset and Close at its right, a white rule, a
+// sidebar of the selected category's sections, a second rule, and the
+// selected section's controls. Esc or F1 opens and closes it, as before;
+// Ctrl+R resets the game, as SoH's does.
+//
+// The sections are the old tabs' own drawing functions, unchanged: in menu
+// mode tab_begin() answers "is this the section on show" instead of drawing
+// a tab, and tab_end() closes nothing. LB_PANEL_TAB still names one (a tab's
+// label, as before).
+struct MenuSection { const char* label; const char* id; void (*draw)(); };
+struct MenuHeader { const char* label; std::vector<MenuSection> sections; };
+
+void section_windows() {
+    if (!tab_begin("Windows")) return;
+    ImGui::Checkbox("Show the top screen overlay", &g_top_visible);
         badge(WIRED);   // g_top_visible gates draw_top_screen
         // THE "WIDE FIELD" VIEWER NO LONGER HAS A CONTROL HERE.
         //
@@ -4210,9 +4254,194 @@ void draw_panels() {
         help("Draws the entire level from the grid in RAM, not just the\n"
              "256x192 the DS can show. The white box is what the game\n"
              "window covers, so it grows as the window widens.");
-        ImGui::TextDisabled("F1 or Esc toggles this panel; close the window to "
-                            "exit.");
+    tab_end();
+}
+
+const std::vector<MenuHeader>& menu_headers() {
+    static const std::vector<MenuHeader> k = {
+        {"Settings", {{"Display", "Display", tab_display},
+                      {"Controls", "Input", tab_input},
+                      {"Music", "Music", tab_music},
+                      {"Saves", "Saves", tab_saves}}},
+        {"Enhancements", {{"Gameplay", "Enhancements", tab_enhancements},
+                          {"Team Builder", "Team Builder", tab_team_builder},
+                          {"Ban Units", "Ban Units", tab_ban_units}}},
+        {"Cheats", {{"Cheats", "Cheats", tab_cheats}}},
+        {"Network", {{"Multiplayer", "Multiplayer", tab_multiplayer}}},
+        {"Tools", {{"Recordings", "Demo", tab_demo},
+                   {"Windows", "Windows", section_windows}}},
+    };
+    return k;
+}
+
+int g_menu_header = 0;
+int g_menu_section[8] = {};
+bool g_quit_ask = false, g_reset_ask = false;
+
+// A header or sidebar entry: a full-width button, coloured when selected.
+bool menu_entry(const char* label, bool selected, float width) {
+    const ImVec4 sel(0.16f, 0.42f, 0.86f, 1.0f);
+    ImGui::PushStyleColor(ImGuiCol_Button, selected ? sel : ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
+                          selected ? sel : ImVec4(0.16f, 0.42f, 0.86f, 0.45f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, sel);
+    const bool hit = ImGui::Button(label, ImVec2(width, 0));
+    ImGui::PopStyleColor(3);
+    return hit;
+}
+
+bool menu_red_button(const char* label, const char* tip) {
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.62f, 0.12f, 0.12f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.80f, 0.18f, 0.18f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.90f, 0.22f, 0.22f, 1.0f));
+    const bool hit = ImGui::Button(label);
+    ImGui::PopStyleColor(3);
+    if (tip && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+    return hit;
+}
+
+// The first frame only: LB_PANEL_TAB names the section to open on.
+void menu_apply_env_tab() {
+    static bool done = false;
+    if (done) return;
+    done = true;
+    const char* want = std::getenv("LB_PANEL_TAB");
+    if (!want) return;
+    const auto& hs = menu_headers();
+    for (int h = 0; h < (int)hs.size(); ++h)
+        for (int s = 0; s < (int)hs[h].sections.size(); ++s)
+            if (std::strcmp(hs[h].sections[s].id, want) == 0) {
+                g_menu_header = h;
+                g_menu_section[h] = s;
+            }
+}
+
+void draw_panels() {
+    menu_apply_env_tab();
+    const auto& hs = menu_headers();
+    if (g_menu_header < 0 || g_menu_header >= (int)hs.size()) g_menu_header = 0;
+    const MenuHeader& head = hs[(size_t)g_menu_header];
+    int& sec = g_menu_section[g_menu_header];
+    if (sec < 0 || sec >= (int)head.sections.size()) sec = 0;
+
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(vp->WorkPos);
+    ImGui::SetNextWindowSize(vp->WorkSize);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0.85f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    const ImGuiWindowFlags full = ImGuiWindowFlags_NoDecoration |
+                                  ImGuiWindowFlags_NoMove |
+                                  ImGuiWindowFlags_NoSavedSettings;
+    if (!ImGui::Begin("LEGO Battles", &g_visible, full)) {
+        ImGui::End();
+        ImGui::PopStyleVar();
+        ImGui::PopStyleColor();
+        return;
     }
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+
+    // The block: the whole window below 1280x800, else 90% of it, and never
+    // wider than 16:9 (SoH's rule).
+    const float ww = vp->WorkSize.x, wh = vp->WorkSize.y;
+    ImVec2 size(ww, wh);
+    if (ww > 1280.0f) size.x = std::min(ww * 0.9f, wh * 1.77f);
+    if (wh > 800.0f) size.y = wh * 0.9f;
+    ImGui::SetCursorPos(ImVec2((ww - size.x) * 0.5f, (wh - size.y) * 0.5f));
+    ImGui::BeginChild("lb_menu_block", size, ImGuiChildFlags_None,
+                      ImGuiWindowFlags_NoScrollbar);
+    const ImGuiStyle& st = ImGui::GetStyle();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    // Header: the categories, then Quit / Reset / Close at the right.
+    ImGui::SetWindowFontScale(1.35f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f, 6.0f));
+    for (int h = 0; h < (int)hs.size(); ++h) {
+        if (h) ImGui::SameLine();
+        const float w = ImGui::CalcTextSize(hs[h].label).x + 20.0f;
+        if (menu_entry(hs[h].label, h == g_menu_header, w)) g_menu_header = h;
+    }
+    const float bw = ImGui::CalcTextSize("Reset").x + ImGui::CalcTextSize("Quit").x +
+                     ImGui::CalcTextSize("Close").x + 60.0f + st.ItemSpacing.x * 2;
+    ImGui::SameLine(std::max(ImGui::GetCursorPosX(), size.x - bw - st.WindowPadding.x));
+    if (menu_red_button("Quit", "Close the game")) g_quit_ask = true;
+    ImGui::SameLine();
+    if (menu_red_button("Reset", "Restart the game from its title screen (Ctrl+R)"))
+        g_reset_ask = true;
+    ImGui::SameLine();
+    if (ImGui::Button("Close")) g_visible = false;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Close the menu (Esc)");
+    ImGui::PopStyleVar();
+
+    // The rule under the header.
+    {
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        dl->AddRectFilled(p, ImVec2(p.x + size.x - st.WindowPadding.x * 2, p.y + 4.0f),
+                          IM_COL32(255, 255, 255, 255), 2.0f);
+        ImGui::Dummy(ImVec2(0, 4.0f + st.ItemSpacing.y));
+    }
+
+    // Sidebar, rule, section.
+    const float sideW = size.x > 1600.0f ? size.x * 0.15f : 200.0f;
+    const float bodyH = ImGui::GetContentRegionAvail().y;
+    ImGui::BeginChild("lb_menu_side", ImVec2(sideW, bodyH));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f, 6.0f));
+    for (int s = 0; s < (int)head.sections.size(); ++s)
+        if (menu_entry(head.sections[s].label, s == sec, -1.0f)) sec = s;
+    ImGui::PopStyleVar();
+    ImGui::EndChild();
+    ImGui::SetWindowFontScale(1.0f);
+    ImGui::SameLine();
+    {
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        dl->AddRectFilled(p, ImVec2(p.x + 4.0f, p.y + bodyH), IM_COL32(255, 255, 255, 255),
+                          2.0f);
+        ImGui::Dummy(ImVec2(4.0f, bodyH));
+    }
+    ImGui::SameLine();
+    ImGui::BeginChild("lb_menu_body", ImVec2(0, bodyH));
+    // A control is a column wide, not the whole body (SoH lays its widgets
+    // out in columns): sliders the width of a 3440 window are unreadable.
+    ImGui::PushItemWidth(std::min(ImGui::GetContentRegionAvail().x * 0.6f, 460.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10.0f, 7.0f));
+    g_menu_id = head.sections[(size_t)sec].id;
+    head.sections[(size_t)sec].draw();
+    g_menu_id = nullptr;
+    ImGui::PopStyleVar(2);
+    ImGui::PopItemWidth();
+    ImGui::EndChild();
+
+    // Confirmations, as SoH's modals.
+    if (g_quit_ask) { ImGui::OpenPopup("Quit LEGO Battles?"); g_quit_ask = false; }
+    if (g_reset_ask) { ImGui::OpenPopup("Reset the game?"); g_reset_ask = false; }
+    if (ImGui::BeginPopupModal("Quit LEGO Battles?", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted("Are you sure you want to quit?");
+        if (menu_red_button("Quit", nullptr)) {
+            SDL_Event q{};
+            q.type = SDL_QUIT;
+            SDL_PushEvent(&q);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    if (ImGui::BeginPopupModal("Reset the game?", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted("Restart from the title screen? Progress since the\n"
+                               "game last saved is lost.");
+        if (menu_red_button("Reset", nullptr)) {
+            lb_request_game_reset();
+            g_visible = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    ImGui::EndChild();
     ImGui::End();
 }
 
@@ -4282,13 +4511,18 @@ extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
             return;
         }
         g_ready = true;
+        // docs/396: text events, for typing on the game's keyboards (SDL2
+        // starts them on the desktop already; this does not depend on it).
+        SDL_StartTextInput();
         std::fprintf(stderr, "[lb_overlay] ready (F1 or Esc toggles)\n");
 
-        // Prove the binding table reproduces frontend.cpp's shipped key_bit()
-        // switch. The overlay REPLACES that function, so if the table were
-        // wrong the keyboard would simply stop working -- and no headless test
-        // can press a key, because SDL input needs a real window. Checking the
-        // mapping directly is the next best thing.
+        // Prove the binding table gives the port's default layout. The overlay
+        // REPLACES frontend.cpp's key_bit(), so if the table were wrong the
+        // keyboard would simply stop working -- and no headless test can
+        // press a key, because SDL input needs a real window. Checking the
+        // mapping directly is the next best thing. (docs/396: the layout is
+        // frontend.cpp's with X/Y/R on C/V/E and W/A/S/D as the D-pad; a
+        // player's own saved bindings report as a mismatch, which is fine.)
         bindings_init_once();
         {
             struct { int sc; uint16_t bit; } expect[] = {
@@ -4296,8 +4530,10 @@ extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
                 {SDL_SCANCODE_BACKSPACE, 1u << 2}, {SDL_SCANCODE_RETURN, 1u << 3},
                 {SDL_SCANCODE_RIGHT, 1u << 4}, {SDL_SCANCODE_LEFT, 1u << 5},
                 {SDL_SCANCODE_UP, 1u << 6}, {SDL_SCANCODE_DOWN, 1u << 7},
-                {SDL_SCANCODE_W, 1u << 8},  {SDL_SCANCODE_Q, 1u << 9},
-                {SDL_SCANCODE_S, 1u << 10}, {SDL_SCANCODE_A, 1u << 11},
+                {SDL_SCANCODE_E, 1u << 8},  {SDL_SCANCODE_Q, 1u << 9},
+                {SDL_SCANCODE_C, 1u << 10}, {SDL_SCANCODE_V, 1u << 11},
+                {SDL_SCANCODE_W, 1u << 6},  {SDL_SCANCODE_A, 1u << 5},
+                {SDL_SCANCODE_S, 1u << 7},  {SDL_SCANCODE_D, 1u << 4},
             };
             int bad = 0;
             for (const auto& e : expect)
@@ -4472,6 +4708,11 @@ extern "C" bool lb_overlay_event(const SDL_Event* event) {
             g_visible = !g_visible;
             return true;
         }
+        // docs/396: Ctrl+R resets the game, as SoH's does.
+        if (k == SDLK_r && (event->key.keysym.mod & KMOD_CTRL)) {
+            lb_request_game_reset();
+            return true;
+        }
     }
 
     if (event->type == SDL_CONTROLLERBUTTONDOWN &&
@@ -4483,6 +4724,38 @@ extern "C" bool lb_overlay_event(const SDL_Event* event) {
         g_pad_binding[g_rebinding_pad] = b;
         g_rebinding_pad = -1;
         return true;
+    }
+
+    // docs/396: TYPING ON THE GAME'S OWN KEYBOARDS. While the profile-name or
+    // cheat-code keyboard is the screen, typed characters press its keys --
+    // through the keys' own callback, in lb_patches.cpp -- and the letter,
+    // digit, Space, Backspace and Enter keys are not DS buttons meanwhile, so
+    // typing "wasd" does not also walk the cursor. Not while a panel field
+    // has the keyboard.
+    if (lb_keyboard_screen_active() &&
+        !(g_visible && ImGui::GetIO().WantCaptureKeyboard)) {
+        if (event->type == SDL_TEXTINPUT) {
+            for (const char* p = event->text.text; *p; ++p)
+                if ((unsigned char)*p >= 0x20 && (unsigned char)*p < 0x7F)
+                    lb_keyboard_type(*p);
+            return true;
+        }
+        if (event->type == SDL_KEYDOWN || event->type == SDL_KEYUP) {
+            const SDL_Scancode sc = event->key.keysym.scancode;
+            const bool typing =
+                (sc >= SDL_SCANCODE_A && sc <= SDL_SCANCODE_0) ||
+                (sc >= SDL_SCANCODE_MINUS && sc <= SDL_SCANCODE_SLASH) ||
+                sc == SDL_SCANCODE_SPACE || sc == SDL_SCANCODE_BACKSPACE ||
+                sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER;
+            if (typing) {
+                if (event->type == SDL_KEYDOWN) {
+                    if (sc == SDL_SCANCODE_BACKSPACE) lb_keyboard_type('\b');
+                    else if (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER)
+                        lb_keyboard_type('\r');
+                }
+                return true;
+            }
+        }
     }
 
     ImGui_ImplSDL2_ProcessEvent(const_cast<SDL_Event*>(event));
@@ -4638,7 +4911,35 @@ extern "C" int lb_binding_key_bit(int scancode) {
     if (scancode == 0) return 0;
     for (int i = 0; i < kActionCount; ++i)
         if (g_binding[i] == scancode) return (int)kActions[i].bit;
-    return 0;
+    // docs/396: W/A/S/D are the D-pad too -- the camera keys, as the arrows --
+    // unless the player bound one of them to a button above.
+    switch (scancode) {
+        case SDL_SCANCODE_W: return 1 << 6;   // Up
+        case SDL_SCANCODE_A: return 1 << 5;   // Left
+        case SDL_SCANCODE_S: return 1 << 7;   // Down
+        case SDL_SCANCODE_D: return 1 << 4;   // Right
+        default: return 0;
+    }
+}
+
+// docs/396: the menu's Reset. A demo being replayed owns the game, so it is
+// refused then, as the battle shortcuts are.
+static std::atomic<int> g_reset_req{0};
+extern "C" void lb_request_game_reset(void) {
+    if (lb_demo_playing()) return;
+    g_reset_req.store(1);
+}
+extern "C" int lb_take_game_reset(void) { return g_reset_req.exchange(0); }
+
+// docs/396: the multiplayer name lb_patches.cpp writes into the game's
+// lobby copies -- the typed one, when "Use the save's profile name" is off;
+// 0 (nothing to write) when it is on, so the profile's own name stands.
+extern "C" int lb_setting_mp_name(char* out, int cap) {
+    if (!out || cap <= 0) return 0;
+    out[0] = 0;
+    if (g_set.name_from_save || !g_set.player_name[0]) return 0;
+    std::snprintf(out, (size_t)cap, "%s", g_set.player_name);
+    return (int)std::strlen(out);
 }
 
 extern "C" int lb_binding_pad_bit(int button) {
@@ -5013,14 +5314,15 @@ extern "C" int lb_setting_same_builders(void) {
     // can verify the patch. Same role as LB_AUTOPLAY: a test aid, never on by
     // default. Without it the only way to exercise the feature is by hand.
     static int forced = -1;
+    // docs/396: =1 still means the Imperial builder; =2..6 nothing new.
     if (forced < 0) forced = std::getenv("LB_FORCE_SAME_BUILDERS") ? 1 : 0;
-    if (forced) return 1;
+    if (forced) return 4;
 
     // This COMPOSES with a balance patch rather than being suppressed by it.
     // The patch is applied first, so equalising to "the Imperial builder"
     // means the patched Imperial, which is what a player selecting both would
     // expect. lb_patches.cpp enforces that order.
-    return g_set.same_builders ? 1 : 0;
+    return g_set.same_builders;   // docs/396: 0, or the source builder 1..6
 }
 
 extern "C" void lb_overlay_shutdown(void) {
@@ -5125,7 +5427,12 @@ extern "C" const char* lb_net_lobby_options_json(void) {
     kv.push_back({"Transport occupants", pick(kTransport, 3, g_set.hotwire_transport)});
     kv.push_back({"Attack boost reaches ranged", g_set.attack_boost_ranged ? "On" : "Off"});
     kv.push_back({"Fix hotwired healing", g_set.fix_hotwired_healing ? "On" : "Off"});
-    kv.push_back({"Same builders", g_set.same_builders ? "On" : "Off"});
+    {
+        static const char* const kFrom[7] = {"Off", "King", "Wizard", "Pirate",
+                                             "Imperial", "Earth", "Alien"};
+        const int f = g_set.same_builders;
+        kv.push_back({"Same builders", kFrom[f >= 0 && f <= 6 ? f : 0]});
+    }
     std::string caps;
     for (int i = 0; i < 10; ++i) {
         if (!kCapName[i] || g_set.cap[i] == kShippedCap[i]) continue;

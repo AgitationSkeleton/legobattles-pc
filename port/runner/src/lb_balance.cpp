@@ -144,6 +144,9 @@ extern "C" int lb_balance_apply(int slot, unsigned int blueprint_base,
 }
 
 extern "C" int lb_balance_is_applied(void) { return g_applied_slot != 0 ? 1 : 0; }
+// docs/396: a game reset reloads the vanilla blueprints, so no pack is
+// applied any more; the patcher applies the chosen one again once they settle.
+extern "C" void lb_balance_on_reset(void) { g_applied_slot = 0; }
 extern "C" int lb_balance_applied_slot(void) { return g_applied_slot; }
 
 extern "C" const char* lb_balance_name(int slot) {

@@ -132,6 +132,19 @@ const char* lb_net_guest_state_text(void);
 // The loaded save profile's name, the one the game shows in its own lobby.
 // Returns its length; 0 (and "") before a profile is loaded.
 int         lb_net_profile_name(char* out, int cap);
+// docs/396: rename the loaded profile on the next VBlank (lb_patches.cpp);
+// the game writes it into the save at its next save.
+void        lb_request_profile_rename(const char* name);
+// docs/396: the menu's Reset. lb_request_game_reset asks; the frontend takes
+// the request at its between-frames safe point (lb_take_game_reset) and runs
+// the power-on boot, then lb_port_on_guest_reset (lb_patches.cpp).
+void        lb_request_game_reset(void);
+int         lb_take_game_reset(void);
+void        lb_port_on_guest_reset(void);
+// docs/396: typing on the game's keyboards (lb_patches.cpp). ch is a
+// printable character, '\b' to erase, '\r' for OK.
+void        lb_keyboard_type(int ch);
+int         lb_keyboard_screen_active(void);
 // Once per frame, from the overlay: advertise the
 // lobby the game opens when auto_host, and give the game's own Join screen the
 // master server's lobbies when auto_join.

@@ -7488,50 +7488,46 @@ def apply(runner_dir, imgui_dir):
     # newly shown window, which SDL 2.0.18+ can suppress with a hint. Fixing
     # only one of them still interrupts the desktop.
     edit(front, "presentation.windows[0] = SDL_CreateWindow(",
-         ["// LB_DISPLAY picks the display index explicitly. Unset, the LAST",
-          "// display is used when more than one exists -- a secondary test",
-          "// display -- and display 0 otherwise, so a",
-          "// single-monitor machine behaves exactly as before.",
+         ["// WHICH DISPLAY (docs/396). A player's window opens on the PRIMARY",
+          "// monitor: the one whose desktop origin is 0,0, which is how Windows",
+          "// defines it (SDL's index 0 usually is, but its order is not",
+          "// promised).",
+          "//",
+          "// A test names another display: LB_DISPLAY by index, or",
+          "// LB_DISPLAY_W/H by its mode (the harness sets 1920x1080 for its",
+          "// test display; a matching display wins, ties to the highest index).",
+          "// Only then does the window also appear WITHOUT taking focus, so a",
+          "// test never interrupts whatever is in use. Until docs/396 both were",
+          "// the default, so a release opened on a secondary monitor.",
           "int lb_display = 0;",
           "{",
           "    const int lb_ndisp = SDL_GetNumVideoDisplays();",
-          "    if (lb_ndisp > 1) lb_display = lb_ndisp - 1;",
-          "    // PICK THE TEST DISPLAY BY ITS GEOMETRY, not by its index.",
-          "    //",
-          "    // \"the LAST display\" was a guess about SDL's enumeration order,",
-          "    // and SDL does not promise it matches the desktop's: test",
-          "    // windows still landed on the main screen with this logic",
-          "    // reporting \"display 1 of 2\".",
-          "    //",
-          "    // LB_DISPLAY_W/H name the test display's mode instead (default",
-          "    // 1920x1080). A display matching it wins; ties go to the highest",
-          "    // index, which keeps the old behaviour when nothing matches.",
-          "    // Every display's bounds are printed either way, so a wrong",
-          "    // guess can be read off the log rather than inferred from where",
-          "    // the window turned up.",
-          "    int lb_dw = 1920, lb_dh = 1080;",
-          "    if (const char* v = std::getenv(\"LB_DISPLAY_W\")) lb_dw = std::atoi(v);",
-          "    if (const char* v = std::getenv(\"LB_DISPLAY_H\")) lb_dh = std::atoi(v);",
+          "    const char* lb_ew = std::getenv(\"LB_DISPLAY_W\");",
+          "    const char* lb_eh = std::getenv(\"LB_DISPLAY_H\");",
+          "    const char* lb_de = std::getenv(\"LB_DISPLAY\");",
+          "    const bool lb_test = (lb_ew && lb_eh) || lb_de;",
+          "    const int lb_dw = lb_ew ? std::atoi(lb_ew) : 0;",
+          "    const int lb_dh = lb_eh ? std::atoi(lb_eh) : 0;",
           "    for (int i = 0; i < lb_ndisp; ++i) {",
           "        SDL_Rect lb_b{};",
           "        if (SDL_GetDisplayBounds(i, &lb_b) != 0) continue;",
-          "        const bool lb_match = lb_b.w == lb_dw && lb_b.h == lb_dh;",
+          "        const bool lb_match = lb_ew && lb_eh && lb_b.w == lb_dw && lb_b.h == lb_dh;",
+          "        const bool lb_primary = lb_b.x == 0 && lb_b.y == 0;",
           "        std::fprintf(stderr,",
-          "                     \"[sdl] display %d: %dx%d at %d,%d%s\\n\",",
+          "                     \"[sdl] display %d: %dx%d at %d,%d%s%s\\n\",",
           "                     i, lb_b.w, lb_b.h, lb_b.x, lb_b.y,",
+          "                     lb_primary ? \"  (primary)\" : \"\",",
           "                     lb_match ? \"  <- matches LB_DISPLAY_W/H\" : \"\");",
-          "        if (lb_match) lb_display = i;",
+          "        if (lb_test ? lb_match : (lb_primary && !lb_display)) lb_display = i;",
           "    }",
-          "    if (const char* lb_de = std::getenv(\"LB_DISPLAY\")) {",
+          "    if (lb_de) {",
           "        const int lb_want = std::atoi(lb_de);",
           "        if (lb_want >= 0 && lb_want < lb_ndisp) lb_display = lb_want;",
           "    }",
-          "    std::fprintf(stderr, \"[sdl] window on display %d of %d\\n\",",
-          "                 lb_display, lb_ndisp);",
-          "}",
-          "// Appear WITHOUT taking focus. Without this the window activates",
-          "// itself over whatever else has focus, every single run.",
-          "SDL_SetHint(SDL_HINT_WINDOW_NO_ACTIVATION_WHEN_SHOWN, \"1\");"],
+          "    std::fprintf(stderr, \"[sdl] window on display %d of %d%s\\n\",",
+          "                 lb_display, lb_ndisp, lb_test ? \" (test placement, no focus)\" : \"\");",
+          "    if (lb_test) SDL_SetHint(SDL_HINT_WINDOW_NO_ACTIVATION_WHEN_SHOWN, \"1\");",
+          "}"],
          after=False, indent="")
     done.append("frontend.cpp: window placement + no focus steal")
 
@@ -9612,6 +9608,97 @@ def apply(runner_dir, imgui_dir):
             "        synthesized.push_back(\"--local-wireless\");\n"
             "        synthesized.push_back(\"on\");\n")
     done.append("main.cpp: the first-run setup and local wireless (docs/394)")
+
+    # docs/396: THE PC'S DATE. The cartridge reads the DS clock in exactly one
+    # place, User::MainMenu (0x020BF0A0): RTC_GetDate (FUN_02115F90), and on
+    # 12/25 it unlocks record 0x1B8, Santa. The runner's clock starts at the
+    # fixed 2024-01-01 unless --rtc-host, so a player could never get it. A
+    # player's start now passes --rtc-host; tests keep the fixed clock (they
+    # pass their own arguments), and a recording carries the clock it ran on
+    # so a replay sets the same one (lb_demo.cpp, rtc=).
+    io_396 = os.path.join(runner_dir, "src", "io.cpp")
+    edit(io_396, "bool g_nds_rtc_host = false;",
+         ["/* legobattles-decomp docs/396: the guest clock's seven BCD registers",
+          "   (year, month, day, weekday, hour, minute, second) for lb_demo.cpp,",
+          "   which records them and restores them on a replay. */",
+          "extern \"C\" void lb_rtc_get(unsigned char out[7]) {",
+          "    std::memcpy(out, g_rtc_datetime, 7);",
+          "}",
+          "extern \"C\" void lb_rtc_set(const unsigned char in[7]) {",
+          "    std::memcpy(g_rtc_datetime, in, 7);",
+          "}",
+          "extern \"C\" int lb_rtc_is_host(void) { return g_nds_rtc_host ? 1 : 0; }"])
+    replace(main_394,
+            "        synthesized.push_back(\"--local-wireless\");\n"
+            "        synthesized.push_back(\"on\");\n",
+            "        synthesized.push_back(\"--local-wireless\");\n"
+            "        synthesized.push_back(\"on\");\n"
+            "        /* docs/396: the PC's date and time, for the 12/25 unlock. */\n"
+            "        synthesized.push_back(\"--rtc-host\");\n")
+    done.append("io.cpp/main.cpp: a player's start runs on the PC's clock (docs/396)")
+
+    # docs/396: THE MENU'S RESET. The interactive start already hands its
+    # power-on boot() to the debug server (debug_set_reset_fn), which runs it
+    # for a `reset` command between frames. The menu's Reset (and Ctrl+R) uses
+    # the same boot at the same safe point: just after debug_pump(), on the
+    # frontend thread, between frames. lb_port_on_guest_reset then re-arms the
+    # port's once-only state (lb_patches.cpp).
+    dbg_396 = os.path.join(runner_dir, "src", "debug_server.cpp")
+    edit(dbg_396, "void debug_set_reset_fn(std::function<void()> fn) { g_reset_fn = std::move(fn); }",
+         ["/* legobattles-decomp docs/396: the same boot, for the menu's Reset. */",
+          "extern \"C\" int lb_debug_reset(void) {",
+          "    if (!g_reset_fn) return 0;",
+          "    g_reset_fn();",
+          "    return 1;",
+          "}"])
+    front_396 = os.path.join(runner_dir, "src", "frontend.cpp")
+    edit(front_396, "#include \"debug_server.h\"",
+         ["extern \"C\" int lb_take_game_reset(void);      /* legobattles-decomp docs/396 */",
+          "extern \"C\" int lb_debug_reset(void);",
+          "extern \"C\" void lb_port_on_guest_reset(void);"])
+    edit(front_396, "        debug_pump();",
+         ["/* legobattles-decomp docs/396: the menu's Reset, at the same point. */",
+          "if (lb_take_game_reset() && lb_debug_reset()) lb_port_on_guest_reset();"])
+    done.append("debug_server.cpp/frontend.cpp: the menu's Reset reboots the game (docs/396)")
+
+    # docs/396: THE MULTIPLAYER STALL. Two instances in a match ran at 31 fps,
+    # each spending 29.3 ms a frame in emulation against ~10 ms alone (run
+    # t396mp, frontend_stats over 40 s). The difference is the wireless
+    # bridge's two blocking receives -- the host waiting for its children's
+    # replies, a child waiting for the host's packet -- which poll their queue
+    # and SLEEP 1 ms between polls. A sleep is at least one timer period
+    # whether the datagram arrived after 30 us or not, and the game exchanges
+    # several per frame, so every exchange cost a millisecond or more. The wait
+    # now blocks on the socket itself (select, 1 ms ceiling, so the deadline
+    # is still checked), which returns the moment a datagram lands.
+    wifi_396 = os.path.join(runner_dir, "src", "wifi_net.cpp")
+    edit(wifi_396, "    static constexpr uint32_t kMagic = 0x4946494Eu;",
+         ["// legobattles-decomp docs/396: wait for the socket, not the clock.",
+          "void WaitReadable() {",
+          "#ifdef _WIN32",
+          "    if (socket_ != INVALID_SOCKET) {",
+          "        fd_set lb_rd;",
+          "        FD_ZERO(&lb_rd);",
+          "        FD_SET(socket_, &lb_rd);",
+          "        timeval lb_tv{0, 1000};",
+          "        ::select(0, &lb_rd, nullptr, nullptr, &lb_tv);",
+          "        return;",
+          "    }",
+          "#endif",
+          "    std::this_thread::sleep_for(std::chrono::milliseconds(1));",
+          "}",
+          ""], after=False)
+    replace(wifi_396,
+            "                if (std::chrono::steady_clock::now() >= deadline) break;\n"
+            "                std::this_thread::sleep_for(std::chrono::milliseconds(1));\n",
+            "                if (std::chrono::steady_clock::now() >= deadline) break;\n"
+            "                WaitReadable();   /* legobattles-decomp docs/396 */\n")
+    replace(wifi_396,
+            "                    return 0;\n"
+            "                std::this_thread::sleep_for(std::chrono::milliseconds(1));\n",
+            "                    return 0;\n"
+            "                WaitReadable();   /* legobattles-decomp docs/396 */\n")
+    done.append("wifi_net.cpp: the wireless bridge waits on its socket, not 1 ms sleeps (docs/396)")
 
     # Last, once every patch has been written: hold the mtime of any file whose
     # patched CONTENT is unchanged since the previous build, so make does not

@@ -1331,6 +1331,11 @@ def main():
 
     env = dict(os.environ)
     env["NDS_DEBUG_ALLOW_WRITES"] = "1"
+    # A test window goes on the test display (a 1920x1080 one by default) and
+    # does not take focus. The game itself opens on the primary monitor unless
+    # these name another (docs/396).
+    env.setdefault("LB_DISPLAY_W", "1920")
+    env.setdefault("LB_DISPLAY_H", "1080")
     # The runner links SDL2 and the MSYS2 C++ runtime dynamically. A shell
     # launch finds them because the MSYS2 bin directory is on that shell's
     # PATH; a launch from Python does not, and Windows reports it only as exit
