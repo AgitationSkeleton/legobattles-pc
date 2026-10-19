@@ -7475,6 +7475,8 @@ def apply(runner_dir, imgui_dir):
           "src/lb_palette.cpp",
           # Mod maps from a mods folder (docs/391).
           "src/lb_mods.cpp",
+          # Online chat and the swear filter (docs/415).
+          "src/lb_chat.cpp",
           # The first-run setup (docs/394).
           "src/lb_setup.cpp",
           "%s/imgui.cpp" % imgui,
@@ -10020,6 +10022,101 @@ def apply(runner_dir, imgui_dir):
             "                    return 0;\n"
             "                WaitReadable();   /* legobattles-decomp docs/396 */\n")
     done.append("wifi_net.cpp: the wireless bridge waits on its socket, not 1 ms sleeps (docs/396)")
+
+    # 0zzzzzzzzzzzzz-409. A REPLAY SIZES THE FIELD AS THE RECORDING DID. The
+    # field (the guest surface) follows the window and the zoom, and the
+    # simulation sees it: camera bounds, where a moved HUD button is touched.
+    # A session that zoomed could not be replayed (docs/408). lb_demo_field
+    # records each size the frontend picks and, replaying a recording that
+    # has them, puts the recorded size back before the surface is sized.
+    front_409 = os.path.join(runner_dir, "src", "frontend.cpp")
+    replace(front_409,
+            "                if (std::getenv(\"LB_NOVFOV\")) lb_wanth = 192;\n",
+            "                if (std::getenv(\"LB_NOVFOV\")) lb_wanth = 192;\n"
+            "                lb_demo_field(&lb_want, &lb_wanth);   /* docs/409 */\n")
+    done.append("frontend.cpp: the field's size is recorded and replayed (docs/409)")
+
+    # 0zzzzzzzzzzzzz-411. SMOOTH 3D MODELS, AT THE RENDERER'S OWN COPY.
+    # Building_Draw3D (0x0203B3AC) turns anti-aliasing off and edge marking on
+    # for every 3D-model unit it draws (DISP3DCNT &= 0xCFEF, |= 0x20), so a
+    # session's first ship or siege leaves the models outlined and jagged
+    # (docs/388). "Smooth 3D Models" renders with anti-aliasing on and edge
+    # marking off instead. It is applied where melonDS latches the register
+    # for the frame (RenderDispCnt), not in the guest: patching the guest
+    # would run that per-model function interpreted, and the register is
+    # never read by the simulation. The identical-frame test compares the
+    # same masked value, so an unchanged frame is still skipped.
+    gpu3d_411 = os.path.join(runner_dir, "vendor", "melonds", "GPU3D.cpp")
+    edit(gpu3d_411, "extern \"C\" int lb_band_for_geometry(int render_width);",
+         ["extern \"C\" int lb_setting_smooth_models(void);   /* docs/411 */",
+          "static inline unsigned lb_render_dispcnt(unsigned d) {",
+          "    return lb_setting_smooth_models() ? ((d & ~0x20u) | 0x10u) : d;",
+          "}"], after=True)
+    replace(gpu3d_411,
+            "                RenderFrameIdentical = RenderDispCnt == DispCnt\n",
+            "                RenderFrameIdentical = RenderDispCnt == lb_render_dispcnt(DispCnt)\n")
+    replace(gpu3d_411,
+            "            RenderDispCnt = DispCnt;\n",
+            "            RenderDispCnt = lb_render_dispcnt(DispCnt);   /* docs/411 */\n")
+    done.append("GPU3D.cpp: Smooth 3D Models renders without edge marking, with AA (docs/411)")
+
+    # 0zzzzzzzzzzzzz-413. THE HOST'S MOD MAPS RIDE ON ITS RULES. A lobby names
+    # its map by a key that, for a mod map, is the map's place in each
+    # machine's own mods folder (lb_mods_name_id), so the host lists every
+    # mod map it holds -- key, content hash, name -- after its bans and flags,
+    # and a joiner translates the key to its own copy of that map, or refuses
+    # it (lb_patches.cpp, docs/413). Thirty maps with names do not fit the 64
+    # bytes the bans were sized for; the bridge's frames take 0x948.
+    wifi_413 = os.path.join(runner_dir, "src", "wifi_net.cpp")
+    replace(wifi_413,
+            "        uint8_t buf[64];\n"
+            "        const int n = lb_rules_outgoing(buf, (int)sizeof buf);\n",
+            "        uint8_t buf[2048];   /* docs/413: the host's mod maps */\n"
+            "        const int n = lb_rules_outgoing(buf, (int)sizeof buf);\n")
+    done.append("wifi_net.cpp: a host's rules carry its mod maps (docs/413)")
+
+    # 0zzzzzzzzzzzzz-415. ONLINE CHAT. A message is a datagram of its own type,
+    # like the rules: lb_chat queues what to send and the bridge's drain sends
+    # it to the siblings and the remote peer; a received one goes to lb_chat
+    # (which a host also passes on), never to the guest.
+    wifi_415 = os.path.join(runner_dir, "src", "wifi_net.cpp")
+    replace(wifi_415,
+            "/* legobattles-decomp (docs/384): the host's rules. */\n",
+            "/* legobattles-decomp (docs/415): online chat. */\n"
+            "extern \"C\" int lb_chat_outgoing(unsigned char* buf, int cap);\n"
+            "extern \"C\" void lb_chat_incoming(const unsigned char* buf, int len,\n"
+            "                                 unsigned int sender);\n"
+            "/* legobattles-decomp (docs/384): the host's rules. */\n")
+    replace(wifi_415,
+            "    static constexpr uint32_t kLbRules = 0x4C425255u;  /* LBRU */\n",
+            "    static constexpr uint32_t kLbRules = 0x4C425255u;  /* LBRU */\n"
+            "    /* docs/415: a chat message, never a frame. */\n"
+            "    static constexpr uint32_t kLbChat = 0x4C424348u;   /* LBCH */\n"
+            "    void LbSendChat() {\n"
+            "        uint8_t buf[512];\n"
+            "        for (int k = 0; k < 8; ++k) {\n"
+            "            const int n = lb_chat_outgoing(buf, (int)sizeof buf);\n"
+            "            if (n <= 0) break;\n"
+            "            SendGeneric(kLbChat, buf, n, 0u);\n"
+            "        }\n"
+            "    }\n")
+    replace(wifi_415,
+            "        LbMaybeRules();   /* docs/384 */\n",
+            "        LbMaybeRules();   /* docs/384 */\n"
+            "        LbSendChat();     /* docs/415 */\n")
+    replace(wifi_415,
+            "            if (ReadLe32(datagram + 8u) == kLbRules) {\n",
+            "            /* docs/415: chat goes to lb_chat, never to the guest. */\n"
+            "            if (ReadLe32(datagram + 8u) == kLbChat) {\n"
+            "                const uint32_t clen = ReadLe32(datagram + 12u);\n"
+            "                if (kHeaderBytes + clen == static_cast<uint32_t>(got))\n"
+            "                    lb_chat_incoming(datagram + kHeaderBytes,\n"
+            "                                     static_cast<int>(clen),\n"
+            "                                     ReadLe32(datagram + 4u));\n"
+            "                continue;\n"
+            "            }\n"
+            "            if (ReadLe32(datagram + 8u) == kLbRules) {\n")
+    done.append("wifi_net.cpp: online chat travels between players (docs/415)")
 
     # Last, once every patch has been written: hold the mtime of any file whose
     # patched CONTENT is unchanged since the previous build, so make does not

@@ -49,6 +49,8 @@ extern "C" {
 extern "C" int lb_demo_play_palette(void);       /* src/lb_demo.cpp */
 extern "C" int lb_level_world(void);              /* src/lb_patches.cpp */
 extern "C" unsigned lb_level_pick(unsigned salt); /* src/lb_patches.cpp */
+extern "C" int lb_level_is_mod(void);             /* docs/410 */
+extern "C" int lb_setting_mod_palette(void);      /* lb_overlay.cpp */
 
 namespace {
 
@@ -144,7 +146,10 @@ extern "C" void lb_palette_tick(void) {
     if (g_world < 0 || g_world > 2 || !build_tables(g_world)) return;
 
     const int played = lb_demo_play_palette();
-    const int mode = played >= 0 ? played : lb_setting_level_palette();
+    int mode = played >= 0 ? played : lb_setting_level_palette();
+    // docs/410: a mods-folder map can have its own choice (0 = the same).
+    const int modpal = lb_setting_mod_palette();
+    if (lb_level_is_mod() && modpal > 0) mode = modpal - 1;
     // 0 Per-Mod (the ROM's own: vanilla), 1 Vanilla, 2 FactionWars, 3 Random.
     const int want = mode == 2 ? 1 : mode == 3 ? g_random : 0;
     if (want == g_in_ram) return;

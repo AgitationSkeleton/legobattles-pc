@@ -77,6 +77,7 @@ int lb_widemap_cam_px(int* x, int* y);     /* src/lb_widemap.cpp */
 #include <chrono>   /* legobattles-decomp: lb_field_bench_tick */
 #include <ctime>    /* docs/388: the save cache's timestamps */
 #include <atomic>   /* docs/396: the Reset request */
+#include <mutex>    /* docs/413: the notice, set from the emulation thread */
 extern "C" int lb_demo_playing(void);   /* lb_demo.cpp */
 
 namespace {
@@ -162,6 +163,13 @@ struct Settings {
     // 3 Random) and a forced tileset (0 Off, 1 Castle, 2 Pirates, 3 Mars,
     // 4 Random).
     int level_palette = 0;
+    int mod_palette = 0;   // docs/410: 0 the same, else Level Palettes' mode + 1
+    bool smooth_models = false;   // docs/411: 3D models without edge marking, AA on
+    // docs/415: online chat. Toasts for received messages, the swear filter
+    // (chat and players' names), and the key that opens the chat box.
+    bool chat_toasts = true;
+    bool swear_filter = true;
+    int chat_key = SDL_SCANCODE_T;
     int force_tileset = 0;
     // docs/383: Space and right-click deselect,
     // Mouse 5 opens the blue brick menu and Mouse 4 the red/yellow/white one.
@@ -232,6 +240,9 @@ struct Settings {
     // docs/408: a hotwired transport stops taking its old owner's orders
     // (lb_patches.cpp, release_stolen_transport).
     bool transport_release = false;
+    // docs/410: the Wolf, Robot and Shark in armies (lb_teams.cpp, cand_on;
+    // their prices, lb_patches.cpp kCreaturePrices). Online, the host's.
+    bool creatures = false;
     int  attack_boost_ranged = 0;  // 0 vanilla, 1 ranged units benefit too
     bool fix_hotwired_healing = false;
     // docs/385: the monkey cage (cosmetic, this machine only), on by default.
@@ -499,6 +510,16 @@ extern "C" void lb_settings_save(void) {
                   g_set.steady_cadence ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"level_palette\": %d,\n",
                   g_set.level_palette); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"mod_palette\": %d,\n",
+                  g_set.mod_palette); o += buf;   // docs/410
+    std::snprintf(buf, sizeof buf, "  \"smooth_models\": %s,\n",
+                  g_set.smooth_models ? "true" : "false"); o += buf;   // docs/411
+    std::snprintf(buf, sizeof buf, "  \"chat_toasts\": %s,\n",
+                  g_set.chat_toasts ? "true" : "false"); o += buf;   // docs/415
+    std::snprintf(buf, sizeof buf, "  \"swear_filter\": %s,\n",
+                  g_set.swear_filter ? "true" : "false"); o += buf;   // docs/415
+    std::snprintf(buf, sizeof buf, "  \"chat_key\": %d,\n",
+                  g_set.chat_key); o += buf;   // docs/415
     std::snprintf(buf, sizeof buf, "  \"force_tileset\": %d,\n",
                   g_set.force_tileset); o += buf;
     std::snprintf(buf, sizeof buf, "  \"quick_keys\": %s,\n",
@@ -530,6 +551,8 @@ extern "C" void lb_settings_save(void) {
                   g_set.ai_hero_rebuild ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"transport_release\": %s,\n",
                   g_set.transport_release ? "true" : "false"); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"creatures\": %s,\n",
+                  g_set.creatures ? "true" : "false"); o += buf;   // docs/410
     std::snprintf(buf, sizeof buf, "  \"attack_boost_ranged\": %d,\n",
                   g_set.attack_boost_ranged); o += buf;
     std::snprintf(buf, sizeof buf, "  \"fix_hotwired_healing\": %s,\n",
@@ -626,6 +649,14 @@ extern "C" void lb_settings_load(void) {
     json_get_int(s, "level_palette", &g_set.level_palette);   // docs/387
     json_get_int(s, "force_tileset", &g_set.force_tileset);   // docs/387
     if (g_set.level_palette < 0 || g_set.level_palette > 3) g_set.level_palette = 0;
+    json_get_int(s, "mod_palette", &g_set.mod_palette);   // docs/410
+    json_get_bool(s, "smooth_models", &g_set.smooth_models);   // docs/411
+    json_get_bool(s, "chat_toasts", &g_set.chat_toasts);       // docs/415
+    json_get_bool(s, "swear_filter", &g_set.swear_filter);     // docs/415
+    json_get_int(s, "chat_key", &g_set.chat_key);              // docs/415
+    if (g_set.chat_key <= 0 || g_set.chat_key >= SDL_NUM_SCANCODES)
+        g_set.chat_key = SDL_SCANCODE_T;
+    if (g_set.mod_palette < 0 || g_set.mod_palette > 4) g_set.mod_palette = 0;
     if (g_set.force_tileset < 0 || g_set.force_tileset > 4) g_set.force_tileset = 0;
     json_get_bool(s, "quick_keys", &g_set.quick_keys);   // docs/383, default on
     json_get_bool(s, "quick_keys_blue", &g_set.quick_keys_blue);   // docs/398
@@ -642,6 +673,7 @@ extern "C" void lb_settings_load(void) {
     json_get_bool(s, "emp_transports", &g_set.emp_transports);   // docs/406
     json_get_bool(s, "ai_hero_rebuild", &g_set.ai_hero_rebuild);
     json_get_bool(s, "transport_release", &g_set.transport_release);
+    json_get_bool(s, "creatures", &g_set.creatures);   // docs/410
     json_get_int(s, "attack_boost_ranged", &g_set.attack_boost_ranged);
     json_get_bool(s, "fix_hotwired_healing", &g_set.fix_hotwired_healing);
     json_get_bool(s, "fix_monkey_cage", &g_set.fix_monkey_cage);   // docs/385
@@ -843,6 +875,8 @@ int g_pad_binding[kActionCount];
 bool g_bindings_ready = false;
 int g_rebinding = -1;        // action waiting for a KEY, or -1
 int g_rebinding_pad = -1;    // action waiting for a PAD BUTTON, or -1
+bool g_rebinding_chat = false;   // docs/415: the chat key waits for a key
+bool g_chat_eat_text = false;    // docs/415: swallow the opening key's text
 
 void settings_load();
 
@@ -1015,6 +1049,14 @@ void tab_display() {
     // Magnification tooltip, beside the slider that actually decides them.
     badge(WIRED);
 
+    // docs/411: the 3D models (ships, siege, specials) without the outline
+    // and with smoothed edges. Off is the game's own look.
+    ImGui::Checkbox("Smooth 3D Models", &g_set.smooth_models);
+    help("The game draws its ships, siege and special units with a dark\n"
+         "outline and no edge smoothing. On, they keep the smoothing and\n"
+         "lose the outline. Only this machine sees it.");
+    badge(WIRED);
+
     ImGui::Spacing();
     // LEAVE ROOM FOR THE LABEL. imgui puts a slider's label to its RIGHT and
     // does not shrink the slider to fit it, so at the panel's default width
@@ -1118,6 +1160,16 @@ void tab_display() {
          "per level. Per-Mod is the ROM's own palettes for now: a mod map\n"
          "found in several mods has no single palette of its own.\n"
          "Changes at once, even mid-battle. Only this machine sees it.");
+    badge(WIRED);
+    // docs/410: a separate choice for the mods folder's maps.
+    const char* modpals[] = {"Same as Level Palettes", "Per-Mod", "Vanilla",
+                             "FactionWars", "Random"};
+    ImGui::Combo("Mod Map Palettes", &g_set.mod_palette, modpals,
+                 IM_ARRAYSIZE(modpals));
+    help("The colours of the maps from the mods folder. Same as Level\n"
+         "Palettes follows the choice above; any other keeps mod maps on\n"
+         "their own choice, so FactionWars colours on the stock maps can\n"
+         "leave the mods' maps as they were.");
     badge(WIRED);
     const char* tilesets[] = {"Off", "Castle", "Pirates", "Mars", "Random"};
     ImGui::Combo("Force Tileset", &g_set.force_tileset, tilesets,
@@ -1805,7 +1857,30 @@ void tab_multiplayer() {
          "Code is what Join by code looks up.");
     badge(WIRED);
 
+    // docs/415: chat.
+    ImGui::SeparatorText("Chat");
+    ImGui::Checkbox("Chat toasts", &g_set.chat_toasts);
+    help("Shows a message from another player for a few seconds, led by\n"
+         "their hero's icon, while the chat box is closed.");
+    ImGui::Checkbox("Swear filter", &g_set.swear_filter);
+    help("Shows swear words in chat and in players' names as \"ziff\"\n"
+         "(\"ziffing\" for -ing words). Switching it off shows them as\n"
+         "written, at once; nothing sent or stored is changed.");
+    {
+        const char* key = g_rebinding_chat
+                              ? "press a key..."
+                              : SDL_GetScancodeName((SDL_Scancode)g_set.chat_key);
+        char label[64];
+        std::snprintf(label, sizeof label, "Chat key: %s###chatkey",
+                      (key && *key) ? key : "(none)");
+        if (ImGui::Button(label)) g_rebinding_chat = !g_rebinding_chat;
+        help("Opens the chat box while you are in an online lobby or match\n"
+             "(and does nothing otherwise). Enter sends, Esc closes.");
+    }
+    badge(WIRED);   // docs/415: runs ch415a/b
+
     // The game's own screens drive the master server.
+    ImGui::SeparatorText("Master server");
     ImGui::Checkbox("Advertise when the game hosts", &g_set.auto_advertise);
     help("Opening a lobby from the game's Multiplayer > Host lists it\n"
          "on the master server; Start or leaving takes it off.");
@@ -1854,8 +1929,9 @@ void tab_multiplayer() {
             if (!lb_net_lobby_at(i, &lobby)) continue;
             ImGui::TableNextRow();
             ImGui::TableNextColumn(); ImGui::TextUnformatted(lobby.code);
-            ImGui::TableNextColumn(); ImGui::TextUnformatted(lobby.name);
-            ImGui::TableNextColumn(); ImGui::TextUnformatted(lobby.host_name);
+            // docs/415: the swear filter covers the names lobbies carry.
+            ImGui::TableNextColumn(); ImGui::TextUnformatted(lb_swear_shown(lobby.name));
+            ImGui::TableNextColumn(); ImGui::TextUnformatted(lb_swear_shown(lobby.host_name));
             ImGui::TableNextColumn(); ImGui::TextUnformatted(lobby.map_name);
             ImGui::TableNextColumn();
             ImGui::Text("%d/%d", lobby.players, lobby.max_players);
@@ -2318,9 +2394,10 @@ void team_put(int* v, const LbTeam& t) {
 }
 
 const char* faction_name(int f) {
-    static const char* const k[6] = {"King", "Wizard", "Pirate",
-                                     "Imperial", "Earth", "Alien"};
-    return (f >= 0 && f < 6) ? k[f] : "?";
+    static const char* const k[7] = {"King", "Wizard", "Pirate",
+                                     "Imperial", "Earth", "Alien",
+                                     "Neutral"};   // docs/410: the creatures
+    return (f >= 0 && f < 7) ? k[f] : "?";
 }
 
 // One head, as a button. `grey` draws it from the greyscale sheet; `alpha`
@@ -2328,12 +2405,20 @@ const char* faction_name(int f) {
 // (button byte +0x0C = 10 of 31). Returns true when clicked.
 bool unit_button(const char* id, int bp, float size, bool grey, float alpha,
                  bool selected) {
+    // docs/410: the battle HUD's heads first (the front end's grid cut gives
+    // the creatures and two pirates someone else's); a locked one is dimmed.
+    SDL_Texture* hud = lb_teams_hud_atlas(g_team_renderer);
     SDL_Texture* tex = lb_teams_atlas(g_team_renderer, grey ? 1 : 0);
     float u0, v0, u1, v1;
     const ImVec4 bg = selected ? ImVec4(0.95f, 0.75f, 0.15f, 1.0f)
                                : ImVec4(0.0f, 0.0f, 0.0f, 0.0f);
     bool hit;
-    if (tex && lb_teams_icon_uv(bp, &u0, &v0, &u1, &v1)) {
+    if (hud && lb_teams_hud_icon_uv(bp, &u0, &v0, &u1, &v1)) {
+        const float k = grey ? 0.4f : 1.0f;
+        hit = ImGui::ImageButton(id, (ImTextureID)(intptr_t)hud,
+                                 ImVec2(size, size), ImVec2(u0, v0),
+                                 ImVec2(u1, v1), bg, ImVec4(k, k, k, alpha));
+    } else if (tex && lb_teams_icon_uv(bp, &u0, &v0, &u1, &v1)) {
         hit = ImGui::ImageButton(id, (ImTextureID)(intptr_t)tex,
                                  ImVec2(size, size), ImVec2(u0, v0),
                                  ImVec2(u1, v1), bg,
@@ -2409,6 +2494,20 @@ void tab_team_builder() {
     static std::string msg;
     static bool msg_bad = false;
     LbTeam team = team_of(g_set.team_working);
+
+    // docs/410: the neutral creatures as army units, at real prices.
+    ImGui::Checkbox("Neutral Creatures in Armies", &g_set.creatures);
+    help("Offers the Wolf and the Robot as Close Combat units and the\n"
+         "Shark as Special Two, for your army and the Custom opponent.\n"
+         "The game gives them a price of 1 brick; on, they cost:\n"
+         "Wolf 200 (build 420), Robot 80 (270), Shark 400 (660).\n"
+         "The Shark swims: only a Shipyard builds it, so it is for water\n"
+         "maps. Online, the host's setting applies.");
+    badge(WIRED);
+    if (lb_rules_host_flags() >= 0)
+        ImGui::TextDisabled("In this lobby, the host's: %s",
+                            lb_creatures_live() ? "On" : "Off");
+    ImGui::Separator();
 
     // The dropdown: King (Free Play's default), the save's team when it is
     // not King's, the save's recent armies (docs/388), then the player's own
@@ -2654,8 +2753,63 @@ void tab_ban_units() {
         std::memset(bits, 0, sizeof bits);
         changed = true;
     }
+    // docs/410: the list as a file, like the Balance values: the blueprint
+    // numbers, with the names beside them for a reader (ignored on import).
+    static char path[512] = "bans.json";
+    static std::string msg;
+    static bool msg_bad = false;
+    ImGui::SameLine();
+    if (ImGui::Button("Export...") &&
+        lb_pick_json_file(path, (int)sizeof path, 1)) {
+        std::string names;
+        for (int bp = 0; bp < 192; ++bp)
+            if ((bits[bp >> 3] >> (bp & 7)) & 1) {
+                if (!names.empty()) names += ", ";
+                names += lb_teams_unit_name(bp);
+            }
+        std::string o = "{\n  \"lb_bans\": 1,\n";
+        json_put_str(o, "banned_units", g_set.banned_units, true);
+        json_put_str(o, "names", names.c_str(), false);
+        o += "}\n";
+        FILE* f = std::fopen(path, "wb");
+        msg_bad = !f || std::fwrite(o.data(), 1, o.size(), f) != o.size();
+        if (f) std::fclose(f);
+        msg = msg_bad ? "Could not write that file." : "Exported the ban list.";
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Import...") &&
+        lb_pick_json_file(path, (int)sizeof path, 0)) {
+        std::string s;
+        if (FILE* f = std::fopen(path, "rb")) {
+            char chunk[4096];
+            size_t got;
+            while ((got = std::fread(chunk, 1, sizeof chunk, f)) > 0 &&
+                   s.size() < (1u << 16))
+                s.append(chunk, got);
+            std::fclose(f);
+        }
+        char list[512] = "";
+        json_get_str(s, "banned_units", list, sizeof list);
+        if (s.find("\"lb_bans\"") == std::string::npos ||
+            s.find("\"banned_units\"") == std::string::npos) {
+            msg = "That is not a ban list file.";
+            msg_bad = true;
+        } else {
+            std::snprintf(g_set.banned_units, sizeof g_set.banned_units, "%s", list);
+            bans_bits(bits);   // drops anything out of range, and the King team
+            changed = true;
+            int n = 0;
+            for (int bp = 0; bp < 192; ++bp) n += (bits[bp >> 3] >> (bp & 7)) & 1;
+            msg = "Imported " + std::to_string(n) + " banned unit(s).";
+            msg_bad = false;
+        }
+    }
     ImGui::EndDisabled();
     badge(WIRED);
+    if (!msg.empty())
+        ImGui::TextColored(msg_bad ? ImVec4(1.0f, 0.5f, 0.4f, 1.0f)
+                                   : ImVec4(0.6f, 0.9f, 0.6f, 1.0f),
+                           "%s", msg.c_str());
     if (changed) bans_store(bits);
     tab_end();
 }
@@ -4612,7 +4766,7 @@ void bal_flag(int rec, int field, bool locked) {
 }
 
 // The lock and the hint, above each table.
-bool bal_header() {
+bool bal_header(bool picks = false) {
     if (!lb_patches_blueprint_base()) {
         ImGui::TextDisabled("The values are read from the game's own "
                             "blueprints, which load at its title screen.");
@@ -4622,9 +4776,12 @@ bool bal_header() {
         ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.3f, 1.0f), "Locked: %s.", why);
         return true;
     }
-    ImGui::TextDisabled("Type a value and press Enter. It applies at once, in a "
-                        "battle too; recordings carry it. Yellow values are "
-                        "yours: right-click one to put it back.");
+    ImGui::TextDisabled(picks ? "Pick a spell. It applies at once, in a battle "
+                                "too; recordings carry it. Yellow choices are "
+                                "yours: right-click one to put it back."
+                              : "Type a value and press Enter. It applies at once, "
+                                "in a battle too; recordings carry it. Yellow "
+                                "values are yours: right-click one to put it back.");
     return true;
 }
 
@@ -4802,7 +4959,7 @@ bool lb_spell_offered(int id) {
 
 void tab_balance_heroes() {
     if (!tab_begin("Balance Heroes")) return;
-    if (bal_header()) {
+    if (bal_header(true)) {
         const bool locked = lb_balance_custom_blocked() != nullptr;
         ImGui::TextDisabled("Each hero's five spell slots, in the order the "
                             "yellow brick lists them. Empty slots show nothing.");
@@ -4885,6 +5042,19 @@ void tab_balance_presets() {
                          lb_balance_custom_blocked() != nullptr);
     if (ImGui::Button("Clear all")) lb_balance_custom_clear_all();
     ImGui::EndDisabled();
+    // docs/416: values in the game's code rather than a blueprint.
+    if (lb_patches_blueprint_base()) {
+        const int rec = lb_balance_record_first(LB_BAL_GLOBALS);
+        const bool locked = lb_balance_custom_blocked() != nullptr;
+        ImGui::Spacing();
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Gold Brick value");
+        ImGui::SameLine();
+        bal_cell(LB_BAL_GLOBALS, rec, 0, locked);
+        help("Bricks a hero's team gets for a Gold Brick: 1000 in the game\n"
+             "(150 where the game gives 150, which takes the same share).\n"
+             "Offline only, like every value here; recordings carry it.");
+    }
     ImGui::Spacing();
     ImGui::InputText("File", g_bal_path, sizeof g_bal_path);
     if (ImGui::Button("Export...")) {
@@ -5140,6 +5310,48 @@ void draw_panels() {
 
 // ---------------------------------------------------------------------------
 
+// docs/413: one message for the player, over the game, until OK or 20 s. Set
+// from the emulation thread (a joiner missing the host's mod map), so it is
+// handed over under a lock; the same text again does not restart it.
+namespace {
+std::mutex g_notice_mu;
+std::string g_notice, g_notice_shown;
+unsigned long long g_notice_until = 0;
+void draw_notice() {
+    {
+        std::lock_guard<std::mutex> lk(g_notice_mu);
+        if (!g_notice.empty()) {
+            if (g_notice != g_notice_shown) {
+                g_notice_shown = g_notice;
+                g_notice_until = SDL_GetTicks64() + 20000ull;
+            }
+            g_notice.clear();
+        }
+    }
+    if (g_notice_shown.empty() || SDL_GetTicks64() > g_notice_until) return;
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x * 0.5f, vp->Pos.y + 40.0f),
+                            ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.92f);
+    if (ImGui::Begin("##lb_notice", nullptr,
+                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                         ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                         ImGuiWindowFlags_NoNav)) {
+        ImGui::PushTextWrapPos(ImGui::GetFontSize() * 34.0f);
+        ImGui::TextUnformatted(g_notice_shown.c_str());
+        ImGui::PopTextWrapPos();
+        if (ImGui::Button("OK")) g_notice_until = 0;
+    }
+    ImGui::End();
+}
+}  // namespace
+
+extern "C" void lb_overlay_notice(const char* text) {
+    if (!text || !*text) return;
+    std::lock_guard<std::mutex> lk(g_notice_mu);
+    g_notice = text;
+}
+
 extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
     if (std::getenv("LB_DIAG")) {
         static int t2 = 0;
@@ -5276,10 +5488,29 @@ extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
     draw_wide_field(renderer);
     draw_top_screen(renderer);
     draw_battlefield(renderer);
+    draw_notice();   // docs/413
+    lb_swear_selftest_if_asked();   // docs/415
+    lb_chat_draw(renderer);         // docs/415
     // docs/384: the tabs draw heads with this renderer, and the enemy team
     // and the ban list reach lb_teams.cpp whether or not the panel is open.
     g_team_renderer = renderer;
     {
+        // docs/410: LB_ENEMY_TEAM=<9 blueprints, the slots in order> sets the
+        // Custom opponent's army once, for a headless test. Test aid only.
+        static bool enemy_env = false;
+        if (!enemy_env) {
+            enemy_env = true;
+            if (const char* p = std::getenv("LB_ENEMY_TEAM")) {
+                int v[LB_TEAM_SLOTS], k = 0, used = 0;
+                while (k < LB_TEAM_SLOTS && std::sscanf(p, "%d%n", &v[k], &used) == 1) {
+                    p += used;
+                    if (*p == ',') ++p;
+                    ++k;
+                }
+                if (k == LB_TEAM_SLOTS)
+                    for (int i = 0; i < LB_TEAM_SLOTS; ++i) g_set.enemy_team[i] = v[i];
+            }
+        }
         const LbTeam enemy = team_of(g_set.enemy_team);
         lb_teams_set_enemy(&enemy);
         unsigned char bits[24];
@@ -5390,6 +5621,16 @@ bool quick_event(const SDL_Event* event, const ImGuiIO& io) {
 extern "C" bool lb_overlay_event(const SDL_Event* event) {
     if (!g_ready || !event) return false;
 
+    // docs/415: the text event of the key that opened the chat comes after its
+    // key event; it is not part of the message.
+    if (event->type == SDL_TEXTINPUT && g_chat_eat_text) {
+        g_chat_eat_text = false;
+        return true;
+    }
+    if (event->type == SDL_KEYDOWN && g_chat_eat_text &&
+        (int)event->key.keysym.scancode != g_set.chat_key)
+        g_chat_eat_text = false;
+
     if (event->type == SDL_KEYDOWN && event->key.repeat == 0) {
         const SDL_Keycode k = event->key.keysym.sym;
 
@@ -5406,6 +5647,25 @@ extern "C" bool lb_overlay_event(const SDL_Event* event) {
                 g_binding[g_rebinding] = sc;
             }
             g_rebinding = -1;
+            return true;
+        }
+        // docs/415: the chat key's rebind, the same way.
+        if (g_rebinding_chat) {
+            if (k != SDLK_ESCAPE) g_set.chat_key = (int)event->key.keysym.scancode;
+            g_rebinding_chat = false;
+            return true;
+        }
+        // docs/415: Esc closes an open chat box before it opens the menu.
+        if (k == SDLK_ESCAPE && lb_chat_is_open()) {
+            lb_chat_close();
+            return true;
+        }
+        // docs/415: the chat key opens the chat box, online only; offline, or
+        // while a text field has the keyboard, it is an ordinary key.
+        if ((int)event->key.keysym.scancode == g_set.chat_key && lb_chat_online() &&
+            !lb_chat_is_open() && !ImGui::GetIO().WantTextInput) {
+            lb_chat_open();
+            g_chat_eat_text = true;   // the "t" this key types is not the message
             return true;
         }
 
@@ -5713,6 +5973,37 @@ extern "C" int lb_setting_quick_blue(void) {
 // through lb_cadence_effective, which lets an env override and a playing demo
 // take precedence.
 // docs/387. LB_PALETTE / LB_TILESET force them without the UI (test aids).
+// docs/415. LB_SWEAR_FILTER=0|1 forces the filter (a test aid).
+extern "C" int lb_setting_swear_filter(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_SWEAR_FILTER");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.swear_filter ? 1 : 0);
+}
+extern "C" int lb_setting_chat_toasts(void) { return g_set.chat_toasts ? 1 : 0; }
+extern "C" const char* lb_overlay_player_name(void) { return mp_player_name(); }
+
+extern "C" int lb_setting_smooth_models(void) {   // docs/411; LB_SMOOTH_MODELS
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_SMOOTH_MODELS");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.smooth_models ? 1 : 0);
+}
+
+extern "C" int lb_setting_mod_palette(void) {   // docs/410
+    static int forced = -2;   // LB_MOD_PALETTE=0..4, a test aid
+    if (forced == -2) {
+        const char* v = std::getenv("LB_MOD_PALETTE");
+        forced = v ? std::atoi(v) : -1;
+    }
+    const int m = forced >= 0 ? forced : g_set.mod_palette;
+    return (m < 0 || m > 4) ? 0 : m;
+}
+
 extern "C" int lb_setting_level_palette(void) {
     static const int forced = [] {
         const char* v = std::getenv("LB_PALETTE");
@@ -5803,7 +6094,18 @@ extern "C" int lb_setting_ai_hero_rebuild(void) {
 
 // docs/406: the rule flags a host sends its players (lb_teams.cpp).
 extern "C" int lb_rules_local_flags(void) {
-    return lb_setting_emp_transports() ? LB_RULE_EMP_TRANSPORTS : 0;
+    return (lb_setting_emp_transports() ? LB_RULE_EMP_TRANSPORTS : 0) |
+           (lb_setting_creatures() ? LB_RULE_CREATURES : 0);   // docs/410
+}
+
+// docs/410: LB_CREATURES=0|1 forces it.
+extern "C" int lb_setting_creatures(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_CREATURES");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.creatures ? 1 : 0);
 }
 
 // The "Fix Hotwired Healing" checkbox had NO getter: nothing in the port could
@@ -5996,6 +6298,28 @@ extern "C" float lb_setting_pixel_scale(void) {
         if (const char* v = std::getenv("LB_PIXEL_SCALE"))
             forced = (float)std::atof(v);
     }
+    // docs/409: LB_TEST_ZOOM=<call>:<scale>,... changes the zoom as the wheel
+    // does, at the given call of this function (one per presented frame), so
+    // a recording with zoom in it can be made without input. Test aid only.
+    static std::vector<std::pair<unsigned, float>> zooms;
+    static bool zoom_env = false;
+    static unsigned calls = 0;
+    if (!zoom_env) {
+        zoom_env = true;
+        if (const char* p = std::getenv("LB_TEST_ZOOM")) {
+            unsigned at = 0;
+            float sc = 0.0f;
+            int used = 0;
+            while (std::sscanf(p, "%u:%f%n", &at, &sc, &used) == 2) {
+                zooms.emplace_back(at, sc);
+                p += used;
+                if (*p == ',') ++p;
+            }
+        }
+    }
+    ++calls;
+    for (const auto& z : zooms)
+        if (z.first == calls) g_set.pixel_scale = z.second;
     const float s = forced > 0.0f ? forced : g_set.pixel_scale;
     return s < 1.0f ? 1.0f : (s > 16.0f ? 16.0f : s);
 }

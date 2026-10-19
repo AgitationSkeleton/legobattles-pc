@@ -247,7 +247,17 @@ const BalField kAttackFields[] = {
     {"Stopped by walls", 0x69, 1, 0, 1},
     {"Explodes", 0x6B, 1, 0, 1},
 };
+// docs/416: values that are not in a blueprint but in the code, as one more
+// record after the projectiles. Field 0 is a Gold Brick's worth: FUN_0205F038
+// (a collectable's pickup) gives the hero's team `mov r5,#0x3E8` = 1000
+// bricks, or `moveq r5,#0x96` = 150 when the session's +0x78 is 2. The patcher
+// replaces it at the pickup (lb_patches.cpp); nothing is written to RAM.
+const BalField kGlobalFields[] = {
+    {"Gold Brick value", 0, 4, 0, 1000000},
+};
+constexpr int kGoldBrickStock = 1000;
 constexpr int kUnitRecords = 182, kAttackRecords = 27;
+constexpr int kGlobalRecord = kUnitRecords + kAttackRecords;   // 209
 constexpr uint32_t kFirstRecord = 4u, kUnitSize = 0x7Cu, kAttackSize = 0x74u;
 
 struct Edit {
@@ -269,6 +279,7 @@ unsigned g_live_gen = 1u;          // the player's set, for the recorder
 int kind_of(int rec) {
     if (rec >= 0 && rec < kUnitRecords) return LB_BAL_UNITS;
     if (rec >= kUnitRecords && rec < kUnitRecords + kAttackRecords) return LB_BAL_ATTACKS;
+    if (rec == kGlobalRecord) return LB_BAL_GLOBALS;   // docs/416
     return -1;
 }
 
@@ -280,8 +291,14 @@ const BalField* field_of(int rec, int field) {
     if (k == LB_BAL_ATTACKS && field >= 0 &&
         field < (int)(sizeof kAttackFields / sizeof kAttackFields[0]))
         return &kAttackFields[field];
+    if (k == LB_BAL_GLOBALS && field >= 0 &&
+        field < (int)(sizeof kGlobalFields / sizeof kGlobalFields[0]))
+        return &kGlobalFields[field];
     return nullptr;
 }
+
+// docs/416: a global's value as the game has it, before any edit.
+int global_stock(int field) { return field == 0 ? kGoldBrickStock : -1; }
 
 uint32_t record_at(uint32_t base, int rec) {
     if (rec < kUnitRecords) return base + kFirstRecord + (uint32_t)rec * kUnitSize;
@@ -322,7 +339,17 @@ bool applies(uint32_t base, int rec, const BalField& f) {
 extern "C" int lb_balance_field_count(int kind) {
     return kind == LB_BAL_UNITS ? (int)(sizeof kUnitFields / sizeof kUnitFields[0])
          : kind == LB_BAL_ATTACKS ? (int)(sizeof kAttackFields / sizeof kAttackFields[0])
+         : kind == LB_BAL_GLOBALS ? (int)(sizeof kGlobalFields / sizeof kGlobalFields[0])
          : 0;
+}
+
+// docs/416: a global's value for the game now -- the replay's or the player's
+// set -- or -1 for the game's own. Offline only, like every value here.
+extern "C" int lb_balance_global(int field) {
+    if (lb_balance_custom_blocked()) return -1;
+    for (const Edit& e : active())
+        if (e.rec == kGlobalRecord && e.field == field) return e.value;
+    return -1;
 }
 extern "C" const char* lb_balance_field_name(int kind, int field) {
     const int first = lb_balance_record_first(kind);
@@ -334,17 +361,21 @@ extern "C" int lb_balance_field_max(int kind, int field) {
     return f ? f->max : 0;
 }
 extern "C" int lb_balance_record_first(int kind) {
-    return kind == LB_BAL_ATTACKS ? kUnitRecords : 0;
+    return kind == LB_BAL_ATTACKS ? kUnitRecords
+         : kind == LB_BAL_GLOBALS ? kGlobalRecord : 0;
 }
 extern "C" int lb_balance_record_count(int kind) {
     return kind == LB_BAL_ATTACKS ? kAttackRecords
-         : kind == LB_BAL_UNITS ? kUnitRecords : 0;
+         : kind == LB_BAL_UNITS ? kUnitRecords
+         : kind == LB_BAL_GLOBALS ? 1 : 0;
 }
 
 // The record's own name, from the string the loader pointed +0x00 at.
 extern "C" int lb_balance_record_name(int rec, char* out, int cap) {
     if (!out || cap <= 0) return 0;
     out[0] = 0;
+    if (kind_of(rec) == LB_BAL_GLOBALS)   // docs/416
+        return std::snprintf(out, (size_t)cap, "%s", "Pickups");
     const uint32_t base = lb_patches_blueprint_base();
     if (!base || kind_of(rec) < 0) return 0;
     const uint32_t s = bus_read_u32(record_at(base, rec));
@@ -371,12 +402,19 @@ extern "C" int lb_balance_record_projectile(int rec) {
 }
 
 extern "C" int lb_balance_value(int rec, int field) {
+    if (kind_of(rec) == LB_BAL_GLOBALS) {   // docs/416: the code's, or the set's
+        if (!field_of(rec, field)) return -1;
+        for (const Edit& e : active())
+            if (e.rec == rec && e.field == field) return e.value;
+        return global_stock(field);
+    }
     const uint32_t base = lb_patches_blueprint_base();
     const BalField* f = field_of(rec, field);
     if (!base || !f || !applies(base, rec, *f)) return -1;
     return (int)read_w(record_at(base, rec) + f->off, f->width);
 }
 extern "C" int lb_balance_base(int rec, int field) {
+    if (kind_of(rec) == LB_BAL_GLOBALS) return global_stock(field);   // docs/416
     const uint32_t base = lb_patches_blueprint_base();
     const BalField* f = field_of(rec, field);
     if (!base || !f) return -1;
@@ -459,6 +497,7 @@ extern "C" int lb_balance_custom_apply(unsigned int base) {
     if (!base) return 0;
     int n = 0;
     for (const Edit& e : active()) {
+        if (kind_of(e.rec) == LB_BAL_GLOBALS) continue;   // docs/416: not in RAM
         const BalField* f = field_of(e.rec, e.field);
         if (!f || !applies(base, e.rec, *f)) continue;
         const uint32_t r = record_at(base, e.rec);

@@ -3852,6 +3852,11 @@ void roster_build_override(void) {
         for (uint32_t i = 0; i < 20u; ++i)
             bus_write_u8(rec + i, g_enemy_rec[i]);
         g_enemy_pending = false;
+        // docs/410: and what it holds, slot field by field (+0x00..+0x11).
+        std::fprintf(stderr, "[lb_enemy] army picks:");
+        for (uint32_t i = 0; i < 18u; i += 2u)
+            std::fprintf(stderr, " %u", (unsigned)(g_enemy_rec[i] | (g_enemy_rec[i + 1u] << 8)));
+        std::fprintf(stderr, "\n");
         std::fprintf(stderr, "[lb_enemy] army written for faction id %u "
                      "(object %08X; its roster is +0x38)\n",
                      (unsigned)bus_read_u8(g_cpu.R[0] + 0x30u),
@@ -4696,7 +4701,6 @@ constexpr uint32_t kRegisterMissions = 0x02045E50u;   // thumb
 constexpr uint32_t kRegisterLoop = 0x02045E58u;
 constexpr uint32_t kMissionTable = 0x02147DDCu;
 constexpr uint32_t kMissionRegistry = 0x021540E8u;   // vector: +4 data, +8 count
-constexpr uint32_t kMapListFill = 0x020C48B0u;        // thumb
 extern "C" int lb_mods_count(void);                   /* lb_mods.cpp */
 extern "C" int lb_mods_players(int k);
 extern "C" int lb_mods_world(int k);
@@ -4712,8 +4716,6 @@ struct MissionReg {
     uint8_t stems[30][5];
     uint32_t stem_at[30];
     uint32_t mission[30];          // the registered mod missions
-    uint32_t mode[30];             // their +0x10, while the MP list hides them
-    bool hidden = false;
 } g_mreg;
 }  // namespace
 
@@ -4818,30 +4820,220 @@ void mod_names_tick(void) {
     }
 }
 
-// The map list is SkirmishFactionSelect's, for Free Play (byte +0xA7 = 0) and
-// for a multiplayer host (1). A joiner looks the host's map up among its own
-// missions and writes through a null pointer when it is missing
-// (FUN_020F5168), so until both machines are shown to hold the same maps the
-// multiplayer list does not offer them: its filter (FUN_0204AFF8) keeps a
-// mission only while +0x10 < 3.
-void map_list_fill_override(void) {
-    void (*original)(void) = lb_dispatch_original(0, kMapListFill);
-    if (g_mreg.phase == 3) {
-        const bool mp = bus_read_u8(g_cpu.R[0] + 0xA7u) != 0;
-        if (mp != g_mreg.hidden) {
-            for (int k = 0; k < g_mreg.n; ++k) {
-                const uint32_t m = g_mreg.mission[k];
-                if (!m) continue;
-                if (mp) {
-                    g_mreg.mode[k] = bus_read_u32(m + 0x10u);
-                    bus_write_u32(m + 0x10u, 3u);
-                } else {
-                    bus_write_u32(m + 0x10u, g_mreg.mode[k]);
-                }
-            }
-            g_mreg.hidden = mp;
+// docs/413: A MOD MAP ONLINE, THE JOINER'S SIDE. FUN_020F5168 reads the game's
+// lobby packets. Type 2 is the host's lobby state (FUN_020F5DA8 builds it),
+// and its word +0xC names the map by the mission's +0xF0, the map name's LOC
+// id (FUN_020454C4 stores the mission table's +8 there). The joiner looks
+// that id up among its own missions, and when none matches it writes through
+// a null pointer (+0x18 stays 0; docs/391). A stock map's id is the same on
+// every machine. A mod map's is its place in that machine's own mods folder
+// (0xBF8 + 2k, lb_mods.cpp), so two folders that differ name different maps
+// by one id.
+//
+// So before the packet is read, a mod map's id is translated through the
+// host's list (its rules, lb_teams.cpp) to the id of this machine's copy of
+// the same content. When this machine has no copy, the map is withheld (0,
+// which the game reads as "no map yet"), and so is the start bit (+0x14 bit
+// 0, which would build the match on the missing mission), and the player is
+// told. A host whose rules carry no list (a build before docs/413) is taken
+// as it is: the same mods folder names the same maps.
+//
+// And the host must not start without this player. Its Start appears only once
+// every joiner is ready, so while the map is withheld this player cannot ready:
+// bit 0 of its own lobby byte (0x0215B804, sent to the host as its record's
+// +0x20) is cleared, and the game's one toggle for it (FUN_020B6074, the Ready
+// and Not Ready buttons and the tick box) is turned back into "not ready".
+constexpr uint32_t kLobbyPacket = 0x020F5168u;   // ARM
+constexpr uint32_t kReadyToggle = 0x020B6074u;   // thumb
+constexpr uint32_t kLocalLobbyByte = 0x0215B804u;
+constexpr uint32_t kModNameBase = 0xBF8u;        // the literal at 0x0203E0F8
+namespace {
+uint32_t g_lobby_key = 0, g_lobby_want = 0xFFFFFFFFu;   // the last translation
+bool g_lobby_withheld = false;                           // no map: no ready
+bool lobby_joined() {
+    const int net = lb_net_guest_state();
+    return net == 9 || net == 6 || net == 7 || net == 5 || net == 12;
+}
+bool lb_net_is_hosting_state() {
+    const int net = lb_net_guest_state();
+    return net == 10 || net == 2 || net == 3 || net == 4 || net == 11;
+}
+}  // namespace
+
+// docs/415: this player's hero for the chat's toasts: the hero slot (+8) of
+// the army in its lobby record, record +0xC (FUN_020F5048 fills it from an
+// entry's 0x14 army bytes, and FUN_020F5168 builds the match's army from it),
+// so record +0x14 -- its own record by its slot (0x02158AE0), else the local
+// mirror (0x0215B7E4 + 0x14). -1 before an army is chosen.
+extern "C" int lb_net_local_hero(void) {
+    const uint32_t self = bus_read_u16(0x02158AE0u);
+    const uint32_t at[2] = {self < 3u ? 0x0215B814u + 0x2Cu * self + 0x14u : 0u,
+                            0x0215B7F8u};
+    for (uint32_t a : at) {
+        if (!a) continue;
+        const unsigned bp = bus_read_u16(a);
+        if (bp > 0u && bp < 182u) return (int)bp;
+    }
+    return -1;
+}
+
+void ready_toggle_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kReadyToggle);
+    if (g_lobby_withheld && lobby_joined()) {
+        const uint8_t b = bus_read_u8(kLocalLobbyByte);
+        // The toggle flips bit 0; set, it flips to "not ready".
+        if (!(b & 1u)) bus_write_u8(kLocalLobbyByte, (uint8_t)(b | 1u));
+        std::fprintf(stderr, "[lb_mods] lobby: Ready refused; this machine "
+                     "lacks the host's map\n");
+        std::fflush(stderr);
+    }
+    if (original) original();
+}
+// docs/415: THE SWEAR FILTER ON PLAYERS' NAMES. A lobby packet carries each
+// player as a 0x18-byte entry that FUN_020F5048 copies into the lobby record:
+// when its +0x16 is 0 the first 11 bytes are the name (else the army). Type 1
+// (a joiner's own, to the host) holds one at +4; type 2 (the host's lobby
+// state) three at +0x16 + 0x18·k, present when bit 0 of +0x15 is set. A name
+// is filtered in the packet, before the game reads it, so the records -- and
+// everything the game draws from them -- show it filtered, and the next packet
+// brings the name as written once the filter is off. (So a host with the
+// filter on also passes the filtered names on to its joiners; a joiner's own
+// is put back, below.)
+void filter_lobby_name(uint32_t entry) {
+    if (bus_read_u8(entry + 0x16u) != 0u) return;   // an army, not a name
+    char name[12];
+    for (uint32_t i = 0; i < 11u; ++i) name[i] = (char)bus_read_u8(entry + i);
+    name[11] = '\0';
+    char out[64];
+    if (!lb_swear_filter(name, out, (int)sizeof out)) return;
+    out[10] = '\0';   // the game's 10 characters
+    const size_t n = std::strlen(out);
+    for (uint32_t i = 0; i < 11u; ++i)
+        bus_write_u8(entry + i, i < n ? (uint8_t)out[i] : 0u);
+}
+// A joiner's OWN entry in the host's lobby state is its own name as the host
+// shows it, filtered by the host's setting. It is put back from this machine's
+// copy (0x0215B7E4, FUN_020F5EC8) before this machine's own filter applies, so
+// nobody sees their own name changed by someone else's filter. This machine's
+// slot is the u16 at 0x02158AE0 (FUN_020F45E0).
+void lobby_names_filter(uint32_t pkt) {
+    if (!guest_ptr(pkt)) return;
+    const bool on = lb_setting_swear_filter() != 0;
+    const uint8_t type = bus_read_u8(pkt);
+    if (type == 1u) {
+        if (on) filter_lobby_name(pkt + 4u);
+    } else if (type == 2u) {
+        const uint32_t self = bus_read_u16(0x02158AE0u);
+        for (uint32_t k = 0; k < 3u; ++k) {
+            const uint32_t e = pkt + 0x16u + 0x18u * k;
+            if (!(bus_read_u8(e + 0x15u) & 1u)) continue;
+            if (k == self && lobby_joined() && bus_read_u8(e + 0x16u) == 0u)
+                for (uint32_t i = 0; i < 11u; ++i)
+                    bus_write_u8(e + i, bus_read_u8(0x0215B7E4u + i));
+            if (on) filter_lobby_name(e);
         }
     }
+}
+
+void lobby_packet_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kLobbyPacket);
+    const uint32_t pkt = g_cpu.R[1];
+    if (lobby_joined() || lb_net_is_hosting_state()) lobby_names_filter(pkt);
+    if (!lobby_joined()) g_lobby_withheld = false;
+    else if (guest_ptr(pkt) && bus_read_u8(pkt) == 2u) {
+        const uint32_t key = bus_read_u32(pkt + 0xCu);
+        if (key != 0u && (key < kModNameBase || key >= kModNameBase + 2u * 256u))
+            g_lobby_withheld = false;   // a stock map
+        if (key >= kModNameBase && key < kModNameBase + 2u * 256u) {
+            unsigned long long hash = 0;
+            char name[40] = "";
+            const int r = lb_rules_host_map(key, &hash, name, (int)sizeof name);
+            uint32_t want = key;                     // -1: an older host
+            int local = -1;
+            if (r == 1) {
+                local = lb_mods_find_hash(hash);
+                want = local >= 0 ? lb_mods_name_id(local) : 0u;
+            } else if (r == -2 && key == g_lobby_key && g_lobby_want != 0u &&
+                       g_lobby_want != 0xFFFFFFFFu) {
+                want = g_lobby_want;   // rules late for a moment: as last time
+            } else if (r == 0 || r == -2) {
+                want = 0u;
+            }
+            if (want != key) bus_write_u32(pkt + 0xCu, want);
+            g_lobby_withheld = want == 0u;
+            if (want == 0u) {
+                const uint32_t f = bus_read_u8(pkt + 0x14u);
+                if (f & 1u) bus_write_u8(pkt + 0x14u, (uint8_t)(f & ~1u));
+                const uint8_t b = bus_read_u8(kLocalLobbyByte);
+                if (b & 1u) bus_write_u8(kLocalLobbyByte, (uint8_t)(b & ~1u));
+            }
+            if (key != g_lobby_key || want != g_lobby_want) {
+                g_lobby_key = key;
+                g_lobby_want = want;
+                if (r == -2)
+                    std::fprintf(stderr, "[lb_mods] lobby: the host's map is mod "
+                                 "id %u; waiting for its rules\n", (unsigned)key);
+                else if (r == -1)
+                    std::fprintf(stderr, "[lb_mods] lobby: the host's map is mod "
+                                 "id %u, and its build sends no list; taken as "
+                                 "it is\n", (unsigned)key);
+                else if (local >= 0)
+                    std::fprintf(stderr, "[lb_mods] lobby: the host's \"%s\" "
+                                 "(id %u) is this machine's z/%02d (id %u)\n",
+                                 name, (unsigned)key, local + 1, (unsigned)want);
+                else
+                    std::fprintf(stderr, "[lb_mods] lobby: the host's map%s%s%s "
+                                 "(id %u) is not in this machine's mods folder; "
+                                 "withheld\n", name[0] ? " \"" : "", name,
+                                 name[0] ? "\"" : "", (unsigned)key);
+                std::fflush(stderr);
+                if (r >= 0 && local < 0) {
+                    char text[192];
+                    std::snprintf(text, sizeof text,
+                                  "The host chose the mod map \"%s\", which is not "
+                                  "in your mods folder, so this lobby cannot start "
+                                  "for you. Leave it, or add the map to "
+                                  "mods/maps and join again.",
+                                  name[0] ? name : "?");
+                    lb_overlay_notice(text);
+                }
+            }
+        }
+    }
+    if (original) original();
+}
+
+// docs/416: A GOLD BRICK'S WORTH. FUN_0205F038, a collectable's pickup, finds
+// the hero's team and passes r5 -- 1000 bricks, or 150 when the session's
+// +0x78 is 2 -- to the team's add (FUN_020866E0, `bl` at 0x0205F068) and to
+// the floating number (FUN_020A6680, `blx` at 0x0205F078). With a Balance
+// value set (offline only, lb_balance_global), both are given that value in
+// place of 1000, and the 150 case the same share of it. Recognised by the
+// return address; every other caller passes straight through.
+constexpr uint32_t kTeamAddBricks = 0x020866E0u;   // ARM
+constexpr uint32_t kFloatNumber = 0x020A6680u;     // thumb
+constexpr uint32_t kGoldAddRet = 0x0205F06Cu, kGoldShowRet = 0x0205F07Cu;
+namespace {
+uint32_t gold_brick_value(uint32_t stock) {
+    const int v = lb_balance_global(0);
+    if (v < 0 || (stock != 1000u && stock != 150u)) return stock;
+    return stock == 1000u ? (uint32_t)v : (uint32_t)(((uint64_t)v * 150u + 500u) / 1000u);
+}
+}  // namespace
+void team_add_bricks_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kTeamAddBricks);
+    if (g_cpu.R[14] == kGoldAddRet) {
+        const uint32_t stock = g_cpu.R[1];
+        g_cpu.R[1] = gold_brick_value(stock);
+        std::fprintf(stderr, "[lb_gold] a Gold Brick: %u bricks (the game's %u)\n",
+                     (unsigned)g_cpu.R[1], (unsigned)stock);
+        std::fflush(stderr);
+    }
+    if (original) original();
+}
+void float_number_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kFloatNumber);
+    if ((g_cpu.R[14] & ~1u) == kGoldShowRet) g_cpu.R[1] = gold_brick_value(g_cpu.R[1]);
     if (original) original();
 }
 
@@ -4936,6 +5128,9 @@ const NdsDispatchEntry kOverrideTable[] = {
     {kCastSpell, 0u, cast_spell_override, nullptr},        /* 0x0207B9C0 */
     /* Observer only, and only speaks with LB_GATHERLOG=1. docs/357. */
     {kTileGather, 0u, tile_gather_observer, nullptr},      /* 0x0207E9B4 */
+    /* ARM. A team's bricks: a Gold Brick's worth, else a pure tail call.
+       docs/416. */
+    {kTeamAddBricks, 0u, team_add_bricks_override, nullptr}, /* 0x020866E0 */
     /* Substitutes the faction-aligned side at MATCH LOAD, before the
        music starts, so freeplay opens on the right calm/battle pair. */
     {kSetMusicSide, 1u, set_music_side_override, nullptr}, /* 0x02088980 */
@@ -4945,6 +5140,9 @@ const NdsDispatchEntry kOverrideTable[] = {
        slots, patched once before its terrain draws. docs/387. */
     {kFillWindow, 1u, fill_window_override, nullptr},      /* 0x020A3234 */
     {kMapParse, 1u, map_parse_override, nullptr},          /* 0x020A369C */
+    /* Thumb. The floating number: a Gold Brick's, else a pure tail call.
+       docs/416. */
+    {kFloatNumber, 1u, float_number_override, nullptr},    /* 0x020A6680 */
     /* Control for the one below: docs/260 puts this ON the click path.
        Observer only, LB_CLICKDISPATCH=1. */
     {kTouchRect, 1u, touch_rect_observer, nullptr},        /* 0x020A8794 */
@@ -4958,6 +5156,9 @@ const NdsDispatchEntry kOverrideTable[] = {
     /* Observer only, and only speaks with LB_MARKERLOG=1. */
     /* Thumb. Free Play's opponent mapper: Custom and Random answer 133 and
        queue their army; the six factions are a pure tail call. docs/384. */
+    /* Thumb. ClientLobby's ready toggle: refused while this joiner lacks
+       the host's mod map. docs/413. */
+    {kReadyToggle, 1u, ready_toggle_override, nullptr},    /* 0x020B6074 */
     /* Thumb. User::MainMenu::virtual_09: a requested rename is saved by the
        game's own save in front of it; otherwise a pure tail call. docs/397. */
     {kMainMenuUpdate, 1u, main_menu_update_override, nullptr}, /* 0x020BF230 */
@@ -4968,7 +5169,6 @@ const NdsDispatchEntry kOverrideTable[] = {
     {kEnemyCycle, 1u, enemy_cycle_override, nullptr},      /* 0x020C0E7C */
     /* Thumb. The map list's fill: a multiplayer list does not offer the mod
        maps (docs/391). */
-    {kMapListFill, 1u, map_list_fill_override, nullptr},   /* 0x020C48B0 */
     {kMarkerPlace, 1u, marker_place_observer, nullptr},    /* 0x020DAAE4 */
     /* Thumb. The hero HUD's setup: with Prioritize Own Hero Spells, the
        player's own selected hero drives it; otherwise a pure tail call.
@@ -4993,6 +5193,8 @@ const NdsDispatchEntry kOverrideTable[] = {
     /* ARM. Steady pacing: NitroMain's two clock reads count VBlanks; every
        other call runs the cartridge's clock. docs/351. */
     {kGetMs, 0u, get_ms_override, nullptr},                /* 0x020F2648 */
+    /* ARM. A mod map's lobby id, translated to this machine's copy; docs/413. */
+    {kLobbyPacket, 0u, lobby_packet_override, nullptr},    /* 0x020F5168 */
     /* ARM. Byte fill and copy into the null page: named and declined.
        docs/369 (the combat crash). */
     /* ARM. GRADED, NOT PATCHED. The signed divide every `/` and `%` in the
@@ -5008,6 +5210,7 @@ const NdsDispatchEntry kOverrideTable[] = {
 // fault after shipping; this refuses to build. Every future entry must be
 // inserted in address order or the build stops here with this message.
 static_assert(kRosterBuild < kRegistryFind &&
+              kSelRect < kReadyToggle && kReadyToggle < kMainMenuUpdate &&
               kSelRect < kMainMenuUpdate && kMainMenuUpdate < kEnemyMap &&
               kEnemyMap < kOppSetupLabel &&
               kOppSetupLabel < kEnemyCycle &&
@@ -5020,20 +5223,19 @@ static_assert(kRosterBuild < kRegistryFind &&
               kMarquee < kFpCell && kFpCell < kStringFromId &&
               kStringFromId < kRegisterMissions &&
               kRegisterMissions < kGfxTransfer &&
-              kEnemyCycle < kMapListFill && kMapListFill < kMarkerPlace &&
               kGfxTransfer < kImageXfer && kImageXfer < kSetOwner &&
               kSetOwner < kSetHp && kSetHp < kApplyDamage &&
               kApplyDamage < kHealTick && kHealTick < kHotWireTick &&
               kHotWireTick < kCastSpell && kCastSpell < kTileGather &&
-              kTileGather < kSetMusicSide &&
+              kTileGather < kTeamAddBricks && kTeamAddBricks < kSetMusicSide &&
               kSetMusicSide < kFillWindow && kFillWindow < kMapParse &&
-              kMapParse < kTouchRect &&
+              kMapParse < kFloatNumber && kFloatNumber < kTouchRect &&
               kTouchRect < kMoveIssue &&
               kMoveIssue < kClickDispatch && kClickDispatch < kSelRect &&
               kSelRect < kMarkerPlace && kMarkerPlace < kWidgetRect &&
               kWidgetRect < kWidgetSetPos && kWidgetSetPos < kSplitArray &&
               kSplitArray < kGetMs &&
-              kGetMs < kFAdd &&
+              kGetMs < kLobbyPacket && kLobbyPacket < kFAdd &&
               kFAdd < kFMul && kFMul < kFSub && kFSub < kDivMod &&
               kSetOwner < kU16IsSet && kU16IsSet < kSetHp &&
               kSetHp < kListFind && kListFind < kApplyDamage,
@@ -5128,6 +5330,73 @@ uint32_t find_blueprint_block() {
         if (blueprint_block_valid(a)) return a;
     }
     return 0u;
+}
+
+// docs/410: THE NEUTRAL CREATURES' PRICES. The game never sells the Wolf (169),
+// the Robot (138) or the Shark (155) and prices them 1 brick and 30 ticks. With
+// "Neutral Creatures in Armies" on they cost what their stats are worth, from
+// the neighbours they resemble: the Wolf (500 health, 25-45) like a mounted
+// unit, the Robot (300, 5-10, slow) like a cheap one, the Shark (500, its bite
+// 60-75) like a special. A layer of its own, over the pack and same-builders
+// and under the player's Balance values, so those still win.
+struct CreaturePrice { int rec; uint16_t cost, build; };
+const CreaturePrice kCreaturePrices[] = {
+    {169, 200, 420}, {138, 80, 270}, {155, 400, 660}};
+struct CreatureByte { uint32_t addr; uint16_t loaded; };
+std::vector<CreatureByte> g_creatures_loaded;
+int g_creatures_patched = 0;
+
+// THE WOLF CAN STAND NOWHERE. FUN_02001510 gives a blueprint's passability
+// per terrain class (0 -> +0x16, 1 -> +0x19, 2 -> +0x17, 3 -> +0x18), and
+// FUN_0200159C its occupancy layers from +0x1A..+0x1C. The Wolf's are all 0
+// (+0x14..: 03 03 00 00 00 00 00 00 00 01), so a trained one finds no tile
+// to come out on (the produce state FUN_02072248 -> FUN_0205D7F0 ->
+// FUN_0207F1B4) and the order dies: an AI given Wolves paid for them and got
+// none (run crea410). It takes the Guardsman's and the Robot's
+// (03 03 01 01 00 00 01 00 00 01): ground, and the ground layer.
+// The Shark needs nothing: it is a naval unit (+0x18), built only at a
+// Shipyard (FUN_0208C500 -> 0x10; the player's list, FUN_020D9844, agrees),
+// so it is fielded on water maps.
+struct CreatureMove { int rec; uint8_t off, value; };
+const CreatureMove kCreatureMoves[] = {{169, 0x16, 1}, {169, 0x17, 1}, {169, 0x1A, 1}};
+struct CreatureMoveByte { uint32_t addr; uint8_t loaded; };
+std::vector<CreatureMoveByte> g_creature_moves_loaded;
+
+void snapshot_creatures() {
+    g_creatures_loaded.clear();
+    for (const CreaturePrice& c : kCreaturePrices) {
+        const uint32_t r = record_addr(g_blueprint_base, (uint32_t)c.rec);
+        g_creatures_loaded.push_back({r + 0x5Eu, (uint16_t)bus_read_u16(r + 0x5Eu)});
+        g_creatures_loaded.push_back({r + 0x60u, (uint16_t)bus_read_u16(r + 0x60u)});
+    }
+    g_creature_moves_loaded.clear();
+    for (const CreatureMove& m : kCreatureMoves) {
+        const uint32_t a = record_addr(g_blueprint_base, (uint32_t)m.rec) + m.off;
+        g_creature_moves_loaded.push_back({a, (uint8_t)bus_read_u8(a)});
+    }
+}
+void revert_creatures() {
+    for (const CreatureByte& b : g_creatures_loaded)
+        if (bus_read_u16(b.addr) != b.loaded) bus_write_u16(b.addr, b.loaded);
+    for (const CreatureMoveByte& b : g_creature_moves_loaded)
+        if (bus_read_u8(b.addr) != b.loaded) bus_write_u8(b.addr, b.loaded);
+}
+void apply_creatures() {
+    for (const CreaturePrice& c : kCreaturePrices) {
+        const uint32_t r = record_addr(g_blueprint_base, (uint32_t)c.rec);
+        bus_write_u16(r + 0x5Eu, c.cost);
+        bus_write_u16(r + 0x60u, c.build);
+    }
+    for (const CreatureMove& m : kCreatureMoves)
+        bus_write_u8(record_addr(g_blueprint_base, (uint32_t)m.rec) + m.off, m.value);
+}
+
+extern "C" int lb_creatures_live(void) {
+    const int played = lb_demo_play_creatures();
+    if (played >= 0) return played;
+    const int host = lb_rules_host_flags();
+    if (host >= 0) return (host & LB_RULE_CREATURES) ? 1 : 0;
+    return lb_setting_creatures();
 }
 
 // docs/386: the five builders' copied fields as the game loaded them, taken at
@@ -8036,6 +8305,7 @@ static void apply_plantation_name(void) {
 namespace {
 char g_map_name[64] = "";
 unsigned g_map_gen = 0;
+bool g_map_is_mod = false;   // docs/410: the level is a mods-folder map ("z/NN")
 
 // (in the unnamed namespace, where the override table's declaration is)
 void map_load_observer(void) {
@@ -8052,6 +8322,7 @@ void map_load_observer(void) {
     }
     if (stem[0]) {
         std::snprintf(g_map_name, sizeof g_map_name, "%s", stem);
+        g_map_is_mod = stem[0] == 'z' && stem[1] == '/';   // docs/410
         if (stem[0] == 'z' && stem[1] == '/') {
             const int k = std::atoi(stem + 2) - 1;
             if (k >= 0 && k < lb_mods_count() && lb_mods_name(k))
@@ -8086,6 +8357,7 @@ void map_load_observer(void) {
 
 extern "C" const char* lb_level_map_name(void) { return g_map_name; }
 extern "C" unsigned lb_level_map_gen(void) { return g_map_gen; }
+extern "C" int lb_level_is_mod(void) { return g_map_is_mod ? 1 : 0; }   // docs/410
 
 // LB_FIELD_DUMP=<path.ppm> renders the whole battlefield once, so the C++
 // locator and renderer can be checked against tools/lb_field.py's output
@@ -10732,6 +11004,58 @@ static void apply_aihero_kill(void) {
     std::fflush(stderr);
 }
 
+// docs/410: LB_BPCENSUS=<seconds> logs, that often in a battle, the live
+// Wolves (169), Robots (138) and Sharks (155) of each owner. Test aid only.
+static void bp_census(void) {
+    static const int secs = [] {
+        const char* v = std::getenv("LB_BPCENSUS");
+        return v ? std::atoi(v) : 0;
+    }();
+    if (secs <= 0) return;
+    int cx = 0, cy = 0;
+    if (!lb_field_camera(&cx, &cy)) return;
+    static int tick = 0;
+    if (++tick < secs * 60) return;
+    tick = 0;
+    const uint32_t pool = bus_read_u32(kEntityPoolPtr);
+    if (!guest_ptr(pool)) return;
+    const uint32_t array = bus_read_u32(pool + 8u);
+    const int32_t count = (int32_t)bus_read_u32(pool + 0xCu);
+    static const int kBp[3] = {169, 138, 155};
+    int n[4][3] = {};
+    for (int32_t i = 0; guest_ptr(array) && i < count && i < 4096; ++i) {
+        const uint32_t e = bus_read_u32(array + (uint32_t)i * 4u);
+        if (!guest_ptr(e) || bus_read_u8(e + 0x227u) == 0u) continue;
+        const uint32_t bp = unit_blueprint(e);
+        if (!bp) continue;
+        const int idx = (int)bus_read_u16(bp + 4u);
+        const unsigned owner = bus_read_u8(e + 0xE4u);
+        for (int k = 0; k < 3; ++k)
+            if (idx == kBp[k] && owner < 4u) ++n[owner][k];
+    }
+    std::fprintf(stderr, "[lb_census] wolf/robot/shark by owner: 0 %d/%d/%d  "
+                 "1 %d/%d/%d  2 %d/%d/%d\n", n[0][0], n[0][1], n[0][2],
+                 n[1][0], n[1][1], n[1][2], n[2][0], n[2][1], n[2][2]);
+    // And every blueprint owner 1 fields, to tell "no creature built" from
+    // "nothing of that slot built yet".
+    int hist[192] = {};
+    for (int32_t i = 0; guest_ptr(array) && i < count && i < 4096; ++i) {
+        const uint32_t e = bus_read_u32(array + (uint32_t)i * 4u);
+        if (!guest_ptr(e) || bus_read_u8(e + 0x227u) == 0u ||
+            bus_read_u8(e + 0xE4u) != 1u)
+            continue;
+        const uint32_t bp = unit_blueprint(e);
+        const int idx = bp ? (int)bus_read_u16(bp + 4u) : -1;
+        if (idx >= 0 && idx < 192) ++hist[idx];
+    }
+    char line[256];
+    int at = std::snprintf(line, sizeof line, "[lb_census] owner 1:");
+    for (int b = 0; b < 192 && at < (int)sizeof line - 12; ++b)
+        if (hist[b]) at += std::snprintf(line + at, sizeof line - at, " %d x%d", b, hist[b]);
+    std::fprintf(stderr, "%s\n", line);
+    std::fflush(stderr);
+}
+
 // ── Stop at the world's edge instead of shifting the band ──────────────────
 //
 // The requirement: rather than jitter/shake the view at the edge/corner of the
@@ -11616,6 +11940,7 @@ extern "C" void lb_patches_on_vblank(void) {
     // LB_KILLTEST is set. docs/239 flags it as compiled-but-never-run.
     apply_kill_test();
     apply_aihero_kill();              // docs/406 test aid
+    bp_census();                      // docs/410 test aid
     apply_insn_hook_policy();
     // Fill the tilemap columns the guest leaves empty, so the widened field
     // shows terrain rather than black. Off unless LB_WIDEMAP is set.
@@ -11752,6 +12077,7 @@ extern "C" void lb_patches_on_vblank(void) {
                      "they were found\n", g_bp_frames);
         lb_balance_snapshot(g_blueprint_base);
         snapshot_same_builders();
+        snapshot_creatures();   // docs/410
         discovered = true;
     }
 
@@ -11762,7 +12088,9 @@ extern "C" void lb_patches_on_vblank(void) {
     if (const char* spec = std::getenv("LB_BALANCE")) slot = std::atoi(spec);
     int builders = lb_setting_same_builders();   // docs/396: 0, or the source
     if (builders < 0 || builders > 6) builders = 0;
-    if (slot == lb_balance_applied_slot() && builders == g_builders_patched) {
+    const int creatures = lb_creatures_live() ? 1 : 0;   // docs/410
+    if (slot == lb_balance_applied_slot() && builders == g_builders_patched &&
+        creatures == g_creatures_patched) {
         // docs/404: only the player's own values changed. They may change in
         // an offline battle (a recording carries each change); not online.
         if (lb_balance_custom_dirty() && !lb_balance_custom_blocked())
@@ -11794,6 +12122,10 @@ extern "C" void lb_patches_on_vblank(void) {
     // equalisation. docs/404: the player's own values are the top layer, out
     // first and back last.
     lb_balance_custom_revert(g_blueprint_base);
+    if (g_creatures_patched) {   // docs/410: over the builders, so out first
+        revert_creatures();
+        g_creatures_patched = 0;
+    }
     if (g_builders_patched) {
         revert_same_builders();
         g_builders_patched = 0;
@@ -11823,6 +12155,12 @@ extern "C" void lb_patches_on_vblank(void) {
                      "from the %s builder to the 5 others\n",
                      (unsigned)(sizeof(kStatFields) / sizeof(kStatFields[0])),
                      kNames[builders - 1]);
+    }
+    if (creatures) {   // docs/410
+        apply_creatures();
+        g_creatures_patched = 1;
+        std::fprintf(stderr, "[lb_patch] neutral creatures priced: Wolf 200, "
+                     "Robot 80, Shark 400\n");
     }
     lb_balance_custom_apply(g_blueprint_base);   // docs/404: the top layer
 }

@@ -64,6 +64,9 @@ cp -p "$W/port/runner/src/lb_palette.cpp" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_palette_data.h" "$TREE/runner/src/"
 # Mod maps from a mods folder (docs/391).
 cp -p "$W/port/runner/src/lb_mods.cpp" "$TREE/runner/src/"
+# Online chat and the swear filter (docs/415); the words only as hashes.
+cp -p "$W/port/runner/src/lb_chat.cpp" "$TREE/runner/src/"
+cp -p "$W/port/runner/src/lb_chat_words.h" "$TREE/runner/src/"
 # The first-run setup: the player's own ROM, Europe or USA (docs/394).
 cp -p "$W/port/runner/src/lb_setup.cpp" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_music.cpp" "$TREE/runner/src/"

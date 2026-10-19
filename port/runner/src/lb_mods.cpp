@@ -399,7 +399,10 @@ std::string exe_dir() {
 
 void scan(const std::vector<uint8_t>& rom, const Nitro& own) {
     namespace fs = std::filesystem;
-    const fs::path dir = fs::path(exe_dir()) / "mods";
+    // docs/413: LB_MODS_DIR=<folder> reads another mods folder, so two
+    // instances in one build folder can hold different maps. Test aid only.
+    const char* alt = std::getenv("LB_MODS_DIR");
+    const fs::path dir = alt && *alt ? fs::path(alt) : fs::path(exe_dir()) / "mods";
     std::error_code ec;
     if (!fs::is_directory(dir, ec)) return;
     std::vector<fs::path> roms;
@@ -468,16 +471,116 @@ void scan(const std::vector<uint8_t>& rom, const Nitro& own) {
             g_maps.push_back(std::move(m));
         }
     }
+    // docs/413: LOOSE MAP FOLDERS, as the community map archive ships them
+    // (github.com/Ryncat2000/Lego-Battles-Custom-Map-Archive): mods/maps/, at
+    // any depth, so its zips can simply be extracted there. A folder is a map
+    // when it holds exactly one .map and that map's four minimap files
+    // (<stem>mini.NCGR/.NCBR, <stem>miniNT.NCGR/.NCBR); a folder of story maps
+    // without them (the archive's difficulty patch) is not one. Its detail
+    // tiles are DetailTiles_<stem>.tbp when it has them; without, a map made
+    // to replace slot mpNN takes that slot's stock ones, any other mp01's
+    // (the archive: "if this is included you MUST replace it"). The folder's
+    // name is the map's.
+    {
+        auto lower = [](std::string s) {
+            for (char& c : s) c = (char)std::tolower((unsigned char)c);
+            return s;
+        };
+        auto slurp = [](const fs::path& p, std::vector<uint8_t>* out) {
+            std::error_code e2;
+            const auto sz = fs::file_size(p, e2);
+            if (e2 || sz == 0 || sz > (8u << 20)) return false;
+            FILE* f = std::fopen(p.string().c_str(), "rb");
+            if (!f) return false;
+            out->resize((size_t)sz);
+            const bool ok = std::fread(out->data(), 1, out->size(), f) == out->size();
+            std::fclose(f);
+            return ok;
+        };
+        const fs::path loose = dir / "maps";
+        std::vector<fs::path> folders;
+        if (fs::is_directory(loose, ec))
+            for (auto it = fs::recursive_directory_iterator(loose, ec);
+                 it != fs::recursive_directory_iterator(); it.increment(ec)) {
+                if (ec) break;
+                if (it->is_directory(ec)) folders.push_back(it->path());
+            }
+        std::sort(folders.begin(), folders.end());
+        int loose_n = 0;
+        for (const fs::path& f : folders) {
+            std::vector<fs::path> maps;
+            std::vector<fs::path> files;
+            for (const auto& e : fs::directory_iterator(f, ec)) {
+                if (!e.is_regular_file(ec)) continue;
+                files.push_back(e.path());
+                if (lower(e.path().extension().string()) == ".map") maps.push_back(e.path());
+            }
+            if (maps.size() != 1) continue;
+            const std::string stem = maps[0].stem().string();
+            auto find = [&](const std::string& name) -> fs::path {
+                const std::string want = lower(name);
+                for (const fs::path& p : files)
+                    if (lower(p.filename().string()) == want) return p;
+                return fs::path();
+            };
+            ModMap m;
+            bool ok = slurp(maps[0], &m.map);
+            for (int k = 0; ok && k < 4; ++k) {
+                const fs::path p = find(stem + kMiniExt[k]);
+                ok = !p.empty() && slurp(p, &m.mini[k]);
+            }
+            if (!ok) continue;
+            if (!map_facts(m.map, &m.world, &m.players) || m.players < 2) {
+                std::fprintf(stderr, "[lb_mods] %s: %s.map is not a map the game "
+                             "reads, skipped\n", f.filename().string().c_str(),
+                             stem.c_str());
+                continue;
+            }
+            const fs::path dt = find("DetailTiles_" + stem + ".tbp");
+            if (dt.empty() || !slurp(dt, &m.detail)) {
+                int s = 0;
+                if (lower(stem).rfind("mp", 0) == 0) s = std::atoi(stem.c_str() + 2);
+                char stock[40];
+                std::snprintf(stock, sizeof stock, "BP/DetailTiles_mp%02d.tbp",
+                              s >= 1 && s <= 30 ? s : 1);
+                mem_read(rom, own, stock, &m.detail);
+            }
+            m.slot = 1000 + loose_n;
+            m.source = "mods/maps/" + f.lexically_relative(loose).generic_string();
+            m.name = f.filename().string();
+            m.hash = fnv64(m.map);
+            m.hash = fnv64(m.detail, m.hash);
+            for (auto& v : m.mini) m.hash = fnv64(v, m.hash);
+            if (std::any_of(g_maps.begin(), g_maps.end(),
+                            [&](const ModMap& o) { return o.hash == m.hash; }))
+                continue;
+            g_maps.push_back(std::move(m));
+            ++loose_n;
+        }
+        if (loose_n) ++files;   // the folder counts as one source in the status
+    }
+
     // A stable order whatever the folder holds: the slot, then the content.
     std::sort(g_maps.begin(), g_maps.end(), [](const ModMap& a, const ModMap& b) {
         return a.slot != b.slot ? a.slot < b.slot : a.hash < b.hash;
     });
-    if (g_maps.size() > 30) g_maps.resize(30);   // one pass of the game's loop
+    size_t dropped = 0;
+    if (g_maps.size() > 30) {   // one pass of the game's loop
+        dropped = g_maps.size() - 30;
+        for (size_t k = 30; k < g_maps.size(); ++k)
+            std::fprintf(stderr, "[lb_mods] over the 30-map limit, not loaded: %s\n",
+                         g_maps[k].source.c_str());
+        g_maps.resize(30);
+    }
     for (ModMap& m : g_maps)
         m.desc = "A map from " + m.source + ".";
     char buf[96];
-    std::snprintf(buf, sizeof buf, "%zu mod map(s) from %d ROM(s)", g_maps.size(),
-                  files);
+    if (dropped)
+        std::snprintf(buf, sizeof buf, "%zu mod map(s) from %d source(s), %zu over "
+                      "the limit", g_maps.size(), files, dropped);
+    else
+        std::snprintf(buf, sizeof buf, "%zu mod map(s) from %d source(s)",
+                      g_maps.size(), files);   // docs/413: ROMs and mods/maps
     g_status = buf;
 }
 
@@ -626,13 +729,17 @@ extern "C" int lb_mods_build(std::vector<uint8_t>* rom_p) {
     std::fprintf(stderr, "[lb_mods] %s: %zu bytes added after 0x%08X; files "
                  "%zu -> %zu, directories +3\n", g_status.c_str(), blob.size(),
                  end, (size_t)(as_n / 8u), fs.fat.size());
-    for (size_t k = 0; k < n; ++k)
+    for (size_t k = 0; k < n; ++k) {
+        char slot[24] = "";   // docs/413: a loose folder has no slot
+        if (g_maps[k].slot < 1000)
+            std::snprintf(slot, sizeof slot, "slot mp%02d of ", g_maps[k].slot);
         std::fprintf(stderr, "[lb_mods]   z/%02u  %-24s %d players, %s, from "
-                     "slot mp%02d of %s\n", (unsigned)(k + 1),
+                     "%s%s\n", (unsigned)(k + 1),
                      g_maps[k].name.c_str(), g_maps[k].players,
                      g_maps[k].world == 1 ? "Pirate" : g_maps[k].world == 2 ? "Mars"
                                                                            : "King",
-                     g_maps[k].slot, g_maps[k].source.c_str());
+                     slot, g_maps[k].source.c_str());
+    }
     std::fflush(stderr);
     return (int)n;
 }
@@ -654,3 +761,13 @@ extern "C" const char* lb_mods_name(int k) {
     return (k >= 0 && k < (int)g_maps.size()) ? g_maps[(size_t)k].name.c_str() : "";
 }
 extern "C" const char* lb_mods_status(void) { return g_status.c_str(); }
+// docs/413: a map's content hash (map, detail tiles, minimaps), the identity
+// a multiplayer lobby compares; and the map holding a hash, or -1.
+extern "C" unsigned long long lb_mods_hash(int k) {
+    return (k >= 0 && k < (int)g_maps.size()) ? g_maps[(size_t)k].hash : 0ull;
+}
+extern "C" int lb_mods_find_hash(unsigned long long hash) {
+    for (size_t k = 0; k < g_maps.size(); ++k)
+        if (g_maps[k].hash == hash) return (int)k;
+    return -1;
+}

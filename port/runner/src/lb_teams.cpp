@@ -237,6 +237,7 @@ struct Cand {
     uint16_t unit;      // blueprint index
     uint16_t minifig;   // blueprint index of its minifig collectable
     uint8_t faction;    // 0 King 1 Wizard 2 Pirate 3 Imperial 4 Earth 5 Alien
+                        // 6 Neutral (docs/410: the creatures, no minifig)
 };
 
 const Cand kHero[] = {
@@ -253,6 +254,9 @@ const Cand kBuilder[] = {
 const Cand kMelee[] = {
     {3, 359, 0},  {162, 367, 0}, {23, 372, 1}, {166, 380, 1}, {43, 385, 2},
     {63, 398, 3}, {83, 411, 4},  {103, 424, 5},
+    // docs/410: the neutral creatures, behind lb_creatures_live (cand_on):
+    // Wolf (CastleNeutral) and Robot (MarsNeutral), both category 2.
+    {169, 0, 6},  {138, 0, 6},
 };
 const Cand kRanged[] = {
     {4, 360, 0},   {24, 373, 1}, {44, 386, 2},  {146, 393, 2}, {64, 399, 3},
@@ -270,6 +274,10 @@ const Cand kSiege2[] = {
     {7, 363, 0},   {163, 368, 0}, {27, 376, 1},  {167, 381, 1},
     {47, 389, 2},  {147, 394, 2}, {67, 402, 3},  {151, 407, 3},
     {87, 415, 4},  {131, 420, 4}, {107, 428, 5}, {135, 433, 5},
+    // docs/410: the Shark (PirateNeutral, category 6, SharkBite). The tier
+    // function FUN_020EB21C gives it none, but the army record's three
+    // special fields only differ in which menu lists them.
+    {155, 0, 6},
 };
 const Cand kSiege3[] = {
     {8, 364, 0}, {28, 377, 1}, {48, 390, 2}, {68, 403, 3}, {88, 416, 4},
@@ -307,10 +315,13 @@ const Slot kSlots[LB_TEAM_SLOTS] = {
 // first transport. That is Free Play's default army.
 const uint16_t kKingDefault[LB_TEAM_SLOTS] = {0, 2, 3, 4, 5, 6, 7, 8, 9};
 
+// docs/410: a creature (no minifig) only while the option allows them.
+bool cand_on(const Cand& c) { return c.minifig != 0 || lb_creatures_live() != 0; }
+
 const Cand* find_cand(int unit, int* slot_out) {
     for (int s = 0; s < LB_TEAM_SLOTS; ++s)
         for (int k = 0; k < kSlots[s].n; ++k)
-            if (kSlots[s].c[k].unit == unit) {
+            if (kSlots[s].c[k].unit == unit && cand_on(kSlots[s].c[k])) {
                 if (slot_out) *slot_out = s;
                 return &kSlots[s].c[k];
             }
@@ -370,6 +381,7 @@ void check_table() {
     for (int s = 0; s < LB_TEAM_SLOTS; ++s)
         for (int k = 0; k < kSlots[s].n; ++k) {
             const Cand& c = kSlots[s].c[k];
+            if (!c.minifig) continue;          // docs/410: a creature
             const uint32_t mf = bp_addr(c.minifig);
             // +0x60 names the unit: its index in the file, or, if the loader
             // fixed it up, the address of its record.
@@ -686,6 +698,12 @@ uint8_t g_bans_recv[kBanBytes] = {};       // under g_rules_mu
 bool g_bans_recv_ok = false;               // under g_rules_mu
 unsigned g_bans_recv_from = 0;             // under g_rules_mu
 uint8_t g_flags_recv = 0;                  // docs/406; under g_rules_mu
+// docs/413: the host's mod maps as its rules list them (key, content hash,
+// name), and whether its rules carried the list at all (an older build's
+// do not).
+struct RecvMap { unsigned key; unsigned long long hash; std::string name; };
+std::vector<RecvMap> g_maps_recv;          // under g_rules_mu
+bool g_maps_recv_has = false;              // under g_rules_mu
 // When they last arrived. A host sends them every 250 ms from opening its
 // lobby to the end of the match, so rules older than a few seconds belong to
 // a lobby this player has left and are not applied.
@@ -734,13 +752,19 @@ extern "C" int lb_rom_read(const char* path, unsigned char* out, int cap) {
 }
 
 extern "C" int lb_teams_slot_count(int slot) {
-    return (slot >= 0 && slot < LB_TEAM_SLOTS) ? kSlots[slot].n : 0;
+    if (slot < 0 || slot >= LB_TEAM_SLOTS) return 0;
+    int n = 0;
+    for (int k = 0; k < kSlots[slot].n; ++k) n += cand_on(kSlots[slot].c[k]);
+    return n;
 }
 
 extern "C" int lb_teams_slot_unit(int slot, int k) {
-    if (slot < 0 || slot >= LB_TEAM_SLOTS || k < 0 || k >= kSlots[slot].n)
-        return -1;
-    return kSlots[slot].c[k].unit;
+    if (slot < 0 || slot >= LB_TEAM_SLOTS || k < 0) return -1;
+    for (int i = 0; i < kSlots[slot].n; ++i) {
+        if (!cand_on(kSlots[slot].c[i])) continue;
+        if (k-- == 0) return kSlots[slot].c[i].unit;
+    }
+    return -1;
 }
 
 extern "C" void lb_teams_slot_pos(int slot, int* x, int* y) {
@@ -826,6 +850,7 @@ extern "C" int lb_teams_unit_state(int bp) {
     const Cand* c = find_cand(bp, nullptr);
     const uint32_t mgr = bus_read_u32(kUnlockMgr);
     if (!c || !guest_ptr(mgr) || !lb_patches_blueprint_base()) return -1;
+    if (!c->minifig) return 2;           // docs/410: a creature, always fieldable
     check_table();
     const uint32_t mf = bp_addr(c->minifig);
     const uint32_t bit = bus_read_u16(mf + 0x6Cu);
@@ -1018,6 +1043,7 @@ extern "C" void lb_teams_randomize(LbTeam* t, int fieldable_only) {
         std::vector<int> pool;
         for (int k = 0; k < kSlots[s].n; ++k) {
             const int u = kSlots[s].c[k].unit;
+            if (!cand_on(kSlots[s].c[k])) continue;   // docs/410
             if (fieldable_only && lb_teams_unit_state(u) != 2) continue;
             pool.push_back(u);
         }
@@ -1268,18 +1294,57 @@ extern "C" int lb_teams_received_bans(unsigned char* bits, int nbytes,
 // docs/406: then a flags count (1) and the host's rule flags (LB_RULE_*),
 // which change the simulation and so must match on every machine. A build
 // that predates them reads the bans and ignores the rest.
+// docs/413: then the host's mod maps: a count, and for each its lobby key
+// (u16), content hash (u64, little-endian) and name (a length byte, at most
+// 31 bytes). A joiner translates the lobby's key through them to its own copy.
 extern "C" int lb_rules_outgoing(unsigned char* buf, int cap) {
     if (!net_hosting(lb_net_guest_state())) return 0;
-    const int n = 6 + kBanBytes + 2;
-    if (!buf || cap < n) return 0;
+    int n = 6 + kBanBytes + 2;
+    if (!buf || cap < n + 1) return 0;
     std::memcpy(buf, "LBR1", 4);
     buf[4] = 1;
     buf[5] = (unsigned char)kBanBytes;
     buf[6 + kBanBytes] = 1;
     buf[7 + kBanBytes] = (unsigned char)lb_rules_local_flags();
+    const int count_at = n++;
+    int maps = 0;
+    for (int k = 0; k < lb_mods_count() && maps < 255; ++k) {
+        const char* name = lb_mods_name(k);
+        const int len = name ? (int)std::min<size_t>(std::strlen(name), 31) : 0;
+        if (n + 11 + len > cap) break;
+        const unsigned key = lb_mods_name_id(k);
+        const unsigned long long h = lb_mods_hash(k);
+        buf[n++] = (unsigned char)(key & 0xFF);
+        buf[n++] = (unsigned char)(key >> 8);
+        for (int b = 0; b < 8; ++b) buf[n++] = (unsigned char)(h >> (8 * b));
+        buf[n++] = (unsigned char)len;
+        if (len) std::memcpy(buf + n, name, (size_t)len);
+        n += len;
+        ++maps;
+    }
+    buf[count_at] = (unsigned char)maps;
     std::lock_guard<std::mutex> lk(g_rules_mu);
     std::memcpy(buf + 6, g_bans_local, kBanBytes);
     return n;
+}
+
+// docs/413: what the host's rules say of the lobby key `key`: 1, with its
+// hash and name, when the host lists it; 0 when the host lists mod maps but
+// not this one; -1 when the host's rules carry no list (a build before
+// docs/413, whose keys can only be taken as they are); -2 before any fresh
+// rules have arrived.
+extern "C" int lb_rules_host_map(unsigned key, unsigned long long* hash,
+                                 char* name, int cap) {
+    std::lock_guard<std::mutex> lk(g_rules_mu);
+    if (!rules_fresh()) return -2;
+    if (!g_maps_recv_has) return -1;
+    for (const RecvMap& m : g_maps_recv)
+        if (m.key == key) {
+            if (hash) *hash = m.hash;
+            if (name && cap > 0) std::snprintf(name, (size_t)cap, "%s", m.name.c_str());
+            return 1;
+        }
+    return 0;
 }
 
 // docs/406: the rule flags a joined machine runs with: the host's as last
@@ -1311,6 +1376,35 @@ extern "C" void lb_rules_incoming(const unsigned char* buf, int len,
     const uint8_t flags = (fn >= 1 && len >= 8 + n) ? buf[7 + n] : 0;
     const bool flags_changed = !g_bans_recv_ok || flags != g_flags_recv;
     g_flags_recv = flags;
+    // docs/413: the host's mod maps, after the flags.
+    std::vector<RecvMap> maps;
+    bool has_maps = false;
+    {
+        int at = 6 + n + 2;
+        if (fn >= 1 && len > at) {
+            const int count = buf[at++];
+            has_maps = true;
+            for (int k = 0; k < count; ++k) {
+                if (at + 11 > len) { has_maps = false; break; }
+                RecvMap m;
+                m.key = (unsigned)buf[at] | ((unsigned)buf[at + 1] << 8);
+                m.hash = 0;
+                for (int b = 0; b < 8; ++b)
+                    m.hash |= (unsigned long long)buf[at + 2 + b] << (8 * b);
+                const int nl = buf[at + 10];
+                at += 11;
+                if (nl > 31 || at + nl > len) { has_maps = false; break; }
+                m.name.assign((const char*)buf + at, (size_t)nl);
+                at += nl;
+                maps.push_back(std::move(m));
+            }
+            if (!has_maps) maps.clear();
+        }
+    }
+    const bool maps_changed = !g_bans_recv_ok || has_maps != g_maps_recv_has ||
+                              maps.size() != g_maps_recv.size();
+    g_maps_recv = std::move(maps);
+    g_maps_recv_has = has_maps;
     g_bans_recv_ok = true;
     g_bans_recv_from = sender;
     g_bans_recv_at = std::chrono::steady_clock::now();
@@ -1324,6 +1418,12 @@ extern "C" void lb_rules_incoming(const unsigned char* buf, int len,
     if (flags_changed) {
         std::fprintf(stderr, "[lb_teams] the host's rule flags from instance "
                      "%u: %02X\n", sender, flags);
+        std::fflush(stderr);
+    }
+    if (maps_changed) {
+        std::fprintf(stderr, "[lb_teams] the host's mod maps from instance %u: "
+                     "%s%zu\n", sender, g_maps_recv_has ? "" : "no list, ",
+                     g_maps_recv.size());
         std::fflush(stderr);
     }
 }
@@ -1349,7 +1449,10 @@ extern "C" int lb_teams_enforce_bans(unsigned char rec[20], char* why, int cap) 
     std::string names;
     for (int s = 0; s < LB_TEAM_SLOTS; ++s) {
         const int bp = rec[kSlots[s].rec_off] | (rec[kSlots[s].rec_off + 1] << 8);
-        if (!king_default(bp) && ban_bit(bits, bp)) {
+        // docs/410: a creature counts as banned unless the host allows them.
+        const bool creature = (bp == 169 || bp == 138 || bp == 155) &&
+                              !lb_creatures_live();
+        if (!king_default(bp) && (ban_bit(bits, bp) || creature)) {
             if (!names.empty()) names += ", ";
             names += lb_teams_unit_name(bp);
         }

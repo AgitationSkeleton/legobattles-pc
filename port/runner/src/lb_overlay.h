@@ -314,7 +314,10 @@ unsigned int lb_balance_extent(void);   // one past any pack's last byte
 // of the pack and Same-builders. Records 0..181 are units and buildings
 // (0x7C each), 182..208 their attacks (projectiles, 0x74 each). Fields are
 // numbered within a kind: lb_balance_field_* name them.
-enum { LB_BAL_UNITS = 0, LB_BAL_ATTACKS = 1 };
+// docs/416: LB_BAL_GLOBALS, values in the code (record 209: field 0 a Gold
+// Brick's worth); lb_balance_global gives the one in force, or -1.
+enum { LB_BAL_UNITS = 0, LB_BAL_ATTACKS = 1, LB_BAL_GLOBALS = 2 };
+int lb_balance_global(int field);
 // docs/408: units' fields 0..9 are the table's columns; 10..14 the spells.
 enum { LB_BAL_SPELL_FIELD0 = 10, LB_BAL_SPELLS = 5 };
 int         lb_balance_field_count(int kind);
@@ -473,8 +476,39 @@ int  lb_setting_music_mode(void);
 int  lb_setting_level_palette(void);
 int  lb_setting_force_tileset(void);
 // docs/391: lb_mods.cpp's summary of the mods folder, e.g. "18 mod map(s)
-// from 3 ROM(s)".
+// from 3 source(s)".
 const char* lb_mods_status(void);
+// docs/413: the mod maps (lb_mods.cpp): how many, each one's lobby key (its
+// name's LOC id), name and content hash, and the map holding a hash (-1).
+int                lb_mods_count(void);
+unsigned           lb_mods_name_id(int k);
+const char*        lb_mods_name(int k);
+unsigned long long lb_mods_hash(int k);
+int                lb_mods_find_hash(unsigned long long hash);
+// docs/413: a joiner's view of the host's mod maps, by lobby key: 1 listed
+// (hash and name filled), 0 not listed, -1 the host sends no list, -2 no
+// fresh rules yet (lb_teams.cpp).
+int  lb_rules_host_map(unsigned key, unsigned long long* hash, char* name, int cap);
+// docs/413: a message for the player that the game's own screens cannot show,
+// drawn over the game whether or not the menu is open (lb_overlay.cpp).
+void lb_overlay_notice(const char* text);
+// docs/415: online chat and the swear filter (lb_chat.cpp). The bridge takes
+// the datagrams to send and hands over the ones received; the overlay opens,
+// closes and draws the chat box and toasts.
+int         lb_chat_outgoing(unsigned char* buf, int cap);
+void        lb_chat_incoming(const unsigned char* buf, int len, unsigned int sender);
+int         lb_chat_online(void);
+int         lb_chat_is_open(void);
+void        lb_chat_open(void);
+void        lb_chat_close(void);
+void        lb_chat_draw(SDL_Renderer* r);
+// The filter: always applied (1 when it changed something), and as shown
+// (applied only while the setting is on; valid until the next call).
+int         lb_swear_filter(const char* in, char* out, int cap);
+const char* lb_swear_shown(const char* in);
+void        lb_swear_selftest_if_asked(void);
+int         lb_setting_swear_filter(void);
+int         lb_setting_chat_toasts(void);
 // Once per frame, from lb_patches_on_vblank (src/lb_palette.cpp).
 void lb_palette_tick(void);
 // Once per frame, from lb_patches_on_vblank.
@@ -563,6 +597,7 @@ void         lb_rules_incoming(const unsigned char* buf, int len,
 // docs/406: rules that change the simulation, so online every machine runs
 // the host's: bits of the rules datagram's flags byte.
 #define LB_RULE_EMP_TRANSPORTS 0x01
+#define LB_RULE_CREATURES      0x02   /* docs/410 */
 int          lb_rules_local_flags(void);   /* this machine's (lb_overlay) */
 int          lb_rules_host_flags(void);    /* the host's; -1 unless joined */
 int          lb_setting_emp_transports(void);
@@ -582,6 +617,12 @@ int          lb_ai_hero_rebuild_live(void);
 int          lb_setting_transport_release(void);
 int          lb_demo_play_transport_release(void);
 int          lb_transport_release_live(void);
+// docs/410: the neutral creatures in armies (kind 13; online, the host's).
+int          lb_setting_creatures(void);
+int          lb_demo_play_creatures(void);
+int          lb_creatures_live(void);
+// docs/409: the field's size, recorded and replayed (lb_demo.cpp).
+void         lb_demo_field(int* w, int* h);
 
 #ifdef __cplusplus
 }

@@ -245,6 +245,14 @@ int g_rec_cheats = 0, g_demo_cheats = -1;
 int g_rec_aicheats = 0, g_demo_aicheats = 0;
 int g_rec_aihero = 0, g_demo_aihero = 0;   // kind 11, the AI's hero rebuild
 int g_rec_trel = 0, g_demo_trel = 0;       // kind 12, docs/408
+int g_rec_crea = 0, g_demo_crea = 0;       // kind 13, docs/410
+// docs/409: THE FIELD'S SIZE, which zoom and the window decide and which the
+// simulation sees (camera bounds, where a moved HUD button is touched). A
+// session that zoomed could not be replayed: four replays of one such
+// recording diverged in the first battle. `f W H` lines record each size the frontend
+// picks; a replay of one sizes its field the same, whatever its window.
+// Recordings without them keep the window's own.
+int g_rec_fw = 0, g_rec_fh = 0, g_demo_fw = 0, g_demo_fh = 0;
 // docs/384: the opponent armies a recording fielded, in order, and the next
 // one a replay takes.
 std::vector<std::array<unsigned char, 20>> g_armies;
@@ -295,6 +303,8 @@ bool load(const char* path) {
     g_demo_aicheats = 0;          // and none for the AI
     g_demo_aihero = 0;            // and the stock hero rebuild
     g_demo_trel = 0;              // and the stock transport ownership
+    g_demo_crea = 0;              // and no creatures in armies
+    g_demo_fw = g_demo_fh = 0;    // docs/409: and the window's own field
     g_demo_has_rtc = false;       // and the clock the replaying run has
     g_armies.clear();
     g_army_at = 0;
@@ -423,6 +433,8 @@ void emit(const Event& e) {
         std::fprintf(g_rec, "%u s %d %d\n", e.frame, e.a, e.b);
     else if (e.kind == 'b')   /* docs/404: a Balance tab value */
         std::fprintf(g_rec, "%u b %d %d %d\n", e.frame, e.a, e.b, e.c);
+    else if (e.kind == 'f')   /* docs/409: the field's size */
+        std::fprintf(g_rec, "%u f %d %d\n", e.frame, e.a, e.b);
     else
         std::fprintf(g_rec, "%u k %d\n", e.frame, e.a);
     std::fflush(g_rec);
@@ -540,6 +552,28 @@ extern "C" int lb_demo_play_ai_cheats(void) {
 extern "C" int lb_demo_play_ai_hero_rebuild(void) {
     return (g_mode == Mode::Play || g_replay_done) ? g_demo_aihero : -1;
 }
+// docs/409: called by the frontend with the field size it is about to use.
+// Recording, a change is a `f` line; replaying one that has them, the
+// recorded size replaces it.
+extern "C" void lb_demo_field(int* w, int* h) {
+    if (!w || !h) return;
+    if (g_mode == Mode::Record) {
+        if (*w == g_rec_fw && *h == g_rec_fh) return;
+        g_rec_fw = *w;
+        g_rec_fh = *h;
+        const Event e{g_frame, 'f', *w, *h, 0, 0};
+        g_events.push_back(e);
+        emit(e);
+        return;
+    }
+    if ((g_mode == Mode::Play || g_replay_done) && g_demo_fw > 0) {
+        *w = g_demo_fw;
+        *h = g_demo_fh;
+    }
+}
+extern "C" int lb_demo_play_creatures(void) {   // docs/410
+    return (g_mode == Mode::Play || g_replay_done) ? g_demo_crea : -1;
+}
 extern "C" int lb_demo_play_transport_release(void) {
     return (g_mode == Mode::Play || g_replay_done) ? g_demo_trel : -1;
 }
@@ -594,6 +628,8 @@ extern "C" void lb_demo_start_record(const char* path) {
     g_rec_aicheats = 0;
     g_rec_aihero = 0;
     g_rec_trel = 0;
+    g_rec_crea = 0;
+    g_rec_fw = g_rec_fh = 0;      // docs/409: the first frame writes the size
     // docs/396: a session on the PC's clock records the guest clock as it
     // stands now, so a replay runs on the same date (the 12/25 unlock).
     char rtc[24] = "";
@@ -777,7 +813,7 @@ extern "C" void lb_demo_tick(void) {
             emit(e);
         }
         // docs/388: and the settings a replay takes from the recording.
-        const int now[13] = {lb_setting_force_tileset(),
+        const int now[14] = {lb_setting_force_tileset(),
                             lb_setting_level_palette(),
                             lb_setting_music_mode(),
                             lb_cage_fix_live() ? 1 : 0,
@@ -789,13 +825,14 @@ extern "C" void lb_demo_tick(void) {
                             lb_cheat_mask_live(),
                             lb_ai_cheats_live(),
                             lb_ai_hero_rebuild_live(),
-                            lb_transport_release_live()};      // docs/408
-        int* const was[13] = {&g_rec_tileset, &g_rec_palette, &g_rec_music,
+                            lb_transport_release_live(),       // docs/408
+                            lb_creatures_live()};              // docs/410
+        int* const was[14] = {&g_rec_tileset, &g_rec_palette, &g_rec_music,
                               &g_rec_cage, &g_rec_ownhero, &g_rec_oppdef,
                               &g_rec_hwtransport, &g_rec_hwmode, &g_rec_emp,
                               &g_rec_cheats, &g_rec_aicheats, &g_rec_aihero,
-                              &g_rec_trel};
-        for (int k = 0; k < 13; ++k) {
+                              &g_rec_trel, &g_rec_crea};
+        for (int k = 0; k < 14; ++k) {
             if (now[k] == *was[k]) continue;
             *was[k] = now[k];
             const Event e{g_frame, 's', k, now[k], 0, 0};
@@ -848,8 +885,11 @@ extern "C" void lb_demo_tick(void) {
             else if (e.a == 10) g_demo_aicheats = e.b ? 1 : 0;
             else if (e.a == 11) g_demo_aihero = e.b ? 1 : 0;
             else if (e.a == 12) g_demo_trel = e.b ? 1 : 0;   // docs/408
+            else if (e.a == 13) g_demo_crea = e.b ? 1 : 0;   // docs/410
         } else if (e.kind == 'b') {   /* docs/404: a Balance tab value */
             lb_balance_custom_play_set(e.a, e.b, e.c);
+        } else if (e.kind == 'f') {   /* docs/409: the field's size */
+            if (e.a >= 256 && e.b >= 192) { g_demo_fw = e.a; g_demo_fh = e.b; }
         } else {
             nds_set_key_mask((uint32_t)e.a);
         }
