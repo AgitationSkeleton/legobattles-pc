@@ -24,6 +24,7 @@
 #include "lb_overlay.h"
 #include "lb_balance_data.h"
 
+#include <cstddef>
 #include <cstdio>
 #include <cstdint>
 #include <vector>
@@ -146,7 +147,11 @@ extern "C" int lb_balance_apply(int slot, unsigned int blueprint_base,
 extern "C" int lb_balance_is_applied(void) { return g_applied_slot != 0 ? 1 : 0; }
 // docs/396: a game reset reloads the vanilla blueprints, so no pack is
 // applied any more; the patcher applies the chosen one again once they settle.
-extern "C" void lb_balance_on_reset(void) { g_applied_slot = 0; }
+extern "C" void lb_balance_custom_on_reset(void);   // docs/404, below
+extern "C" void lb_balance_on_reset(void) {
+    g_applied_slot = 0;
+    lb_balance_custom_on_reset();
+}
 extern "C" int lb_balance_applied_slot(void) { return g_applied_slot; }
 
 extern "C" const char* lb_balance_name(int slot) {
@@ -157,4 +162,349 @@ extern "C" const char* lb_balance_name(int slot) {
 extern "C" int lb_balance_byte_count(int slot) {
     if (slot <= 0 || slot > kTableCount) return 0;
     return (int)lb_balance_tables[slot - 1].byte_count;
+}
+
+// ── docs/404: THE PLAYER'S OWN VALUES, FIELD BY FIELD ──────────────────────
+//
+// A third layer over the blueprints, after the pack and Same-builders: a set
+// of (record, field) -> value the Balance tab edits. Writing it keeps the
+// bytes it replaced, so it comes out exactly; the patcher (lb_patches.cpp)
+// takes it out before it touches the pack or the builders and puts it back
+// after, so each layer sits on the one below.
+//
+// THE RECORDS, from tools/lb_blueprints.py's walk of Entities.ebp: 182 unit
+// and building records of 0x7C bytes (type 0) from offset 4, then 27
+// projectiles of 0x74 (type 1). The fields are the ones docs/20-29 traced to
+// the code that reads them:
+//   cost +0x5E u16, build time +0x60 u16, health +0x62 u16, mana +0x64 u16,
+//   speed +0x0C u32 (20.12 tiles per tick; 0xFFFFFFFF for a structure),
+//   melee damage +0x68 u8 and its spread +0x6A u8, attack interval +0x6D u8
+//   (1/30 s ticks), attack range +0x6F u8, resource yield +0x6C u8;
+//   a projectile's hit damage at +0x6C/+0x6E and its impact damage at
+//   +0x70/+0x72, u16 each (docs/408: not one range written twice, as this
+//   once said -- two the game reads apart, equal in the vanilla data), its
+//   speed at +0x0C and its flags at +0x5E..+0x6B (kAttackFields).
+//
+// IN A BATTLE, OFFLINE: allowed, and recorded. A unit reads its blueprint as
+// it acts, so a change applies from that moment; a recording carries the set
+// in its header (`balc=`) and every change as a `b` line on its frame, so a
+// replay changes on the same frame. ONLINE: refused -- both machines must
+// run one rule set (the lockstep), and nothing carries a set across yet.
+namespace {
+
+struct BalField {
+    const char* name;
+    uint16_t off;
+    uint8_t width;
+    uint16_t mirror;   // a second copy written alongside (projectiles), or 0
+    int max;
+};
+const BalField kUnitFields[] = {
+    {"Cost", 0x5E, 2, 0, 65535},
+    {"Build time", 0x60, 2, 0, 65535},
+    {"Health", 0x62, 2, 0, 65535},
+    {"Mana", 0x64, 2, 0, 65535},
+    {"Speed", 0x0C, 4, 0, 0x7FFFFFFF},
+    {"Melee damage", 0x68, 1, 0, 255},
+    {"Melee spread", 0x6A, 1, 0, 255},
+    {"Attack interval", 0x6D, 1, 0, 255},
+    {"Attack range", 0x6F, 1, 0, 255},
+    {"Resource yield", 0x6C, 1, 0, 255},
+    // docs/408: a hero's five spell slots, spell ids 1..0x22 and 0 empty
+    // (docs/106: the factory FUN_0207BC0C bounds the id at 0x22). Shown in
+    // their own Heroes section, not as columns (LB_BAL_SPELL_FIELD0).
+    {"Spell 1", 0x72, 1, 0, 0x22},
+    {"Spell 2", 0x73, 1, 0, 0x22},
+    {"Spell 3", 0x74, 1, 0, 0x22},
+    {"Spell 4", 0x75, 1, 0, 0x22},
+    {"Spell 5", 0x76, 1, 0, 0x22},
+};
+// docs/408: +0x70/+0x72 are NOT a copy of +0x6C/+0x6E. The hit (FUN_0206E408,
+// `ldrh [bp,#0x6c]`/`#0x6e`) and the impact and blast (FUN_0206E450,
+// FUN_0206E60C, `ldrh [bp,#0x70]`/`#0x72`) read their own u16 pair; vanilla
+// gives the two the same values. The flags are read every flight tick by the
+// contact test (FUN_02054438) and the blocking test (FUN_02053F90), the speed
+// once per shot (Entity::virtual_02 hands a non-unit bp+0x0C to its seeker).
+// Left out: +0x14 and +0x15 (what follows a landing, the flight model: other
+// values leave a shot alive or still), +0x65 (terrain class 1, on no map) and
+// +0x6A (an event only spells use).
+const BalField kAttackFields[] = {
+    {"Hit damage min", 0x6C, 2, 0, 65535},
+    {"Hit damage max", 0x6E, 2, 0, 65535},
+    {"Impact damage min", 0x70, 2, 0, 65535},
+    {"Impact damage max", 0x72, 2, 0, 65535},
+    {"Speed", 0x0C, 4, 0, 0x7FFFFFFF},
+    {"Hits buildings", 0x5E, 1, 0, 1},
+    {"Hits flying", 0x5F, 1, 0, 1},
+    {"Hits ground", 0x60, 1, 0, 1},
+    {"Hits walls", 0x61, 1, 0, 1},
+    {"Hurts allies", 0x62, 1, 0, 1},
+    {"Hurts on the way", 0x63, 1, 0, 1},
+    {"Stopped by cliffs", 0x64, 1, 0, 1},
+    {"Stopped by buildings", 0x66, 1, 0, 1},
+    {"Stopped by allies", 0x67, 1, 0, 1},
+    {"Stopped by enemies", 0x68, 1, 0, 1},
+    {"Stopped by walls", 0x69, 1, 0, 1},
+    {"Explodes", 0x6B, 1, 0, 1},
+};
+constexpr int kUnitRecords = 182, kAttackRecords = 27;
+constexpr uint32_t kFirstRecord = 4u, kUnitSize = 0x7Cu, kAttackSize = 0x74u;
+
+struct Edit {
+    int rec, field, value;
+};
+struct Written {
+    uint32_t addr;
+    uint8_t width;
+    uint32_t before;
+};
+
+std::vector<Edit> g_live;          // the player's set (settings)
+std::vector<Edit> g_play;          // a replay's set
+bool g_play_on = false;
+std::vector<Written> g_written;    // what is in RAM now, to take it out
+unsigned g_gen = 1u, g_written_gen = 0u;
+unsigned g_live_gen = 1u;          // the player's set, for the recorder
+
+int kind_of(int rec) {
+    if (rec >= 0 && rec < kUnitRecords) return LB_BAL_UNITS;
+    if (rec >= kUnitRecords && rec < kUnitRecords + kAttackRecords) return LB_BAL_ATTACKS;
+    return -1;
+}
+
+const BalField* field_of(int rec, int field) {
+    const int k = kind_of(rec);
+    if (k == LB_BAL_UNITS && field >= 0 &&
+        field < (int)(sizeof kUnitFields / sizeof kUnitFields[0]))
+        return &kUnitFields[field];
+    if (k == LB_BAL_ATTACKS && field >= 0 &&
+        field < (int)(sizeof kAttackFields / sizeof kAttackFields[0]))
+        return &kAttackFields[field];
+    return nullptr;
+}
+
+uint32_t record_at(uint32_t base, int rec) {
+    if (rec < kUnitRecords) return base + kFirstRecord + (uint32_t)rec * kUnitSize;
+    return base + kFirstRecord + (uint32_t)kUnitRecords * kUnitSize +
+           (uint32_t)(rec - kUnitRecords) * kAttackSize;
+}
+
+uint32_t read_w(uint32_t a, int w) {
+    return w == 1 ? bus_read_u8(a) : w == 2 ? bus_read_u16(a) : bus_read_u32(a);
+}
+void write_w(uint32_t a, int w, uint32_t v) {
+    if (w == 1) bus_write_u8(a, (uint8_t)v);
+    else if (w == 2) bus_write_u16(a, (uint16_t)v);
+    else bus_write_u32(a, v);
+}
+
+bool guest_ram(uint32_t a) { return a >= 0x02000000u && a < 0x02400000u; }
+
+std::vector<Edit>& active() { return g_play_on ? g_play : g_live; }
+
+void put(std::vector<Edit>& set, int rec, int field, int value) {
+    for (size_t i = 0; i < set.size(); ++i) {
+        if (set[i].rec != rec || set[i].field != field) continue;
+        if (value < 0) set.erase(set.begin() + (std::ptrdiff_t)i);
+        else set[i].value = value;
+        return;
+    }
+    if (value >= 0) set.push_back({rec, field, value});
+}
+
+// A structure's speed is the 0xFFFFFFFF sentinel, not a speed.
+bool applies(uint32_t base, int rec, const BalField& f) {
+    return !(f.width == 4 && read_w(record_at(base, rec) + f.off, 4) == 0xFFFFFFFFu);
+}
+
+}  // namespace
+
+extern "C" int lb_balance_field_count(int kind) {
+    return kind == LB_BAL_UNITS ? (int)(sizeof kUnitFields / sizeof kUnitFields[0])
+         : kind == LB_BAL_ATTACKS ? (int)(sizeof kAttackFields / sizeof kAttackFields[0])
+         : 0;
+}
+extern "C" const char* lb_balance_field_name(int kind, int field) {
+    const int first = lb_balance_record_first(kind);
+    const BalField* f = field_of(first, field);
+    return f ? f->name : "";
+}
+extern "C" int lb_balance_field_max(int kind, int field) {
+    const BalField* f = field_of(lb_balance_record_first(kind), field);
+    return f ? f->max : 0;
+}
+extern "C" int lb_balance_record_first(int kind) {
+    return kind == LB_BAL_ATTACKS ? kUnitRecords : 0;
+}
+extern "C" int lb_balance_record_count(int kind) {
+    return kind == LB_BAL_ATTACKS ? kAttackRecords
+         : kind == LB_BAL_UNITS ? kUnitRecords : 0;
+}
+
+// The record's own name, from the string the loader pointed +0x00 at.
+extern "C" int lb_balance_record_name(int rec, char* out, int cap) {
+    if (!out || cap <= 0) return 0;
+    out[0] = 0;
+    const uint32_t base = lb_patches_blueprint_base();
+    if (!base || kind_of(rec) < 0) return 0;
+    const uint32_t s = bus_read_u32(record_at(base, rec));
+    if (!guest_ram(s)) return 0;
+    int n = 0;
+    for (; n < cap - 1; ++n) {
+        const uint8_t c = bus_read_u8(s + (uint32_t)n);
+        if (!c || c < 0x20 || c > 0x7E) break;
+        out[n] = (char)c;
+    }
+    out[n] = 0;
+    return n;
+}
+extern "C" int lb_balance_record_category(int rec) {
+    const uint32_t base = lb_patches_blueprint_base();
+    if (!base || kind_of(rec) != LB_BAL_UNITS) return -1;
+    return bus_read_u8(record_at(base, rec) + 0x5Cu);
+}
+extern "C" int lb_balance_record_projectile(int rec) {
+    const uint32_t base = lb_patches_blueprint_base();
+    if (!base || kind_of(rec) != LB_BAL_UNITS) return -1;
+    const int p = bus_read_u16(record_at(base, rec) + 0x66u);
+    return (p >= kUnitRecords && p < kUnitRecords + kAttackRecords) ? p : -1;
+}
+
+extern "C" int lb_balance_value(int rec, int field) {
+    const uint32_t base = lb_patches_blueprint_base();
+    const BalField* f = field_of(rec, field);
+    if (!base || !f || !applies(base, rec, *f)) return -1;
+    return (int)read_w(record_at(base, rec) + f->off, f->width);
+}
+extern "C" int lb_balance_base(int rec, int field) {
+    const uint32_t base = lb_patches_blueprint_base();
+    const BalField* f = field_of(rec, field);
+    if (!base || !f) return -1;
+    const uint32_t a = record_at(base, rec) + f->off;
+    for (const Written& w : g_written)
+        if (w.addr == a) return (int)w.before;
+    return lb_balance_value(rec, field);
+}
+
+extern "C" int lb_balance_custom_get(int rec, int field) {
+    for (const Edit& e : g_live)
+        if (e.rec == rec && e.field == field) return e.value;
+    return -1;
+}
+extern "C" void lb_balance_custom_set(int rec, int field, int value) {
+    const BalField* f = field_of(rec, field);
+    if (!f) return;
+    if (value > f->max) value = f->max;
+    put(g_live, rec, field, value);
+    ++g_live_gen;
+    if (!g_play_on) ++g_gen;
+}
+extern "C" void lb_balance_custom_clear_all(void) {
+    g_live.clear();
+    ++g_live_gen;
+    if (!g_play_on) ++g_gen;
+}
+extern "C" int lb_balance_custom_size(void) { return (int)g_live.size(); }
+extern "C" unsigned lb_balance_custom_generation(void) { return g_live_gen; }
+
+extern "C" int lb_balance_custom_text(char* out, int cap) {
+    if (!out || cap <= 0) return 0;
+    int n = 0;
+    out[0] = 0;
+    for (const Edit& e : g_live) {
+        const int w = std::snprintf(out + n, (size_t)(cap - n), "%s%d:%d=%d",
+                                    n ? "," : "", e.rec, e.field, e.value);
+        if (w < 0 || n + w >= cap) break;
+        n += w;
+    }
+    return n;
+}
+
+namespace {
+void parse_into(std::vector<Edit>& set, const char* text) {
+    set.clear();
+    for (const char* p = text; p && *p;) {
+        int rec = -1, field = -1, value = -1, used = 0;
+        if (std::sscanf(p, "%d:%d=%d%n", &rec, &field, &value, &used) == 3 &&
+            used > 0) {
+            if (field_of(rec, field) && value >= 0) put(set, rec, field, value);
+            p += used;
+        } else {
+            ++p;
+        }
+        while (*p == ',' || *p == ' ') ++p;
+    }
+}
+}  // namespace
+
+extern "C" int lb_balance_custom_parse(const char* text) {
+    parse_into(g_live, text);
+    ++g_live_gen;
+    if (!g_play_on) ++g_gen;
+    return (int)g_live.size();
+}
+
+extern "C" int lb_balance_custom_dirty(void) { return g_gen != g_written_gen ? 1 : 0; }
+
+extern "C" void lb_balance_custom_revert(unsigned int base) {
+    for (size_t i = g_written.size(); i-- > 0;)
+        write_w(g_written[i].addr, g_written[i].width, g_written[i].before);
+    g_written.clear();
+    g_written_gen = 0u;
+    (void)base;
+}
+
+extern "C" int lb_balance_custom_apply(unsigned int base) {
+    lb_balance_custom_revert(base);
+    if (!base) return 0;
+    int n = 0;
+    for (const Edit& e : active()) {
+        const BalField* f = field_of(e.rec, e.field);
+        if (!f || !applies(base, e.rec, *f)) continue;
+        const uint32_t r = record_at(base, e.rec);
+        const uint16_t offs[2] = {f->off, f->mirror};
+        for (const uint16_t off : offs) {
+            if (!off) continue;
+            const uint32_t a = r + off;
+            g_written.push_back({a, f->width, read_w(a, f->width)});
+            write_w(a, f->width, (uint32_t)e.value);
+        }
+        ++n;
+    }
+    g_written_gen = g_gen;
+    if (n)
+        std::fprintf(stderr, "[lb_balance] %d value(s) of the %s set written\n",
+                     n, g_play_on ? "recording's" : "player's");
+    return n;
+}
+
+// docs/396: a reset reloads the blueprints, so nothing is written any more.
+extern "C" void lb_balance_custom_on_reset(void) {
+    g_written.clear();
+    g_written_gen = 0u;
+}
+
+extern "C" void lb_balance_custom_play_begin(const char* text) {
+    parse_into(g_play, text);
+    g_play_on = true;
+    ++g_gen;
+}
+extern "C" void lb_balance_custom_play_set(int rec, int field, int value) {
+    if (!g_play_on || !field_of(rec, field)) return;
+    put(g_play, rec, field, value);
+    ++g_gen;
+}
+extern "C" void lb_balance_custom_play_end(void) {
+    if (!g_play_on) return;
+    g_play_on = false;
+    g_play.clear();
+    ++g_gen;
+}
+
+extern "C" const char* lb_balance_custom_blocked(void) {
+    const int net = lb_net_guest_state();
+    if (net != 0 && net != -1)
+        return "not while hosting, in a lobby or online: both players must "
+               "play by the same numbers";
+    return nullptr;
 }

@@ -53,6 +53,11 @@
 #ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
+// docs/405: UPnP, through miniupnpc (BSD-3-Clause), linked statically.
+#define MINIUPNP_STATICLIB 1
+#include <miniupnpc/miniupnpc.h>
+#include <miniupnpc/upnpcommands.h>
+#include <miniupnpc/upnperrors.h>
 #else
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -306,11 +311,32 @@ bool is_loopback(uint32_t ip_be) { return (ntohl(ip_be) >> 24) == 127u; }
 // client on ANOTHER machine that is itself. That host is reachable at the
 // master server's own address, which the client already knows. A client on
 // the master server's machine keeps 127.0.0.1, which is right for it.
+//
+// docs/400: A PRIVATE ADDRESS MEANS THE SAME. A server run on a home network
+// sees a host on that network arrive through the router, and lists it as the
+// router's address (192.168.1.1 on 2026-10-18), which nobody outside can
+// use. When the server itself is public, that host is behind the server's
+// own address. A server on a private address is a LAN server, and its
+// private listings are right for its LAN.
+bool is_private_ip(uint32_t ip_be) {
+    const uint32_t a = ntohl(ip_be);
+    return (a >> 24) == 10u || (a >> 20) == 0xAC1u || (a >> 16) == 0xC0A8u ||
+           (a >> 22) == 0x191u || (a >> 16) == 0xA9FEu;
+}
+std::string local_ipv4();   // docs/400, below
 uint32_t lobby_ip(const char* address, const std::string& server) {
     const uint32_t ip = resolve_ipv4(address);
-    if (ip == INADDR_NONE || !is_loopback(ip)) return ip;
+    // docs/400: a host on THIS machine, listed by its LAN pair (a second copy
+    // behind the same router), is reached over loopback, where the bridge
+    // knows it for a sibling. By the LAN address every frame would arrive
+    // twice: once from the sibling sweep and once from the peer.
+    if (ip != INADDR_NONE && is_private_ip(ip)) {
+        const std::string me = local_ipv4();
+        if (!me.empty() && resolve_ipv4(me.c_str()) == ip) return htonl(INADDR_LOOPBACK);
+    }
+    if (ip == INADDR_NONE || !(is_loopback(ip) || is_private_ip(ip))) return ip;
     const uint32_t via = resolve_ipv4(server.c_str());
-    if (via != INADDR_NONE && !is_loopback(via)) return via;
+    if (via != INADDR_NONE && !is_loopback(via) && !is_private_ip(via)) return via;
     return ip;
 }
 
@@ -396,6 +422,271 @@ extern "C" void nds_local_wireless_set_listen(int on);
 extern "C" int  nds_local_wireless_peer(uint32_t* ip_be, uint16_t* port,
                                         int* learned);
 extern "C" uint16_t nds_local_wireless_port(void);
+/* docs/400: NAT traversal (apply_hooks.py 0zzzzzzzzzzzzz-400). */
+extern "C" void nds_local_wireless_stun(uint32_t ip_be, uint16_t port);
+extern "C" int  nds_local_wireless_public(uint32_t* ip_be, uint16_t* port);
+extern "C" void nds_local_wireless_punch(uint32_t ip_be, uint16_t port, int ms);
+extern "C" void nds_local_wireless_stats(unsigned* sent, unsigned* recvd);
+
+// ── docs/400: REACHING A HOST BEHIND A ROUTER ─────────────────────────────
+//
+// The directory alone could not do it. A joiner sent to the listed host, and
+// the host's router dropped the datagram: the router had never seen the host
+// send anywhere, so nothing told it where the datagram should go. Every
+// hosting session of 2026-10-18 logged `frames sent=1800 recv=0`.
+//
+// So both sides now:
+//   * learn their PUBLIC UDP mapping -- the bridge sends a STUN binding
+//     request from its own socket, and the answer says what address and port
+//     the router gave that socket;
+//   * advertise it: the host in /announce, the joiner in /punch;
+//   * and send to each other. A joiner already says hello to its peer every
+//     250 ms; a host, told about a joiner by /poll, says hello back for 15 s.
+// The first datagram out of each router opens it for the other's, and the
+// bridge's existing learning takes over.
+//
+// Two routers that hand every destination a different port (symmetric NAT,
+// some carrier-grade NAT) defeat this; they need a relay (docs/399, 0b).
+namespace {
+// The STUN servers, resolved off the frame. The bridge asks again by itself
+// whenever its socket is reopened, so one resolution serves the session; the
+// second server is tried only if the first never answered.
+std::atomic<bool> g_stun_asked{false};
+void request_stun() {
+    if (g_stun_asked.exchange(true)) return;
+    std::thread([]() {
+        static const struct { const char* host; uint16_t port; } kStun[] = {
+            {"stun.l.google.com", 19302}, {"stun.cloudflare.com", 3478}};
+        for (const auto& s : kStun) {
+            const uint32_t ip = resolve_ipv4(s.host);
+            if (ip == INADDR_NONE) continue;
+            nds_local_wireless_stun(ip, s.port);
+            for (int i = 0; i < 40; ++i) {
+                if (nds_local_wireless_public(nullptr, nullptr)) return;
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            std::fprintf(stderr, "[lb_net] no STUN answer from %s\n", s.host);
+        }
+        g_stun_asked = false;   // let a later host or join try again
+    }).detach();
+}
+
+bool wait_public(int ms, uint32_t* ip, uint16_t* port) {
+    for (int waited = 0;; waited += 100) {
+        if (nds_local_wireless_public(ip, port)) return true;
+        if (waited >= ms) return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+}
+
+// This machine's address on its own network: the source address a datagram
+// to the internet would leave from. Nothing is sent.
+std::string local_ipv4() {
+    SOCKET s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (s == INVALID_SOCKET) return {};
+    sockaddr_in to{};
+    to.sin_family = AF_INET;
+    to.sin_port = htons(53);
+    to.sin_addr.s_addr = inet_addr("8.8.8.8");
+    std::string out;
+    if (connect(s, (sockaddr*)&to, sizeof to) == 0) {
+        sockaddr_in me{};
+        socklen_t len = sizeof me;
+        if (getsockname(s, (sockaddr*)&me, &len) == 0)
+            out = ip_text(me.sin_addr.s_addr);
+    }
+    closesocket(s);
+    return out;
+}
+
+// The server the lobby list came from, for the joins that start from it.
+std::string g_list_server;   // under g_mutex
+int g_list_port = 0;         // under g_mutex
+
+// "I want to join CODE; here is my public mapping." Sent by a joiner each
+// time it points the bridge at a lobby; the host collects it with /poll.
+void post_punch(const std::string& server, int port, const std::string& code) {
+    if (server.empty() || code.empty()) return;
+    request_stun();
+    const unsigned short local = nds_local_wireless_port();
+    std::thread([server, port, code, local]() {
+        uint32_t pip = 0u;
+        uint16_t pport = 0u;
+        if (!wait_public(3000, &pip, &pport)) {
+            std::fprintf(stderr, "[lb_net] join %s: no public address (STUN "
+                         "did not answer); the host cannot be introduced\n",
+                         code.c_str());
+            return;
+        }
+        const std::string body =
+            "{\"code\":" + json_str(code.c_str()) +
+            ",\"address\":" + json_str(ip_text(pip).c_str()) +
+            ",\"port\":" + std::to_string(pport) +
+            ",\"lan_address\":" + json_str(local_ipv4().c_str()) +
+            ",\"lan_port\":" + std::to_string(local) + "}";
+        std::string error;
+        const std::string reply =
+            http_request(server, port, "POST", "/punch", body, &error);
+        std::fprintf(stderr, "[lb_net] join %s: introduced as %s:%u (%s)\n",
+                     code.c_str(), ip_text(pip).c_str(), (unsigned)pport,
+                     reply.find("\"ok\":true") != std::string::npos
+                         ? "the host will answer"
+                         : (error.empty() ? "the server refused" : error.c_str()));
+    }).detach();
+}
+}  // namespace
+
+// ── docs/405: UPnP -- ASKING THE ROUTER TO FORWARD THE PORT ────────────────
+//
+// Hole punching (above) opens a router by sending through it, and fails when
+// the router gives every destination a different port. A router that speaks
+// UPnP can simply be asked: "forward UDP <port> to this machine". When the
+// game hosts, and the setting is on (it is by default), the host asks before
+// it announces, and advertises the router's public address with that port.
+// The mapping is removed when the lobby closes and when the program exits;
+// its lease (an hour) covers a program that is killed.
+//
+// miniupnpc (BSD-3-Clause, miniupnp.free.fr) does the protocol: SSDP
+// discovery, the IGD's description, and the SOAP calls.
+extern "C" int lb_setting_upnp(void);   /* lb_overlay.cpp */
+namespace {
+std::mutex g_upnp_mutex;
+std::string g_upnp_text;        // under g_upnp_mutex
+uint16_t g_upnp_port = 0;       // the port forwarded now, or 0
+std::string g_upnp_wan;         // the router's public address
+#ifdef _WIN32
+UPNPUrls g_upnp_urls{};
+IGDdatas g_upnp_data{};
+#endif
+
+void upnp_status(const std::string& s) {
+    std::lock_guard<std::mutex> lock(g_upnp_mutex);
+    g_upnp_text = s;
+}
+
+void upnp_unmap() {
+#ifdef _WIN32
+    std::lock_guard<std::mutex> lock(g_upnp_mutex);
+    if (!g_upnp_port) return;
+    char p[8];
+    std::snprintf(p, sizeof p, "%u", (unsigned)g_upnp_port);
+    const int e = UPNP_DeletePortMapping(g_upnp_urls.controlURL,
+                                         g_upnp_data.first.servicetype, p,
+                                         "UDP", nullptr);
+    FreeUPNPUrls(&g_upnp_urls);
+    std::fprintf(stderr, "[lb_upnp] UDP %s mapping removed (%s)\n", p,
+                 e == UPNPCOMMAND_SUCCESS ? "ok" : strupnperror(e));
+    g_upnp_port = 0;
+    g_upnp_text = "The router no longer forwards the port.";
+#endif
+}
+
+// On a worker thread: true when the router forwards `port` to this machine,
+// with its public address in *wan.
+bool upnp_map(uint16_t port, std::string* wan) {
+#ifdef _WIN32
+    if (!lb_setting_upnp()) {
+        upnp_status("UPnP is off.");
+        return false;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_upnp_mutex);
+        if (g_upnp_port == port && !g_upnp_wan.empty()) {
+            *wan = g_upnp_wan;
+            return true;
+        }
+    }
+    upnp_status("Asking the router to forward the port (UPnP)...");
+    int err = 0;
+    UPNPDev* devs = upnpDiscover(2000, nullptr, nullptr, UPNP_LOCAL_PORT_ANY,
+                                 0, 2, &err);
+    if (!devs) {
+        upnp_status("No router answered UPnP (it may be switched off in the "
+                    "router's settings).");
+        std::fprintf(stderr, "[lb_upnp] no UPnP device answered (error %d)\n", err);
+        return false;
+    }
+    UPNPUrls urls{};
+    IGDdatas data{};
+    char lan[64] = "", wanaddr[64] = "";
+    const int r = UPNP_GetValidIGD(devs, &urls, &data, lan, (int)sizeof lan,
+                                   wanaddr, (int)sizeof wanaddr);
+    freeUPNPDevlist(devs);
+    if (r != UPNP_CONNECTED_IGD) {
+        if (r != UPNP_NO_IGD) FreeUPNPUrls(&urls);
+        upnp_status(r == UPNP_PRIVATEIP_IGD
+                        ? "The router is itself behind another router (its "
+                          "internet address is private), so UPnP cannot open it."
+                        : "No connected UPnP router was found.");
+        std::fprintf(stderr, "[lb_upnp] no usable gateway (result %d)\n", r);
+        return false;
+    }
+    char p[8];
+    std::snprintf(p, sizeof p, "%u", (unsigned)port);
+    int e = UPNP_AddPortMapping(urls.controlURL, data.first.servicetype, p, p,
+                                lan, "LEGO Battles", "UDP", nullptr, "3600");
+    if (e == 725)   // OnlyPermanentLeasesSupported
+        e = UPNP_AddPortMapping(urls.controlURL, data.first.servicetype, p, p,
+                                lan, "LEGO Battles", "UDP", nullptr, "0");
+    if (e != UPNPCOMMAND_SUCCESS) {
+        FreeUPNPUrls(&urls);
+        upnp_status(std::string("The router refused to forward the port (") +
+                    strupnperror(e) + ").");
+        std::fprintf(stderr, "[lb_upnp] UDP %s refused: %s (%d)\n", p,
+                     strupnperror(e), e);
+        return false;
+    }
+    char ext[40] = "";
+    UPNP_GetExternalIPAddress(urls.controlURL, data.first.servicetype, ext);
+    {
+        std::lock_guard<std::mutex> lock(g_upnp_mutex);
+        if (g_upnp_port) FreeUPNPUrls(&g_upnp_urls);
+        g_upnp_urls = urls;
+        g_upnp_data = data;
+        g_upnp_port = port;
+        g_upnp_wan = ext;
+        g_upnp_text = std::string("The router forwards UDP ") + p + " to this "
+                      "machine (UPnP)" + (ext[0] ? std::string(", at ") + ext : "") + ".";
+    }
+    static bool registered = false;
+    if (!registered) {
+        registered = true;
+        std::atexit(upnp_unmap);
+    }
+    std::fprintf(stderr, "[lb_upnp] the router forwards UDP %s to %s (public %s)\n",
+                 p, lan, ext[0] ? ext : "unknown");
+    *wan = ext;
+    return true;
+#else
+    (void)port;
+    (void)wan;
+    return false;
+#endif
+}
+}  // namespace
+
+extern "C" const char* lb_net_upnp_text(void) {
+    static std::string copy;
+    std::lock_guard<std::mutex> lock(g_upnp_mutex);
+    copy = g_upnp_text;
+    return copy.c_str();
+}
+
+extern "C" int lb_net_public_text(char* out, int cap) {
+    if (!out || cap <= 0) return 0;
+    uint32_t ip = 0u;
+    uint16_t port = 0u;
+    if (!nds_local_wireless_public(&ip, &port)) {
+        out[0] = 0;
+        return 0;
+    }
+    std::snprintf(out, (size_t)cap, "%s:%u", ip_text(ip).c_str(), (unsigned)port);
+    return 1;
+}
+
+extern "C" void lb_net_link_stats(unsigned* sent, unsigned* recvd) {
+    nds_local_wireless_stats(sent, recvd);
+}
 
 namespace {
 void remember_manual_peer(uint32_t ip_be, uint16_t port) {
@@ -432,6 +723,9 @@ extern "C" void lb_net_refresh_lobbies(const char* host, int port) {
             g_status = error.empty() ? "empty reply" : error;
         } else {
             parse_lobbies(body, h);
+            std::lock_guard<std::mutex> lock(g_mutex);
+            g_list_server = h;     // docs/400: a row's Join introduces itself here
+            g_list_port = port;
         }
         g_busy = false;
     }).detach();
@@ -511,7 +805,6 @@ extern "C" void lb_net_announce(const char* server, int port, const char* name,
     body += "\"host_name\":" +
             json_str(host_name && *host_name ? host_name : "Player") + ",";
     body += "\"map_name\":" + json_str(map_name ? map_name : "") + ",";
-    body += "\"port\":" + std::to_string(game_port) + ",";
     body += "\"players\":" + std::to_string(players) + ",";
     body += "\"max_players\":" + std::to_string(max_players) + ",";
     // The host's simulation settings, by the panel's labels, and its build:
@@ -527,11 +820,47 @@ extern "C" void lb_net_announce(const char* server, int port, const char* name,
     // enabling local wireless does not open a port to the network. Saying
     // "advertise" is the moment the player asks for that.
     nds_local_wireless_set_listen(1);
+    request_stun();   // docs/400
     std::string s = server ? server : "";
-    std::thread([s, port, body]() {
+    std::thread([s, port, body, game_port]() {
+        // docs/400: THE ADDRESS AND PORT THE ROUTER GAVE THIS SOCKET, from
+        // STUN, rather than the address the server saw the HTTP request come
+        // from and the port bound here. They differ whenever the router
+        // renumbers ports, and on a home-run server the seen address is the
+        // router's private one. Without an answer the old fields stand.
+        // lan_address/lan_port reach players behind the same router, whom
+        // the server tells apart by their public address.
+        std::string b = body;
+        b.pop_back();   // the closing brace
+        // docs/405: a router that forwards the port by UPnP is reachable by
+        // anyone at its public address and that port, whatever its NAT does
+        // to other traffic -- so that pair is advertised first.
+        std::string wan;
+        const bool mapped = upnp_map((uint16_t)game_port, &wan);
+        const uint32_t wan_ip = mapped ? resolve_ipv4(wan.c_str()) : INADDR_NONE;
+        uint32_t pip = 0u;
+        uint16_t pport = 0u;
+        if (mapped && wan_ip != INADDR_NONE && wan_ip != 0u && !is_private_ip(wan_ip)) {
+            b += ",\"address\":" + json_str(wan.c_str()) +
+                 ",\"port\":" + std::to_string(game_port);
+            std::fprintf(stderr, "[lb_net] hosting at %s:%d (UPnP)\n", wan.c_str(),
+                         game_port);
+        } else if (wait_public(2500, &pip, &pport)) {
+            b += ",\"address\":" + json_str(ip_text(pip).c_str()) +
+                 ",\"port\":" + std::to_string(pport);
+            std::fprintf(stderr, "[lb_net] hosting at public %s:%u (STUN)\n",
+                         ip_text(pip).c_str(), (unsigned)pport);
+        } else {
+            b += ",\"port\":" + std::to_string(game_port);
+            std::fprintf(stderr, "[lb_net] no STUN answer: hosting without a "
+                         "public address; only a forwarded UDP %d can be "
+                         "reached\n", game_port);
+        }
+        b += ",\"lan_address\":" + json_str(local_ipv4().c_str()) +
+             ",\"lan_port\":" + std::to_string(game_port) + "}";
         std::string error;
         const std::string reply =
-            http_request(s, port, "POST", "/announce", body, &error);
+            http_request(s, port, "POST", "/announce", b, &error);
         std::lock_guard<std::mutex> lock(g_host_mutex);
         if (reply.empty()) {
             g_host_status = error.empty() ? "no reply" : error;
@@ -557,8 +886,66 @@ extern "C" void lb_net_announce(const char* server, int port, const char* name,
     }).detach();
 }
 
+namespace {
+std::atomic<long long> g_last_poll{0};
+std::atomic<bool> g_polling{false};
+
+// docs/400: while the lobby waits for its first player, ask the server every
+// 2 s who wants in, and say hello to each for 15 s. A host that has learned a
+// player stops: the bridge holds one peer.
+void host_poll(long long now_ms) {
+    if (now_ms - g_last_poll.load() < 2000 || g_polling.load()) return;
+    uint32_t pip = 0u;
+    uint16_t pport = 0u;
+    int learned = 0;
+    nds_local_wireless_peer(&pip, &pport, &learned);
+    if (learned) return;
+    std::string server, code, token, state;
+    int port;
+    {
+        std::lock_guard<std::mutex> lock(g_host_mutex);
+        server = g_host_server; code = g_host_code;
+        token = g_host_token;   port = g_host_port;
+        state = g_host_state;
+    }
+    if (code.empty() || state != "open") return;
+    g_last_poll = now_ms;
+    g_polling = true;
+    const std::string body =
+        "{\"code\":\"" + code + "\",\"token\":\"" + token + "\"}";
+    std::thread([server, port, body]() {
+        std::string error;
+        const std::string reply =
+            http_request(server, port, "POST", "/poll", body, &error);
+        size_t at = reply.find("\"punch\"");
+        at = at == std::string::npos ? at : reply.find('[', at);
+        const size_t end = at == std::string::npos ? at : close_of(reply, at);
+        for (size_t i = at; end != std::string::npos && i < end; ++i) {
+            if (reply[i] != '{') continue;
+            const size_t close = close_of(reply, i);
+            if (close == std::string::npos || close > end) break;
+            const std::string obj = reply.substr(i, close - i + 1);
+            i = close;
+            const uint32_t ip = resolve_ipv4(field(obj, 0, "address").c_str());
+            const int p = std::atoi(field(obj, 0, "port").c_str());
+            if (ip == INADDR_NONE || p <= 0 || p > 65535) continue;
+            nds_local_wireless_punch(ip, (uint16_t)p, 15000);
+            static std::string said;
+            const std::string who = ip_text(ip) + ":" + std::to_string(p);
+            if (said != who) {
+                said = who;
+                std::fprintf(stderr, "[lb_net] a player is joining from %s; "
+                             "answering it\n", who.c_str());
+            }
+        }
+        g_polling = false;
+    }).detach();
+}
+}  // namespace
+
 extern "C" void lb_net_host_tick(long long now_ms) {
     if (!g_hosting.load()) return;
+    host_poll(now_ms);   // docs/400
     // 30 s, comfortably inside the server's 90 s TTL.
     if (now_ms - g_last_beat.load() < 30000) return;
     g_last_beat = now_ms;
@@ -614,6 +1001,7 @@ void stop_hosting_impl(const char* reason = "disband") {
     std::thread([server, port, body]() {
         std::string error;
         http_request(server, port, "POST", "/remove", body, &error);
+        upnp_unmap();   // docs/405: the lobby is gone; so is the open port
     }).detach();
 }
 }  // namespace
@@ -710,6 +1098,7 @@ extern "C" void lb_net_join_by_code(const char* server, int port,
                                  "[lb_net] join %s -> peer %s:%d (listed %s)\n",
                                  c.c_str(), ip_text(ip).c_str(), p,
                                  addr.c_str());
+                    post_punch(s, port, c);   // docs/400
                 }
             }
         }
@@ -753,6 +1142,14 @@ extern "C" int lb_net_join_index(int index) {
     }
     std::fprintf(stderr, "[lb_net] join lobby %d -> peer %s:%d (listed %s)\n",
                  index, ip_text(ip).c_str(), lobby.port, lobby.address);
+    std::string ls;
+    int lp = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        ls = g_list_server;
+        lp = g_list_port;
+    }
+    post_punch(ls, lp, lobby.code);   // docs/400
     return 1;
 }
 
@@ -916,6 +1313,9 @@ void point_at_listed_host() {
         std::lock_guard<std::mutex> lock(g_host_mutex);
         own_code = g_host_code;
     }
+    uint32_t pub_ip = 0u;
+    uint16_t pub_port = 0u;
+    const bool have_pub = nds_local_wireless_public(&pub_ip, &pub_port) != 0;
     uint32_t ip = 0u;
     uint16_t port = 0u;
     char code[8] = "";
@@ -931,6 +1331,10 @@ void point_at_listed_host() {
             // This machine's own lobby, still listed for up to 90 s after it
             // closed: talking to ourselves is never a join.
             if (is_loopback(at) && own != 0 && l.port == (int)own) continue;
+            // docs/400: the same, by this machine's public mapping -- what a
+            // host now advertises, and what the 2026-10-18 Join screen kept
+            // choosing after a restart.
+            if (have_pub && at == pub_ip && l.port == (int)pub_port) continue;
             ip = at;
             port = (uint16_t)l.port;
             std::snprintf(code, sizeof code, "%s", l.code);
@@ -954,6 +1358,14 @@ void point_at_listed_host() {
                  (unsigned)(ip & 0xFFu), (unsigned)((ip >> 8) & 0xFFu),
                  (unsigned)((ip >> 16) & 0xFFu), (unsigned)((ip >> 24) & 0xFFu),
                  (unsigned)port);
+    std::string ls;
+    int lp = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        ls = g_list_server;
+        lp = g_list_port;
+    }
+    post_punch(ls, lp, code);   // docs/400
 }
 }  // namespace
 

@@ -108,6 +108,13 @@ void        lb_net_join_by_code(const char* server, int port,
 unsigned short lb_net_wireless_port(void);
 // The peer currently set, as a printable "a.b.c.d:port", or "" for none.
 const char* lb_net_peer_text(void);
+// docs/400: this machine's public UDP mapping from STUN, "a.b.c.d:port"
+// (0 and "" until known), and the bridge's link counters: frames sent, and
+// datagrams received from anything that is not a sibling on this machine.
+int         lb_net_public_text(char* out, int cap);
+// docs/405: what the router said to the UPnP request, or "" before one.
+const char* lb_net_upnp_text(void);
+void        lb_net_link_stats(unsigned* sent, unsigned* recvd);
 // Point the bridge at lobby `index` of the last list. What the per-row
 // Join button does, and what LB_MP_JOIN=1 does at startup.
 int         lb_net_join_index(int index);
@@ -261,6 +268,9 @@ void lb_settings_load(void);
 int lb_setting_view_width(void);
 int lb_setting_unlock_units(void);
 int lb_setting_unlock_extras(void);
+// docs/407: 0 units, 1 cheat codes, 2 maps, 3 concept art, 4 campaigns.
+#define LB_UNLOCK_KINDS 5
+int lb_setting_unlock(int kind);
 
 int lb_setting_hotwire_anything(void);
 
@@ -299,6 +309,48 @@ int  lb_balance_byte_count(int slot);
 void lb_balance_snapshot(unsigned int blueprint_base);
 int  lb_balance_revert(unsigned int blueprint_base);
 unsigned int lb_balance_extent(void);   // one past any pack's last byte
+
+// docs/404: THE BALANCE TAB -- the player's own values, field by field, on top
+// of the pack and Same-builders. Records 0..181 are units and buildings
+// (0x7C each), 182..208 their attacks (projectiles, 0x74 each). Fields are
+// numbered within a kind: lb_balance_field_* name them.
+enum { LB_BAL_UNITS = 0, LB_BAL_ATTACKS = 1 };
+// docs/408: units' fields 0..9 are the table's columns; 10..14 the spells.
+enum { LB_BAL_SPELL_FIELD0 = 10, LB_BAL_SPELLS = 5 };
+int         lb_balance_field_count(int kind);
+const char* lb_balance_field_name(int kind, int field);
+int         lb_balance_field_max(int kind, int field);   // the field's range
+int         lb_balance_record_first(int kind);
+int         lb_balance_record_count(int kind);
+int         lb_balance_record_name(int record, char* out, int cap);
+int         lb_balance_record_category(int record);      // units: +0x5C
+int         lb_balance_record_projectile(int record);    // units: +0x66, or -1
+// The value in the game now, and the one beneath the player's (pack/builders).
+// -1 when the blueprints are not in RAM, or the field does not apply (a
+// building's speed).
+int         lb_balance_value(int record, int field);
+int         lb_balance_base(int record, int field);
+// The player's set. value -1 clears one entry. Persisted through
+// lb_balance_custom_text / _parse ("rec:field=value,...").
+int         lb_balance_custom_get(int record, int field);   // -1 none
+void        lb_balance_custom_set(int record, int field, int value);
+void        lb_balance_custom_clear_all(void);
+int         lb_balance_custom_size(void);
+unsigned    lb_balance_custom_generation(void);   // bumps on every change
+int         lb_balance_custom_text(char* out, int cap);
+int         lb_balance_custom_parse(const char* text);
+// The patcher's half (lb_patches.cpp): whether the set in force differs from
+// what is written, and writing or taking it out.
+int         lb_balance_custom_dirty(void);
+int         lb_balance_custom_apply(unsigned int blueprint_base);
+void        lb_balance_custom_revert(unsigned int blueprint_base);
+void        lb_balance_custom_on_reset(void);
+// Recordings (lb_demo.cpp): a replay brings its own set and its changes.
+void        lb_balance_custom_play_begin(const char* text);
+void        lb_balance_custom_play_set(int record, int field, int value);
+void        lb_balance_custom_play_end(void);
+// Why the player's values cannot change now (an online session), or null.
+const char* lb_balance_custom_blocked(void);
 
 // The address docs/95's patch found the in-RAM BPNZ block at, or 0.
 unsigned int lb_patches_blueprint_base(void);
@@ -474,6 +526,12 @@ SDL_Texture* lb_teams_atlas(SDL_Renderer* r, int grey);
 int          lb_teams_icon_uv(int blueprint, float* u0, float* v0, float* u1,
                               float* v1);
 const char*  lb_teams_icons_status(void);
+// docs/408: the battle HUD's icons (UI/MiniHeadsGame via UI/Game/UIMgrData),
+// one per blueprint 0..181; the Balance menu's.
+SDL_Texture* lb_teams_hud_atlas(SDL_Renderer* r);
+const char*  lb_teams_spell_name(int spell_id);   /* null until text loads */
+int          lb_teams_hud_icon_uv(int blueprint, float* u0, float* v0, float* u1,
+                                  float* v1);
 void         lb_teams_shutdown(void);
 void         lb_teams_king_default(LbTeam* t);
 int          lb_teams_valid(const LbTeam* t);
@@ -502,6 +560,28 @@ int          lb_teams_enforce_bans(unsigned char rec[20], char* why, int cap);
 int          lb_rules_outgoing(unsigned char* buf, int cap);
 void         lb_rules_incoming(const unsigned char* buf, int len,
                                unsigned int sender);
+// docs/406: rules that change the simulation, so online every machine runs
+// the host's: bits of the rules datagram's flags byte.
+#define LB_RULE_EMP_TRANSPORTS 0x01
+int          lb_rules_local_flags(void);   /* this machine's (lb_overlay) */
+int          lb_rules_host_flags(void);    /* the host's; -1 unless joined */
+int          lb_setting_emp_transports(void);
+int          lb_emp_transports_live(void); /* the host's or this machine's */
+// docs/406: the red-brick cheats as a mask (bit i = flags[i]); a replay's
+// (-1 when not replaying one from sets=3), and the AI-gets-them option.
+int          lb_demo_play_cheats(void);
+int          lb_cheat_mask_live(void);
+int          lb_setting_ai_cheats(void);
+int          lb_demo_play_ai_cheats(void);
+int          lb_ai_cheats_live(void);      /* lb_patches: offline only */
+// docs/406: the AI rebuilds its hero after every death (kind 11).
+int          lb_setting_ai_hero_rebuild(void);
+int          lb_demo_play_ai_hero_rebuild(void);
+int          lb_ai_hero_rebuild_live(void);
+// docs/408: a hotwired transport leaves its old owner's AI (kind 12).
+int          lb_setting_transport_release(void);
+int          lb_demo_play_transport_release(void);
+int          lb_transport_release_live(void);
 
 #ifdef __cplusplus
 }

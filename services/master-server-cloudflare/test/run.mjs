@@ -50,6 +50,23 @@ check('join', (await call('POST', '/join', { code, name: 'TestJoiner' })).status
 mine = (await call('GET', '/list')).data.lobbies.find((l) => l.code === code);
 check('the joiner counts and is listed', mine.players === 2 && mine.players_list.some((p) => p.name === 'TestJoiner'), mine);
 
+// docs/400: the introduction. Locally every request comes from one address,
+// so the joiner is "behind the host's router" and its LAN pair is used.
+check('punch refuses a bad port', (await call('POST', '/punch', { code, port: 0 })).status === 400);
+check('punch to an unknown lobby is 404', (await call('POST', '/punch', { code: 'ZZZZ', port: 40000 })).status === 404);
+check('punch', (await call('POST', '/punch', { code, port: 40000, lan_address: '192.168.5.7', lan_port: 26711 })).status === 200);
+check('poll with a wrong token is 404', (await call('POST', '/poll', { code, token: 'x' })).status === 404);
+let poll = await call('POST', '/poll', { code, token });
+check('poll hands the host the joiner', poll.status === 200 && poll.data.punch.length === 1, poll);
+const peerSeen = mine.address;   // the address this test is seen from
+const same = peerSeen === '0.0.0.0' || peerSeen === mine.address;
+check('poll gives the LAN pair to a host behind the same router',
+      same ? (poll.data.punch[0].address === '192.168.5.7' && poll.data.punch[0].port === 26711)
+           : poll.data.punch[0].port === 40000, poll);
+check('a public lan_address is dropped',
+      (await call('POST', '/punch', { code, port: 40001, lan_address: '8.8.8.8', lan_port: 26711 })).status === 200 &&
+      (await call('POST', '/poll', { code, token })).data.punch.every((p) => p.address !== '8.8.8.8'));
+
 check('heartbeat with a wrong token is 404', (await call('POST', '/heartbeat', { code, token: 'x', players: 1 })).status === 404);
 check('heartbeat', (await call('POST', '/heartbeat', { code, token, players: 1 })).status === 200);
 
@@ -66,6 +83,14 @@ check('gone', (await call('POST', '/heartbeat', { code, token, players: 1 })).st
 // A lobby that never plays: hosted and disbanded.
 const b = await call('POST', '/announce', { host_name: 'TestHost', port: 28701, max_players: 2 });
 check('disband', (await call('POST', '/remove', { code: b.data.code, token: b.data.token })).status === 200);
+
+// docs/400: a host's LAN pair is shown only to players behind its router.
+const c = await call('POST', '/announce', { host_name: 'TestHost', port: 28702, max_players: 2,
+                                          lan_address: '192.168.5.9', lan_port: 26710 });
+const seen = (await call('GET', '/list')).data.lobbies.find((l) => l.code === c.data.code);
+check('a viewer behind the host\'s router sees its LAN pair',
+      seen && seen.address === '192.168.5.9' && seen.port === 26710, seen);
+check('disband the LAN lobby', (await call('POST', '/remove', { code: c.data.code, token: c.data.token })).status === 200);
 
 console.log(`${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

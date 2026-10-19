@@ -130,6 +130,39 @@ def main():
                                           "max_players": 2})
     check("an out-of-range port is refused", code == 400)
 
+    # -- docs/400: the introduction. Every request here comes from 127.0.0.1,
+    #    so the joiner is "behind the host's router" and gets the LAN pair. --
+    code, body = post(base, "/announce",
+                      {"name": "Nat", "port": 30010, "max_players": 2,
+                       "lan_address": "192.168.5.9", "lan_port": 26710})
+    nat, ntok = body.get("code"), body.get("token")
+    _, body = get(base, "/list")
+    mine = [l for l in body.get("lobbies", []) if l["code"] == nat]
+    check("a viewer behind the host's router sees its LAN pair",
+          bool(mine) and mine[0]["address"] == "192.168.5.9"
+          and mine[0]["port"] == 26710, str(mine[:1]))
+    code, _ = post(base, "/punch", {"code": nat, "port": 0})
+    check("punch refuses a bad port", code == 400)
+    code, _ = post(base, "/punch", {"code": "ZZZZ", "port": 40000})
+    check("punch to an unknown lobby is refused", code == 404)
+    code, _ = post(base, "/punch", {"code": nat, "port": 40000,
+                                    "lan_address": "192.168.5.7",
+                                    "lan_port": 26711})
+    check("punch", code == 200)
+    code, _ = post(base, "/poll", {"code": nat, "token": "wrong"})
+    check("poll with a wrong token is refused", code == 404)
+    code, body = post(base, "/poll", {"code": nat, "token": ntok})
+    check("poll hands the host the joiner's LAN pair",
+          code == 200 and body.get("punch") == [{"address": "192.168.5.7",
+                                                 "port": 26711}], str(body))
+    post(base, "/punch", {"code": nat, "port": 40001,
+                          "lan_address": "8.8.8.8", "lan_port": 26711})
+    _, body = post(base, "/poll", {"code": nat, "token": ntok})
+    check("a public lan_address is never handed out",
+          all(p["address"] != "8.8.8.8" for p in body.get("punch", [])),
+          str(body))
+    post(base, "/remove", {"code": nat, "token": ntok})
+
     # -- expiry --
     stale = time.time() - master_server.TTL_SECONDS - 5
     with store.lock:

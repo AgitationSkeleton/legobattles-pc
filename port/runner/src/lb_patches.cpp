@@ -1142,6 +1142,75 @@ bool occupant_hop() {
     return true;
 }
 
+// docs/408: A STOLEN TRANSPORT STILL TAKES ITS OLD OWNER'S ORDERS (vanilla).
+//
+// A transport has no home field. The computer player that built it keeps its
+// handle in its transport manager (AI+0x58, FUN_0209EB68's tick): request
+// items in the vector at +0xC (data +0x10, count +0x14), each with a record
+// list at item+0x38 (pointers at [+4], count [+8], FUN_020A05BC; the handle in
+// a record's first two bytes) and the handle again in its squad's
+// ArrayEntityRef at squad+0x78 (data +0x7C, count +0x80; item+0x44,
+// FUN_0209EFCC). SetOwner (FUN_020598C4) changes teams and never touches any
+// of it, and the orders the AI goes on issuing are executed whoever owns the
+// unit (MoveEntities, FUN_020848AC, tests only that it lives). So a hotwired
+// transport sails back to the old owner's pick-up and drop-off points and is
+// let go when that request finishes. The fix writes the game's own null
+// handle (*0x0215541C, FUN_02087454) over the transport's in every OTHER
+// owner's AI -- exactly what an AI sees of a transport that was sunk, which
+// every reader already handles (FUN_020A05C8 drops such records). The AI list
+// is the container at *0x0215697C (data +4, count +8; FUN_0208B01C), each
+// AI's owner byte at +0x36. Plain stores, in the hotwire's own SetOwner, so
+// every machine does it on the same frame.
+static unsigned release_stolen_transport(uint32_t e, uint8_t new_owner) {
+    auto ram = [](uint32_t p) { return p >= 0x02000000u && p < 0x02400000u; };
+    const uint8_t h0 = bus_read_u8(e + 0xDCu), h1 = bus_read_u8(e + 0xDDu);
+    const uint8_t n0 = bus_read_u8(0x0215541Cu), n1 = bus_read_u8(0x0215541Du);
+    auto clear_at = [&](uint32_t p) {
+        if (!ram(p) || bus_read_u8(p) != h0 || bus_read_u8(p + 1u) != h1) return 0u;
+        bus_write_u8(p, n0);
+        bus_write_u8(p + 1u, n1);
+        return 1u;
+    };
+    unsigned cleared = 0;
+    const uint32_t ais = bus_read_u32(0x0215697Cu);
+    if (!ram(ais)) return 0;
+    const uint32_t ad = bus_read_u32(ais + 4u);
+    const int32_t an = (int32_t)bus_read_u32(ais + 8u);
+    for (int32_t a = 0; ram(ad) && a < an && a < 8; ++a) {
+        const uint32_t ai = bus_read_u32(ad + 4u * (uint32_t)a);
+        if (!ram(ai) || bus_read_u8(ai + 0x36u) == new_owner) continue;
+        const uint32_t mgr = bus_read_u32(ai + 0x58u);
+        if (!ram(mgr)) continue;
+        const uint32_t items = bus_read_u32(mgr + 0x10u);
+        const int32_t ni = (int32_t)bus_read_u32(mgr + 0x14u);
+        for (int32_t i = 0; ram(items) && i < ni && i < 64; ++i) {
+            const uint32_t item = bus_read_u32(items + 4u * (uint32_t)i);
+            if (!ram(item)) continue;
+            const uint32_t recs = bus_read_u32(item + 0x38u);
+            if (ram(recs)) {
+                const uint32_t rd = bus_read_u32(recs + 4u);
+                const int32_t nr = (int32_t)bus_read_u32(recs + 8u);
+                for (int32_t r = 0; ram(rd) && r < nr && r < 64; ++r)
+                    cleared += clear_at(bus_read_u32(rd + 4u * (uint32_t)r));
+            }
+            const uint32_t sq = bus_read_u32(item + 0x44u);
+            if (ram(sq)) {
+                const uint32_t sd = bus_read_u32(sq + 0x7Cu);
+                const int32_t ns = (int32_t)bus_read_u32(sq + 0x80u);
+                for (int32_t s = 0; ram(sd) && s < ns && s < 128; ++s)
+                    cleared += clear_at(sd + 2u * (uint32_t)s);
+            }
+        }
+    }
+    return cleared;
+}
+
+extern "C" int lb_demo_play_transport_release(void);   /* src/lb_demo.cpp */
+extern "C" int lb_transport_release_live(void) {
+    const int played = lb_demo_play_transport_release();
+    return played >= 0 ? played : lb_setting_transport_release();
+}
+
 uint8_t entity_category(uint32_t entity) {
     const uint32_t def = bus_read_u32(entity + 0x160u);
     if (!def) return 0xFFu;
@@ -1217,6 +1286,17 @@ void set_owner_override() {
         g_cpu.R[14] = g_occ.lr;
         g_cpu.R[13] = g_occ.sp;
         g_occ.active = false;
+        // docs/408: AND EMPTY ITS HOLD. The occupants are the ArrayEntityRef
+        // at transport+0xFC (handles at [+0x100], count +0x104), the list
+        // the game's own dying-transport kill walks (0x0206A2A8..0x0206A308).
+        // There the transport dies with them; here it lives on, and its list
+        // still named the dead: a later walk resolved one to null and stored
+        // through it, into the ITCM's IRQ handler at 0x01FF8008 (a reported
+        // freeze, after a second "Destroy them"). Empty,
+        // as unloading would have left it.
+        if (g_occ.mode == 1 && g_occ.transport >= 0x02000000u &&
+            g_occ.transport < 0x02400000u)
+            bus_write_u32(g_occ.transport + 0x104u, 0u);
         std::fprintf(stderr, "[lb_hotwire] transport %08X: %d occupant(s) %s\n",
                      g_occ.transport, g_occ.n,
                      g_occ.mode == 1 ? "destroyed" : "hotwired with it");
@@ -1226,6 +1306,29 @@ void set_owner_override() {
         const uint32_t owner_ptr = g_cpu.R[1];
         const int mode = lb_hotwire_transport_live();
         auto ram = [](uint32_t p) { return p >= 0x02000000u && p < 0x02400000u; };
+        // docs/402: every hotwire's change of owner, said once each -- what
+        // was stolen (its category) and by whom. Only the hotwire's own call.
+        if (g_cpu.R[14] == kHotwireSetOwnerRet && ram(entity) && ram(owner_ptr)) {
+            static unsigned said = 0u;
+            if (++said <= 32u) {
+                std::fprintf(stderr, "[lb_hotwire] hotwired entity %08X "
+                             "(category %u, owner %u) -> owner %u\n", entity,
+                             (unsigned)entity_category(entity),
+                             (unsigned)bus_read_u8(entity + 0xE4u),
+                             (unsigned)bus_read_u8(owner_ptr));
+                std::fflush(stderr);
+            }
+            // docs/408: and its old owner's AI lets go of a stolen transport.
+            if (entity_category(entity) == kCategoryTransport &&
+                bus_read_u8(owner_ptr) != bus_read_u8(entity + 0xE4u) &&
+                lb_transport_release_live()) {
+                const unsigned n =
+                    release_stolen_transport(entity, bus_read_u8(owner_ptr));
+                std::fprintf(stderr, "[lb_hotwire] transport %08X: its old "
+                             "owner's AI let go (%u reference(s))\n", entity, n);
+                std::fflush(stderr);
+            }
+        }
         if ((mode == 1 || mode == 2) && g_cpu.R[14] == kHotwireSetOwnerRet &&
             ram(entity) && ram(owner_ptr) &&
             occupant_start(entity, owner_ptr, mode)) {
@@ -2108,6 +2211,105 @@ void fp_post_override(void) {
     }
     // After the camera is back: the checkmark's point for this call (docs/372).
     checkmark_stash(g_cpu.R[0]);
+    if (original) original();
+}
+
+// docs/403: THE FOOTPRINT'S HOLE UNDER A MOVED BRICK. Task_View_CommitBGs
+// (0x020396E0, ARM) blanks BG3 -- tile 0x1F -- in every cell of the UI grid
+// (0x02151F28, SpriteUI_MarkCells' marks: rows at +0x14, one bit per cell)
+// whenever BG3 is dirty (view+0x68), then uploads it. BG3 is the placement
+// footprint, in front of the 3D layer the HUD is drawn in, so on a DS that
+// hole is what lets a brick show over the footprint. This port draws the
+// brick column and the bottom-left buttons at the window's corners, and the
+// cells under their NATIVE place became a hole in the middle of the
+// footprint (run t403pv: two columns, a two-cell gap, two columns; the grid
+// read live marked exactly cells 0-1 of rows 2-7 and the bottom-left
+// corner). The bits of cells only moved elements punched (lb_hud_refog_cell,
+// docs/348's own test) are cleared just before the commit runs.
+constexpr uint32_t kCommitBGs = 0x020396E0u;   // ARM
+constexpr uint32_t kUiCellGrid = 0x02151F28u;
+extern "C" int lb_hud_refog_cell(int cx, int cy);   // lb_hud.cpp
+
+// docs/406: TEST AID, LB_AIHERO_KILL. A unit to give SetHealth(e, 0)
+// (FUN_0205E7F4, ARM), called from here as a tail call that returns here
+// (the docs/383 mechanism, as the profile save does from the main menu).
+// The kill self-test's WaitingToDie chain crashed a battle (run aih406a);
+// this is one call. The victim is checked against the pool when it is taken.
+constexpr uint32_t kSetHealth = 0x0205E7F4u;   // ARM
+uint32_t g_hp_victim = 0u;
+struct HpCall {
+    bool active = false;
+    uint32_t r[4] = {0, 0, 0, 0};
+    uint32_t r12 = 0, lr = 0, sp = 0, sp_call = 0;
+} g_hp_call;
+bool entity_in_pool(uint32_t e) {
+    const uint32_t pool = bus_read_u32(0x02155028u);
+    if (!check_in_ram(pool)) return false;
+    const uint32_t array = bus_read_u32(pool + 8u);
+    const int32_t count = (int32_t)bus_read_u32(pool + 0xCu);
+    for (int32_t i = 0; check_in_ram(array) && i < count && i < 4096; ++i)
+        if (bus_read_u32(array + 4u * (uint32_t)i) == e) return true;
+    return false;
+}
+
+void commit_bgs_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kCommitBGs);
+    if (g_hp_call.active && g_cpu.R[13] == g_hp_call.sp_call) {
+        g_hp_call.active = false;   // SetHealth returned here
+        std::fprintf(stderr, "[lb_aihero] SetHealth(%08X, 0) returned\n",
+                     g_hp_victim);
+        std::fflush(stderr);
+        g_hp_victim = 0u;
+        g_cpu.R[0] = g_hp_call.r[0];
+        g_cpu.R[1] = g_hp_call.r[1];
+        g_cpu.R[2] = g_hp_call.r[2];
+        g_cpu.R[3] = g_hp_call.r[3];
+        g_cpu.R[12] = g_hp_call.r12;
+        g_cpu.R[14] = g_hp_call.lr;
+        g_cpu.R[13] = g_hp_call.sp;
+        if (original) original();
+        return;
+    }
+    if (g_hp_victim && !g_hp_call.active) {
+        const uint32_t e = g_hp_victim;
+        if (!entity_in_pool(e)) {
+            g_hp_victim = 0u;
+        } else {
+            g_hp_call.r[0] = g_cpu.R[0];
+            g_hp_call.r[1] = g_cpu.R[1];
+            g_hp_call.r[2] = g_cpu.R[2];
+            g_hp_call.r[3] = g_cpu.R[3];
+            g_hp_call.r12 = g_cpu.R[12];
+            g_hp_call.lr = g_cpu.R[14];
+            g_hp_call.sp = g_cpu.R[13];
+            g_hp_call.sp_call = (g_hp_call.sp - 0x40u) & ~7u;
+            g_hp_call.active = true;
+            g_cpu.R[0] = e;
+            g_cpu.R[1] = 0u;
+            g_cpu.R[13] = g_hp_call.sp_call;
+            g_cpu.R[14] = kCommitBGs;   // back here, in ARM
+            g_cpu.R[15] = kSetHealth;
+            runtime_dispatch_with_exchange(kSetHealth);
+            return;
+        }
+    }
+    const uint32_t view = g_cpu.R[0];
+    if (check_in_ram(view) && bus_read_u8(view + 0x68u)) {
+        const uint32_t rows = bus_read_u32(kUiCellGrid + 0x14u);
+        if (check_in_ram(rows)) {
+            for (int cy = 0; cy < 24; ++cy) {
+                const uint32_t row = bus_read_u32(rows + 4u * (uint32_t)cy);
+                if (!check_in_ram(row)) break;
+                for (int cx = 0; cx < 32; ++cx) {
+                    if (!lb_hud_refog_cell(cx, cy)) continue;
+                    const uint32_t a = row + (uint32_t)(cx >> 3);
+                    const uint8_t b = bus_read_u8(a);
+                    const uint8_t bit = (uint8_t)(1u << (cx & 7));
+                    if (b & bit) bus_write_u8(a, (uint8_t)(b & ~bit));
+                }
+            }
+        }
+    }
     if (original) original();
 }
 
@@ -4691,6 +4893,9 @@ const NdsDispatchEntry kOverrideTable[] = {
     {kFpPaint, 0u, fp_paint_override, nullptr},            /* 0x020370B4 */
     /* ARM, not thumb. Runs the original, then notes that the guest is showing
        its selection box this frame and blanks the tilemap it drew it into. */
+    /* ARM. Task_View_CommitBGs: the UI grid's cells under HUD elements the
+       port moved are cleared before it blanks BG3 with them. docs/403. */
+    {kCommitBGs, 0u, commit_bgs_override, nullptr},        /* 0x020396E0 */
     {kMarquee, 0u, marquee_observer, nullptr},             /* 0x0203B7FC */
     /* ARM. The placement cell painter: an observer that notes each piece the
        wall-line painter hands it, so the band can draw the culled ones
@@ -4810,7 +5015,8 @@ static_assert(kRosterBuild < kRegistryFind &&
               kHeroHud < kViewUpdate && kViewUpdate < kScreenUpdate &&
               kScreenUpdate < kWidgetRect &&
               kRegistryFind < kMapLoad && kMapLoad < kFpPost &&
-              kFpPost < kFpPaint && kFpPaint < kMarquee &&
+              kFpPost < kFpPaint && kFpPaint < kCommitBGs &&
+              kCommitBGs < kMarquee &&
               kMarquee < kFpCell && kFpCell < kStringFromId &&
               kStringFromId < kRegisterMissions &&
               kRegisterMissions < kGfxTransfer &&
@@ -7270,94 +7476,171 @@ static void apply_cadence(void) {
     std::fflush(stderr);
 }
 
-// ---- per-item unlocks (docs/181) ------------------------------------------
+// ---- what a profile earns (docs/407; docs/181 before it) -------------------
 //
-// The profile record carries TWO parallel bitfields recording which coded items
-// the player has unlocked. Every bit below was measured one at a time by typing
-// that item's code on the cartridge's own keyboard and diffing the record, so
-// each is the game's own write rather than a guess about layout.
+// THE LIVE STATE, NOT THE SAVE IMAGE. docs/181 wrote its bits into the record
+// at 0x02168500, and docs/153 had already found that is the serialised SAVE
+// IMAGE (by its checksum and name): the game rebuilds it from the
+// UnlockableManager every time it saves, so those writes were lost at the
+// next save unless the game happened to read the buffer back first. They
+// now go where the game keeps the state:
 //
-// The two fields are the SAME MSB-first bit stream, based 0x24 bytes apart,
-// with field B one position further along. That relation held for all 52 codes
-// measured without a single exception, which is why it is relied on here rather
-// than writing field B from its own table.
-static const uint32_t kProfileRecord = 0x02168500u;   // docs/176
-static const uint32_t kUnlockFieldA = 0xB4u;
-static const uint32_t kUnlockFieldB = 0xD8u;
-
-// UNITS: the 38 characters and vehicles whose bits were measured. Catapult
-// (registry index 71) is deliberately ABSENT -- its code set no bit on the run
-// that measured the others, and an unmeasured bit is not going to be guessed at
-// from its neighbours.
-static const uint8_t kUnlockUnits[] = {
-    18, 19, 20, 26, 28, 29, 31, 32, 33, 39, 42, 44, 45, 46, 52, 54, 55,
-    57, 58, 59, 65, 67, 68, 70, 71, 72, 78, 80, 81, 83, 84, 85, 86, 87,
-    88, 89, 90, 91
+// * UnlockableManager, *0x021585A8: four BitArrays (count +4, data +0xC,
+//   289 bits LSB-first, FUN_020EE9A0), one bit per collectable slot (the
+//   blueprint's +0x6C, FUN_02000C6C): committed A +4 and B +0x14, working
+//   A +0x24 and B +0x34. A is "unlocked", B "bought/owned". FUN_020EB798
+//   sets working A, FUN_020EB5D8 working B, FUN_020EB8F4 commits working into
+//   committed on a won mission and FUN_020EB8D8 reverts it on a lost one, so
+//   all four are set: committed only would be lost at the next win, working
+//   only at the next defeat. FUN_020EB7BC/844 save and load committed A then
+//   committed B -- which is docs/181's "B is A one bit along": two 289-bit
+//   arrays end to end, its stream index n being slot n + 88.
+// * Campaigns: each mission object's +0x15F (CampaignMissionBase::v02 reads
+//   it, v03 stores 1), in the six campaigns at 0x021539EC (data +4, count
+//   +8; FUN_020401C0), their missions at +0x10/+0x14; and the 91-bit array at
+//   0x02154E18 the save is made from (FUN_020405C4; FUN_0203FC40 reads it at
+//   load). Both: an end-of-mission save rebuilds the bits from the missions,
+//   any other save writes the bits as they are.
+//
+// The slots (the blueprints' +0x6C, docs/22), and what reads them:
+//   maps 0-29       Free Play's picker, FUN_02045F04 (committed A); bought in
+//                   Extras > Maps (FUN_020CDE84 sets A and B)
+//   concept art     30-95, bought in Extras > Concept Art (FUN_020CB8FC)
+//   minifigs        96-180, the Character Collection: A to buy, B owned,
+//                   and a Custom Army needs B (FUN_020B93D0). 180 is Santa.
+//   red bricks      181-198, the cheats (FUN_02008634 on a typed code)
+// Minikits (199-288) are left alone: the pickup's write was not traced.
+// Cutscenes have no state of their own; StoreMovies (FUN_020CF9FC) lists them
+// from the missions' completion. Nothing derived is stored (the store's
+// percentage, the trophy checks), so the bits alone are consistent.
+static const uint32_t kUnlockableMgrPtr = 0x021585A8u;
+static const uint32_t kUnlockSlots = 289u;
+static const uint32_t kUnlockArrays[4] = {0x04u, 0x14u, 0x24u, 0x34u};
+struct UnlockRange { int kind; uint16_t first, last; };
+static const UnlockRange kUnlockRanges[] = {
+    {0, 96, 180},    // units: every minifig, owned
+    {1, 181, 198},   // the cheat codes
+    {2, 0, 29},      // the maps
+    {3, 30, 95},     // the concept art
 };
+static const uint32_t kCampaignVec = 0x021539ECu;
+static const uint32_t kCampaignBits = 0x02154E18u;
 
-// EXTRAS: the cheat codes themselves, as ITEMS the profile records as found --
-// which is a different thing from the flags block above that turns one ON.
-// Stream index 108 is a gap in this otherwise solid 93..110 run and is very
-// likely Reveal Map, whose record is kind 16 and carries no kind-8 code, so it
-// was never typed. Not included, for the same reason Catapult is not.
-static const uint8_t kUnlockExtras[] = {
-    93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107,
-    109, 110
-};
-
-// Counts the bits it actually flips, so "the unlock switches are wired" can
-// be a measurement instead of a code reading. The panel badges these READ,
-// and a badge should only be upgraded on evidence.
+// Counts the bits it actually flips, so "the unlocks are wired" is a
+// measurement rather than a code reading.
 static unsigned g_unlock_bits_set = 0;
 
-static void set_stream_bit(uint32_t field_base, int n) {
-    const uint32_t addr = kProfileRecord + field_base + (uint32_t)(n / 8);
-    const uint8_t mask = (uint8_t)(0x80u >> (n % 8));
+static bool bitarray_ok(uint32_t ba, uint32_t count) {
+    return bus_read_u32(ba + 4u) == count && guest_ptr(bus_read_u32(ba + 0xCu));
+}
+
+// True when the bit was newly set.
+static bool bitarray_set(uint32_t ba, uint32_t i) {
+    const uint32_t addr = bus_read_u32(ba + 0xCu) + (i >> 3);
+    const uint8_t mask = (uint8_t)(1u << (i & 7u));
     const uint8_t cur = bus_read_u8(addr);
-    if (!(cur & mask)) {
-        bus_write_u8(addr, (uint8_t)(cur | mask));
-        ++g_unlock_bits_set;
+    if (cur & mask) return false;
+    bus_write_u8(addr, (uint8_t)(cur | mask));
+    return true;
+}
+
+// LB_UNLOCKLOG=1: once a profile's manager is up (and again every ~10 s), log
+// how many slots of each range committed A and B hold, and the campaign
+// bits. Read-only; the persistence test aid for apply_unlocks.
+static void unlock_log(void) {
+    static const bool on = std::getenv("LB_UNLOCKLOG") != nullptr;
+    if (!on) return;
+    static unsigned tick = 0;
+    if ((++tick % 600u) != 1u) return;
+    const uint32_t mgr = bus_read_u32(kUnlockableMgrPtr);
+    if (!guest_ptr(mgr) || !bitarray_ok(mgr + 4u, kUnlockSlots) ||
+        !bitarray_ok(mgr + 0x14u, kUnlockSlots))
+        return;
+    auto bit = [](uint32_t ba, uint32_t i) {
+        return (bus_read_u8(bus_read_u32(ba + 0xCu) + (i >> 3)) >> (i & 7u)) & 1u;
+    };
+    static const char* const kName[4] = {"units", "codes", "maps", "art"};
+    char line[240];
+    int at = std::snprintf(line, sizeof line, "[lb_unlocklog]");
+    for (const UnlockRange& r : kUnlockRanges) {
+        unsigned a = 0, b = 0;
+        for (uint32_t s = r.first; s <= r.last; ++s) {
+            a += bit(mgr + 4u, s);
+            b += bit(mgr + 0x14u, s);
+        }
+        at += std::snprintf(line + at, sizeof line - at, " %s A%u/B%u of %u",
+                            kName[r.kind], a, b, (unsigned)(r.last - r.first + 1));
     }
+    if (bitarray_ok(kCampaignBits, 91u)) {
+        unsigned c = 0;
+        for (uint32_t i = 0; i < 90u; ++i) c += bit(kCampaignBits, i);
+        std::snprintf(line + at, sizeof line - at, " campaign bits %u of 90", c);
+    }
+    std::fprintf(stderr, "%s\n", line);
+    std::fflush(stderr);
 }
 
 static void apply_unlocks(void) {
-    // Only ever SETS bits, and only the ones a code would have set. Turning a
-    // switch off does not re-lock anything: the game has no "forget this code"
-    // and forging one would be inventing behaviour the cartridge does not have.
-    const bool units = lb_setting_unlock_units() != 0;
-    const bool extras = lb_setting_unlock_extras() != 0;
-    if (!units && !extras) return;
+    unlock_log();
+    // Only ever SETS. Unticking does not lock anything again: the game has no
+    // "forget this" and forging one would be behaviour the cartridge lacks.
+    bool want[LB_UNLOCK_KINDS];
+    bool any = false;
+    for (int k = 0; k < LB_UNLOCK_KINDS; ++k)
+        any |= want[k] = lb_setting_unlock(k) != 0;
+    if (!any) return;
 
-    // The record is not always resident -- there is no profile before one is
-    // chosen. A record whose two fields disagree about a bit they must share is
-    // not the record, so nothing is written until they agree.
-    int seen = 0, agree = 0;
-    for (int n = 0; n < 24 * 8 - 1; ++n) {
-        const uint8_t a = bus_read_u8(kProfileRecord + kUnlockFieldA + (uint32_t)(n / 8));
-        if (!(a & (uint8_t)(0x80u >> (n % 8)))) continue;
-        ++seen;
-        const int m = n + 1;
-        const uint8_t b = bus_read_u8(kProfileRecord + kUnlockFieldB + (uint32_t)(m / 8));
-        if (b & (uint8_t)(0x80u >> (m % 8))) ++agree;
+    // No profile, no manager: nothing is written until all four arrays are
+    // the 289-bit ones this was read from.
+    const uint32_t mgr = bus_read_u32(kUnlockableMgrPtr);
+    if (!guest_ptr(mgr)) return;
+    for (uint32_t off : kUnlockArrays)
+        if (!bitarray_ok(mgr + off, kUnlockSlots)) return;
+
+    // Only the committed arrays and the campaigns count: they are what the
+    // save is made from. The game resets the working copies now and then
+    // (run unl407b: 778, 1466, 1482 with every array counted), and they are
+    // simply set again; that is no reason to save again.
+    for (const UnlockRange& r : kUnlockRanges) {
+        if (!want[r.kind]) continue;
+        for (uint32_t s = r.first; s <= r.last; ++s)
+            for (uint32_t off : kUnlockArrays)
+                if (bitarray_set(mgr + off, s) && off < 0x24u) ++g_unlock_bits_set;
     }
-    if (seen < 2 || agree != seen) return;   // not a loaded profile record
 
-    if (units)
-        for (size_t i = 0; i < sizeof kUnlockUnits; ++i) {
-            set_stream_bit(kUnlockFieldA, kUnlockUnits[i]);
-            set_stream_bit(kUnlockFieldB, kUnlockUnits[i] + 1);
+    if (want[4]) {
+        const uint32_t data = bus_read_u32(kCampaignVec + 4u);
+        const uint32_t n = bus_read_u32(kCampaignVec + 8u);
+        if (guest_ptr(data) && n == 6u && bitarray_ok(kCampaignBits, 91u)) {
+            for (uint32_t c = 0; c < n; ++c) {
+                const uint32_t camp = bus_read_u32(data + 4u * c);
+                if (!guest_ptr(camp)) continue;
+                const uint32_t missions = bus_read_u32(camp + 0x10u);
+                const uint32_t m = bus_read_u32(camp + 0x14u);
+                for (uint32_t i = 0; guest_ptr(missions) && i < m && i < 32u; ++i) {
+                    const uint32_t ms = bus_read_u32(missions + 4u * i);
+                    if (guest_ptr(ms) && bus_read_u8(ms + 0x15Fu) != 1u) {
+                        bus_write_u8(ms + 0x15Fu, 1u);
+                        ++g_unlock_bits_set;
+                    }
+                }
+            }
+            for (uint32_t b = 0; b < 90u; ++b)
+                if (bitarray_set(kCampaignBits, b)) ++g_unlock_bits_set;
         }
-    if (extras)
-        for (size_t i = 0; i < sizeof kUnlockExtras; ++i) {
-            set_stream_bit(kUnlockFieldA, kUnlockExtras[i]);
-            set_stream_bit(kUnlockFieldB, kUnlockExtras[i] + 1);
-        }
+    }
+
     static unsigned last = 0u;
     if (g_unlock_bits_set != last) {
         last = g_unlock_bits_set;
+        // Saved by the game itself, at the main menu, as a rename is
+        // (main_menu_update_override), so the unlocks outlive the session.
+        g_profile_save_pending = true;
         std::fprintf(stderr,
-                     "[lb_unlock] units=%d extras=%d: %u profile bits set\n",
-                     units ? 1 : 0, extras ? 1 : 0, g_unlock_bits_set);
+                     "[lb_unlock] units=%d codes=%d maps=%d art=%d campaigns=%d: "
+                     "%u bits set\n", want[0] ? 1 : 0, want[1] ? 1 : 0,
+                     want[2] ? 1 : 0, want[3] ? 1 : 0, want[4] ? 1 : 0,
+                     g_unlock_bits_set);
         std::fflush(stderr);
     }
 }
@@ -9968,6 +10251,252 @@ static void apply_hotwire_specials_only(void) {
     std::fflush(stderr);
 }
 
+// ── docs/406: EMP disables transports (player suggestion 7) ──────────────
+//
+// Battles::Sim::EAttackSpell::virtual_03 (0x0207731C) moves the spell and,
+// each step, calls FUN_020775F0 with the tiles under it. That collects the
+// victims into the spell's list (+0x50/+0x54/+0x58) by the entity's category
+// ([+0x160]->[+8]->[+0x5C]), and FUN_02077510 puts each into state 0xB
+// (FUN_0206B268, a state that does not depend on the category). With the
+// spell's +0x74 byte clear -- the EMP -- only category 6 (Siege/Special)
+// is collected, at two sites: the first pass (an empty list) and the
+// one that skips victims already in it. A transport is category 5.
+//
+// Each site is `cmp r0,#6; bne skip` followed by the victim record's
+// allocation, FUN_0204C6E4(8, file, line). That allocator never reads its
+// file and line (r1 is overwritten at once, r2 never read), so dropping the
+// line argument makes room for a second compare:
+//
+//     020776B4  cmp r0,#6          cmp r0,#6
+//     020776B8  bne 020776F8       cmpne r0,#5
+//     020776BC  mov r0,#8          bne 020776F8
+//     020776C0  mov r1,r6          mov r0,#8
+//     020776C4  add r2,r5,#7       mov r1,r6
+//
+//     020777F0  cmp r0,#6          cmp r0,#6
+//     020777F4  bne 0207784C       cmpne r0,#5
+//     020777F8  ldr r1,=0214A830   bne 0207784C
+//     020777FC  ldr r2,=0x13B      ldr r1,=0214A830  (the same literal)
+//     02077800  mov r0,#8          mov r0,#8
+//
+// The patched function runs interpreted (content validation), as Hotwire
+// Anything's does. It changes the simulation, so the value is a replay's,
+// else the host's online (lb_teams.cpp's rules flags), else this machine's.
+const HotwirePatch kEmpTransports[] = {
+    {0x020776B8u, 0x1A00000Eu, 0x13500005u, "bne -> cmpne r0,#5"},
+    {0x020776BCu, 0xE3A00008u, 0x1A00000Du, "mov r0,#8 -> bne 020776F8"},
+    {0x020776C0u, 0xE1A01006u, 0xE3A00008u, "mov r1,r6 -> mov r0,#8"},
+    {0x020776C4u, 0xE2852007u, 0xE1A01006u, "add r2,r5,#7 -> mov r1,r6"},
+    {0x020777F4u, 0x1A000014u, 0x13500005u, "bne -> cmpne r0,#5"},
+    {0x020777F8u, 0xE59F105Cu, 0x1A000013u, "ldr r1 -> bne 0207784C"},
+    {0x020777FCu, 0xE59F2060u, 0xE59F1058u, "ldr r2 -> ldr r1 (same literal)"},
+};
+
+extern "C" int lb_demo_play_emp_transports(void);   /* src/lb_demo.cpp */
+extern "C" int lb_emp_transports_live(void) {
+    const int host = lb_rules_host_flags();
+    if (host >= 0) return (host & LB_RULE_EMP_TRANSPORTS) ? 1 : 0;
+    return lb_setting_emp_transports();
+}
+
+static void apply_emp_transports(void) {
+    static int applied = 0;           // 0 = stock, 1 = patched
+    static unsigned gen = 0;          // a reset restores stock
+    if (gen != g_boot_gen) { gen = g_boot_gen; applied = 0; }
+    const int played = lb_demo_play_emp_transports();
+    const int want = played >= 0 ? played : lb_emp_transports_live();
+    if (want == applied) return;
+
+    const int n = (int)(sizeof kEmpTransports / sizeof kEmpTransports[0]);
+    int ready = 0;
+    for (const HotwirePatch& p : kEmpTransports) {
+        const uint32_t got = bus_read_u32(p.addr);
+        if (got == p.stock || got == p.want) ++ready;
+    }
+    if (ready != n) return;           // not loaded yet, or not this build
+
+    for (const HotwirePatch& p : kEmpTransports)
+        bus_write_u32(p.addr, want ? p.want : p.stock);
+    applied = want;
+    std::fprintf(stderr, "[lb_emp] EMP on transports %s (%08X)\n",
+                 want ? "ON: category 5 is collected too" : "off",
+                 kEmpTransports[0].addr);
+    std::fflush(stderr);
+}
+
+// ── docs/406: the AI gets the red-brick cheats (player suggestion 8) ──────
+//
+// Every gameplay cheat reader tests its flags byte (the block from
+// FUN_020092A8) and then that the unit is the local player's:
+//
+//     blx  FUN_020A186C ; blx FUN_020A2230   ; -> the local player's id byte
+//     ldrb r1,[unit,#0xE4]                   ; the unit's owner
+//     ldrb r0,[r0]
+//     cmp  r1,r0                             ; <-- patched to cmp r0,r0
+//     moveq / lsleq / addeq / bne ...        ; the cheat's effect
+//
+// `cmp r0,r0` always sets Z, so the effect applies whoever owns the unit.
+// The sites, by the byte each follows (lb_code.py dis; tools above):
+//
+//     1  One Hit Kill (Heroes)  0205079C, 0206E970 (a hero's hit kills)
+//     2  Fast Building          ConstructProgressAction, RepairStructureAction
+//     3  Fast Magic             0205F124 (mana +4)
+//     4  Double LEGO Bricks     0206D0E0
+//     7  Regenerating Health    0205F124
+//     11 Fast Harvesting        020531F8
+//     12 Full Unit Cap          02085E78, 02085F74, 020863D8
+//     13 Invincible Hero        0205E7F4 (SetHealth), 0206E970
+//     14 Fast Mining            0206D7F0
+//     16 Upgraded Towers        ConstructStructureEntityCommand::v09
+//     17 Super Explosions       0206E60C (a shot's owner, +0x14)
+//
+// Super Magic (9, FUN_02002AA8) and Long Range Magic (8, FUN_02002AD4) have
+// no owner test and already apply to every army. The visibility cheats
+// (0, 5, 6, 10, 15) are left alone. Offline only: a match online has no AI.
+const HotwirePatch kAiCheats[] = {
+    {0x02050C3Cu, 0xE1510000u, 0xE1500000u, "1 one hit kill"},
+    {0x0206EA58u, 0xE1510000u, 0xE1500000u, "1 one hit kill (shot)"},
+    {0x02052488u, 0xE1510000u, 0xE1500000u, "2 fast building"},
+    {0x02054DE4u, 0xE1510000u, 0xE1500000u, "2 fast repair"},
+    {0x0205F1FCu, 0xE1510000u, 0xE1500000u, "3 fast magic"},
+    {0x0206D1F4u, 0xE1510000u, 0xE1500000u, "4 double bricks"},
+    {0x0205F38Cu, 0xE1510000u, 0xE1500000u, "7 regenerating health"},
+    {0x02053234u, 0xE1510000u, 0xE1500000u, "11 fast harvesting"},
+    {0x02085EB4u, 0xE1510000u, 0xE1500000u, "12 full unit cap"},
+    {0x02085FB0u, 0xE1510000u, 0xE1500000u, "12 full unit cap"},
+    {0x02086484u, 0xE1510000u, 0xE1500000u, "12 full unit cap"},
+    {0x0205E858u, 0xE1510000u, 0xE1500000u, "13 invincible hero"},
+    {0x0206EA94u, 0xE1510000u, 0xE1500000u, "13 invincible hero (shot)"},
+    {0x0206D850u, 0xE1510000u, 0xE1500000u, "14 fast mining"},
+    {0x020698A0u, 0xE1510000u, 0xE1500000u, "16 upgraded towers"},
+    {0x0206E84Cu, 0xE1510000u, 0xE1500000u, "17 super explosions"},
+};
+
+extern "C" int lb_ai_cheats_live(void) {
+    const int net = lb_net_guest_state();
+    if (net > 0) return 0;            // hosting or joining: no AI, and lockstep
+    return lb_setting_ai_cheats();
+}
+
+static void apply_ai_cheats(void) {
+    static int applied = 0;           // 0 = stock, 1 = patched
+    static unsigned gen = 0;          // a reset restores stock
+    if (gen != g_boot_gen) { gen = g_boot_gen; applied = 0; }
+    const int played = lb_demo_play_ai_cheats();
+    const int want = played >= 0 ? played : lb_ai_cheats_live();
+    if (want == applied) return;
+
+    const int n = (int)(sizeof kAiCheats / sizeof kAiCheats[0]);
+    int ready = 0;
+    for (const HotwirePatch& p : kAiCheats) {
+        const uint32_t got = bus_read_u32(p.addr);
+        if (got == p.stock || got == p.want) ++ready;
+    }
+    if (ready != n) return;           // not loaded yet, or not this build
+
+    for (const HotwirePatch& p : kAiCheats)
+        bus_write_u32(p.addr, want ? p.want : p.stock);
+    applied = want;
+    std::fprintf(stderr, "[lb_cheat] the AI gets the cheats: %s (%d sites)\n",
+                 want ? "ON" : "off", n);
+    std::fflush(stderr);
+}
+
+// ── docs/406: the AI rebuilds its hero every time (player suggestion 9) ──
+//
+// The AI's economy manager ([AI+0x4C], its list L28 = mgr+0xC) queues a hero
+// in FUN_02094A9C when it has none alive AND FUN_0208CA00 finds no hero item
+// in L28 -- which, with none available, counts the USED ones (FUN_0208CD84).
+// Building one moves its item to used (FUN_0208CAF0). When a unit dies,
+// FUN_0208A5C0 removes its used item (FUN_0208CBC4):
+//
+//     0208A5FE  cmp r0,#1          ; the dead unit's category
+//     0208A600  bne 0208A64E       ; <-- patched: bhi 0208A64E
+//               ...L28, then `cmp r0,#0` -> the hero arm (FUN_0209A27C)
+//     0208A64E  ...L2C, the army list
+//
+// Only builders (1) took the L28 path, so a dead hero's item was looked for
+// in L2C, never found, and stayed "used" in L28 for the rest of the match:
+// the starting hero is rebuilt once, that one never. `bhi` sends categories
+// 0 and 1 down the L28 path, where the hero arm already sits unreachable.
+// Category 2 and up are untouched. Offline only (an online match has no AI).
+struct HalfWordPatch { uint32_t addr; uint16_t stock, want; };
+constexpr HalfWordPatch kAiHeroRebuild = {0x0208A600u, 0xD125u, 0xD825u};
+
+extern "C" int lb_ai_hero_rebuild_live(void) {
+    if (lb_net_guest_state() > 0) return 0;
+    return lb_setting_ai_hero_rebuild();
+}
+
+static void apply_ai_hero_rebuild(void) {
+    static int applied = 0;
+    static unsigned gen = 0;
+    if (gen != g_boot_gen) { gen = g_boot_gen; applied = 0; }
+    const int played = lb_demo_play_ai_hero_rebuild();
+    const int want = played >= 0 ? played : lb_ai_hero_rebuild_live();
+    if (want == applied) return;
+    const HalfWordPatch& p = kAiHeroRebuild;
+    const uint32_t got = bus_read_u16(p.addr);
+    if (got != p.stock && got != p.want) return;   // not loaded, or not this build
+    bus_write_u16(p.addr, want ? p.want : p.stock);
+    applied = want;
+    std::fprintf(stderr, "[lb_aihero] the AI rebuilds its hero every time: %s "
+                 "(%08X)\n", want ? "ON" : "off", p.addr);
+    std::fflush(stderr);
+}
+
+// docs/408: LB_CAMREST=1 logs every place the shown camera (the ground's,
+// lb_shown_cam) comes to rest off the 8-px grid: still for 30 frames, x or
+// y not a multiple of 8. Fog_ApplyUiCellMask's holes and BG2's scroll
+// (camy % 16) only meet on that grid, so off it a command icon sits camy % 8
+// px below its hole. Test aid only.
+extern "C" int lb_shown_cam(int* x, int* y);   /* lb_widemap.cpp */
+static void cam_rest_log(void) {
+    static const bool on = std::getenv("LB_CAMREST") != nullptr;
+    if (!on) return;
+    static int lx = INT32_MIN, ly = INT32_MIN, still = 0;
+    static int said_x = INT32_MIN, said_y = INT32_MIN;
+    static unsigned frame = 0;
+    ++frame;
+    int x = 0, y = 0;
+    if (!lb_shown_cam(&x, &y)) return;
+    if (x != lx || y != ly) { lx = x; ly = y; still = 0; return; }
+    if (++still != 30) return;
+    if ((x & 7) == 0 && (y & 7) == 0) return;
+    if (x == said_x && y == said_y) return;
+    said_x = x; said_y = y;
+    std::fprintf(stderr, "[lb_camrest] frame %u: rest at %d,%d (x%%8 %d, "
+                 "y%%8 %d)\n", frame, x, y, x & 7, y & 7);
+    std::fflush(stderr);
+}
+
+// docs/406: LB_BRICKLOG=<frames> logs every player's bricks that often, to
+// measure the AI cheats (Double LEGO Bricks). A player is
+// [[0x0215540C]+8 + 4*owner] (FUN_02086CA4); its bricks are +0x90
+// (FUN_020866E0). Test aid only.
+static void brick_log(void) {
+    static const int every = [] {
+        const char* v = std::getenv("LB_BRICKLOG");
+        return v ? std::atoi(v) : 0;
+    }();
+    static unsigned tick = 0;
+    if (every <= 0 || (++tick % (unsigned)every) != 0u) return;
+    const uint32_t world = bus_read_u32(0x0215540Cu);
+    if (!guest_ptr(world)) return;
+    const uint32_t table = bus_read_u32(world + 8u);
+    if (!guest_ptr(table)) return;
+    char line[160];
+    int at = std::snprintf(line, sizeof line, "[lb_bricks] tick %u:", tick);
+    for (uint32_t o = 0; o < 4u && at < (int)sizeof line - 24; ++o) {
+        const uint32_t p = bus_read_u32(table + 4u * o);
+        if (guest_ptr(p))
+            at += std::snprintf(line + at, sizeof line - at, " p%u=%u", o,
+                                bus_read_u32(p + 0x90u));
+    }
+    std::fprintf(stderr, "%s\n", line);
+    std::fflush(stderr);
+}
+
 // ── Self-test for the kill path (LB_KILLTEST=1) ───────────────────────────
 //
 // GOAL: `issue_waiting_to_die` is the newest and riskiest code in this file --
@@ -10116,8 +10645,9 @@ void lb_kill_test_run_if_armed(void) {
     // no-op for occupants already moved". So retry rather than declaring
     // failure on the first partial attempt; a real fault will still show as a
     // run of identical failures at the same step.
+    static int tries = 0;             // docs/406: per kill, LB_AIHERO_KILL repeats
+    if (ok) tries = 0;
     if (!ok) {
-        static int tries = 0;
         if (++tries < 12) {
             std::fprintf(stderr,
                          "[lb_killtest] attempt %d unwound; re-arming\n",
@@ -10127,6 +10657,7 @@ void lb_kill_test_run_if_armed(void) {
         }
         std::fprintf(stderr, "[lb_killtest] gave up after %d attempts\n",
                      tries);
+        tries = 0;
     }
     g_kill_test_pending = false;
 
@@ -10140,6 +10671,64 @@ void lb_kill_test_run_if_armed(void) {
                  ok ? "ok" : "UNWOUND", g_kill_before_cmds, after,
                  (int)(after - g_kill_before_cmds),
                  (int)g_kill_before_pool, (int)pool_after);
+    std::fflush(stderr);
+}
+
+// docs/406: LB_AIHERO_KILL=<seconds> tests the AI's hero rebuild. That often
+// in a battle it logs every computer player's live heroes (unit-kind
+// entities of category 0, by blueprint) and, if one has a hero, arms the
+// kill self-test's WaitingToDie on it (lb_kill_test_run_if_armed performs it
+// from a guest call). Vanilla rebuilds the hero once; kAiHeroRebuild every
+// time. Test aid only.
+static void apply_aihero_kill(void) {
+    static const int secs = [] {
+        const char* v = std::getenv("LB_AIHERO_KILL");
+        return v ? std::atoi(v) : 0;
+    }();
+    if (secs <= 0) return;
+    int cx = 0, cy = 0;
+    static int round = 0;
+    static bool in_battle = false;
+    const bool now = lb_field_camera(&cx, &cy);
+    if (now != in_battle) {
+        in_battle = now;
+        std::fprintf(stderr, "[lb_aihero] %s the battle (after round %d)\n",
+                     now ? "in" : "out of", round);
+        std::fflush(stderr);
+    }
+    if (!now) return;
+    static int tick = 0;
+    if (++tick < secs * 60) return;
+    tick = 0;
+    const uint32_t pool = bus_read_u32(kEntityPoolPtr);
+    if (!guest_ptr(pool)) return;
+    const uint32_t array = bus_read_u32(pool + 8u);
+    const int32_t count = (int32_t)bus_read_u32(pool + 0xCu);
+    if (!guest_ptr(array) || count <= 0) return;
+    ++round;
+    char line[200];
+    int at = std::snprintf(line, sizeof line, "[lb_aihero] round %d heroes:",
+                           round);
+    uint32_t victim = 0u;
+    for (int32_t i = 0; i < count && i < 4096; ++i) {
+        const uint32_t e = bus_read_u32(array + (uint32_t)i * 4u);
+        if (!guest_ptr(e)) continue;
+        const uint32_t kind_obj = bus_read_u32(bus_read_u32(e + 0xE0u) + 4u);
+        if (!guest_ptr(kind_obj) || bus_read_u8(kind_obj + 8u) != 0u) continue;
+        if (entity_category(e) != 0u) continue;
+        const uint32_t bp = unit_blueprint(e);
+        const unsigned owner = bus_read_u8(e + 0xE4u);
+        if (at < (int)sizeof line - 24)
+            at += std::snprintf(line + at, sizeof line - at, " o%u:bp%u", owner,
+                                bp ? (unsigned)bus_read_u16(bp + 4u) : 0u);
+        if (owner != 0u && !victim) victim = e;
+    }
+    std::fprintf(stderr, "%s\n", line);
+    if (victim && !g_hp_victim) {
+        g_hp_victim = victim;   // commit_bgs_override calls SetHealth(e, 0)
+        std::fprintf(stderr, "[lb_aihero] round %d: killing %08X (owner %u)\n",
+                     round, victim, (unsigned)bus_read_u8(victim + 0xE4u));
+    }
     std::fflush(stderr);
 }
 
@@ -11015,12 +11604,18 @@ extern "C" void lb_patches_on_vblank(void) {
     // accessor and no caller until the vanilla rule above was located.
     apply_hotwire_anything();
     apply_hotwire_specials_only();
+    apply_emp_transports();           // docs/406
+    apply_ai_cheats();
+    apply_ai_hero_rebuild();
+    brick_log();
+    cam_rest_log();                   // docs/408 test aid
     // Move the order path off the cartridge's byte touch
     // fields. Gated on LB_ORDERFIX; a no-op unless it is set. docs/238.
     apply_order_fix();
     // Self-test for the newly implemented kill path; a no-op unless
     // LB_KILLTEST is set. docs/239 flags it as compiled-but-never-run.
     apply_kill_test();
+    apply_aihero_kill();              // docs/406 test aid
     apply_insn_hook_policy();
     // Fill the tilemap columns the guest leaves empty, so the widened field
     // shows terrain rather than black. Off unless LB_WIDEMAP is set.
@@ -11167,8 +11762,13 @@ extern "C" void lb_patches_on_vblank(void) {
     if (const char* spec = std::getenv("LB_BALANCE")) slot = std::atoi(spec);
     int builders = lb_setting_same_builders();   // docs/396: 0, or the source
     if (builders < 0 || builders > 6) builders = 0;
-    if (slot == lb_balance_applied_slot() && builders == g_builders_patched)
+    if (slot == lb_balance_applied_slot() && builders == g_builders_patched) {
+        // docs/404: only the player's own values changed. They may change in
+        // an offline battle (a recording carries each change); not online.
+        if (lb_balance_custom_dirty() && !lb_balance_custom_blocked())
+            lb_balance_custom_apply(g_blueprint_base);
         return;
+    }
 
     // docs/386: A CHANGE TAKES EFFECT AT ONCE outside a battle and a lobby
     // (lb_blueprint_edit_blocked); inside one it waits, and the panel says
@@ -11191,7 +11791,9 @@ extern "C" void lb_patches_on_vblank(void) {
     // pack goes BEFORE same-builders: the setting wants all builders
     // equalised to the Imperial one, and with a pack that has to be the
     // PATCHED Imperial; applying the pack second would overwrite the
-    // equalisation.
+    // equalisation. docs/404: the player's own values are the top layer, out
+    // first and back last.
+    lb_balance_custom_revert(g_blueprint_base);
     if (g_builders_patched) {
         revert_same_builders();
         g_builders_patched = 0;
@@ -11222,6 +11824,7 @@ extern "C" void lb_patches_on_vblank(void) {
                      (unsigned)(sizeof(kStatFields) / sizeof(kStatFields[0])),
                      kNames[builders - 1]);
     }
+    lb_balance_custom_apply(g_blueprint_base);   // docs/404: the top layer
 }
 
 

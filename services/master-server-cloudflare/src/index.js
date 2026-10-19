@@ -18,6 +18,21 @@
 //   POST /join       {code, name}   a player is in this lobby (the joiner says
 //   POST /leave      {code, name}   so; the cartridge's own lobby carries it)
 //
+// And the introduction that lets two routers open for each other (docs/400):
+//
+//   POST /punch      {code, port, lan_address?, lan_port?}  a joiner's public
+//                    UDP port (from STUN); its address is the one this server
+//                    sees, never one it names, so a host can only be pointed
+//                    back at whoever asked
+//   POST /poll       {code, token} -> {punch: [{address, port}]}  the host,
+//                    every 2 s while it waits: who to say hello to. Kept in
+//                    memory for 30 s; nothing is stored.
+//
+// A host announces its STUN mapping as address/port, plus lan_address and
+// lan_port. Anyone whose public address equals the host's is behind the same
+// router and is given the LAN pair instead (in the list, and in /poll for the
+// host).
+//
 // All of it is kept by ONE Durable Object, so a list is always consistent.
 
 import { DurableObject } from 'cloudflare:workers';
@@ -49,6 +64,18 @@ function toInt(v, dflt) {
   return Number.isFinite(n) ? n : dflt;
 }
 
+// docs/400: a LAN address is only ever a private IPv4 dotted quad, and goes
+// only to players behind the same router; anything else is dropped.
+const PRIVATE_V4 = /^(10\.\d{1,3}|172\.(1[6-9]|2\d|3[01])|192\.168)\.\d{1,3}\.\d{1,3}$/;
+function lanAddress(v) {
+  const s = String(v == null ? '' : v).trim();
+  return PRIVATE_V4.test(s) ? s : '';
+}
+function lanPort(v) {
+  const n = toInt(v, 0);
+  return n >= 1 && n <= 65535 ? n : 0;
+}
+
 // ---------------------------------------------------------------- Worker ----
 
 export default {
@@ -69,6 +96,7 @@ export class Directory extends DurableObject {
     this.lobbies = new Map();   // code -> lobby
     this.bans = new Map();      // address -> {reason, created}
     this.rate = new Map();      // address -> {window, count}
+    this.punches = new Map();   // code -> [{address, port, at}]  (docs/400; memory only)
     ctx.blockConcurrencyWhile(async () => {
       const saved = await ctx.storage.get('lobbies');
       if (saved) for (const l of saved) this.lobbies.set(l.code, l);
@@ -101,10 +129,14 @@ export class Directory extends DurableObject {
     return Math.min(l.max_players, Math.max(l.players, 1 + l.members.length));
   }
 
-  publicView(l) {
+  // `viewer` is the asker's address: one behind the host's own router is
+  // given the host's LAN address (docs/400).
+  publicView(l, viewer) {
+    const local = viewer && viewer === l.address && l.lan_address && l.lan_port;
     return {
-      code: l.code, name: l.name, host_name: l.host_name, address: l.address,
-      port: l.port, players: this.players(l), max_players: l.max_players,
+      code: l.code, name: l.name, host_name: l.host_name,
+      address: local ? l.lan_address : l.address,
+      port: local ? l.lan_port : l.port, players: this.players(l), max_players: l.max_players,
       map_name: l.map_name, mode: l.mode, version: l.version,
       options: l.options, created: l.created / 1000, seen: l.seen / 1000,
       state: l.state, players_list: this.roster(l),
@@ -170,11 +202,11 @@ export class Directory extends DurableObject {
         return json(200, { ok: true, lobbies: [...this.lobbies.values()]
           .filter((l) => l.state === 'open')
           .sort((a, b) => a.created - b.created)
-          .map((l) => this.publicView(l)) });
+          .map((l) => this.publicView(l, peer)) });
       if (path.startsWith('/lobby/')) {
         const l = this.lobbies.get(path.slice(7).toUpperCase());
         if (!l || l.state !== 'open') return json(404, { ok: false, error: 'no such lobby' });
-        return json(200, { ok: true, lobby: this.publicView(l) });
+        return json(200, { ok: true, lobby: this.publicView(l, peer) });
       }
       return json(404, { ok: false, error: 'no such endpoint' });
     }
@@ -197,6 +229,8 @@ export class Directory extends DurableObject {
       case '/remove': return this.remove(body, now);
       case '/join': return this.join(body, now);
       case '/leave': return this.leave(body, now);
+      case '/punch': return this.punch(body, peer, now);
+      case '/poll': return this.poll(body, now);
       default: return json(404, { ok: false, error: 'no such endpoint' });
     }
   }
@@ -218,6 +252,7 @@ export class Directory extends DurableObject {
       host_name: cleanName(body.host_name, 'Player'),
       address: String(body.address || peer).slice(0, 64),
       port, players, max_players: maxp,
+      lan_address: lanAddress(body.lan_address), lan_port: lanPort(body.lan_port),
       map_name: cleanName(body.map_name, ''),
       mode: cleanName(body.mode, ''),
       version: String(body.version || '').slice(0, 32),
@@ -285,6 +320,33 @@ export class Directory extends DurableObject {
                ` (${this.players(l)}/${l.max_players}).`);
     }
     return json(200, { ok: true });
+  }
+
+  // docs/400: a joiner's public UDP port, for the host's /poll.
+  async punch(body, peer, now) {
+    const l = this.lobbies.get(String(body.code || '').toUpperCase());
+    if (!l || l.state !== 'open') return json(404, { ok: false, error: 'unknown lobby' });
+    const port = toInt(body.port, 0);
+    if (!(port >= 1 && port <= 65535)) return json(400, { ok: false, error: 'port out of range' });
+    const local = peer === l.address;
+    const entry = local && lanAddress(body.lan_address) && lanPort(body.lan_port)
+      ? { address: lanAddress(body.lan_address), port: lanPort(body.lan_port), at: now }
+      : { address: peer, port, at: now };
+    const list = (this.punches.get(l.code) || [])
+      .filter((p) => now - p.at < 30000 && !(p.address === entry.address && p.port === entry.port));
+    list.push(entry);
+    this.punches.set(l.code, list.slice(-8));
+    return json(200, { ok: true });
+  }
+
+  // docs/400: the host's question while it waits. Nothing is written.
+  async poll(body, now) {
+    const l = this.lobbies.get(String(body.code || '').toUpperCase());
+    if (!l || l.token !== String(body.token || ''))
+      return json(404, { ok: false, error: 'unknown lobby' });
+    const list = (this.punches.get(l.code) || []).filter((p) => now - p.at < 30000);
+    if (list.length) this.punches.set(l.code, list); else this.punches.delete(l.code);
+    return json(200, { ok: true, punch: list.map((p) => ({ address: p.address, port: p.port })) });
   }
 
   async leave(body, now) {

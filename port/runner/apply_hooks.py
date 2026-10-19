@@ -7576,6 +7576,19 @@ def apply(runner_dir, imgui_dir):
           "endif()"])
     done.append("CMakeLists.txt: comdlg32 for the native file picker")
 
+    # docs/405: miniupnpc for UPnP port forwarding (src/lb_net.cpp), linked
+    # STATICALLY so a release ships no extra DLL. The MSYS2 UCRT64 package
+    # (mingw-w64-ucrt-x86_64-miniupnpc) installs libminiupnpc.a beside the
+    # compiler; on Windows it needs iphlpapi and ws2_32.
+    edit(cmake, "target_link_libraries(nds_runner PRIVATE nds_banks",
+         ["if(WIN32)",
+          "    get_filename_component(LB_TC_BIN \"${CMAKE_C_COMPILER}\" DIRECTORY)",
+          "    find_library(LB_MINIUPNPC NAMES libminiupnpc.a miniupnpc",
+          "                 HINTS \"${LB_TC_BIN}/../lib\" REQUIRED)",
+          "    target_link_libraries(nds_runner PRIVATE ${LB_MINIUPNPC} iphlpapi ws2_32)",
+          "endif()"])
+    done.append("CMakeLists.txt: miniupnpc (static) for UPnP")
+
     # 3z. Attribute static-dispatch validation rejections.
     #
     #     docs/302: the ARM7 runs 87.6% interpreted, and the cause is NOT a
@@ -9066,6 +9079,306 @@ def apply(runner_dir, imgui_dir):
             "            }\n")
     done.append("wifi_net.cpp: a host's ban list travels to its players "
                 "(docs/384)")
+
+    # 0zzzzzzzzzzzzz-400. NAT TRAVERSAL (docs/400). The master server only
+    # lists addresses, so a host behind a router was unreachable: the joiner's
+    # first datagram met a router that had never seen the host send anywhere
+    # (every hosting session of 2026-10-18 logged `recv=0`). Each side now
+    # learns its PUBLIC UDP mapping from this socket -- a STUN binding request
+    # (RFC 5389) answered with XOR-MAPPED-ADDRESS -- and, when the master
+    # server introduces the two, sends hellos to the other's mapping, which
+    # opens both routers for the game's frames. lb_net.cpp asks for both from
+    # its worker threads (nds_local_wireless_stun / _punch); the transport
+    # does the sending on its own thread, from DrainSocket like the hello.
+    wifi_400 = os.path.join(runner_dir, "src", "wifi_net.cpp")
+    edit(wifi_400, "/* legobattles-decomp (docs/384): the host's rules. */",
+         ["/* legobattles-decomp (docs/400): NAT traversal state, shared with",
+          "   lb_net.cpp's worker threads through the nds_local_wireless_*",
+          "   functions below MP_Begin. */",
+          "namespace lb_nat {",
+          "std::mutex mu;",
+          "uint32_t stun_ip = 0u;      /* network order */",
+          "uint16_t stun_port = 0u;",
+          "unsigned stun_gen = 0u;     /* bumped by every request */",
+          "uint32_t pub_ip = 0u;       /* network order; 0 until answered */",
+          "uint16_t pub_port = 0u;",
+          "struct Punch {",
+          "    uint32_t ip;",
+          "    uint16_t port;",
+          "    std::chrono::steady_clock::time_point until;",
+          "};",
+          "std::vector<Punch> punches;",
+          "}  // namespace lb_nat",
+          ""],
+         after=False)
+    edit(wifi_400, "    void LbMaybeRules() {",
+         ["/* docs/400: STUN and punching (lb_nat above). */",
+          "unsigned lb_bind_gen_ = 0u, lb_nat_bind_ = 0u;",
+          "unsigned lb_stun_gen_ = 0u;",
+          "int lb_stun_tries_ = 0;",
+          "uint8_t lb_stun_txid_[12] = {};",
+          "std::chrono::steady_clock::time_point lb_last_stun_{}, lb_last_punch_{};",
+          "unsigned lb_remote_rx_ = 0u;",
+          "void LbHelloTo(uint32_t ip_be, uint16_t port) {",
+          "#ifdef _WIN32",
+          "    std::vector<uint8_t> datagram;",
+          "    WriteLe32(&datagram, kMagic);",
+          "    WriteLe32(&datagram, instance_);",
+          "    WriteLe32(&datagram, kLbHello);",
+          "    WriteLe32(&datagram, 0u);",
+          "    WriteLe64(&datagram, 0u);",
+          "    sockaddr_in to{};",
+          "    to.sin_family = AF_INET;",
+          "    to.sin_addr.s_addr = ip_be;",
+          "    to.sin_port = htons(port);",
+          "    ::sendto(socket_, reinterpret_cast<const char*>(datagram.data()),",
+          "             static_cast<int>(datagram.size()), 0,",
+          "             reinterpret_cast<sockaddr*>(&to), sizeof(to));",
+          "#endif",
+          "}",
+          "void LbNatTick() {",
+          "#ifdef _WIN32",
+          "    if (!enabled_ || socket_ == INVALID_SOCKET || !LbRemote()) return;",
+          "    const auto now = std::chrono::steady_clock::now();",
+          "    uint32_t sip = 0u;",
+          "    uint16_t sport = 0u;",
+          "    unsigned gen = 0u;",
+          "    std::vector<lb_nat::Punch> targets;",
+          "    {",
+          "        std::lock_guard<std::mutex> lock(lb_nat::mu);",
+          "        sip = lb_nat::stun_ip;",
+          "        sport = lb_nat::stun_port;",
+          "        gen = lb_nat::stun_gen;",
+          "        /* A new socket is a new mapping: ask again. */",
+          "        if (lb_nat_bind_ != lb_bind_gen_) {",
+          "            lb_nat_bind_ = lb_bind_gen_;",
+          "            lb_nat::pub_ip = 0u;",
+          "            lb_nat::pub_port = 0u;",
+          "            lb_stun_gen_ = gen - 1u;",
+          "        }",
+          "        for (size_t i = 0; i < lb_nat::punches.size();) {",
+          "            if (lb_nat::punches[i].until <= now) {",
+          "                lb_nat::punches.erase(lb_nat::punches.begin() +",
+          "                                      static_cast<std::ptrdiff_t>(i));",
+          "                continue;",
+          "            }",
+          "            targets.push_back(lb_nat::punches[i]);",
+          "            ++i;",
+          "        }",
+          "    }",
+          "    if (gen != lb_stun_gen_) {",
+          "        lb_stun_gen_ = gen;",
+          "        lb_stun_tries_ = 8;",
+          "        const uint64_t seed = static_cast<uint64_t>(",
+          "            now.time_since_epoch().count()) ^ (uint64_t)instance_ << 56;",
+          "        for (int i = 0; i < 12; ++i)",
+          "            lb_stun_txid_[i] = static_cast<uint8_t>(seed >> ((i % 8) * 8)) ^",
+          "                               static_cast<uint8_t>(i * 37);",
+          "    }",
+          "    if (sip && sport && lb_stun_tries_ > 0 &&",
+          "        now - lb_last_stun_ >= std::chrono::milliseconds(400)) {",
+          "        lb_last_stun_ = now;",
+          "        --lb_stun_tries_;",
+          "        uint8_t req[20] = {0x00, 0x01, 0x00, 0x00, 0x21, 0x12, 0xA4, 0x42};",
+          "        std::memcpy(req + 8, lb_stun_txid_, 12);",
+          "        sockaddr_in to{};",
+          "        to.sin_family = AF_INET;",
+          "        to.sin_addr.s_addr = sip;",
+          "        to.sin_port = htons(sport);",
+          "        ::sendto(socket_, reinterpret_cast<const char*>(req), 20, 0,",
+          "                 reinterpret_cast<sockaddr*>(&to), sizeof(to));",
+          "    }",
+          "    if (!targets.empty() &&",
+          "        now - lb_last_punch_ >= std::chrono::milliseconds(200)) {",
+          "        lb_last_punch_ = now;",
+          "        for (const lb_nat::Punch& p : targets) LbHelloTo(p.ip, p.port);",
+          "    }",
+          "#endif",
+          "}",
+          "/* A STUN answer to our own request: the public mapping. True for",
+          "   anything that is a STUN answer, so it never reaches the game. */",
+          "bool LbStunAnswer(const uint8_t* d, int got) {",
+          "    if (got < 20 || d[0] != 0x01 || d[1] != 0x01) return false;",
+          "    if (d[4] != 0x21 || d[5] != 0x12 || d[6] != 0xA4 || d[7] != 0x42)",
+          "        return false;",
+          "    if (std::memcmp(d + 8, lb_stun_txid_, 12) != 0) return true;",
+          "    const int len = (d[2] << 8) | d[3];",
+          "    int at = 20;",
+          "    while (at + 4 <= got && at + 4 <= 20 + len) {",
+          "        const int type = (d[at] << 8) | d[at + 1];",
+          "        const int alen = (d[at + 2] << 8) | d[at + 3];",
+          "        const uint8_t* v = d + at + 4;",
+          "        if (at + 4 + alen > got) break;",
+          "        if ((type == 0x0020 || type == 0x0001) && alen >= 8 && v[1] == 0x01) {",
+          "            uint16_t port = static_cast<uint16_t>((v[2] << 8) | v[3]);",
+          "            uint8_t ip[4] = {v[4], v[5], v[6], v[7]};",
+          "            if (type == 0x0020) {",
+          "                port ^= 0x2112u;",
+          "                ip[0] ^= 0x21; ip[1] ^= 0x12; ip[2] ^= 0xA4; ip[3] ^= 0x42;",
+          "            }",
+          "            uint32_t ip_be = 0u;",
+          "            std::memcpy(&ip_be, ip, 4);",
+          "            bool changed = false;",
+          "            {",
+          "                std::lock_guard<std::mutex> lock(lb_nat::mu);",
+          "                changed = lb_nat::pub_ip != ip_be || lb_nat::pub_port != port;",
+          "                lb_nat::pub_ip = ip_be;",
+          "                lb_nat::pub_port = port;",
+          "            }",
+          "            lb_stun_tries_ = 0;",
+          "            if (changed)",
+          "                melonDS::Platform::Log(melonDS::Platform::Info,",
+          "                    \"[local_mp] public address %u.%u.%u.%u:%u (STUN)\\n\",",
+          "                    (unsigned)ip[0], (unsigned)ip[1], (unsigned)ip[2],",
+          "                    (unsigned)ip[3], (unsigned)port);",
+          "            if (type == 0x0020) return true;",
+          "        }",
+          "        at += 4 + ((alen + 3) & ~3);",
+          "    }",
+          "    return true;",
+          "}"],
+         after=False)
+    replace(wifi_400,
+            "        LbMaybeRules();   /* docs/384 */\n",
+            "        LbMaybeRules();   /* docs/384 */\n"
+            "        LbNatTick();      /* docs/400 */\n")
+    replace(wifi_400,
+            "            if (got < static_cast<int>(kHeaderBytes)) continue;\n"
+            "            if (ReadLe32(datagram) != kMagic) continue;\n"
+            "            /* legobattles-decomp: a HOST has no address to answer\n",
+            "            if (LbStunAnswer(datagram, got)) continue;   /* docs/400 */\n"
+            "            if (got < static_cast<int>(kHeaderBytes)) continue;\n"
+            "            if (ReadLe32(datagram) != kMagic) continue;\n"
+            "            /* legobattles-decomp: a HOST has no address to answer\n")
+    edit(wifi_400, "            if (lb_listen_ && lb_peer_ip_ == 0u && !sibling) {",
+         ["if (!sibling) ++lb_remote_rx_;   /* docs/400 */"], after=False)
+    replace(wifi_400,
+            "        melonDS::Platform::Log(melonDS::Platform::Info,\n"
+            "            \"[local_mp] enabled instance=%u port=%u\\n\",",
+            "        ++lb_bind_gen_;   /* docs/400: a new socket, a new mapping */\n"
+            "        melonDS::Platform::Log(melonDS::Platform::Info,\n"
+            "            \"[local_mp] enabled instance=%u port=%u\\n\",")
+    edit(wifi_400, "    bool LbEnabled() const { return enabled_; }",
+         ["void LbStats(unsigned* s, unsigned* r) const {",
+          "    if (s) *s = lb_sent_;",
+          "    if (r) *r = lb_remote_rx_;",
+          "}"])
+    edit(wifi_400, "extern \"C\" uint16_t nds_local_wireless_port(void) {",
+         ["/* docs/400: NAT traversal, for lb_net.cpp. */",
+          "extern \"C\" void nds_local_wireless_stun(uint32_t ip_be, uint16_t port) {",
+          "    std::lock_guard<std::mutex> lock(lb_nat::mu);",
+          "    lb_nat::stun_ip = ip_be;",
+          "    lb_nat::stun_port = port;",
+          "    ++lb_nat::stun_gen;",
+          "}",
+          "extern \"C\" int nds_local_wireless_public(uint32_t* ip_be, uint16_t* port) {",
+          "    std::lock_guard<std::mutex> lock(lb_nat::mu);",
+          "    if (ip_be) *ip_be = lb_nat::pub_ip;",
+          "    if (port) *port = lb_nat::pub_port;",
+          "    return lb_nat::pub_ip != 0u ? 1 : 0;",
+          "}",
+          "extern \"C\" void nds_local_wireless_punch(uint32_t ip_be, uint16_t port,",
+          "                                         int ms) {",
+          "    std::lock_guard<std::mutex> lock(lb_nat::mu);",
+          "    const auto until = std::chrono::steady_clock::now() +",
+          "                       std::chrono::milliseconds(ms);",
+          "    for (lb_nat::Punch& p : lb_nat::punches)",
+          "        if (p.ip == ip_be && p.port == port) {",
+          "            p.until = until;",
+          "            return;",
+          "        }",
+          "    if (lb_nat::punches.size() < 8u)",
+          "        lb_nat::punches.push_back({ip_be, port, until});",
+          "}",
+          "extern \"C\" void nds_local_wireless_stats(unsigned* sent, unsigned* recvd) {",
+          "    if (sent) *sent = 0u;",
+          "    if (recvd) *recvd = 0u;",
+          "    if (g_bridge) g_bridge->local_mp.LbStats(sent, recvd);",
+          "}",
+          ""],
+         after=False)
+    done.append("wifi_net.cpp: STUN and hole punching for the bridge (docs/400)")
+
+    # 0zzzzzzzzzzzzz-401. A SAVE FROM ANY REGION, ANY TOOL, UNDER ANY ROM NAME
+    # (docs/401; the functions are in lb_setup.cpp). The loader takes another
+    # region's tag over to this build's, and a padded or DeSmuME file's first
+    # 512 bytes, instead of ignoring the file and later writing a blank save
+    # over it. main.cpp gives the retail cartridge one fixed save name.
+    io_401 = os.path.join(runner_dir, "src", "io.cpp")
+    edit(io_401, "std::string g_cart_save_path;",
+         ["/* legobattles-decomp docs/401 (lb_setup.cpp). */",
+          "extern \"C\" int lb_save_adopt(unsigned char* sram, size_t size,",
+          "                              const char* path);",
+          "extern \"C\" int lb_save_lenient_load(const char* path,",
+          "                                     unsigned char* sram, size_t size);"],
+         after=False)
+    replace(io_401,
+            "                case NdsBatterySaveLoadResult::Loaded:\n"
+            "                    std::fprintf(stderr,\n"
+            "                                 \"[save] loaded %zu bytes from %s\\n\",\n"
+            "                                 g_cart_backup.sram.size(),\n"
+            "                                 g_cart_save_path.c_str());\n"
+            "                    break;\n",
+            "                case NdsBatterySaveLoadResult::Loaded:\n"
+            "                    std::fprintf(stderr,\n"
+            "                                 \"[save] loaded %zu bytes from %s\\n\",\n"
+            "                                 g_cart_backup.sram.size(),\n"
+            "                                 g_cart_save_path.c_str());\n"
+            "                    if (lb_save_adopt(g_cart_backup.sram.data(),\n"
+            "                                      g_cart_backup.sram.size(),\n"
+            "                                      g_cart_save_path.c_str()))\n"
+            "                        g_cart_backup.dirty = true;   /* docs/401 */\n"
+            "                    break;\n")
+    replace(io_401,
+            "                case NdsBatterySaveLoadResult::InvalidSize:\n"
+            "                case NdsBatterySaveLoadResult::Error:\n"
+            "                    std::fprintf(stderr,\n",
+            "                case NdsBatterySaveLoadResult::InvalidSize:\n"
+            "                    /* docs/401: a padded or DeSmuME file. */\n"
+            "                    if (lb_save_lenient_load(g_cart_save_path.c_str(),\n"
+            "                                             g_cart_backup.sram.data(),\n"
+            "                                             g_cart_backup.sram.size())) {\n"
+            "                        lb_save_adopt(g_cart_backup.sram.data(),\n"
+            "                                      g_cart_backup.sram.size(),\n"
+            "                                      g_cart_save_path.c_str());\n"
+            "                        g_cart_backup.dirty = true;\n"
+            "                        break;\n"
+            "                    }\n"
+            "                    [[fallthrough]];\n"
+            "                case NdsBatterySaveLoadResult::Error:\n"
+            "                    std::fprintf(stderr,\n")
+    main_401 = os.path.join(runner_dir, "src", "main.cpp")
+    replace(main_401,
+            'extern "C" void lb_rom_attach(const unsigned char*, size_t);'
+            '  /* docs/384 */\n',
+            'extern "C" void lb_rom_attach(const unsigned char*, size_t);'
+            '  /* docs/384 */\n'
+            'extern "C" int lb_retail_save_path(const char* derived,'
+            ' const char* rom_path, const char* rom_sha1, char* out, int cap);'
+            '  /* docs/401 */\n')
+    replace(main_401,
+            "        } else if (interactive) {\n"
+            "            std::filesystem::path derived(rom_path);\n"
+            "            derived.replace_extension(\".sav\");\n"
+            "            save_path = derived.string();\n"
+            "        }\n"
+            "    }\n",
+            "        } else if (interactive) {\n"
+            "            std::filesystem::path derived(rom_path);\n"
+            "            derived.replace_extension(\".sav\");\n"
+            "            save_path = derived.string();\n"
+            "        }\n"
+            "        /* legobattles-decomp docs/401: the retail cartridge's save\n"
+            "           does not depend on what its ROM file is called. */\n"
+            "        char lb_fixed[1024];\n"
+            "        if (!save_path.empty() &&\n"
+            "            lb_retail_save_path(save_path.c_str(), rom_path.c_str(),\n"
+            "                                rom_sha1.c_str(), lb_fixed,\n"
+            "                                (int)sizeof lb_fixed))\n"
+            "            save_path = lb_fixed;\n"
+            "    }\n")
+    done.append("io.cpp/main.cpp: saves from any region, tool or ROM name "
+                "(docs/401)")
 
     # 0zzzzzzzzzzzzz. A DEBUG MOUSE WHEEL (docs/385). Zooming in/out while a
     # menu is open could offset what clicks what in it. The wheel

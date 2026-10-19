@@ -517,3 +517,124 @@ extern "C" int lb_first_run_setup(const char* root_dir, const char* found,
     std::fflush(stderr);
     return result;
 }
+
+// ── docs/401: A SAVE FROM ANY REGION, ANY TOOL, UNDER ANY ROM NAME ─────────
+//
+// Three ways a player's save "did not apply" (2026-10-18):
+//
+//   * THE REGION TAG. A save begins "XXX_BATTLE_SAVES", and XXX is a constant
+//     compiled into each build (func_0204B1D4 writes 'A','F','E' as
+//     immediates). This port runs the European code, so a USA cartridge's
+//     "AFN" save shows empty profile slots. The checksum does not cover the
+//     tag (tools/lb_save.py), so rewriting the three letters is enough.
+//   * THE SIZE. The runner loads only an exact-size file and otherwise
+//     ignores it -- and then writes a blank one over it at the next save.
+//     Emulators and flashcarts pad (to 8 KB and beyond with 0xFF, or with
+//     DeSmuME's footer); the game's 512 bytes are at the front.
+//   * THE NAME. The save was named after the ROM file, so renaming the ROM
+//     started an empty save, and a save dropped into saves\ under any other
+//     name was never read.
+//
+// So the retail cartridge -- the European image, which a USA ROM is converted
+// to before this point -- always uses saves\LEGO Battles.sav, taken over from
+// the old name (or from a lone save the player dropped there) the first time.
+// A romhack keeps a save of its own name, so it can never overwrite this one.
+// Every rewrite keeps the original beside it as <name>.orig.
+namespace {
+const char kRetailSha1[] = "da60469bd143eb8f47ecf0d7951181b4783c91b4";
+const char kBuildTag[3] = {'A', 'F', 'E'};
+
+bool battle_tagged(const unsigned char* d, size_t n) {
+    return n >= 16 && std::memcmp(d + 3, "_BATTLE_SAVES", 13) == 0;
+}
+
+void keep_original(const char* path) {
+    if (!path || !*path) return;
+    std::error_code ec;
+    const std::filesystem::path orig = std::string(path) + ".orig";
+    if (!std::filesystem::exists(orig, ec))
+        std::filesystem::copy_file(path, orig, ec);
+}
+}  // namespace
+
+// The loaded image's tag, rewritten to this build's; 1 if it was changed.
+extern "C" int lb_save_adopt(unsigned char* sram, size_t size, const char* path) {
+    if (!sram || !battle_tagged(sram, size)) return 0;
+    if (std::memcmp(sram, kBuildTag, 3) == 0) return 0;
+    char was[4] = {(char)sram[0], (char)sram[1], (char)sram[2], 0};
+    keep_original(path);
+    std::memcpy(sram, kBuildTag, 3);
+    std::fprintf(stderr, "[save] %s carries the %s tag (another region's build); "
+                 "retagged to AFE, original kept as .orig\n", path ? path : "", was);
+    return 1;
+}
+
+// A file larger than the save whose extra bytes are padding or an
+// emulator's footer: its first `size` bytes. 1 if taken.
+extern "C" int lb_save_lenient_load(const char* path, unsigned char* sram,
+                                    size_t size) {
+    if (!path || !sram || !size) return 0;
+    std::ifstream in(path, std::ios::binary);
+    if (!in) return 0;
+    std::vector<unsigned char> buf((std::istreambuf_iterator<char>(in)),
+                                   std::istreambuf_iterator<char>());
+    if (buf.size() <= size || !battle_tagged(buf.data(), size)) return 0;
+    bool blank = true;
+    for (size_t i = size; i < buf.size() && blank; ++i)
+        blank = buf[i] == 0xFFu || buf[i] == 0x00u;
+    static const char kFooter[] = "|-DESMUME SAVE-|";
+    const bool desmume =
+        std::search(buf.begin() + (std::ptrdiff_t)size, buf.end(), kFooter,
+                    kFooter + sizeof kFooter - 1) != buf.end();
+    if (!blank && !desmume) return 0;
+    keep_original(path);
+    std::memcpy(sram, buf.data(), size);
+    std::fprintf(stderr, "[save] %s is %zu bytes (%s); took its first %zu, "
+                 "original kept as .orig\n", path, buf.size(),
+                 desmume ? "a DeSmuME save" : "padded", size);
+    return 1;
+}
+
+// The save path for this cartridge: the retail image's fixed one, taken over
+// from `derived` (the old ROM-named path) when that is all there is. Only a
+// save NAMED AFTER THE ROM is replaced -- the convention play.bat and the
+// double-click start follow; a path a tool named itself (the harness's
+// lb.sav) is left exactly as given.
+extern "C" int lb_retail_save_path(const char* derived, const char* rom_path,
+                                   const char* rom_sha1, char* out, int cap) {
+    if (!derived || !*derived || !rom_sha1 || !out || cap <= 0) return 0;
+    if (std::strcmp(rom_sha1, kRetailSha1) != 0) return 0;
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const fs::path old_path(derived);
+    if (!rom_path || old_path.stem() != fs::path(rom_path).stem()) return 0;
+    const fs::path dir = old_path.has_parent_path() ? old_path.parent_path() : fs::path(".");
+    const fs::path fixed = dir / "LEGO Battles.sav";
+    if (!fs::exists(fixed, ec)) {
+        fs::path from;
+        if (fs::exists(old_path, ec)) {
+            from = old_path;
+        } else {
+            // A save the player dropped in by hand: taken only when it is the
+            // one candidate, so a guess never picks between two.
+            int found = 0;
+            for (const auto& e : fs::directory_iterator(dir, ec)) {
+                if (!e.is_regular_file(ec)) continue;
+                std::string ext = e.path().extension().string();
+                for (char& c : ext) c = (char)std::tolower((unsigned char)c);
+                if (ext != ".sav") continue;
+                ++found;
+                from = e.path();
+            }
+            if (found != 1) from.clear();
+        }
+        if (!from.empty()) {
+            fs::copy_file(from, fixed, ec);
+            std::fprintf(stderr, "[save] the cartridge's save is now %s "
+                         "(copied from %s)\n", fixed.string().c_str(),
+                         from.string().c_str());
+        }
+    }
+    std::snprintf(out, (size_t)cap, "%s", fixed.string().c_str());
+    return 1;
+}

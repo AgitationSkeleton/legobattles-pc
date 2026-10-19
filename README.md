@@ -27,8 +27,16 @@ cheat-code screens, just type.
 
 **Multiplayer** uses the game's own Multiplayer menu. Hosting advertises your
 lobby on the public lobby server (`lbserver.viosarcade.xyz`); the Join screen
-lists the lobbies there. The host needs UDP port 26710 reachable from the
-internet; players on one network need nothing.
+lists the lobbies there. When you host, the game asks your router to forward
+its port (UPnP; on by default, in the Multiplayer section), and the server
+introduces the two players so both routers let the game's traffic through, so
+most home networks need no manual port forwarding.
+The settings menu's Multiplayer section shows whether anything has arrived from
+the other player.
+
+**Saves:** your save is `saves\LEGO Battles.sav`, whatever your ROM file is
+called. A save from a cartridge or an emulator, of either region, imports from
+Settings > Saves; the game restarts to load it.
 
 **Reporting a problem:** open an issue on the
 [issue tracker](../../issues/new/choose) -- there is a form for bugs and one for
@@ -59,7 +67,8 @@ A build needs things this repository cannot ship:
   every generated file is lifted from;
 - **ndsrecomp**, the recompiler and runner framework the port builds on, at
   `$NDSRECOMP` (read-only: every change to the runner lives in `port/runner/`);
-- **MSYS2** with the UCRT64 toolchain (`gcc`, `g++`, `cmake`, `make`, SDL2) and
+- **MSYS2** with the UCRT64 toolchain (`gcc`, `g++`, `cmake`, `make`, SDL2,
+  miniupnpc: `pacman -S mingw-w64-ucrt-x86_64-miniupnpc`) and
   Python 3.
 
 The pipeline, in short:

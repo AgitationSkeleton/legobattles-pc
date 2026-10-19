@@ -561,6 +561,119 @@ bool build_atlas() {
     return true;
 }
 
+// ---- the battle HUD's icons (docs/408) --------------------------------------
+//
+// The battle HUD does not cut the head grid (h%16, h/16) as the front end
+// does: FUN_020D85F4(bp, heads, upgrade) picks a UI/Game/UIMgrData.bin record
+// -- 0x252 + the blueprint's key position for the heads set, after a remap:
+// Tower II and III draw the Tower II "+" cell in an upgrade list (the record
+// the front end's file leaves empty), shipyards draw the King's, bridge
+// variants the small bridge's -- and that record's frame names a rectangle on
+// UI/MiniHeadsGame (u16 x,y,w,h at frame+0x14, FUN_020332E8) with its
+// sub-palette at frame+0x0F. One cell per blueprint here, 16 x 12 of 24 px.
+// The battle sheet drew a lantern and a sack over the Wolf's and the Shark's
+// heads (cells (11,2) and (11,1)); those two are taken from UI/MiniHeads,
+// which still has them.
+constexpr int kHudW = 384, kHudH = 288;
+std::vector<uint32_t> g_hud_rgba;
+bool g_hud_has[192];
+int g_hud_state = 0;                    // 0 not yet, 1 built, -1 failed
+SDL_Texture* g_hud_tex = nullptr;
+SDL_Renderer* g_hud_owner = nullptr;
+
+int hud_icon_key(int bp) {
+    static const int kTower[6] = {16, 36, 56, 76, 96, 116};
+    for (int t : kTower)
+        if (bp == t + 1 || bp == t + 2) return t + 1;   // the "+" tower
+    if (bp == 39 || bp == 59 || bp == 79 || bp == 99 || bp == 119) return 19;
+    if (bp >= 122 && bp <= 126) return 121;
+    return bp;
+}
+
+bool build_hud_atlas() {
+    if (g_hud_state != 0) return g_hud_state > 0;
+    if (!g_rom) return false;
+    const uint32_t count = bus_read_u32(kHeadCount);
+    if (count == 0 || count > 551u || bus_read_u32(kHeadKeys + 4u) != 2u)
+        return false;   // the key table is not in RAM yet
+    std::vector<uint8_t> game, fe, nclr, ui;
+    if (!nitro_file("UI/MiniHeadsGame.NCGR", &game) || !comp_unwrap(&game) ||
+        !nitro_file("UI/MiniHeads.NCGR", &fe) || !comp_unwrap(&fe) ||
+        !nitro_file("UI/WorldViewTop_Back.NCLR", &nclr) || !comp_unwrap(&nclr) ||
+        !nitro_file("UI/Game/UIMgrData.bin", &ui) || !comp_unwrap(&ui)) {
+        g_hud_state = -1;
+        std::fprintf(stderr, "[lb_teams] could not read the HUD icons\n");
+        return false;
+    }
+    struct Sheet { const uint8_t* pix; unsigned tw; };
+    auto sheet = [](const std::vector<uint8_t>& f, Sheet* s) {
+        const long c = section(f, "RAHC");
+        if (c < 0) return false;
+        const uint8_t* cb = f.data() + c;
+        const unsigned th = rd16(cb + 8), tw = rd16(cb + 10);
+        const uint32_t dsz = rd32(cb + 24), doff = rd32(cb + 28);
+        if (tw * 8u != (unsigned)kAtlasW || th * 8u != (unsigned)kAtlasH ||
+            rd32(cb + 12) != 3u || (size_t)c + 8u + doff + dsz > f.size())
+            return false;
+        s->pix = cb + 8 + doff;
+        s->tw = tw;
+        return true;
+    };
+    Sheet sg{}, sf{};
+    const long pl = section(nclr, "TTLP");
+    if (!sheet(game, &sg) || !sheet(fe, &sf) || pl < 0 || ui.size() < 8) {
+        g_hud_state = -1;
+        return false;
+    }
+    const uint8_t* pb = nclr.data() + pl;
+    const uint32_t pdsz = rd32(pb + 16), pdoff = rd32(pb + 20);
+    if ((size_t)pl + 8u + pdoff + pdsz > nclr.size()) { g_hud_state = -1; return false; }
+    const uint8_t* pal = pb + 8 + pdoff;
+    const unsigned pal_n = pdsz / 2u;
+    const unsigned ui_n = rd16(ui.data());
+
+    g_hud_rgba.assign((size_t)kHudW * kHudH, 0u);
+    for (bool& h : g_hud_has) h = false;
+    int drawn = 0;
+    for (int bp = 0; bp < 182; ++bp) {
+        const int key = hud_icon_key(bp);
+        int pos = -1;
+        for (uint32_t k = 0; k < count && k < 166u; ++k)
+            if (bus_read_u32(kHeadKeys + 4u * k) == (uint32_t)key) { pos = (int)k; break; }
+        if (pos < 0) continue;
+        const unsigned rec = kHeadRecBase + (unsigned)pos;
+        if (rec >= ui_n || 8u + (rec + 1u) * 0x1Cu > ui.size()) continue;
+        const uint32_t frame = rd32(ui.data() + 8u + rec * 0x1Cu);
+        const uint32_t res = rd32(ui.data() + 8u + rec * 0x1Cu + 24u);
+        if (frame == 0 || res != 0x2Cu || frame + 0x1Cu > ui.size() ||
+            ui[frame + 0x0Cu] != 0)
+            continue;
+        const unsigned sx = rd16(ui.data() + frame + 0x14u);
+        const unsigned sy = rd16(ui.data() + frame + 0x16u);
+        const unsigned sub = ui[frame + 0x0Fu];
+        if (sx + 24u > (unsigned)kAtlasW || sy + 24u > (unsigned)kAtlasH) continue;
+        const Sheet& s = (bp == 155 || bp == 169) ? sf : sg;   // Shark, Wolf
+        const int x0 = (bp % 16) * 24, y0 = (bp / 16) * 24;
+        for (int y = 0; y < 24; ++y)
+            for (int x = 0; x < 24; ++x) {
+                const unsigned px = sx + (unsigned)x, py = sy + (unsigned)y;
+                const uint8_t byte =
+                    s.pix[((py >> 3) * s.tw + (px >> 3)) * 32 + (py & 7) * 4 + ((px & 7) >> 1)];
+                const unsigned v = (px & 1) ? (byte >> 4) : (byte & 15u);
+                if (!v || sub * 16u + v >= pal_n) continue;
+                g_hud_rgba[(size_t)(y0 + y) * kHudW + (x0 + x)] =
+                    rgb555_to_rgba(rd16(pal + 2u * (sub * 16u + v)));
+            }
+        g_hud_has[bp] = true;
+        ++drawn;
+    }
+    g_hud_state = 1;
+    std::fprintf(stderr, "[lb_teams] %d HUD icons read from UI/MiniHeadsGame\n",
+                 drawn);
+    std::fflush(stderr);
+    return true;
+}
+
 // ---- the enemy -------------------------------------------------------------
 LbTeam g_enemy = {{0, 2, 3, 4, 5, 6, 7, 8, 9}};
 bool g_enemy_set = false;
@@ -572,6 +685,7 @@ uint8_t g_bans_local[kBanBytes] = {};      // under g_rules_mu
 uint8_t g_bans_recv[kBanBytes] = {};       // under g_rules_mu
 bool g_bans_recv_ok = false;               // under g_rules_mu
 unsigned g_bans_recv_from = 0;             // under g_rules_mu
+uint8_t g_flags_recv = 0;                  // docs/406; under g_rules_mu
 // When they last arrived. A host sends them every 250 ms from opening its
 // lobby to the end of the match, so rules older than a few seconds belong to
 // a lobby this player has left and are not applied.
@@ -659,6 +773,31 @@ extern "C" const char* lb_teams_unit_name(int bp) {
     return s.c_str();
 }
 
+// docs/408: a spell's name, as the HUD's tooltip gives it (FUN_020DCD34):
+// spell record +1 (0x02126DA0, 0x14 each) picks a button, the button its
+// layout element (0x2A5 + k, 4/5 and 6/7 swapped; WorldViewScreen::v08), and
+// the {element, text} pairs at 0x021283D0 the text. Read live, so it follows
+// the game's language; null when the table is not settled. Ids 0x21/0x22 are
+// the Lightning Bolt's and Fireball's impact payloads and are never listed.
+extern "C" const char* lb_teams_spell_name(int id) {
+    static const uint16_t kText[0x21] = {
+        0,     0x126, 0x126, 0x127, 0x120, 0x121, 0x122, 0x123, 0x124, 0x125,
+        0x107, 0x11A, 0x110, 0x108, 0x10A, 0x109, 0x10B, 0x10C, 0x10D, 0x10E,
+        0x10F, 0x116, 0x115, 0x111, 0x112, 0x114, 0x113, 0x117, 0x118, 0x119,
+        0x11B, 0x11E, 0x11D};
+    if (id <= 0 || id > 0x20) return nullptr;
+    static uint32_t file = 0;
+    static std::string cache[0x21];
+    const uint32_t now = lang_table();
+    if (!now) return nullptr;
+    if (now != file) {
+        file = now;
+        for (std::string& c : cache) c.clear();
+    }
+    if (cache[id].empty()) cache[id] = loc_text(kText[id]);
+    return cache[id].empty() ? nullptr : cache[id].c_str();
+}
+
 // docs/385: the unit's display-name id (its blueprint's +0x06), -1 if the
 // blueprints are not in RAM.
 extern "C" int lb_teams_unit_name_id(int bp) {
@@ -729,6 +868,36 @@ extern "C" int lb_teams_icon_uv(int bp, float* u0, float* v0, float* u1,
     return 1;
 }
 
+// docs/408: the battle HUD's icon for a blueprint (build_hud_atlas), as the
+// Balance menu shows them.
+extern "C" SDL_Texture* lb_teams_hud_atlas(SDL_Renderer* r) {
+    if (!r || !build_hud_atlas()) return nullptr;
+    if (g_hud_owner != r && g_hud_tex) {
+        SDL_DestroyTexture(g_hud_tex);
+        g_hud_tex = nullptr;
+    }
+    g_hud_owner = r;
+    if (!g_hud_tex) {
+        g_hud_tex = SDL_CreateTexture(r, SDL_PIXELFORMAT_RGBA32,
+                                      SDL_TEXTUREACCESS_STATIC, kHudW, kHudH);
+        if (!g_hud_tex) return nullptr;
+        SDL_UpdateTexture(g_hud_tex, nullptr, g_hud_rgba.data(), kHudW * 4);
+        SDL_SetTextureBlendMode(g_hud_tex, SDL_BLENDMODE_BLEND);
+        SDL_SetTextureScaleMode(g_hud_tex, SDL_ScaleModeNearest);
+    }
+    return g_hud_tex;
+}
+
+extern "C" int lb_teams_hud_icon_uv(int bp, float* u0, float* v0, float* u1,
+                                    float* v1) {
+    if (g_hud_state <= 0 || bp < 0 || bp >= 182 || !g_hud_has[bp]) return 0;
+    *u0 = (float)((bp % 16) * 24) / kHudW;
+    *v0 = (float)((bp / 16) * 24) / kHudH;
+    *u1 = *u0 + 24.0f / kHudW;
+    *v1 = *v0 + 24.0f / kHudH;
+    return 1;
+}
+
 extern "C" const char* lb_teams_icons_status(void) {
     return g_atlas_msg.c_str();
 }
@@ -737,6 +906,8 @@ extern "C" void lb_teams_shutdown(void) {
     for (SDL_Texture*& t : g_tex)
         if (t) { SDL_DestroyTexture(t); t = nullptr; }
     g_tex_owner = nullptr;
+    if (g_hud_tex) { SDL_DestroyTexture(g_hud_tex); g_hud_tex = nullptr; }
+    g_hud_owner = nullptr;
 }
 
 extern "C" void lb_teams_king_default(LbTeam* t) {
@@ -1094,16 +1265,32 @@ extern "C" int lb_teams_received_bans(unsigned char* bits, int nbytes,
 // The rules a HOST sends its players, from the wireless bridge's drain every
 // 250 ms (apply_hooks, wifi_net.cpp): "LBR1", a version byte, the byte count,
 // then the ban bits for blueprints 0..191. Nothing while not hosting.
+// docs/406: then a flags count (1) and the host's rule flags (LB_RULE_*),
+// which change the simulation and so must match on every machine. A build
+// that predates them reads the bans and ignores the rest.
 extern "C" int lb_rules_outgoing(unsigned char* buf, int cap) {
     if (!net_hosting(lb_net_guest_state())) return 0;
-    const int n = 6 + kBanBytes;
+    const int n = 6 + kBanBytes + 2;
     if (!buf || cap < n) return 0;
     std::memcpy(buf, "LBR1", 4);
     buf[4] = 1;
     buf[5] = (unsigned char)kBanBytes;
+    buf[6 + kBanBytes] = 1;
+    buf[7 + kBanBytes] = (unsigned char)lb_rules_local_flags();
     std::lock_guard<std::mutex> lk(g_rules_mu);
     std::memcpy(buf + 6, g_bans_local, kBanBytes);
     return n;
+}
+
+// docs/406: the rule flags a joined machine runs with: the host's as last
+// received (0 before any arrive), or -1 when this machine decides (offline,
+// or hosting). Not gated on freshness, so a late datagram mid-match cannot
+// switch a rule off on one machine only; every datagram rewrites them, so a
+// new lobby's host replaces an old one's long before its match starts.
+extern "C" int lb_rules_host_flags(void) {
+    if (!net_joined(lb_net_guest_state())) return -1;
+    std::lock_guard<std::mutex> lk(g_rules_mu);
+    return g_bans_recv_ok ? g_flags_recv : 0;
 }
 
 extern "C" void lb_rules_incoming(const unsigned char* buf, int len,
@@ -1119,6 +1306,11 @@ extern "C" void lb_rules_incoming(const unsigned char* buf, int len,
     std::memcpy(g_bans_recv, buf + 6, kBanBytes);
     for (uint16_t k : kKingDefault)
         g_bans_recv[k >> 3] &= (uint8_t)~(1u << (k & 7));
+    // docs/406: the flags after the bans; a host that sends none has none on.
+    const int fn = len >= 7 + n ? buf[6 + n] : 0;
+    const uint8_t flags = (fn >= 1 && len >= 8 + n) ? buf[7 + n] : 0;
+    const bool flags_changed = !g_bans_recv_ok || flags != g_flags_recv;
+    g_flags_recv = flags;
     g_bans_recv_ok = true;
     g_bans_recv_from = sender;
     g_bans_recv_at = std::chrono::steady_clock::now();
@@ -1127,6 +1319,11 @@ extern "C" void lb_rules_incoming(const unsigned char* buf, int len,
         for (int b = 0; b < kBanBytes * 8; ++b) count += ban_bit(g_bans_recv, b);
         std::fprintf(stderr, "[lb_teams] rules from instance %u: %d unit(s) "
                      "banned\n", sender, count);
+        std::fflush(stderr);
+    }
+    if (flags_changed) {
+        std::fprintf(stderr, "[lb_teams] the host's rule flags from instance "
+                     "%u: %02X\n", sender, flags);
         std::fflush(stderr);
     }
 }

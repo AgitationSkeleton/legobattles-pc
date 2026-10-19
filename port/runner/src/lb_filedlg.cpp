@@ -67,7 +67,26 @@ bool widen(const char* in, wchar_t* out, int out_chars) {
 // Returns 1 and overwrites `buf` on success, 0 if the user cancelled or the
 // dialog failed. `buf` is left untouched on failure, so a cancel keeps whatever
 // the user had typed.
+namespace {
+int pick_file(char* buf, int cap, int saving, const wchar_t* filter,
+              const wchar_t* ext);
+}
+
 extern "C" int lb_pick_save_file(char* buf, int cap, int saving) {
+    return pick_file(buf, cap, saving, kSaveFilter, L"sav");
+}
+
+// docs/404: a Balance tab set, exported or imported.
+extern "C" int lb_pick_json_file(char* buf, int cap, int saving) {
+    static const wchar_t kJsonFilter[] =
+        L"Balance values (*.json)\0*.json\0"
+        L"All files (*.*)\0*.*\0";
+    return pick_file(buf, cap, saving, kJsonFilter, L"json");
+}
+
+namespace {
+int pick_file(char* buf, int cap, int saving, const wchar_t* filter,
+              const wchar_t* ext) {
     if (!buf || cap < 2) return 0;
 
     wchar_t path[1024];
@@ -80,11 +99,11 @@ extern "C" int lb_pick_save_file(char* buf, int cap, int saving) {
     // modal to it, which is tidier, but reaching SDL_GetWindowWMInfo from here
     // would drag SDL into this TU for a cosmetic gain.
     ofn.hwndOwner = NULL;
-    ofn.lpstrFilter = kSaveFilter;
+    ofn.lpstrFilter = filter;
     ofn.nFilterIndex = 1;
     ofn.lpstrFile = path;
     ofn.nMaxFile = 1024;
-    ofn.lpstrDefExt = L"sav";
+    ofn.lpstrDefExt = ext;
     // OFN_NOCHANGEDIR matters: without it the dialog changes the PROCESS's
     // working directory to wherever the user browsed, and every later relative
     // path in the runner -- settings.json, the demo file, screenshots -- starts
@@ -105,6 +124,7 @@ extern "C" int lb_pick_save_file(char* buf, int cap, int saving) {
     buf[cap - 1] = '\0';
     return 1;
 }
+}  // namespace
 
 // THE PORT KEEPS ITS OWN LOG, because the launcher cannot be relied on.
 //
@@ -197,6 +217,11 @@ extern "C" int lb_pick_rom_file(char* buf, int cap) {
 extern "C" int lb_pick_save_file(char* buf, int cap, int saving) {
     (void)buf; (void)cap; (void)saving;
     return 0;   // caller falls back to the text field
+}
+
+extern "C" int lb_pick_json_file(char* buf, int cap, int saving) {
+    (void)buf; (void)cap; (void)saving;
+    return 0;
 }
 
 extern "C" int lb_pick_rom_file(char* buf, int cap) {

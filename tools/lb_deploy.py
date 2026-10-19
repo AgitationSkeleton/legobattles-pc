@@ -42,8 +42,9 @@ REM reads custom map and balance data out of; those files are not bootable, and
 REM launching one shows a black screen indistinguishable from a broken port.
 REM That mistake is exactly why this no longer offers them.
 REM
-REM Saves live in saves\. Your original cartridge saves are never used
-REM directly: import them with tools\lb_save.py.
+REM Saves live in saves\ (the retail cartridge's is saves\LEGO Battles.sav,
+REM whatever the ROM is called). Import another save from the settings
+REM panel: Settings > Saves.
 REM ---------------------------------------------------------------------------
 cd /d "%~dp0"
 if not exist "mods"  mkdir "mods"
@@ -118,22 +119,22 @@ once. (play.bat starts it the old way, with a console log.)
 
 Multiplayer: the game's own Multiplayer menu. Hosting advertises your lobby
 on the public lobby server (lbserver.viosarcade.xyz, settings panel >
-Multiplayer); the Join screen lists the lobbies there. The host needs UDP
-port 26710 reachable from the internet (a forwarded port); players on the
-same network need nothing.
+Multiplayer); the Join screen lists the lobbies there. The lobby server
+introduces the two players so both routers let the game through: no port
+forwarding is needed on most home networks. The Multiplayer section shows
+whether anything has arrived from the other player.
 
   rom\\      your own cartridge dump. This is the only thing that boots.
   mods\\     custom MAP and balance data the port reads from. These are NOT
             bootable ROMs -- pointing the emulator at one gives a black
             screen. Select them in the settings panel, not the launcher.
-  saves\\    save files. Your originals are never used directly: the port
-            rewrites its save file even when it cannot read it, so import:
-
-              python tools\\lb_save.py import <cartridge.sav> saves\\<name>.sav
-
-            A save from a cartridge whose build tag differs (AFN vs AFE) shows
-            empty profile slots until imported. The importer rewrites that tag,
-            which is lossless -- the record checksums do not cover it.
+  saves\\    your save is saves\\LEGO Battles.sav, whatever the ROM file is
+            called. To use a save from a cartridge or an emulator (any
+            region), import it: settings panel > Settings > Saves > Browse,
+            then Import; the game restarts to load it. A USA save's region
+            tag (AFN) is rewritten to the European one (AFE), which is
+            lossless, and a padded emulator file is trimmed; the original
+            is kept beside it as .orig.
 
   settings.json  written beside the executable when a setting changes.
   imgui.ini      window layout, likewise.

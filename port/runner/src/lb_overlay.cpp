@@ -223,6 +223,15 @@ struct Settings {
     // letting both be ticked and needing a warning about which wins.
     int  hotwire_mode = 0;         // 0 vanilla, 1 specials only, 2 anything
     int  hotwire_transport = 0;    // 0 vanilla, 1 kill occupants, 2 convert them
+    // docs/406: the Earth/Alien attack spell's EMP disables transports too
+    // (lb_patches.cpp, kEmpTransports). Online, the host's.
+    bool emp_transports = false;
+    // docs/406: the AI rebuilds its hero after every death, not once
+    // (lb_patches.cpp, kAiHeroRebuild). Offline only.
+    bool ai_hero_rebuild = false;
+    // docs/408: a hotwired transport stops taking its old owner's orders
+    // (lb_patches.cpp, release_stolen_transport).
+    bool transport_release = false;
     int  attack_boost_ranged = 0;  // 0 vanilla, 1 ranged units benefit too
     bool fix_hotwired_healing = false;
     // docs/385: the monkey cage (cosmetic, this machine only), on by default.
@@ -266,9 +275,17 @@ struct Settings {
     // simulation, so in a multiplayer game the host decides and a joining
     // client must conform or the lockstep desyncs.
     bool cheat[18] = {false};
+    // docs/406: the cheats' owner tests pass for every owner, so the AI
+    // gets them too (lb_patches.cpp, kAiCheats). Offline only.
+    bool ai_cheats = false;
 
     bool unlock_units = false;
-    bool unlock_extras = false;
+    bool unlock_extras = false;   // the cheat codes (red bricks)
+    // docs/407: the rest of what a profile earns (lb_patches.cpp,
+    // apply_unlocks): the Free Play maps, the concept art, every campaign.
+    bool unlock_maps = false;
+    bool unlock_art = false;
+    bool unlock_campaigns = false;
 
     // Music
     int  music_mode = 0;           // 0 vanilla, 1 random, 2 faction, 3 map,
@@ -306,6 +323,8 @@ struct Settings {
     // button in this panel. lb_net_auto_tick does both.
     bool auto_advertise = true;
     bool auto_browse = true;
+    // docs/405: ask the router to forward the port (UPnP) when hosting.
+    bool upnp = true;
     // DELIBERATELY NOT PERSISTED, and this is the only field of this struct
     // that is not. Saying so here so a future sweep does not read the gap as
     // an oversight and "fix" it.
@@ -352,6 +371,7 @@ extern "C" unsigned lb_dump_frame_get(void);
 // saving==0 opens an existing file, !=0 chooses a destination. Returns 1 and
 // overwrites buf on success; leaves buf alone on cancel.
 extern "C" int lb_pick_save_file(char* buf, int cap, int saving);
+extern "C" int lb_pick_json_file(char* buf, int cap, int saving);   // docs/404
 
 // ---- persistence ----------------------------------------------------------
 //
@@ -504,6 +524,12 @@ extern "C" void lb_settings_save(void) {
                   g_set.hotwire_mode); o += buf;
     std::snprintf(buf, sizeof buf, "  \"hotwire_transport\": %d,\n",
                   g_set.hotwire_transport); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"emp_transports\": %s,\n",
+                  g_set.emp_transports ? "true" : "false"); o += buf;   // docs/406
+    std::snprintf(buf, sizeof buf, "  \"ai_hero_rebuild\": %s,\n",
+                  g_set.ai_hero_rebuild ? "true" : "false"); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"transport_release\": %s,\n",
+                  g_set.transport_release ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"attack_boost_ranged\": %d,\n",
                   g_set.attack_boost_ranged); o += buf;
     std::snprintf(buf, sizeof buf, "  \"fix_hotwired_healing\": %s,\n",
@@ -525,10 +551,18 @@ extern "C" void lb_settings_save(void) {
         o += g_set.cheat[i] ? "true" : "false";
     }
     o += "],\n";
+    std::snprintf(buf, sizeof buf, "  \"ai_cheats\": %s,\n",
+                  g_set.ai_cheats ? "true" : "false"); o += buf;   // docs/406
     std::snprintf(buf, sizeof buf, "  \"unlock_units\": %s,\n",
                   g_set.unlock_units ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"unlock_extras\": %s,\n",
                   g_set.unlock_extras ? "true" : "false"); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"unlock_maps\": %s,\n",
+                  g_set.unlock_maps ? "true" : "false"); o += buf;   // docs/407
+    std::snprintf(buf, sizeof buf, "  \"unlock_art\": %s,\n",
+                  g_set.unlock_art ? "true" : "false"); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"unlock_campaigns\": %s,\n",
+                  g_set.unlock_campaigns ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"music_mode\": %d,\n",
                   g_set.music_mode); o += buf;
     std::snprintf(buf, sizeof buf, "  \"criminal_leader_name\": %d,\n",
@@ -543,9 +577,17 @@ extern "C" void lb_settings_save(void) {
                   g_set.auto_advertise ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"auto_browse\": %s,\n",
                   g_set.auto_browse ? "true" : "false"); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"upnp\": %s,\n",
+                  g_set.upnp ? "true" : "false"); o += buf;
     json_put_str(o, "master_host", g_set.master_host, true);
     std::snprintf(buf, sizeof buf, "  \"master_port\": %d,\n",
                   g_set.master_port); o += buf;
+    // docs/404: the Balance tab's values, "record:field=value,...".
+    {
+        static char bal[32768];
+        lb_balance_custom_text(bal, (int)sizeof bal);
+        json_put_str(o, "balance_custom", bal, true);
+    }
     json_put_str(o, "player_name", g_set.player_name, false);
     o += "}\n";
 
@@ -597,6 +639,9 @@ extern "C" void lb_settings_load(void) {
     json_get_int(s, "balance_patch", &g_set.balance_patch);
     json_get_int(s, "hotwire_mode", &g_set.hotwire_mode);
     json_get_int(s, "hotwire_transport", &g_set.hotwire_transport);
+    json_get_bool(s, "emp_transports", &g_set.emp_transports);   // docs/406
+    json_get_bool(s, "ai_hero_rebuild", &g_set.ai_hero_rebuild);
+    json_get_bool(s, "transport_release", &g_set.transport_release);
     json_get_int(s, "attack_boost_ranged", &g_set.attack_boost_ranged);
     json_get_bool(s, "fix_hotwired_healing", &g_set.fix_hotwired_healing);
     json_get_bool(s, "fix_monkey_cage", &g_set.fix_monkey_cage);   // docs/385
@@ -610,8 +655,12 @@ extern "C" void lb_settings_load(void) {
     }
     json_get_ints(s, "cap", g_set.cap, 10);
     json_get_bools(s, "cheat", g_set.cheat, 18);
+    json_get_bool(s, "ai_cheats", &g_set.ai_cheats);   // docs/406
     json_get_bool(s, "unlock_units", &g_set.unlock_units);
     json_get_bool(s, "unlock_extras", &g_set.unlock_extras);
+    json_get_bool(s, "unlock_maps", &g_set.unlock_maps);           // docs/407
+    json_get_bool(s, "unlock_art", &g_set.unlock_art);
+    json_get_bool(s, "unlock_campaigns", &g_set.unlock_campaigns);
     json_get_int(s, "music_mode", &g_set.music_mode);
     // A file written before this key existed keeps the default (off).
     json_get_int(s, "criminal_leader_name", &g_set.criminal_leader_name);
@@ -629,10 +678,21 @@ extern "C" void lb_settings_load(void) {
         g_set.master_port = 80;
     }
     json_get_str(s, "player_name", g_set.player_name, sizeof g_set.player_name);
+    {   // docs/404
+        static char bal[32768];
+        bal[0] = 0;
+        json_get_str(s, "balance_custom", bal, sizeof bal);
+        // TEST AID: LB_BALANCE_CUSTOM="rec:field=value,..." sets them instead,
+        // without writing the player's settings.json from a harness.
+        if (const char* t = std::getenv("LB_BALANCE_CUSTOM"))
+            std::snprintf(bal, sizeof bal, "%s", t);
+        lb_balance_custom_parse(bal);
+    }
     // A file written before these keys existed keeps the defaults (all on).
     json_get_bool(s, "name_from_save", &g_set.name_from_save);
     json_get_bool(s, "auto_advertise", &g_set.auto_advertise);
     json_get_bool(s, "auto_browse", &g_set.auto_browse);
+    json_get_bool(s, "upnp", &g_set.upnp);   // docs/405, default on
 
     // Clamp anything a hand-edited file could put out of range.
     if (g_ui_scale < 0.75f || g_ui_scale > 3.0f) g_ui_scale = 1.0f;
@@ -1079,6 +1139,8 @@ void tab_display() {
     tab_end();
 }
 
+void draw_balance_pack();         // docs/404, below
+void draw_after_balance_pack();
 void tab_enhancements() {
     if (!tab_begin("Enhancements")) return;
     host_note();
@@ -1138,6 +1200,32 @@ void tab_enhancements() {
                  transport_modes, IM_ARRAYSIZE(transport_modes));
     help("What happens to the units inside a transport when it is hotwired.\n"
          "Off leaves them the old owner's, as the game does.");
+    badge(WIRED);
+    // docs/408: the computer player that owned it kept ordering it about.
+    ImGui::Checkbox("Hotwired Transports Leave Their Old Owner",
+                    &g_set.transport_release);
+    help("In the game, a transport stolen from the computer still sails\n"
+         "where its old owner sends it, and is let go when that order\n"
+         "ends. On, the old owner forgets it the moment it is hotwired.");
+    badge(WIRED);
+    ImGui::Spacing();
+    // docs/406: FUN_020775F0 collects the EMP's victims by category 6 only;
+    // the patch lets category 5 (transports) in as well.
+    ImGui::Checkbox("EMP Disables Transports", &g_set.emp_transports);
+    help("The EMP spell disables special units only.\n"
+         "On, it disables transports caught in it too. Online, the host's\n"
+         "setting applies to everyone.");
+    badge(WIRED);
+    if (lb_rules_host_flags() >= 0)
+        ImGui::TextDisabled("In this lobby, the host's: %s",
+                            lb_emp_transports_live() ? "On" : "Off");
+    ImGui::Spacing();
+    // docs/406: FUN_0208A5C0 freed a dead hero's build record from the army
+    // list instead of the hero's, so the AI's second hero was its last.
+    ImGui::Checkbox("The AI Rebuilds Its Hero Every Time", &g_set.ai_hero_rebuild);
+    help("The computer rebuilds its hero once, then never again: the game\n"
+         "loses track of the second one. On, it rebuilds after every death.\n"
+         "Free Play only.");
     badge(WIRED);
     ImGui::Spacing();
     ImGui::Text("Attack Boost Reaches Ranged Units");
@@ -1249,20 +1337,26 @@ void tab_enhancements() {
     // exactly the ones with classes of their own: Towers (13-15, class 3),
     // Bridges (17, class 7), Walls (19, class 6). Units and the Base (0-7) are
     // never counted by it.
+    //
+    // docs/405: NO "GATES" LINE. Class 8 counts gates (GateH/GateV, category
+    // 18, blueprints 127/128), and the cartridge ships it at 0: no faction's
+    // roster has a gate, and nothing in the game places one (docs/367: the
+    // factory builds a Sim::Gate for category 18, which no build list
+    // offers). A limit on a building nobody can build was only confusing.
     static const char* kCapName[10] = {
         "Heroes", "Minifigures", "Specials", "Towers", "Buildings",
-        nullptr, "Walls", "Bridges", "Gates", nullptr};
+        nullptr, "Walls", "Bridges", nullptr, nullptr};
     for (int i = 0; i < 10; ++i) {
-        if (!kCapName[i]) continue;          // 5 and 9: see above
+        if (!kCapName[i]) continue;          // 5, 8 and 9: see above
         ImGui::PushID(i);
         ImGui::SetNextItemWidth(120.0f);
         ImGui::InputInt(kCapName[i], &g_set.cap[i]);
         if (g_set.cap[i] < 0) g_set.cap[i] = 0;
         if (g_set.cap[i] > 255) g_set.cap[i] = 255;
         if (i == 4)
-            help("Mill, Mine, Farm, Barracks, Vehicle Center, Shipyard and\n"
-                 "Gate. Towers, Walls and Bridges have their own limits\n"
-                 "below; the Base and all units are counted elsewhere.");
+            help("Mill, Mine, Farm, Barracks, Vehicle Center and Shipyard.\n"
+                 "Towers, Walls and Bridges have their own limits below;\n"
+                 "the Base and all units are counted elsewhere.");
         ImGui::SameLine();
         ImGui::TextDisabled("(shipped %d)", kShippedCap[i]);
         ImGui::PopID();
@@ -1270,6 +1364,18 @@ void tab_enhancements() {
     badge(WIRED);
 
     ImGui::Separator();
+    // docs/404: the packs moved to the Balance menu, beside the player's own
+    // values (draw_balance_pack).
+    ImGui::Text("Balance Patch: %s", lb_balance_name(g_set.balance_patch));
+    ImGui::SameLine();
+    ImGui::TextDisabled("(set it, and every unit's values, in the Balance menu)");
+
+    // COSMETIC AND THIS MACHINE'S ONLY -- see below.
+    draw_after_balance_pack();
+}
+
+// docs/404: the balance packs, in Balance > Presets.
+void draw_balance_pack() {
     ImGui::Text("Balance Patch");
     const char* packs[] = {"Off (Vanilla)", "Rebalance", "FactionWars", "Funlite"};
     ImGui::Combo("##balance_patch", &g_set.balance_patch, packs,
@@ -1322,7 +1428,10 @@ void tab_enhancements() {
         ImGui::TextDisabled("  applied: %s",
                             lb_balance_name(lb_balance_applied_slot()));
     }
+}
 
+// The rest of the Enhancements section, after the balance pack moved out.
+void draw_after_balance_pack() {
     // COSMETIC AND THIS MACHINE'S ONLY, unlike everything above it -- hence
     // the "(this machine only)" beside the label, in a tab that opens with
     // "Host-decided". apply_leader_name in lb_patches.cpp rewrites the loaded
@@ -1389,8 +1498,8 @@ void tab_enhancements() {
     tab_end();
 }
 
-// The cartridge's 18 cheats, in the order the record table gives them, so the
-// index IS the flags-block byte. Names are the game's own LOC strings and the
+// The cartridge's 18 cheats, in the order of the flags-block bytes they set,
+// so the index IS the byte. Names are the game's own LOC strings and the
 // codes are the ones in the cartridge's record table (docs/171); nothing here
 // is transcribed from a walkthrough.
 struct CheatDef { const char* name; const char* code; };
@@ -1405,14 +1514,21 @@ static const CheatDef kCheats[] = {
     {"Regenerating Health",   "ABABLRX"},
     {"Long Range Magic",      "ZPWJFUQ"},
     {"Super Magic",           "DWFTBNS"},
-    {"Show Red Bricks",       "RTGYPKC"},
-    {"Upgraded Towers",       "EDRFTGY"},
-    {"Super Explosions",      "THNBGRE"},
-    {"Fast Harvesting",       "PQZLJOB"},
+    {"Show Red Bricks",       "RTGYPKC"},   // flags[10]
+    // docs/406: from here the record and the byte part. FUN_020088D4's jump
+    // table sends records 11..17 to bytes 16, 17, 11, 12, 13, 14, 15, and the
+    // readers agree: byte 11 is FUN_020531F8's harvest time, 12 the unit cap
+    // (FUN_02085E78), 13 the hero's health, 14 the mining yield (FUN_0206D7F0),
+    // 15 the visibility test beside Reveal Map's (FUN_02025C14), 16 the tower
+    // upgrade (category 13), 17 the doubled blast. This list had the record
+    // order, so ticking Upgraded Towers turned Fast Harvesting on.
+    {"Fast Harvesting",       "PQZLJOB"},   // flags[11]
     {"Full Unit Cap",         "UMSXIRQ"},
     {"Invincible Hero",       "HJCRAWK"},
     {"Fast Mining",           "KVBPQRJ"},
-    {"Show Enemies",          "IBGOFWX"},   // flags[17]
+    {"Show Enemies",          "IBGOFWX"},
+    {"Upgraded Towers",       "EDRFTGY"},
+    {"Super Explosions",      "THNBGRE"},   // flags[17]
 };
 static const int kCheatCount = (int)(sizeof(kCheats) / sizeof(kCheats[0]));
 
@@ -1429,8 +1545,9 @@ void tab_cheats() {
     // 0x02125FF4 names cheat i, and func_020088D4's jump table reads
     // flags[i] for every case 0..17 -- so the mapping is the game's, not a
     // guess. Verified live: setting flags[0] revealed the whole minimap.
-    ImGui::TextDisabled("Carried into a multiplayer lobby - host and client "
-                        "must agree.");
+    // docs/406: nothing carries them; the rules datagram has the bans and the
+    // LB_RULE_* flags only.
+    ImGui::TextDisabled("Online, every player must tick the same cheats.");
     ImGui::Spacing();
     if (ImGui::BeginTable("cheats", 3,
                           ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
@@ -1461,65 +1578,57 @@ void tab_cheats() {
     if (ImGui::Button("Disable every cheat")) {
         for (int i = 0; i < kCheatCount; ++i) g_set.cheat[i] = false;
     }
+    ImGui::Spacing();
+    // docs/406: each gameplay cheat tests that the unit is the local
+    // player's (owner byte against FUN_020A2230's); kAiCheats passes that
+    // test for every owner. Super Magic and Long Range Magic have no test.
+    ImGui::Checkbox("The AI Gets the Cheats Too", &g_set.ai_cheats);
+    help("The gameplay cheats ticked above (faster building, harvesting\n"
+         "and mining, magic, health, double bricks, the unit cap, towers,\n"
+         "explosions, the hero's invincibility and one hit kills) help the\n"
+         "computer's armies as well as yours. Not online.");
+    badge(WIRED);
 
     ImGui::Separator();
-    // Per-ITEM unlock state. docs/181 measured the bits by typing each code on
-    // the cartridge's own keyboard and diffing the profile record: two
-    // MSB-first bit streams at +0x0B4 and +0x0D8, the second always one
-    // position further along. docs/data/unlock_bits.tsv has all 55.
+    // docs/407: WHAT A PROFILE EARNS, set where the game keeps it. The live
+    // state is the UnlockableManager (*0x021585A8): four 289-bit arrays,
+    // committed A/B at +4/+0x14 and their working copies at +0x24/+0x34, one
+    // bit per collectable slot (A = unlocked, B = bought or owned). The game
+    // builds the save from them at its next save; it is not written here.
+    // Campaigns are each mission's +0x15F and the 91-bit array at 0x02154E18.
+    // apply_unlocks in lb_patches.cpp; only ever SETS, so unticking a box
+    // locks nothing again.
     ImGui::Text("Unlocks");
-    help("Sets the profile's own per-item unlock bits.");
-    // WIRED, measured. apply_unlocks in lb_patches.cpp reads these two through
-    // lb_setting_unlock_units / _extras and sets bits in the profile record via
-    // set_stream_bit. A run with both on reports
-    //
-    //     [lb_unlock] units=1 extras=1: 220 profile bits set
-    //
-    // and a run with neither prints no such line at all, which is the control.
-    // The badge said READ, "known but not hooked up", and that was stale.
+    help("Unlocks things on the current profile the way earning them would,\n"
+         "and the game saves them at its next save. Unticking a box does\n"
+         "not lock anything again.");
     ImGui::Checkbox("Unlock All Units", &g_set.unlock_units);
+    help("All 85 minifigures and vehicles in the Character Collection,\n"
+         "bought, so every unit can go in a Custom Army (Santa too).");
     badge(WIRED);
-    ImGui::Checkbox("Unlock All Extras", &g_set.unlock_extras);
+    ImGui::Checkbox("Unlock All Maps", &g_set.unlock_maps);
+    help("All 30 Free Play and multiplayer maps, as if bought in\n"
+         "Extras > Maps.");
     badge(WIRED);
-    // "Unlock Santa" and "Unlock All Maps" are REMOVED, for the same reason
-    // lb_setting_fit_all was: they stored state and nothing read it.
-    //
-    // They used to sit here badged [unread] with a note calling that "research
-    // not yet done rather than UI work outstanding". The research is now done,
-    // and it closes the question rather than opening a way to wire them.
-    // docs/data/cheat_registry.tsv holds 155 records across seven kinds. Only
-    // kinds 8 and 16 carry resolved names -- the shipped cheat list, "One Hit
-    // Kill (Heroes)" through "Show Enemies". Every record in kinds 1, 2, 3, 4
-    // and 31 (79 of them) shares the SINGLE string id 0x0af1, "Unnamed Cheat
-    // Code". The 49 kind-1 records were the last candidate for a per-map
-    // unlock, and 49 being a plausible map count was the whole case for it --
-    // but 49 distinct maps would carry 49 distinct string ids, and these carry
-    // one between them. There is no Santa record and no map record to set.
-    //
-    // A checkbox that cannot ever do anything is worse than no checkbox: it
-    // promises a feature the cartridge does not have.
+    ImGui::Checkbox("Unlock All Cheat Codes", &g_set.unlock_extras);
+    help("The 18 red-brick cheats, found and bought, so the game's own\n"
+         "Extras > Cheat Codes screen can switch them.");
+    badge(WIRED);
+    ImGui::Checkbox("Unlock All Concept Art", &g_set.unlock_art);
+    help("All 66 pieces in Extras > Concept Art, bought.");
+    badge(WIRED);
+    ImGui::Checkbox("Complete Every Campaign", &g_set.unlock_campaigns);
+    help("Marks all 90 story missions done: every mission is open and\n"
+         "every cutscene shows in Extras > Cutscenes.");
+    badge(WIRED);
 
     ImGui::Spacing();
-    if (ImGui::Button("Unlock Everything")) {
-        g_set.unlock_units = g_set.unlock_extras = true;
+    if (ImGui::Button("Unlock All")) {
+        g_set.unlock_units = g_set.unlock_extras = g_set.unlock_maps =
+            g_set.unlock_art = g_set.unlock_campaigns = true;
     }
-    help("Ticks both boxes above.");
-    // Both boxes this sets are backed: docs/181 measured 52 unlock codes by
-    // typing them on the cartridge's own keyboard, and `apply_unlocks` in
-    // lb_patches.cpp consumes `unlock_units` and `unlock_extras` and sets the
-    // bits.
-    //
-    // This badge used to need an argument, because the button also set Santa
-    // and Maps and so was only half backed. Removing those two settles it:
-    // every box it ticks is read by something.
-    //
-    // And now measured, not argued. This button's entire effect is ticking the
-    // two boxes above, and a run with both on reports
-    //
-    //     [lb_unlock] units=1 extras=1: 220 profile bits set
-    //
-    // against a run with neither, which prints no such line. A button whose
-    // only effect is to set two controls that are themselves WIRED is wired.
+    help("Ticks every box above, so a new profile is ready for online\n"
+         "play: every unit for a Custom Army and every map to host on.");
     badge(WIRED);
     tab_end();
 }
@@ -1622,19 +1731,52 @@ void tab_input() {
 void tab_multiplayer() {
     if (!tab_begin("Multiplayer")) return;
 
-    ImGui::Text("Master server");
-    ImGui::InputText("Address", g_set.master_host, IM_ARRAYSIZE(g_set.master_host));
-    ImGui::InputInt("Port", &g_set.master_port);
-    help("A DIRECTORY, not a relay. No game traffic passes through it,\n"
-         "so it cannot make an unreachable host reachable -- port\n"
-         "forwarding or UPnP on the host is what does that.");
-    badge(WIRED);
+    // docs/400: the known servers by name; Custom shows the fields.
+    {
+        struct Known { const char* label; const char* host; int port; };
+        static const Known kKnown[] = {
+            {"lbserver.viosarcade.xyz (default)", "lbserver.viosarcade.xyz", 80},
+            {"king.legobattles.win", "king.legobattles.win", 28555},
+        };
+        const int nk = (int)(sizeof kKnown / sizeof kKnown[0]);
+        int cur = nk;   // Custom
+        for (int i = 0; i < nk; ++i)
+            if (std::strcmp(g_set.master_host, kKnown[i].host) == 0 &&
+                g_set.master_port == kKnown[i].port)
+                cur = i;
+        static bool custom_open = false;
+        if (cur < nk) custom_open = false;
+        const char* shown = (cur < nk && !custom_open) ? kKnown[cur].label : "Custom";
+        if (ImGui::BeginCombo("Master server", shown)) {
+            for (int i = 0; i < nk; ++i)
+                if (ImGui::Selectable(kKnown[i].label, cur == i && !custom_open)) {
+                    std::snprintf(g_set.master_host, sizeof g_set.master_host,
+                                  "%s", kKnown[i].host);
+                    g_set.master_port = kKnown[i].port;
+                    custom_open = false;
+                }
+            if (ImGui::Selectable("Custom", cur == nk || custom_open))
+                custom_open = true;
+            ImGui::EndCombo();
+        }
+        help("Where lobbies are listed. It lists them and introduces a\n"
+             "joining player to the host so both routers let the game's\n"
+             "traffic through; no port forwarding is needed on most home\n"
+             "routers. king.legobattles.win is another player's server and\n"
+             "may be offline.");
+        badge(WIRED);
+        if (cur == nk || custom_open) {
+            ImGui::InputText("Address", g_set.master_host,
+                             IM_ARRAYSIZE(g_set.master_host));
+            ImGui::InputInt("Port", &g_set.master_port);
+        }
+    }
 
     ImGui::Separator();
     ImGui::Checkbox("Use the save's profile name", &g_set.name_from_save);
     help("The name the game itself shows in its lobby.\n"
          "Untick to advertise a different one.");
-    badge(UNSEEN);
+    badge(WIRED);   // docs/396: seen in the host lobby
     if (g_set.name_from_save) {
         // Read-only mirror of the loaded profile. Not g_set.player_name, which
         // stays what the player last typed for when this is unticked.
@@ -1656,8 +1798,7 @@ void tab_multiplayer() {
             g_set.name_from_save = true;   // the profile now carries it
         }
         help("Renames the loaded profile. The game shows it at once and\n"
-             "keeps it the next time it saves (finishing a battle, or\n"
-             "changing an option in the game's own menus).");
+             "saves it the next time its main menu is up.");
     }
     ImGui::InputText("Room code", g_set.room_code, IM_ARRAYSIZE(g_set.room_code));
     help("Name is how an advertised lobby is listed.\n"
@@ -1668,13 +1809,22 @@ void tab_multiplayer() {
     ImGui::Checkbox("Advertise when the game hosts", &g_set.auto_advertise);
     help("Opening a lobby from the game's Multiplayer > Host lists it\n"
          "on the master server; Start or leaving takes it off.");
-    badge(UNSEEN);
+    badge(WIRED);   // docs/400: run t400b
+    // docs/405
+    ImGui::Checkbox("Open the port on my router when hosting (UPnP)", &g_set.upnp);
+    help("Asks your router to forward the game's UDP port to this PC while\n"
+         "you host, and closes it again when the lobby or match ends. Most\n"
+         "home routers allow it; some have UPnP switched off in their own\n"
+         "settings. Without it, joining still works on most routers.");
+    badge(WIRED);
+    if (const char* u = lb_net_upnp_text())
+        if (*u) ImGui::TextDisabled("  %s", u);
     ImGui::Checkbox("Game's Join screen uses the master server",
                     &g_set.auto_browse);
     help("While the game's Join screen is open the list is fetched every\n"
          "few seconds and the newest host (or the one you picked) is made\n"
          "reachable, so the game lists it.");
-    badge(UNSEEN);
+    badge(WIRED);   // docs/400: run t400b
     ImGui::TextDisabled("Game network: %s", lb_net_guest_state_text());
 
     ImGui::Spacing();
@@ -1777,6 +1927,26 @@ void tab_multiplayer() {
         else
             ImGui::TextDisabled("No peer set. Hosting learns one from the "
                                 "first datagram; joining sets it from the code.");
+        // docs/400: what the router gave this machine, and whether anything
+        // has come back -- a dead link must not look like a slow one.
+        char pub[40];
+        if (lb_net_public_text(pub, (int)sizeof pub))
+            ImGui::Text("Public address: %s", pub);
+        else
+            ImGui::TextDisabled("Public address: not known yet (found when "
+                                "hosting or joining)");
+        unsigned sent = 0, recvd = 0;
+        lb_net_link_stats(&sent, &recvd);
+        if (peer && *peer) {
+            if (recvd)
+                ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.45f, 1.0f),
+                                   "Connected: %u datagram(s) from the other "
+                                   "player", recvd);
+            else
+                ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.3f, 1.0f),
+                                   "Nothing from the other player yet "
+                                   "(%u sent)", sent);
+        }
     }
     // Two instances on ONE machine need no peer at all: different
     // --instance-index values find each other over loopback, which is how
@@ -1945,9 +2115,22 @@ void tab_saves() {
             g_save_msg = "Could not open that path for reading.";
             g_save_msg_bad = true;
         } else {
-            std::vector<uint8_t> buf(kSaveSize + 1);
-            const size_t got = std::fread(buf.data(), 1, buf.size(), f);
+            // docs/401: an emulator's or flashcart's file may be padded (with
+            // 0xFF to 8 KB and beyond) or carry DeSmuME's footer; the game's
+            // bytes are at the front. Read it all and keep the save's size.
+            std::vector<uint8_t> buf;
+            {
+                uint8_t chunk[4096];
+                size_t n = 0;
+                while ((n = std::fread(chunk, 1, sizeof chunk, f)) > 0 &&
+                       buf.size() < (1u << 20))
+                    buf.insert(buf.end(), chunk, chunk + n);
+            }
             std::fclose(f);
+            size_t got = buf.size();
+            if (got > live_size && live_size >= kTagLen &&
+                std::memcmp(buf.data() + 3, "_BATTLE_SAVES", 13) == 0)
+                got = live_size;
             if (got != live_size) {
                 // Refuse rather than pad. A file that is not the right size is
                 // not this game's save, and importing it would leave the
@@ -1965,13 +2148,28 @@ void tab_saves() {
                 // Retag to the prefix this build already uses, taken from the
                 // live save rather than hard-coded, so it is right for whatever
                 // region the port was built for.
-                buf[0] = live[0];
-                buf[1] = live[1];
-                buf[2] = live[2];
+                // docs/401: a NEW player's live save is blank (0xFF), and
+                // retagging to that wrote a tag the game refuses -- the
+                // import "did not apply". Then the build's own constant is
+                // used: AFE, which func_0204B1D4 writes as immediates.
+                const char want[3] = {tag_ok ? (char)live[0] : 'A',
+                                      tag_ok ? (char)live[1] : 'F',
+                                      tag_ok ? (char)live[2] : 'E'};
+                buf[0] = (uint8_t)want[0];
+                buf[1] = (uint8_t)want[1];
+                buf[2] = (uint8_t)want[2];
                 if (nds_io_cartridge_save_restore(buf.data(), live_size)) {
+                    // docs/401: and load it now, by the game's own restart
+                    // (docs/396), unless a match or a wireless session is on.
+                    int cx = 0, cy = 0;
+                    const bool busy = lb_field_camera(&cx, &cy) ||
+                                      lb_net_guest_state() > 0;
+                    if (!busy) lb_request_game_reset();
                     g_save_msg = std::string("Imported (retagged ") + from +
-                                 " -> " + tag[0] + tag[1] + tag[2] +
-                                 "). Return to the title screen to load it.";
+                                 " -> " + want[0] + want[1] + want[2] + "). " +
+                                 (busy ? "Leave the match or the lobby, then "
+                                         "press Reset to load it."
+                                       : "The game restarts to load it.");
                 } else {
                     g_save_msg = "The runner refused the image.";
                     g_save_msg_bad = true;
@@ -1999,8 +2197,11 @@ void tab_saves() {
     // the game reports "The LEGO Battles data is corrupted and will be
     // deleted" and does exactly that (docs/207). Importing a whole save is the
     // safe way to change unlocks; the checksum travels with its own data.
-    ImGui::TextDisabled("After importing, return to the title screen for the "
-                        "save to appear.");
+    // docs/401
+    ImGui::TextDisabled("Any region's save, from a cartridge or an emulator, "
+                        "imports; the game restarts to load it.");
+    ImGui::TextDisabled("Your save is saves\\LEGO Battles.sav, whatever your "
+                        "ROM file is called.");
     tab_end();
 }
 
@@ -4270,6 +4471,479 @@ void section_windows() {
     tab_end();
 }
 
+// ── docs/404: THE BALANCE MENU ─────────────────────────────────────────────
+//
+// Every unit's and building's values, by faction, read from the game's own
+// blueprints and edited in place (lb_balance.cpp's top layer, over the pack
+// and Same-builders); their attacks' damage; and the packs and files. A value
+// the player set is drawn yellow, and a right-click puts the one beneath it
+// back. Online the cells are locked: both machines must run one rule set.
+const char* const kBalFactions[7] = {"King", "Wizard", "Pirate", "Imperial",
+                                     "Earth", "Alien", "Neutral and story"};
+const char* const kBalCategory[20] = {
+    "Hero", "Builder", "Melee", "Ranged", "Mounted", "Transport", "Special",
+    "Base", "Mill", "Mine", "Farm", "Barracks", "Vehicle Center", "Tower",
+    "Tower 2", "Tower 3", "Shipyard", "Bridge", "Gate", "Wall"};
+// Short column labels, in lb_balance.cpp's field order, and what each means.
+const char* const kBalUnitCols[10] = {"Cost", "Build", "Health", "Mana",
+                                      "Speed", "Melee", "Spread", "Interval",
+                                      "Range", "Yield"};
+const char* const kBalUnitTips[10] = {
+    "Bricks to build it.",
+    "Build time (the construction's divisor; larger is slower).",
+    "Hit points.",
+    "A hero's mana.",
+    "Tiles per second.",
+    "Melee damage, the low end.",
+    "Melee damage spread: the high end is damage + spread.",
+    "Ticks between attacks (30 a second).",
+    "Attack range.",
+    "Resources a mine, quarry or well cap yields."};
+int g_bal_faction = 0;
+int g_bal_filter = 0;   // 0 all, 1 units, 2 buildings
+char g_bal_path[512] = "balance.json";
+std::string g_bal_msg;
+bool g_bal_msg_bad = false;
+
+int bal_faction_of(int rec) {
+    char name[48];
+    if (lb_balance_record_name(rec, name, (int)sizeof name) < 2 || name[1] != '_')
+        return 6;
+    static const char kPrefix[6] = {'K', 'W', 'P', 'I', 'E', 'A'};
+    for (int f = 0; f < 6; ++f)
+        if (name[0] == kPrefix[f]) return f;
+    return 6;
+}
+
+// docs/408: the bridges come in pairs, the horizontal and vertical piece of
+// each size (121/122 small, 123/124 medium, 125/126 large) with the same
+// values, so one row shows the pair and a change writes both. The gates
+// (127/128) are never built (docs/405) and are not listed.
+int bal_twin(int rec) {
+    return (rec == 121 || rec == 123 || rec == 125) ? rec + 1 : -1;
+}
+bool bal_unlisted(int rec) {
+    // And two placeholders with no values at all: 137 MarsFalvour ("REMOVE
+    // THIS") and 139 SpaceCriminalShipColor (no name).
+    return rec == 122 || rec == 124 || rec == 126 || rec == 127 || rec == 128 ||
+           rec == 137 || rec == 139;
+}
+const char* bal_row_name(int rec) {
+    if (rec == 121) return "Bridge (small)";
+    if (rec == 123) return "Bridge (medium)";
+    if (rec == 125) return "Bridge (large)";
+    return lb_teams_unit_name(rec);
+}
+void bal_set(int rec, int field, int v) {
+    lb_balance_custom_set(rec, field, v);
+    const int twin = bal_twin(rec);
+    if (twin >= 0) lb_balance_custom_set(twin, field, v);
+}
+
+// One editable value. Enter commits it; a right-click on a yellow one puts
+// the value beneath it back.
+void bal_cell(int kind, int rec, int field, bool locked) {
+    const int live = lb_balance_value(rec, field);
+    ImGui::PushID(rec * 32 + field);
+    if (live < 0) {
+        ImGui::TextDisabled("-");
+        ImGui::PopID();
+        return;
+    }
+    const int custom = lb_balance_custom_get(rec, field);
+    const bool speed = std::strcmp(lb_balance_field_name(kind, field), "Speed") == 0;
+    if (custom >= 0)
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.82f, 0.25f, 1.0f));
+    ImGui::SetNextItemWidth(speed ? 64.0f : 58.0f);
+    ImGui::BeginDisabled(locked);
+    if (speed) {
+        float tps = (float)live * 30.0f / 4096.0f;
+        if (ImGui::InputFloat("##v", &tps, 0.0f, 0.0f, "%.2f",
+                              ImGuiInputTextFlags_EnterReturnsTrue)) {
+            long raw = std::lround(tps * 4096.0f / 30.0f);
+            if (raw < 1) raw = 1;
+            bal_set(rec, field, (int)raw);
+        }
+    } else {
+        int v = live;
+        if (ImGui::InputInt("##v", &v, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue)) {
+            const int mx = lb_balance_field_max(kind, field);
+            bal_set(rec, field, v < 0 ? 0 : (v > mx ? mx : v));
+        }
+    }
+    ImGui::EndDisabled();
+    if (custom >= 0) {
+        ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered()) {
+            const int b = lb_balance_base(rec, field);
+            if (speed)
+                ImGui::SetTooltip("Yours. Beneath it: %.2f. Right-click to put "
+                                  "that back.", (float)b * 30.0f / 4096.0f);
+            else
+                ImGui::SetTooltip("Yours. Beneath it: %d. Right-click to put "
+                                  "that back.", b);
+        }
+        if (!locked && ImGui::IsItemClicked(ImGuiMouseButton_Right))
+            bal_set(rec, field, -1);
+    }
+    ImGui::PopID();
+}
+
+// docs/408: an on/off field (a projectile's flags), as a tick box.
+void bal_flag(int rec, int field, bool locked) {
+    const int live = lb_balance_value(rec, field);
+    const int custom = lb_balance_custom_get(rec, field);
+    ImGui::PushID(rec * 32 + field);
+    bool on = live > 0;
+    if (custom >= 0)
+        ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(1.0f, 0.82f, 0.25f, 1.0f));
+    ImGui::BeginDisabled(locked || live < 0);
+    if (ImGui::Checkbox("##f", &on)) bal_set(rec, field, on ? 1 : 0);
+    ImGui::EndDisabled();
+    if (custom >= 0) {
+        ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Yours. Beneath it: %s. Right-click to put that "
+                              "back.", lb_balance_base(rec, field) ? "on" : "off");
+        if (!locked && ImGui::IsItemClicked(ImGuiMouseButton_Right))
+            bal_set(rec, field, -1);
+    }
+    ImGui::PopID();
+}
+
+// The lock and the hint, above each table.
+bool bal_header() {
+    if (!lb_patches_blueprint_base()) {
+        ImGui::TextDisabled("The values are read from the game's own "
+                            "blueprints, which load at its title screen.");
+        return false;
+    }
+    if (const char* why = lb_balance_custom_blocked()) {
+        ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.3f, 1.0f), "Locked: %s.", why);
+        return true;
+    }
+    ImGui::TextDisabled("Type a value and press Enter. It applies at once, in a "
+                        "battle too; recordings carry it. Yellow values are "
+                        "yours: right-click one to put it back.");
+    return true;
+}
+
+void tab_balance_units() {
+    if (!tab_begin("Balance Units")) return;
+    static bool faction_env = false;   // LB_BAL_FACTION=0..7, a test aid
+    if (!faction_env) {
+        faction_env = true;
+        if (const char* v = std::getenv("LB_BAL_FACTION")) g_bal_faction = std::atoi(v);
+    }
+    if (bal_header()) {
+        const bool locked = lb_balance_custom_blocked() != nullptr;
+        ImGui::SetNextItemWidth(170.0f);
+        ImGui::Combo("Faction", &g_bal_faction, kBalFactions, 7);
+        ImGui::SameLine();
+        const char* filters[] = {"Everything", "Units", "Buildings"};
+        ImGui::SetNextItemWidth(130.0f);
+        ImGui::Combo("Show", &g_bal_filter, filters, 3);
+        // The stat columns; the spell fields after them have their own
+        // section (tab_balance_heroes).
+        const int nf = LB_BAL_SPELL_FIELD0;
+        SDL_Texture* atlas = lb_teams_hud_atlas(g_team_renderer)   /* docs/408 */;
+        if (ImGui::BeginTable("balunits", nf + 3,
+                              ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                                  ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY |
+                                  ImGuiTableFlags_SizingFixedFit,
+                              ImVec2(0.0f, 0.0f))) {
+            ImGui::TableSetupScrollFreeze(2, 1);
+            ImGui::TableSetupColumn("##icon");
+            ImGui::TableSetupColumn("Name");
+            for (int f = 0; f < nf && f < 10; ++f)
+                ImGui::TableSetupColumn(kBalUnitCols[f]);
+            ImGui::TableSetupColumn("Attack");
+            ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+            for (int c = 0; c < nf + 3; ++c) {
+                ImGui::TableSetColumnIndex(c);
+                ImGui::TableHeader(ImGui::TableGetColumnName(c));
+                if (c >= 2 && c < nf + 2 && ImGui::IsItemHovered())
+                    ImGui::SetTooltip("%s", kBalUnitTips[c - 2]);
+            }
+            const int n = lb_balance_record_count(LB_BAL_UNITS);
+            for (int rec = 0; rec < n; ++rec) {
+                if (bal_faction_of(rec) != g_bal_faction) continue;
+                if (bal_unlisted(rec)) continue;   // docs/408
+                const int cat = lb_balance_record_category(rec);
+                const bool building = cat >= 7;
+                if ((g_bal_filter == 1 && building) || (g_bal_filter == 2 && !building))
+                    continue;
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                float u0, v0, u1, v1;
+                if (atlas && lb_teams_hud_icon_uv(rec, &u0, &v0, &u1, &v1))
+                    ImGui::Image((ImTextureID)(intptr_t)atlas, ImVec2(24.0f, 24.0f),
+                                 ImVec2(u0, v0), ImVec2(u1, v1));
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(bal_row_name(rec));
+                ImGui::SameLine();
+                ImGui::TextDisabled("%s", cat >= 0 && cat < 20 ? kBalCategory[cat] : "");
+                for (int f = 0; f < nf; ++f) {
+                    ImGui::TableNextColumn();
+                    bal_cell(LB_BAL_UNITS, rec, f, locked);
+                }
+                ImGui::TableNextColumn();
+                const int p = lb_balance_record_projectile(rec);
+                char pname[48] = "";
+                if (p >= 0) lb_balance_record_name(p, pname, (int)sizeof pname);
+                ImGui::TextDisabled("%s", pname);
+            }
+            ImGui::EndTable();
+        }
+    }
+    tab_end();
+}
+
+void tab_balance_attacks() {
+    if (!tab_begin("Balance Attacks")) return;
+    if (bal_header()) {
+        const bool locked = lb_balance_custom_blocked() != nullptr;
+        ImGui::TextDisabled("A ranged unit's or a special's attack. Damage is "
+                            "a range: each hit deals between the two. The "
+                            "ticks are on/off.");
+        // docs/408: what each field does, from the code that reads it.
+        static const char* const kTips[] = {
+            "Damage to what it touches on the way or hits (FUN_0206E408).",
+            "",
+            "Damage where it lands: the target, and the blast if it explodes\n"
+            "(FUN_0206E450, FUN_0206E60C).",
+            "",
+            "Flight speed, tiles per second. Applies from the next shot.",
+            "Its contact damage reaches buildings.",
+            "It can touch flying units.",
+            "It can touch ground units, bridges and gates.",
+            "Its contact damage reaches walls.",
+            "Its contact damage hurts its own side too.",
+            "It damages enemies it passes over, not only its target. With\n"
+            "Stopped by enemies off, it pierces.",
+            "Impassable ground (cliffs, deep water) stops it.",
+            "Buildings stop it; off, it flies over them.",
+            "Its own side's units stop it.",
+            "The first enemy unit it touches stops it.",
+            "Walls stop it.",
+            "It explodes where it lands, hitting what is near."};
+        const int nf = lb_balance_field_count(LB_BAL_ATTACKS);
+        if (ImGui::BeginTable("balattacks", nf + 2,
+                              ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                                  ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY |
+                                  ImGuiTableFlags_SizingFixedFit)) {
+            ImGui::TableSetupScrollFreeze(1, 1);
+            ImGui::TableSetupColumn("Attack");
+            for (int f = 0; f < nf; ++f)
+                ImGui::TableSetupColumn(lb_balance_field_name(LB_BAL_ATTACKS, f));
+            ImGui::TableSetupColumn("Used by");
+            ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+            for (int c = 0; c < nf + 2; ++c) {
+                ImGui::TableSetColumnIndex(c);
+                ImGui::TableHeader(ImGui::TableGetColumnName(c));
+                const int f = c - 1;
+                if (f >= 0 && f < nf && f < (int)IM_ARRAYSIZE(kTips) &&
+                    kTips[f][0] && ImGui::IsItemHovered())
+                    ImGui::SetTooltip("%s", kTips[f]);
+            }
+            const int first = lb_balance_record_first(LB_BAL_ATTACKS);
+            const int n = lb_balance_record_count(LB_BAL_ATTACKS);
+            const int units = lb_balance_record_count(LB_BAL_UNITS);
+            for (int rec = first; rec < first + n; ++rec) {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                char name[48] = "";
+                lb_balance_record_name(rec, name, (int)sizeof name);
+                ImGui::TextUnformatted(name);
+                for (int f = 0; f < nf; ++f) {
+                    ImGui::TableNextColumn();
+                    if (lb_balance_field_max(LB_BAL_ATTACKS, f) == 1)
+                        bal_flag(rec, f, locked);
+                    else
+                        bal_cell(LB_BAL_ATTACKS, rec, f, locked);
+                }
+                ImGui::TableNextColumn();
+                int shown = 0;
+                for (int u = 0; u < units && shown < 4; ++u) {
+                    if (lb_balance_record_projectile(u) != rec) continue;
+                    if (shown++) ImGui::SameLine();
+                    ImGui::TextDisabled("%s", lb_teams_unit_name(u));
+                }
+            }
+            ImGui::EndTable();
+        }
+    }
+    tab_end();
+}
+
+// docs/408: which hero casts what. A hero's five slots are spell ids at
+// blueprint +0x72 (docs/106); the yellow brick lists them in slot order and
+// an empty slot (0) shows nothing. The names are the game's own
+// (lb_teams_spell_name); these English ones stand in before its text loads.
+// Id 3 (Area Heal) is skipped by the yellow brick's filler (FUN_020DC004's
+// `cmp r0,#3`), and 0x21/0x22 are impact payloads, so none is offered.
+const char* lb_spell_name(int id) {
+    if (id == 0) return "(empty)";
+    if (const char* s = lb_teams_spell_name(id)) return s;
+    static const char* const kEn[0x21] = {
+        "(empty)", "Unit Heal", "Unit Heal", "Area Heal", "Unit Speed Boost",
+        "Area Speed Boost", "Unit Damage Boost", "Area Damage Boost",
+        "Unit Armour Boost", "Area Armour Boost", "Forest Spawn",
+        "Crystal Cache", "Jungle Growth", "Earthquake", "Fireball", "Lightning",
+        "Thunder Hammer", "Mining Buff", "Roar", "Logging Buff", "Monkey Swarm",
+        "Crab Swarm", "Coconut Storm", "Artillery", "Trade Winds",
+        "Arrow Volley", "Teleport", "EMP", "Space Laser", "ESP", "Tracking",
+        "Cluster Bomb", "Hot Wire"};
+    return id > 0 && id <= 0x20 ? kEn[id] : "?";
+}
+bool lb_spell_offered(int id) {
+    return id == 0 || (id >= 1 && id <= 0x20 && id != 3);
+}
+
+void tab_balance_heroes() {
+    if (!tab_begin("Balance Heroes")) return;
+    if (bal_header()) {
+        const bool locked = lb_balance_custom_blocked() != nullptr;
+        ImGui::TextDisabled("Each hero's five spell slots, in the order the "
+                            "yellow brick lists them. Empty slots show nothing.");
+        SDL_Texture* atlas = lb_teams_hud_atlas(g_team_renderer)   /* docs/408 */;
+        if (ImGui::BeginTable("balheroes", 2 + LB_BAL_SPELLS,
+                              ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                                  ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY |
+                                  ImGuiTableFlags_SizingFixedFit)) {
+            ImGui::TableSetupScrollFreeze(2, 1);
+            ImGui::TableSetupColumn("##icon");
+            ImGui::TableSetupColumn("Hero");
+            for (int s = 0; s < LB_BAL_SPELLS; ++s)
+                ImGui::TableSetupColumn(lb_balance_field_name(LB_BAL_UNITS,
+                                                              LB_BAL_SPELL_FIELD0 + s));
+            ImGui::TableHeadersRow();
+            const int n = lb_balance_record_count(LB_BAL_UNITS);
+            for (int rec = 0; rec < n; ++rec) {
+                if (lb_balance_record_category(rec) != 0) continue;   // heroes
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                float u0, v0, u1, v1;
+                if (atlas && lb_teams_hud_icon_uv(rec, &u0, &v0, &u1, &v1))
+                    ImGui::Image((ImTextureID)(intptr_t)atlas, ImVec2(24.0f, 24.0f),
+                                 ImVec2(u0, v0), ImVec2(u1, v1));
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(lb_teams_unit_name(rec));
+                for (int s = 0; s < LB_BAL_SPELLS; ++s) {
+                    ImGui::TableNextColumn();
+                    const int field = LB_BAL_SPELL_FIELD0 + s;
+                    const int live = lb_balance_value(rec, field);
+                    const int custom = lb_balance_custom_get(rec, field);
+                    ImGui::PushID(rec * 32 + field);
+                    if (custom >= 0)
+                        ImGui::PushStyleColor(ImGuiCol_Text,
+                                              ImVec4(1.0f, 0.82f, 0.25f, 1.0f));
+                    ImGui::SetNextItemWidth(150.0f);
+                    ImGui::BeginDisabled(locked);
+                    if (ImGui::BeginCombo("##sp", lb_spell_name(live < 0 ? 0 : live))) {
+                        for (int id = 0; id <= 0x22; ++id) {
+                            if (!lb_spell_offered(id)) continue;
+                            char item[64];
+                            // Ids 1 and 2 are both "Unit Heal"; 2's record
+                            // casts at once (target mask 0x40, FUN_020A92D4).
+                            std::snprintf(item, sizeof item, "%s%s##%d",
+                                          lb_spell_name(id),
+                                          id == 2 ? " (instant)" : "", id);
+                            if (ImGui::Selectable(item, id == live))
+                                lb_balance_custom_set(rec, field, id);
+                        }
+                        ImGui::EndCombo();
+                    }
+                    ImGui::EndDisabled();
+                    if (custom >= 0) {
+                        ImGui::PopStyleColor();
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("Yours. Beneath it: %s. Right-click "
+                                              "to put that back.",
+                                              lb_spell_name(lb_balance_base(rec, field)));
+                        if (!locked && ImGui::IsItemClicked(ImGuiMouseButton_Right))
+                            lb_balance_custom_set(rec, field, -1);
+                    }
+                    ImGui::PopID();
+                }
+            }
+            ImGui::EndTable();
+        }
+    }
+    tab_end();
+}
+
+void tab_balance_presets() {
+    if (!tab_begin("Balance Presets")) return;
+    draw_balance_pack();
+    ImGui::Separator();
+    ImGui::Text("Your values: %d", lb_balance_custom_size());
+    help("Kept in settings.json, on top of the pack above. They apply at\n"
+         "once, in a battle too, except online; recordings carry them.");
+    ImGui::SameLine();
+    ImGui::BeginDisabled(lb_balance_custom_size() == 0 ||
+                         lb_balance_custom_blocked() != nullptr);
+    if (ImGui::Button("Clear all")) lb_balance_custom_clear_all();
+    ImGui::EndDisabled();
+    ImGui::Spacing();
+    ImGui::InputText("File", g_bal_path, sizeof g_bal_path);
+    if (ImGui::Button("Export...")) {
+        if (lb_pick_json_file(g_bal_path, (int)sizeof g_bal_path, 1)) {
+            static char text[32768];
+            lb_balance_custom_text(text, (int)sizeof text);
+            std::string o = "{\n  \"lb_balance\": 1,\n";
+            char b[64];
+            std::snprintf(b, sizeof b, "  \"pack\": %d,\n", g_set.balance_patch);
+            o += b;
+            json_put_str(o, "values", text, false);
+            o += "}\n";
+            FILE* f = std::fopen(g_bal_path, "wb");
+            g_bal_msg_bad = !f || std::fwrite(o.data(), 1, o.size(), f) != o.size();
+            if (f) std::fclose(f);
+            g_bal_msg = g_bal_msg_bad ? "Could not write that file."
+                                      : "Exported " +
+                                            std::to_string(lb_balance_custom_size()) +
+                                            " value(s).";
+        }
+    }
+    ImGui::SameLine();
+    ImGui::BeginDisabled(lb_balance_custom_blocked() != nullptr);
+    if (ImGui::Button("Import...")) {
+        if (lb_pick_json_file(g_bal_path, (int)sizeof g_bal_path, 0)) {
+            std::string s;
+            if (FILE* f = std::fopen(g_bal_path, "rb")) {
+                char chunk[4096];
+                size_t got;
+                while ((got = std::fread(chunk, 1, sizeof chunk, f)) > 0 &&
+                       s.size() < (1u << 20))
+                    s.append(chunk, got);
+                std::fclose(f);
+            }
+            if (s.find("\"lb_balance\"") == std::string::npos) {
+                g_bal_msg = "That is not a balance file.";
+                g_bal_msg_bad = true;
+            } else {
+                static char text[32768];
+                text[0] = 0;
+                json_get_str(s, "values", text, sizeof text);
+                int pack = g_set.balance_patch;
+                json_get_int(s, "pack", &pack);
+                if (pack >= 0 && pack <= 3) g_set.balance_patch = pack;
+                const int n = lb_balance_custom_parse(text);
+                g_bal_msg = "Imported " + std::to_string(n) + " value(s) and the " +
+                            lb_balance_name(g_set.balance_patch) + " pack.";
+                g_bal_msg_bad = false;
+            }
+        }
+    }
+    ImGui::EndDisabled();
+    if (!g_bal_msg.empty())
+        ImGui::TextColored(g_bal_msg_bad ? ImVec4(1.0f, 0.5f, 0.4f, 1.0f)
+                                         : ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                           "%s", g_bal_msg.c_str());
+    tab_end();
+}
+
 const std::vector<MenuHeader>& menu_headers() {
     static const std::vector<MenuHeader> k = {
         {"Settings", {{"Display", "Display", tab_display},
@@ -4279,6 +4953,10 @@ const std::vector<MenuHeader>& menu_headers() {
         {"Enhancements", {{"Gameplay", "Enhancements", tab_enhancements},
                           {"Team Builder", "Team Builder", tab_team_builder},
                           {"Ban Units", "Ban Units", tab_ban_units}}},
+        {"Balance", {{"Units", "Balance Units", tab_balance_units},
+                     {"Heroes", "Balance Heroes", tab_balance_heroes},
+                     {"Attacks", "Balance Attacks", tab_balance_attacks},
+                     {"Presets", "Balance Presets", tab_balance_presets}}},
         {"Cheats", {{"Cheats", "Cheats", tab_cheats}}},
         {"Network", {{"Multiplayer", "Multiplayer", tab_multiplayer}}},
         {"Tools", {{"Recordings", "Demo", tab_demo},
@@ -4499,6 +5177,8 @@ extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
             // own it was removed. So it can neither trigger a save nor
             // suppress one; it is inert, not a persisted field this misses.
             h ^= (size_t)(g_wide_field ? 1u : 0u); h *= 1099511628211ull;
+            // docs/404: the Balance tab's values live in lb_balance.cpp.
+            h ^= (size_t)lb_balance_custom_generation(); h *= 1099511628211ull;
             if (last_hash && h != last_hash) lb_settings_save();
             last_hash = h;
         }
@@ -5019,6 +5699,11 @@ extern "C" int lb_setting_enhanced(void) {
     return g_set.enhanced ? 1 : 0;
 }
 
+// docs/405: UPnP when hosting.
+extern "C" int lb_setting_upnp(void) {
+    return g_set.upnp ? 1 : 0;
+}
+
 // docs/398: number keys pick from the blue brick's list while it is open.
 extern "C" int lb_setting_quick_blue(void) {
     return g_set.quick_keys_blue ? 1 : 0;
@@ -5082,6 +5767,43 @@ extern "C" int lb_setting_hotwire_transport(void) {
         }
     }
     return forced >= 0 ? forced : g_set.hotwire_transport;
+}
+
+// docs/406: this machine's EMP-on-transports choice (LB_EMP_TRANSPORTS=0|1
+// forces it). The patch runs with lb_patches.cpp's effective value: a
+// replay's, else the host's online, else this.
+extern "C" int lb_setting_emp_transports(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_EMP_TRANSPORTS");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.emp_transports ? 1 : 0);
+}
+
+// docs/408: LB_TRANSPORT_RELEASE=0|1 forces it.
+extern "C" int lb_setting_transport_release(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_TRANSPORT_RELEASE");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.transport_release ? 1 : 0);
+}
+
+// docs/406: LB_AI_HERO_REBUILD=0|1 forces it.
+extern "C" int lb_setting_ai_hero_rebuild(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_AI_HERO_REBUILD");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.ai_hero_rebuild ? 1 : 0);
+}
+
+// docs/406: the rule flags a host sends its players (lb_teams.cpp).
+extern "C" int lb_rules_local_flags(void) {
+    return lb_setting_emp_transports() ? LB_RULE_EMP_TRANSPORTS : 0;
 }
 
 // The "Fix Hotwired Healing" checkbox had NO getter: nothing in the port could
@@ -5172,11 +5894,33 @@ extern "C" int lb_setting_cheat(int index) {
             }
         }
     }
+    // docs/406: a replay runs on the recording's cheats (from sets=3).
+    const int played = lb_demo_play_cheats();
+    if (played >= 0) return (played >> index) & 1;
     if (forced & (1u << index)) return 1;
     return g_set.cheat[index] ? 1 : 0;
 }
 
 extern "C" int lb_setting_cheat_count(void) { return kCheatCount; }
+
+// docs/406: the cheats as a mask, bit i = flags[i], as recordings carry them.
+extern "C" int lb_cheat_mask_live(void) {
+    int m = 0;
+    for (int i = 0; i < kCheatCount; ++i)
+        if (lb_setting_cheat(i)) m |= 1 << i;
+    return m;
+}
+
+// docs/406: the AI gets the red-brick cheats too (lb_patches.cpp, kAiCheats).
+// LB_AI_CHEATS=0|1 forces it. Offline only; a replay's own when replaying.
+extern "C" int lb_setting_ai_cheats(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_AI_CHEATS");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.ai_cheats ? 1 : 0);
+}
 
 // Which faction's music a match plays. 0 vanilla (the game untouched),
 // 1 random, 2 faction-aligned by builder, 3 map-specific, 4..9 one side
@@ -5362,6 +6106,26 @@ extern "C" int lb_setting_unlock_extras(void) {
     return (g_set.unlock_extras || forced) ? 1 : 0;
 }
 
+// docs/407: every unlock category by number, LB_UNLOCKS=<words> forcing them
+// (units, extras, maps, art, campaigns, or all).
+extern "C" int lb_setting_unlock(int kind) {
+    static const char* const kWord[LB_UNLOCK_KINDS] = {
+        "units", "extras", "maps", "art", "campaigns"};
+    if (kind < 0 || kind >= LB_UNLOCK_KINDS) return 0;
+    static int forced = -1;
+    if (forced < 0) {
+        forced = 0;
+        if (const char* spec = std::getenv("LB_UNLOCKS"))
+            for (int k = 0; k < LB_UNLOCK_KINDS; ++k)
+                if (std::strstr(spec, kWord[k]) || std::strstr(spec, "all"))
+                    forced |= 1 << k;
+    }
+    const bool on[LB_UNLOCK_KINDS] = {g_set.unlock_units, g_set.unlock_extras,
+                                      g_set.unlock_maps, g_set.unlock_art,
+                                      g_set.unlock_campaigns};
+    return (on[kind] || ((forced >> kind) & 1)) ? 1 : 0;
+}
+
 extern "C" int lb_setting_same_builders(void) {
     // LB_FORCE_SAME_BUILDERS=1 turns this on without the UI, so a headless run
     // can verify the patch. Same role as LB_AUTOPLAY: a test aid, never on by
@@ -5462,7 +6226,7 @@ extern "C" const char* lb_net_lobby_options_json(void) {
     static const char* kBalance[] = {"Off (Vanilla)", "Rebalance", "FactionWars", "Funlite"};
     static const char* kCapName[10] = {
         "Heroes", "Minifigures", "Specials", "Towers", "Buildings",
-        nullptr, "Walls", "Bridges", "Gates", nullptr};
+        nullptr, "Walls", "Bridges", nullptr, nullptr};   // docs/405: no gates
     auto pick = [](const char* const* names, int n, int v) {
         return (v >= 0 && v < n) ? names[v] : "?";
     };
@@ -5478,6 +6242,9 @@ extern "C" const char* lb_net_lobby_options_json(void) {
     kv.push_back({"Balance patch", pick(kBalance, 4, g_set.balance_patch)});
     kv.push_back({"Hotwire targets", pick(kHotwire, 3, g_set.hotwire_mode)});
     kv.push_back({"Transport occupants", pick(kTransport, 3, g_set.hotwire_transport)});
+    kv.push_back({"EMP disables transports", g_set.emp_transports ? "On" : "Off"});
+    kv.push_back({"AI rebuilds its hero", g_set.ai_hero_rebuild ? "On" : "Off"});
+    kv.push_back({"Hotwired transports leave", g_set.transport_release ? "On" : "Off"});
     kv.push_back({"Attack boost reaches ranged", g_set.attack_boost_ranged ? "On" : "Off"});
     kv.push_back({"Fix hotwired healing", g_set.fix_hotwired_healing ? "On" : "Off"});
     {
@@ -5501,6 +6268,7 @@ extern "C" const char* lb_net_lobby_options_json(void) {
     }
     kv.push_back({"Cheats", cheats.empty() ? "None" : cheats});
     if (g_set.unlock_units) kv.push_back({"Unlock all units", "On"});
+    if (g_set.unlock_maps) kv.push_back({"Unlock all maps", "On"});   // docs/407
     if (g_set.banned_units[0]) kv.push_back({"Banned units", g_set.banned_units});
     out = "{";
     for (size_t i = 0; i < kv.size(); ++i) {

@@ -235,6 +235,16 @@ int g_rec_tileset = 0, g_rec_palette = 0, g_rec_music = 0, g_rec_cage = 0,
 // stock values (Wizard, Off, Vanilla) and follows its `s` lines.
 int g_rec_oppdef = 1, g_rec_hwtransport = 0, g_rec_hwmode = 0;
 int g_demo_oppdef = -1, g_demo_hwtransport = -1, g_demo_hwmode = -1;
+// docs/406: kind 8, EMP disables transports. Every recording made before it
+// ran without it, so a replay starts from Off whatever its version.
+int g_rec_emp = 0, g_demo_emp = 0;
+// docs/406: kind 9, the red-brick cheats as a mask, from `sets=3` (an older
+// recording leaves them to this machine, -1, as before); kind 10, the AI
+// gets them too, Off in every recording before it.
+int g_rec_cheats = 0, g_demo_cheats = -1;
+int g_rec_aicheats = 0, g_demo_aicheats = 0;
+int g_rec_aihero = 0, g_demo_aihero = 0;   // kind 11, the AI's hero rebuild
+int g_rec_trel = 0, g_demo_trel = 0;       // kind 12, docs/408
 // docs/384: the opponent armies a recording fielded, in order, and the next
 // one a replay takes.
 std::vector<std::array<unsigned char, 20>> g_armies;
@@ -257,7 +267,9 @@ bool load(const char* path) {
     g_events.clear();
     FILE* fh = std::fopen(path, "rb");
     if (!fh) return false;
-    char line[256];
+    // docs/404: the header line is past 230 characters; a 256-byte buffer
+    // would have split a longer one into "events".
+    char line[1024];
     bool header = false;
     g_demo_cadence = 20;          // unless the header says otherwise
     g_demo_hudhit = 0;            // likewise: older recordings are unmapped
@@ -278,6 +290,11 @@ bool load(const char* path) {
     g_demo_seed = 0u;
     g_demo_music = -1;            // and this machine's Music mode
     g_demo_oppdef = g_demo_hwtransport = g_demo_hwmode = -1;   // docs/392
+    g_demo_emp = 0;               // docs/406: and no EMP on transports
+    g_demo_cheats = -1;           // and this machine's cheats
+    g_demo_aicheats = 0;          // and none for the AI
+    g_demo_aihero = 0;            // and the stock hero rebuild
+    g_demo_trel = 0;              // and the stock transport ownership
     g_demo_has_rtc = false;       // and the clock the replaying run has
     g_armies.clear();
     g_army_at = 0;
@@ -344,6 +361,7 @@ bool load(const char* path) {
                         g_demo_oppdef = 1;
                         g_demo_hwtransport = 0;
                         g_demo_hwmode = 0;
+                        if (std::atoi(s2 + 5) >= 3) g_demo_cheats = 0;   // docs/406
                     }
                 continue;
             }
@@ -403,9 +421,45 @@ void emit(const Event& e) {
         std::fprintf(g_rec, "%u q %d\n", e.frame, e.a);
     else if (e.kind == 's')   /* docs/388: a setting changed */
         std::fprintf(g_rec, "%u s %d %d\n", e.frame, e.a, e.b);
+    else if (e.kind == 'b')   /* docs/404: a Balance tab value */
+        std::fprintf(g_rec, "%u b %d %d %d\n", e.frame, e.a, e.b, e.c);
     else
         std::fprintf(g_rec, "%u k %d\n", e.frame, e.a);
     std::fflush(g_rec);
+}
+
+// docs/404: the Balance tab's values as last WRITTEN to the recording, one
+// slot per (record, field); a `b` line for each that differs from the
+// player's set now (-1: the value was cleared). `initial` starts from none,
+// so a recording opens with the whole set on frame 0.
+std::vector<int> g_rec_bal;
+unsigned g_rec_bal_gen = 0u;
+void rec_balance_diff(bool initial) {
+    if (g_mode != Mode::Record) return;
+    const unsigned gen = lb_balance_custom_generation();
+    if (!initial && gen == g_rec_bal_gen) return;   // nothing changed
+    g_rec_bal_gen = gen;
+    const int kinds[2] = {LB_BAL_UNITS, LB_BAL_ATTACKS};
+    const int recs = lb_balance_record_count(LB_BAL_UNITS) +
+                     lb_balance_record_count(LB_BAL_ATTACKS);
+    const int stride = 32;   // docs/408: attacks have 17 fields, units 15
+    if (initial || (int)g_rec_bal.size() != recs * stride)
+        g_rec_bal.assign((size_t)(recs * stride), -1);
+    for (const int kind : kinds) {
+        const int first = lb_balance_record_first(kind);
+        const int n = lb_balance_record_count(kind);
+        const int nf = lb_balance_field_count(kind);
+        for (int r = first; r < first + n; ++r)
+            for (int f = 0; f < nf && f < stride; ++f) {
+                const int now = lb_balance_custom_get(r, f);
+                int& was = g_rec_bal[(size_t)(r * stride + f)];
+                if (now == was) continue;
+                was = now;
+                const Event e{g_frame, 'b', r, f, now, 0};
+                g_events.push_back(e);
+                emit(e);
+            }
+    }
 }
 
 }  // namespace
@@ -474,6 +528,21 @@ extern "C" int lb_demo_play_hotwire_transport(void) {
 extern "C" int lb_demo_play_hotwire_mode(void) {
     return (g_mode == Mode::Play || g_replay_done) ? g_demo_hwmode : -1;
 }
+extern "C" int lb_demo_play_emp_transports(void) {   // docs/406
+    return (g_mode == Mode::Play || g_replay_done) ? g_demo_emp : -1;
+}
+extern "C" int lb_demo_play_cheats(void) {
+    return (g_mode == Mode::Play || g_replay_done) ? g_demo_cheats : -1;
+}
+extern "C" int lb_demo_play_ai_cheats(void) {
+    return (g_mode == Mode::Play || g_replay_done) ? g_demo_aicheats : -1;
+}
+extern "C" int lb_demo_play_ai_hero_rebuild(void) {
+    return (g_mode == Mode::Play || g_replay_done) ? g_demo_aihero : -1;
+}
+extern "C" int lb_demo_play_transport_release(void) {
+    return (g_mode == Mode::Play || g_replay_done) ? g_demo_trel : -1;
+}
 extern "C" unsigned lb_demo_pick_seed(void) {
     static const unsigned live = [] {
         const unsigned t = (unsigned)std::time(nullptr);
@@ -520,6 +589,11 @@ extern "C" void lb_demo_start_record(const char* path) {
     g_rec_oppdef = 1;
     g_rec_hwtransport = 0;
     g_rec_hwmode = 0;
+    g_rec_emp = 0;                // docs/406
+    g_rec_cheats = 0;
+    g_rec_aicheats = 0;
+    g_rec_aihero = 0;
+    g_rec_trel = 0;
     // docs/396: a session on the PC's clock records the guest clock as it
     // stands now, so a replay runs on the same date (the 12/25 unlock).
     char rtc[24] = "";
@@ -532,7 +606,7 @@ extern "C" void lb_demo_start_record(const char* path) {
     std::fprintf(g_rec, "lbdemo 1 cadence=%d hudhit=%d camedge=%d camgrid=1 snd=%d "
                  "depth=%d exty=1 hudmemo=1 fp2d=1 fpline=1 quick=1 enemy8=1 cage=%d "
                  "ownhero=%d oppname=2 tileset=%d palette=%d pickseed=%u "
-                 "music=%d sets=2%s\n",
+                 "music=%d sets=3 balc=1%s\n",
                  g_rec_cadence, lb_hud_hit_live() ? 1 : 0,
                  lb_camera_edge_live() ? 1 : 0,
                  lb_snd_cull_live() ? 1 : 0,
@@ -543,6 +617,8 @@ extern "C" void lb_demo_start_record(const char* path) {
     std::fflush(g_rec);
     g_mode = Mode::Record;
     g_frame = 0;
+    // docs/404: the Balance tab's values in force, as frame-0 `b` lines.
+    rec_balance_diff(true);
     g_status = "recording to " + g_path;
     std::fprintf(stderr, "[lb_demo] recording to %s\n", g_path.c_str());
     std::fflush(stderr);
@@ -561,6 +637,9 @@ extern "C" void lb_demo_start_play(const char* path) {
     g_frame = 0;
     g_replay_done = false;
     g_mode = Mode::Play;
+    // docs/404: a replay runs on its own Balance tab values -- its `b` lines,
+    // or none for a recording made before there were any.
+    lb_balance_custom_play_begin("");
     // docs/396: the clock the recording ran on, set on the frame recording
     // began (both happen in lb_demo_apply_env, on the first VBlank).
     if (g_demo_has_rtc) {
@@ -698,24 +777,32 @@ extern "C" void lb_demo_tick(void) {
             emit(e);
         }
         // docs/388: and the settings a replay takes from the recording.
-        const int now[8] = {lb_setting_force_tileset(),
+        const int now[13] = {lb_setting_force_tileset(),
                             lb_setting_level_palette(),
                             lb_setting_music_mode(),
                             lb_cage_fix_live() ? 1 : 0,
                             lb_setting_own_hero_spells() ? 1 : 0,
                             lb_setting_default_opponent(),     // docs/392
                             lb_setting_hotwire_transport(),
-                            lb_setting_hotwire_mode()};
-        int* const was[8] = {&g_rec_tileset, &g_rec_palette, &g_rec_music,
-                             &g_rec_cage, &g_rec_ownhero, &g_rec_oppdef,
-                             &g_rec_hwtransport, &g_rec_hwmode};
-        for (int k = 0; k < 8; ++k) {
+                            lb_setting_hotwire_mode(),
+                            lb_emp_transports_live(),          // docs/406
+                            lb_cheat_mask_live(),
+                            lb_ai_cheats_live(),
+                            lb_ai_hero_rebuild_live(),
+                            lb_transport_release_live()};      // docs/408
+        int* const was[13] = {&g_rec_tileset, &g_rec_palette, &g_rec_music,
+                              &g_rec_cage, &g_rec_ownhero, &g_rec_oppdef,
+                              &g_rec_hwtransport, &g_rec_hwmode, &g_rec_emp,
+                              &g_rec_cheats, &g_rec_aicheats, &g_rec_aihero,
+                              &g_rec_trel};
+        for (int k = 0; k < 13; ++k) {
             if (now[k] == *was[k]) continue;
             *was[k] = now[k];
             const Event e{g_frame, 's', k, now[k], 0, 0};
             g_events.push_back(e);
             emit(e);
         }
+        rec_balance_diff(false);   // docs/404
         return;
     }
     if (g_mode != Mode::Play) return;
@@ -756,6 +843,13 @@ extern "C" void lb_demo_tick(void) {
             else if (e.a == 5 && e.b >= 0 && e.b <= 7) g_demo_oppdef = e.b;
             else if (e.a == 6 && e.b >= 0 && e.b <= 2) g_demo_hwtransport = e.b;
             else if (e.a == 7 && e.b >= 0 && e.b <= 2) g_demo_hwmode = e.b;
+            else if (e.a == 8) g_demo_emp = e.b ? 1 : 0;   // docs/406
+            else if (e.a == 9 && e.b >= 0) g_demo_cheats = e.b & 0x3FFFF;
+            else if (e.a == 10) g_demo_aicheats = e.b ? 1 : 0;
+            else if (e.a == 11) g_demo_aihero = e.b ? 1 : 0;
+            else if (e.a == 12) g_demo_trel = e.b ? 1 : 0;   // docs/408
+        } else if (e.kind == 'b') {   /* docs/404: a Balance tab value */
+            lb_balance_custom_play_set(e.a, e.b, e.c);
         } else {
             nds_set_key_mask((uint32_t)e.a);
         }
@@ -780,6 +874,7 @@ extern "C" void lb_demo_tick(void) {
 extern "C" void lb_demo_on_reset(void) {
     const Mode was = g_mode;
     lb_demo_stop();
+    lb_balance_custom_play_end();   // docs/404: back to the player's values
     if (was == Mode::Record && !std::getenv("LB_DEMO_NOREC")) {
         char name[64];
         std::snprintf(name, sizeof name, "lb-session-%llu.lbdemo",

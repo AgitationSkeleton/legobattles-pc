@@ -299,6 +299,30 @@ def clean_name(value, fallback="Player"):
     return value if NAME_OK.match(value) else fallback
 
 
+_PRIVATE_V4 = re.compile(
+    r"^(10\.\d{1,3}|172\.(1[6-9]|2\d|3[01])|192\.168)\.\d{1,3}\.\d{1,3}$")
+
+
+def lan_address(value):
+    """docs/400: a private IPv4 dotted quad, or '' -- nothing else is kept."""
+    s = str(value if value is not None else "").strip()
+    return s if _PRIVATE_V4.match(s) else ""
+
+
+def is_local(address):
+    """A loopback or private address: this server's own network."""
+    s = str(address or "")
+    return s.startswith("127.") or bool(_PRIVATE_V4.match(s))
+
+
+def lan_port(value):
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return n if 1 <= n <= 65535 else 0
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "LegoBattlesMaster/1.0"
 
@@ -351,6 +375,7 @@ class Handler(BaseHTTPRequestHandler):
                 lob.pop("token", None)
                 lob["options"] = json.loads(lob.get("options") or "{}")
                 lob["players_list"] = srv.store.players(lob["code"])
+                self._local_view(lob)
                 out.append(lob)
             return self._send(200, {"ok": True, "lobbies": out})
         if path.startswith("/lobby/"):
@@ -361,6 +386,7 @@ class Handler(BaseHTTPRequestHandler):
             lob.pop("token", None)
             lob["options"] = json.loads(lob.get("options") or "{}")
             lob["players_list"] = srv.store.players(code)
+            self._local_view(lob)
             return self._send(200, {"ok": True, "lobby": lob})
         return self._send(404, {"ok": False, "error": "no such endpoint"})
 
@@ -384,7 +410,71 @@ class Handler(BaseHTTPRequestHandler):
             return self._heartbeat(body, now)
         if path == "/remove":
             return self._remove(body)
+        if path == "/punch":
+            return self._punch(body, now)
+        if path == "/poll":
+            return self._poll(body, now)
         return self._send(404, {"ok": False, "error": "no such endpoint"})
+
+    # -- docs/400: the introduction that opens two routers for each other --
+    #
+    # A joiner's /punch names its public UDP port (from STUN); its address is
+    # the one this server sees, never one it names, so a host can only be
+    # pointed back at whoever asked. The host's /poll, every 2 s while it
+    # waits, collects them. Anyone whose address equals the host's is behind
+    # the same router and is given the LAN pair instead. All of it is kept in
+    # memory for 30 s: nothing is written to the database.
+
+    def _local_view(self, lob):
+        lan = self.server.lan.get(lob.get("code"))
+        if lan and self._same_router(lob, lan[2]):
+            lob["address"], lob["port"] = lan[0], lan[1]
+
+    def _same_router(self, lob, host_seen):
+        # Behind the host's router: the same public address, or -- for a
+        # server on a home network, which sees its own network's machines by
+        # their private addresses -- both on that network.
+        if self.peer == lob.get("address"):
+            return True
+        return is_local(self.peer) and is_local(host_seen)
+
+    def _punch(self, body, now):
+        srv = self.server
+        code = str(body.get("code") or "").upper()
+        lob = srv.store.lobby(code)
+        if not lob:
+            return self._send(404, {"ok": False, "error": "unknown lobby"})
+        port = lan_port(body.get("port"))
+        if not port:
+            return self._send(400, {"ok": False, "error": "port out of range"})
+        entry = (self.peer, port)
+        la, lp = lan_address(body.get("lan_address")), lan_port(body.get("lan_port"))
+        host_lan = srv.lan.get(code)
+        if la and lp and self._same_router(lob, host_lan[2] if host_lan else ""):
+            entry = (la, lp)
+        with srv.lock:
+            keep = [p for p in srv.punches.get(code, [])
+                    if now - p[2] < 30 and (p[0], p[1]) != entry]
+            keep.append((entry[0], entry[1], now))
+            srv.punches[code] = keep[-8:]
+        srv.log("PUNCH", "%s  a player at %s:%d wants in" % (code, entry[0], entry[1]))
+        return self._send(200, {"ok": True})
+
+    def _poll(self, body, now):
+        srv = self.server
+        code = str(body.get("code") or "").upper()
+        token = str(body.get("token") or "")
+        lob = srv.store.lobby(code)
+        if not lob or not token or lob.get("token") != token:
+            return self._send(404, {"ok": False, "error": "unknown lobby"})
+        with srv.lock:
+            keep = [p for p in srv.punches.get(code, []) if now - p[2] < 30]
+            if keep:
+                srv.punches[code] = keep
+            else:
+                srv.punches.pop(code, None)
+        return self._send(200, {"ok": True,
+                                "punch": [{"address": a, "port": p} for a, p, _ in keep]})
 
     def _announce(self, body, now):
         srv = self.server
@@ -423,6 +513,13 @@ class Handler(BaseHTTPRequestHandler):
             "options": body.get("options") or {},
         }
         srv.store.announce(code, token, fields, now)
+        # docs/400: the host's LAN pair, for players behind its router.
+        la, lp = lan_address(body.get("lan_address")), lan_port(body.get("lan_port"))
+        with srv.lock:
+            if la and lp:
+                srv.lan[code] = (la, lp, self.peer)
+            else:
+                srv.lan.pop(code, None)
         if isinstance(body.get("players_list"), list):
             srv.store.set_players(code, body["players_list"][:maxp])
         srv.log("ANNOUNCE", "%s  %s hosted by %s at %s:%d  (%d/%d)"
@@ -466,6 +563,10 @@ class MasterServer(ThreadingHTTPServer):
         self.log = log
         self.max_players = max_players
         self._last_sweep = 0.0
+        # docs/400: in memory only.
+        self.lock = threading.Lock()
+        self.lan = {}        # code -> (lan_address, lan_port)
+        self.punches = {}    # code -> [(address, port, when)]
 
     def sweep(self, now):
         """Expire stale advertisements, at most once a second."""

@@ -1186,9 +1186,21 @@ static void lb_hud_scan_boxes(int output_width, int output_height, int band,
         if (!nds_gpu3d_render_polygon(i, &p)) continue;
         // A command icon (z 502, depth 4,275,712) punches its own hole and is
         // never moved; see g_refog.
+        //
+        // docs/403: NOT ONE OUT IN THE BAND. The cartridge clamps an icon's
+        // cells to its own 32x24, so a placement checkmark beside a site in
+        // the left band (native x -12..4) still marks column 0 -- a hole in
+        // the native columns with nothing over it, which this keep-hole
+        // preserved (run t403pv3: the footprint's one missing cell, beside
+        // the checkmark). An icon whose centre is outside the native screen
+        // is drawn in the band and needs no native hole.
+        const int icx = ((int)p.min_x + (int)p.max_x) / 2 - list_x;
+        const int icy = ((int)p.min_y + (int)p.max_y) / 2 - list_y;
+        // And the edge cells its clamped mark punched have nothing over them.
         if (p.min_z == 4275712u)
-            mark_ui_cells(g_keephole, (int)p.min_x - list_x,
-                          (int)p.min_y - list_y,
+            mark_ui_cells((icx >= 0 && icx < 256 && icy >= 0 && icy < 192)
+                              ? g_keephole : g_refog,
+                          (int)p.min_x - list_x, (int)p.min_y - list_y,
                           (int)p.max_x - (int)p.min_x,
                           (int)p.max_y - (int)p.min_y);
         if (p.min_z >= zmax) {                      // world geometry
@@ -1351,7 +1363,23 @@ static void lb_hud_scan_boxes(int output_width, int output_height, int band,
             }
             const int ex0 = x0 - extra, ex1 = x1 - extra;
             const int ey0 = y0 - extra_y, ey1 = y1 - extra_y;
-            if (!(ex0 <= kEdgeSlack && ex1 < 256 - kEdgeSlack)) continue;
+            if (ex0 > kEdgeSlack) continue;
+            // docs/402: A LONG LIST STILL HAS ITS COLUMN. With a builder's
+            // eleven buildings open (Pirate), the brick column and its row
+            // reach the right native edge too, and an element against both
+            // edges was declined here and below -- so the whole drawer stayed
+            // at its native place in the band (right of the window's centre
+            // near a map edge, in a reported screenshot) and the items in flight
+            // had no column to follow. An element that holds the column -- a
+            // narrow quad against the left edge -- is the drawer whatever its
+            // width. A full-width banner has no such quad.
+            if (ex1 >= 256 - kEdgeSlack) {
+                bool column = false;
+                for (int i = 0; i < qn && !column; ++i)
+                    column = find(i) == r && q[i].sx0 - extra <= kEdgeSlack &&
+                             q[i].sx1 - q[i].sx0 <= 24;
+                if (!column) continue;
+            }
             if ((ey0 + ey1) / 2 >= 96 || ey1 - ey0 < 24) continue;
             if (dr_root >= 0 && ey1 - ey0 <= dr_ny1 - dr_ny0) continue;
             dr_root = r;
@@ -1377,7 +1405,12 @@ static void lb_hud_scan_boxes(int output_width, int output_height, int band,
     auto drawer_piece = [&](int root, int nx0, int nx1, int ny0,
                             int ny1) -> bool {
         if (dr_root < 0 || root == dr_root) return false;
-        if (nx0 <= kEdgeSlack || nx1 - nx0 > 48 || ny1 - ny0 > 26) return false;
+        // docs/402: one ROW of items, not one item. Items in flight that
+        // touch merge into one element (three blue commands at 96 px in the
+        // reported screenshot), which the old 48 px limit sent off on its own
+        // to the opposite corner. The texture and row tests below are what
+        // keep other HUD elements out.
+        if (nx0 <= kEdgeSlack || nx1 - nx0 > 240 || ny1 - ny0 > 26) return false;
         if (ny0 < dr_ny0 - 1 || ny1 > dr_ny1 + 25) return false;
         bool shares = false;
         for (int i = 0; i < qn; ++i) {
@@ -1604,6 +1637,10 @@ static void lb_hud_scan_boxes(int output_width, int output_height, int band,
             dx = dr_dx;
             dy = dr_dy;
         }
+        // docs/402: and a drawer whose list reaches the right edge is still
+        // anchored by its column, on the left. Only this case changes: an
+        // element against one edge already got the same dx above.
+        if (root == dr_root && at_left && at_right) dx = dr_dx;
         // A WIDE CENTRED ELEMENT STRETCHES INSTEAD OF MOVING.
         //
         // The two tests above have both declined horizontally -- the element
