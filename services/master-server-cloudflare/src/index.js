@@ -1,10 +1,14 @@
 // The LEGO Battles master server, as a Cloudflare Worker.
 //
-// A DIRECTORY, NOT A RELAY -- the same service as services/master-server's
-// Python one, with the same endpoints, field names, 90 s TTL and room-code
-// alphabet, so the port's client (port/runner/src/lb_net.cpp) talks to either.
-// Hosts advertise a lobby; clients ask for the list and get addresses back.
-// No game traffic passes through here.
+// A DIRECTORY -- the same service as services/master-server's Python one,
+// with the same endpoints, field names, 90 s TTL and room-code alphabet, so
+// the port's client (port/runner/src/lb_net.cpp) talks to either. Hosts
+// advertise a lobby; clients ask for the list and get addresses back. Game
+// traffic goes player to player -- except through the relay (src/relay.js,
+// docs/424), for the players the direct route cannot connect:
+//
+//   GET /relay/<code>?role=host|join   a WebSocket (the host's carries its
+//                                      token as X-Token or ?token=)
 //
 // What this one adds is the lobby's life after it is advertised, so that it can
 // be logged to Discord (src/discord.js):
@@ -78,10 +82,36 @@ function lanPort(v) {
 
 // ---------------------------------------------------------------- Worker ----
 
+export { RelayRoom } from './relay.js';
+
+// docs/424: the relay's front door. A host proves it owns the lobby with its
+// token; a joiner only needs the lobby to be open. Then the WebSocket goes to
+// the lobby's own room (src/relay.js).
+async function relay(request, env, code) {
+  if ((request.headers.get('Upgrade') || '').toLowerCase() !== 'websocket')
+    return json(426, { ok: false, error: 'expected a WebSocket upgrade' });
+  if (!env.RELAY) return json(503, { ok: false, error: 'relay not configured' });
+  const url = new URL(request.url);
+  const role = url.searchParams.get('role');
+  if (role !== 'host' && role !== 'join')
+    return json(400, { ok: false, error: 'role must be host or join' });
+  const dir = env.DIRECTORY.get(env.DIRECTORY.idFromName('directory'));
+  const token = request.headers.get('X-Token') || url.searchParams.get('token') || '';
+  const q = new URLSearchParams({ code, role, token });
+  const auth = await dir.fetch('https://directory/internal/relay-auth?' + q.toString());
+  if (auth.status !== 200) return auth;
+  return env.RELAY.get(env.RELAY.idFromName(code)).fetch(request);
+}
+
 export default {
   async fetch(request, env) {
     if (request.method !== 'GET' && request.method !== 'POST')
       return json(405, { ok: false, error: 'GET or POST' });
+    const path = new URL(request.url).pathname;
+    const m = /^\/relay\/([0-9A-Za-z]{1,8})\/?$/.exec(path);
+    if (m && request.method === 'GET') return relay(request, env, m[1].toUpperCase());
+    // Only the Worker itself asks the Directory these.
+    if (path.startsWith('/internal/')) return json(404, { ok: false, error: 'no such endpoint' });
     const stub = env.DIRECTORY.get(env.DIRECTORY.idFromName('directory'));
     return stub.fetch(request);
   },
@@ -196,8 +226,22 @@ export class Directory extends DurableObject {
 
     if (request.method === 'GET') {
       if (path === '/' || path === '/health')
-        return json(200, { ok: true, service: 'legobattles-master',
+        return json(200, { ok: true, service: 'legobattles-master', relay: !!this.env.RELAY,
                            lobbies: [...this.lobbies.values()].filter((l) => l.state === 'open').length });
+      // docs/424: the relay's check, from the Worker only (it refuses
+      // /internal/ from outside). A joiner may join a lobby that is open or
+      // starting -- its match may begin while the relay is opening.
+      if (path === '/internal/relay-auth') {
+        const l = this.lobbies.get(String(url.searchParams.get('code') || '').toUpperCase());
+        if (!l) return json(404, { ok: false, error: 'no such lobby' });
+        if (url.searchParams.get('role') === 'host') {
+          if (l.token !== String(url.searchParams.get('token') || ''))
+            return json(401, { ok: false, error: 'unauthorized' });
+        } else if (l.state === 'playing') {
+          return json(404, { ok: false, error: 'that match has started' });
+        }
+        return json(200, { ok: true });
+      }
       if (path === '/list')
         return json(200, { ok: true, lobbies: [...this.lobbies.values()]
           .filter((l) => l.state === 'open')

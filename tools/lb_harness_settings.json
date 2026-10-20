@@ -17,5 +17,7 @@
   "music_mode": 2,
   "master_host": "127.0.0.1",
   "master_port": 28555,
+  "master_both": false,
+  "master_choice": true,
   "player_name": "Player"
 }

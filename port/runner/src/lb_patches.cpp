@@ -77,6 +77,28 @@ void lb_kill_test_run_if_armed(void);
 // down, read by the drag-select guard inside the namespace (docs/344).
 extern int g_ext_touch_y;
 
+// docs/423: the host-level WH's overrides (lb_vwh.cpp), and the return
+// they end with. C linkage, because both sides sit in anonymous namespaces.
+extern "C" {
+void vwh_start_scan_override(void);
+void vwh_end_scan_override(void);
+void vwh_measure_override(void);
+void vwh_initialize_override(void);
+void vwh_parent_connect_override(void);
+void vwh_child_connect_override(void);
+void vwh_shared_override(void);
+void vwh_step_override(void);
+void vwh_reset_override(void);
+void vwh_finalize_override(void);
+void vwh_end_override(void);
+void wm_connected_override(void);
+void wm_link_override(void);
+void wm_game_info_override(void);
+void wm_set_entry_override(void);
+void lb_vwh_tick(void);
+bool lb_vwh_override_return(void);
+}
+
 namespace {
 
 // ── RETRACTED: func_020872DC is NOT a hotwire function ────────────────
@@ -4844,6 +4866,15 @@ void mod_names_tick(void) {
 // +0x20) is cleared, and the game's one toggle for it (FUN_020B6074, the Ready
 // and Not Ready buttons and the tick box) is turned back into "not ready".
 constexpr uint32_t kLobbyPacket = 0x020F5168u;   // ARM
+// docs/423: the host-level WH (lb_vwh.cpp). All ARM.
+constexpr uint32_t kWhStartScan = 0x020F3324u, kWhEndScan = 0x020F3690u,
+                   kWhMeasure = 0x020F3DACu, kWhInitialize = 0x020F40D8u,
+                   kWhParentConnect = 0x020F4254u, kWhChildConnect = 0x020F4340u,
+                   kWhShared = 0x020F43D4u, kWhStep = 0x020F43F4u,
+                   kWhReset = 0x020F4448u, kWhFinalize = 0x020F4490u,
+                   kWhEnd = 0x020F4598u, kWmConnectedAids = 0x02118628u,
+                   kWmLinkLevel = 0x021188C4u, kWmSetGameInfo = 0x0211A084u,
+                   kWmSetEntry = 0x0211A1B4u;
 constexpr uint32_t kReadyToggle = 0x020B6074u;   // thumb
 constexpr uint32_t kLocalLobbyByte = 0x0215B804u;
 constexpr uint32_t kModNameBase = 0xBF8u;        // the literal at 0x0203E0F8
@@ -5217,8 +5248,27 @@ const NdsDispatchEntry kOverrideTable[] = {
     /* ARM. Steady pacing: NitroMain's two clock reads count VBlanks; every
        other call runs the cartridge's clock. docs/351. */
     {kGetMs, 0u, get_ms_override, nullptr},                /* 0x020F2648 */
+    /* ARM. The wireless helper (wh.c), answered by host code: online data
+       sharing as a lockstep pipeline, not a radio round trip per step.
+       LB_VWH=0 makes each a pure tail call. docs/423. */
+    {kWhStartScan, 0u, vwh_start_scan_override, nullptr},  /* 0x020F3324 */
+    {kWhEndScan, 0u, vwh_end_scan_override, nullptr},      /* 0x020F3690 */
+    {kWhMeasure, 0u, vwh_measure_override, nullptr},       /* 0x020F3DAC */
+    {kWhInitialize, 0u, vwh_initialize_override, nullptr}, /* 0x020F40D8 */
+    {kWhParentConnect, 0u, vwh_parent_connect_override, nullptr}, /* 0x020F4254 */
+    {kWhChildConnect, 0u, vwh_child_connect_override, nullptr},   /* 0x020F4340 */
+    {kWhShared, 0u, vwh_shared_override, nullptr},         /* 0x020F43D4 */
+    {kWhStep, 0u, vwh_step_override, nullptr},             /* 0x020F43F4 */
+    {kWhReset, 0u, vwh_reset_override, nullptr},           /* 0x020F4448 */
+    {kWhFinalize, 0u, vwh_finalize_override, nullptr},     /* 0x020F4490 */
+    {kWhEnd, 0u, vwh_end_override, nullptr},               /* 0x020F4598 */
     /* ARM. A mod map's lobby id, translated to this machine's copy; docs/413. */
     {kLobbyPacket, 0u, lobby_packet_override, nullptr},    /* 0x020F5168 */
+    /* ARM. The four WM calls the game makes past WH. docs/423. */
+    {kWmConnectedAids, 0u, wm_connected_override, nullptr}, /* 0x02118628 */
+    {kWmLinkLevel, 0u, wm_link_override, nullptr},         /* 0x021188C4 */
+    {kWmSetGameInfo, 0u, wm_game_info_override, nullptr},  /* 0x0211A084 */
+    {kWmSetEntry, 0u, wm_set_entry_override, nullptr},     /* 0x0211A1B4 */
     /* ARM. Byte fill and copy into the null page: named and declined.
        docs/369 (the combat crash). */
     /* ARM. GRADED, NOT PATCHED. The signed divide every `/` and `%` in the
@@ -5259,7 +5309,16 @@ static_assert(kRosterBuild < kRegistryFind &&
               kSelRect < kMarkerPlace && kMarkerPlace < kWidgetRect &&
               kWidgetRect < kWidgetSetPos && kWidgetSetPos < kSplitArray &&
               kSplitArray < kGetMs &&
-              kGetMs < kLobbyPacket && kLobbyPacket < kFAdd &&
+              kGetMs < kWhStartScan && kWhStartScan < kWhEndScan &&
+              kWhEndScan < kWhMeasure && kWhMeasure < kWhInitialize &&
+              kWhInitialize < kWhParentConnect &&
+              kWhParentConnect < kWhChildConnect &&
+              kWhChildConnect < kWhShared && kWhShared < kWhStep &&
+              kWhStep < kWhReset && kWhReset < kWhFinalize &&
+              kWhFinalize < kWhEnd && kWhEnd < kLobbyPacket &&
+              kLobbyPacket < kWmConnectedAids &&
+              kWmConnectedAids < kWmLinkLevel && kWmLinkLevel < kWmSetGameInfo &&
+              kWmSetGameInfo < kWmSetEntry && kWmSetEntry < kFAdd &&
               kFAdd < kFMul && kFMul < kFSub && kFSub < kDivMod &&
               kSetOwner < kU16IsSet && kU16IsSet < kSetHp &&
               kSetHp < kListFind && kListFind < kApplyDamage,
@@ -6234,6 +6293,11 @@ static void apply_camera_view_size(void) {
         if (max_tx >= min_tx && max_ty >= min_ty) {
             world_w = (max_tx - min_tx + 1) * 24;
             world_h = (max_ty - min_ty + 1) * 16;
+            if (world_w != g_world_w || world_h != g_world_h) {
+                std::fprintf(stderr, "[lb_world] extent %dx%d (camera object %08X)\n",
+                             world_w, world_h, cam_obj);
+                std::fflush(stderr);
+            }
             g_world_w = world_w;
             g_world_h = world_h;
             if (gw > world_w) gw = world_w;
@@ -12009,6 +12073,7 @@ extern "C" void lb_patches_on_vblank(void) {
     // Make the Music mode actually choose the music.
     // A no-op in Vanilla, which is the default and the "off" position.
     lb_music_tick();
+    lb_vwh_tick();              // docs/423: the host-level WH's deliveries
     lb_teams_portrait_tick();   // docs/390: the Custom/Random portrait records
     opponent_open_portrait_tick();   // docs/393: and the opening choice's
     mod_names_tick();           // docs/391: the mod maps' names
@@ -12318,3 +12383,6 @@ extern "C" void lsw2_register_dispatch_overrides(const char* rom_sha1) {
                  "title banks\n",
                  kOverrideCount);
 }
+
+// docs/423: lb_override_return, for lb_vwh.cpp.
+extern "C" bool lb_vwh_override_return(void) { return lb_override_return(); }

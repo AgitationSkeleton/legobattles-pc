@@ -320,10 +320,15 @@ struct Settings {
     // Python one (services/master-server) still works: 127.0.0.1, 28555.
     char master_host[128] = "lbserver.viosarcade.xyz";
     // docs/419: list on and browse both known servers; and HTTPS first.
-    bool master_both = false;
+    // docs/424: Both is the default.
+    bool master_both = true;
+    // docs/424: set once a person picks a server in the menu; until then a
+    // file on the default server is moved to Both (it was the old default).
+    bool master_choice = false;
     bool master_https = true;
     // docs/420: a lobby's mod map this machine lacks is fetched from the archive.
     bool fetch_maps = true;
+    bool fast_link = true;      // docs/423: the host-level WH
     int  master_port = 80;
     char player_name[32] = "Player";
     // The multiplayer player name is derived from the save file's name. On,
@@ -610,10 +615,14 @@ extern "C" void lb_settings_save(void) {
     json_put_str(o, "master_host", g_set.master_host, true);
     std::snprintf(buf, sizeof buf, "  \"master_both\": %s,\n",
                   g_set.master_both ? "true" : "false"); o += buf;   // docs/419
+    std::snprintf(buf, sizeof buf, "  \"master_choice\": %s,\n",
+                  g_set.master_choice ? "true" : "false"); o += buf;   // docs/424
     std::snprintf(buf, sizeof buf, "  \"master_https\": %s,\n",
                   g_set.master_https ? "true" : "false"); o += buf;   // docs/419
     std::snprintf(buf, sizeof buf, "  \"fetch_maps\": %s,\n",
                   g_set.fetch_maps ? "true" : "false"); o += buf;   // docs/420
+    std::snprintf(buf, sizeof buf, "  \"fast_link\": %s,\n",
+                  g_set.fast_link ? "true" : "false"); o += buf;    // docs/423
     std::snprintf(buf, sizeof buf, "  \"master_port\": %d,\n",
                   g_set.master_port); o += buf;
     // docs/404: the Balance tab's values, "record:field=value,...".
@@ -711,8 +720,10 @@ extern "C" void lb_settings_load(void) {
     json_get_int(s, "default_opponent", &g_set.default_opponent);   // docs/392
     json_get_str(s, "master_host", g_set.master_host, sizeof g_set.master_host);
     json_get_bool(s, "master_both", &g_set.master_both);     // docs/419
+    json_get_bool(s, "master_choice", &g_set.master_choice); // docs/424
     json_get_bool(s, "master_https", &g_set.master_https);   // docs/419
     json_get_bool(s, "fetch_maps", &g_set.fetch_maps);       // docs/420
+    json_get_bool(s, "fast_link", &g_set.fast_link);         // docs/423
     json_get_int(s, "master_port", &g_set.master_port);
     // docs/394: a file that still holds the OLD default (the local Python
     // server, which every build wrote before there was a public one) moves to
@@ -723,6 +734,11 @@ extern "C" void lb_settings_load(void) {
                       "lbserver.viosarcade.xyz");
         g_set.master_port = 80;
     }
+    // docs/424: Both became the default. A file nobody chose a server in,
+    // still on the default server, follows it; a person's choice is kept.
+    if (!g_set.master_choice && g_set.master_port == 80 &&
+        std::strcmp(g_set.master_host, "lbserver.viosarcade.xyz") == 0)
+        g_set.master_both = true;
     json_get_str(s, "player_name", g_set.player_name, sizeof g_set.player_name);
     {   // docs/404
         static char bal[32768];
@@ -1801,7 +1817,7 @@ void tab_multiplayer() {
     {
         struct Known { const char* label; const char* host; int port; };
         static const Known kKnown[] = {
-            {"lbserver.viosarcade.xyz (default)", "lbserver.viosarcade.xyz", 80},
+            {"lbserver.viosarcade.xyz", "lbserver.viosarcade.xyz", 80},
             {"king.legobattles.win", "king.legobattles.win", 28555},
         };
         const int nk = (int)(sizeof kKnown / sizeof kKnown[0]);
@@ -1814,7 +1830,7 @@ void tab_multiplayer() {
         if (cur < nk) custom_open = false;
         // docs/419: "Both" is the first server with the second beside it.
         const bool both = g_set.master_both && cur == 0 && !custom_open;
-        const char* shown = both ? "Both"
+        const char* shown = both ? "Both (default)"
                           : (cur < nk && !custom_open) ? kKnown[cur].label : "Custom";
         if (ImGui::BeginCombo("Master server", shown)) {
             for (int i = 0; i < nk; ++i)
@@ -1823,18 +1839,21 @@ void tab_multiplayer() {
                                   "%s", kKnown[i].host);
                     g_set.master_port = kKnown[i].port;
                     g_set.master_both = false;
+                    g_set.master_choice = true;   // docs/424
                     custom_open = false;
                 }
-            if (ImGui::Selectable("Both", both)) {
+            if (ImGui::Selectable("Both (default)", both)) {
                 std::snprintf(g_set.master_host, sizeof g_set.master_host, "%s",
                               kKnown[0].host);
                 g_set.master_port = kKnown[0].port;
                 g_set.master_both = true;
+                g_set.master_choice = true;   // docs/424
                 custom_open = false;
             }
             if (ImGui::Selectable("Custom", (cur == nk || custom_open) && !both)) {
                 custom_open = true;
                 g_set.master_both = false;
+                g_set.master_choice = true;   // docs/424
             }
             ImGui::EndCombo();
         }
@@ -1858,6 +1877,12 @@ void tab_multiplayer() {
         help("When a host picks a mod map that is not in your mods folder,\n"
              "look for it by name in the community map archive (GitHub) and\n"
              "put it in mods/maps/_archive. Restart the game to use it.");
+        ImGui::Checkbox("Fast online link", &g_set.fast_link);
+        help("Carries the game's wireless traffic in a pipeline instead of\n"
+             "one network round trip per step, so an online match keeps\n"
+             "its frame rate. Every player in a game needs the same\n"
+             "setting; it takes effect the next time you host or join.\n"
+             "Off is the original DS wireless protocol.");
     }
 
     ImGui::Separator();
@@ -1930,6 +1955,11 @@ void tab_multiplayer() {
     badge(WIRED);
     if (const char* u = lb_net_upnp_text())
         if (*u) ImGui::TextDisabled("  %s", u);
+    {   // docs/424: the master server's relay, for when nothing else connects
+        char r[160];
+        if (lb_relay_status(r, (int)sizeof r) > 0 && std::strcmp(r, "off") != 0)
+            ImGui::TextDisabled("  Relay: %s", r);
+    }
     ImGui::Checkbox("Game's Join screen uses the master server",
                     &g_set.auto_browse);
     help("While the game's Join screen is open the list is fetched every\n"
@@ -5544,6 +5574,17 @@ extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
                          bad ? "  <-- MISMATCH" : "");
         }
 
+        // docs/424: LB_MASTER=host:port, a test aid -- this run's master
+        // server alone (a local `wrangler dev`, say), never the public ones.
+        if (const char* x = std::getenv("LB_MASTER")) {
+            if (const char* c = std::strchr(x, ':')) {
+                std::snprintf(g_set.master_host, sizeof g_set.master_host, "%.*s",
+                              (int)(c - x), x);
+                g_set.master_port = std::atoi(c + 1);
+                g_set.master_both = false;
+                g_set.master_https = false;
+            }
+        }
         // docs/419: LB_EXTRA_SERVER is in place before the self-test runs.
         if (const char* x = std::getenv("LB_EXTRA_SERVER")) {
             if (const char* c = std::strchr(x, ':')) {
@@ -6034,7 +6075,18 @@ extern "C" void lb_request_game_reset(void) {
     if (lb_demo_playing()) return;
     g_reset_req.store(1);
 }
-extern "C" int lb_take_game_reset(void) { return g_reset_req.exchange(0); }
+extern "C" int lb_take_game_reset(void) {
+    // LB_TEST_RESET_AT=<seconds>: the menu's Reset, pressed once at that
+    // many seconds after start. Test aid only.
+    static const char* at = std::getenv("LB_TEST_RESET_AT");
+    static bool fired = false;
+    if (at && !fired && SDL_GetTicks64() >= (unsigned long long)std::atoi(at) * 1000ull) {
+        fired = true;
+        std::fprintf(stderr, "[lb_reset] test aid: Reset pressed\n");
+        lb_request_game_reset();
+    }
+    return g_reset_req.exchange(0);
+}
 
 // docs/396: the multiplayer name lb_patches.cpp writes into the game's
 // lobby copies -- the typed one, when "Use the save's profile name" is off;
@@ -6101,6 +6153,7 @@ extern "C" int lb_setting_swear_filter(void) {
 }
 extern "C" int lb_setting_chat_toasts(void) { return g_set.chat_toasts ? 1 : 0; }
 extern "C" int lb_setting_fetch_maps(void) { return g_set.fetch_maps ? 1 : 0; }   // docs/420
+extern "C" int lb_setting_fast_link(void) { return g_set.fast_link ? 1 : 0; }     // docs/423
 // docs/419. LB_MASTER_HTTPS=0|1 forces it (a test aid).
 extern "C" int lb_setting_master_https(void) {
     static int forced = -2;

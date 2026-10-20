@@ -7481,6 +7481,10 @@ def apply(runner_dir, imgui_dir):
           "src/lb_https.cpp",
           # A host's mod map from the community archive (docs/420).
           "src/lb_mapfetch.cpp",
+          # The host-level WH: smooth online play (docs/423).
+          "src/lb_vwh.cpp",
+          # The master server's relay (docs/424), for <winsock2.h>.
+          "src/lb_relay.cpp",
           # The first-run setup (docs/394).
           "src/lb_setup.cpp",
           "%s/imgui.cpp" % imgui,
@@ -10123,6 +10127,185 @@ def apply(runner_dir, imgui_dir):
             "            }\n"
             "            if (ReadLe32(datagram + 8u) == kLbRules) {\n")
     done.append("wifi_net.cpp: online chat travels between players (docs/415)")
+
+    # 0zzzzzzzzzzzzz-423. THE HOST-LEVEL WH. Host code answers the game's
+    # wireless helper (lb_vwh.cpp), and its datagrams ride this socket as a
+    # type of their own, like chat: lb_vwh queues them and the drain sends
+    # them; a received one goes to lb_vwh, never to the guest. The radio is
+    # never powered on then, so nothing calls MP_Begin: the pump opens the
+    # socket itself, with whatever peer lb_net asked for.
+    wifi_423 = os.path.join(runner_dir, "src", "wifi_net.cpp")
+    replace(wifi_423,
+            "/* legobattles-decomp (docs/415): online chat. */\n",
+            "/* legobattles-decomp (docs/423): the host-level WH. */\n"
+            "extern \"C\" int lb_vwh_outgoing(unsigned char* buf, int cap);\n"
+            "extern \"C\" void lb_vwh_incoming(const unsigned char* buf, int len,\n"
+            "                                unsigned int sender);\n"
+            "/* legobattles-decomp (docs/415): online chat. */\n")
+    replace(wifi_423,
+            "    static constexpr uint32_t kLbChat = 0x4C424348u;   /* LBCH */\n",
+            "    static constexpr uint32_t kLbChat = 0x4C424348u;   /* LBCH */\n"
+            "    /* docs/423: the host-level WH's datagrams. */\n"
+            "    static constexpr uint32_t kLbVwh = 0x4C425657u;    /* LBVW */\n"
+            "    void LbSendVwh() {\n"
+            "        uint8_t buf[1400];\n"
+            "        for (int k = 0; k < 16; ++k) {\n"
+            "            const int n = lb_vwh_outgoing(buf, (int)sizeof buf);\n"
+            "            if (n <= 0) break;\n"
+            "            SendGeneric(kLbVwh, buf, n, 0u);\n"
+            "        }\n"
+            "    }\n")
+    replace(wifi_423,
+            "        LbSendChat();     /* docs/415 */\n",
+            "        LbSendChat();     /* docs/415 */\n"
+            "        LbSendVwh();      /* docs/423 */\n")
+    replace(wifi_423,
+            "            if (ReadLe32(datagram + 8u) == kLbChat) {\n",
+            "            /* docs/423: the host-level WH's own, never the guest's. */\n"
+            "            if (ReadLe32(datagram + 8u) == kLbVwh) {\n"
+            "                const uint32_t vlen = ReadLe32(datagram + 12u);\n"
+            "                if (kHeaderBytes + vlen == static_cast<uint32_t>(got))\n"
+            "                    lb_vwh_incoming(datagram + kHeaderBytes,\n"
+            "                                    static_cast<int>(vlen),\n"
+            "                                    ReadLe32(datagram + 4u));\n"
+            "                continue;\n"
+            "            }\n"
+            "            if (ReadLe32(datagram + 8u) == kLbChat) {\n")
+    replace(wifi_423,
+            "    bool LbEnabled() const { return enabled_; }\n",
+            "    bool LbEnabled() const { return enabled_; }\n"
+            "    /* docs/423: the host-level WH drives the socket itself. */\n"
+            "    bool LbOpen() const {\n"
+            "#ifdef _WIN32\n"
+            "        return socket_ != INVALID_SOCKET;\n"
+            "#else\n"
+            "        return false;\n"
+            "#endif\n"
+            "    }\n"
+            "    void LbPump() {\n"
+            "        if (!enabled_) return;\n"
+            "        if (!LbOpen()) Begin();\n"
+            "        DrainSocket();\n"
+            "    }\n")
+    replace(wifi_423,
+            "extern \"C\" int nds_local_wireless_peer(uint32_t* ip_be,\n",
+            "/* docs/423: send and receive now, for the host-level WH; opens the\n"
+            "   socket (with any peer asked for before the bridge existed) when\n"
+            "   the radio, never powered, has not. */\n"
+            "extern \"C\" void nds_local_wireless_pump(void) {\n"
+            "    if (!g_bridge) return;\n"
+            "    if (!g_bridge->local_mp.LbOpen() && g_lb_pending_valid) {\n"
+            "        g_bridge->local_mp.LbSetListen(g_lb_pending_listen);\n"
+            "        if (g_lb_pending_peer_ip)\n"
+            "            g_bridge->local_mp.LbSetPeer(g_lb_pending_peer_ip,\n"
+            "                                         g_lb_pending_peer_port);\n"
+            "    }\n"
+            "    g_bridge->local_mp.LbPump();\n"
+            "}\n"
+            "\n"
+            "extern \"C\" int nds_local_wireless_peer(uint32_t* ip_be,\n")
+    done.append("wifi_net.cpp: the host-level WH's datagrams and pump (docs/423)")
+
+    # 0zzzzzzzzzzzzz-424. THE RELAY. For players the direct UDP route cannot
+    # connect (a VPN, symmetric or carrier-grade NAT), the master server's
+    # relay carries the same datagrams (lb_relay.cpp): every datagram this
+    # transport sends also goes to lb_relay_send while the relay is in use, a
+    # relayed one is read before the socket and handled as if it had arrived,
+    # and a joiner on the relay leaves the direct route alone, so nothing
+    # arrives twice. A relayed datagram never teaches the host a peer address
+    # and never counts as direct traffic (lb_net watches that count to decide
+    # when to try the relay).
+    wifi_424 = os.path.join(runner_dir, "src", "wifi_net.cpp")
+    replace(wifi_424,
+            "/* legobattles-decomp (docs/423): the host-level WH. */\n",
+            "/* legobattles-decomp (docs/424): the master server's relay. */\n"
+            "extern \"C\" int lb_relay_active(void);\n"
+            "extern \"C\" int lb_relay_direct_off(void);\n"
+            "extern \"C\" void lb_relay_send(const unsigned char* d, int n);\n"
+            "extern \"C\" void lb_relay_flush(void);\n"
+            "extern \"C\" int lb_relay_recv(unsigned char* buf, int cap);\n"
+            "/* legobattles-decomp (docs/423): the host-level WH. */\n")
+    replace(wifi_424,
+            "        if (lb_peer_ip_ != 0u && lb_peer_port_ != 0u &&\n"
+            "            !(lb_peer_ip_ == htonl(INADDR_LOOPBACK) &&\n",
+            "        if (lb_peer_ip_ != 0u && lb_peer_port_ != 0u &&\n"
+            "            !lb_relay_direct_off() &&   /* docs/424 */\n"
+            "            !(lb_peer_ip_ == htonl(INADDR_LOOPBACK) &&\n")
+    replace(wifi_424,
+            "        LbCount(sent, 0);   /* legobattles-decomp */\n"
+            "        return sent;\n",
+            "        /* docs/424: and to the relay, while it carries someone. */\n"
+            "        if (lb_relay_active()) {\n"
+            "            lb_relay_send(datagram.data(), static_cast<int>(datagram.size()));\n"
+            "            sent = len;\n"
+            "        }\n"
+            "        LbCount(sent, 0);   /* legobattles-decomp */\n"
+            "        return sent;\n")
+    replace(wifi_424,
+            "        LbNatTick();      /* docs/400 */\n",
+            "        LbNatTick();      /* docs/400 */\n"
+            "        lb_relay_flush(); /* docs/424: what the sends above gathered */\n")
+    replace(wifi_424,
+            "            const int got = ::recvfrom(\n"
+            "                socket_, reinterpret_cast<char*>(datagram), sizeof(datagram),\n"
+            "                0, reinterpret_cast<sockaddr*>(&from), &from_len);\n"
+            "            if (got == SOCKET_ERROR) {\n"
+            "                const int err = WSAGetLastError();\n"
+            "                if (err != WSAEWOULDBLOCK && err != WSAECONNRESET) {\n"
+            "                    melonDS::Platform::Log(melonDS::Platform::Warn,\n"
+            "                        \"[local_mp] recvfrom failed: %d\\n\", err);\n"
+            "                }\n"
+            "                return;\n"
+            "            }\n"
+            "            if (LbStunAnswer(datagram, got)) continue;   /* docs/400 */\n",
+            "            /* docs/424: the relay's datagrams first, as if received. */\n"
+            "            int got = lb_relay_recv(datagram, static_cast<int>(sizeof(datagram)));\n"
+            "            const bool lb_relayed = got > 0;\n"
+            "            if (!lb_relayed) {\n"
+            "            got = ::recvfrom(\n"
+            "                socket_, reinterpret_cast<char*>(datagram), sizeof(datagram),\n"
+            "                0, reinterpret_cast<sockaddr*>(&from), &from_len);\n"
+            "            if (got == SOCKET_ERROR) {\n"
+            "                const int err = WSAGetLastError();\n"
+            "                if (err != WSAEWOULDBLOCK && err != WSAECONNRESET) {\n"
+            "                    melonDS::Platform::Log(melonDS::Platform::Warn,\n"
+            "                        \"[local_mp] recvfrom failed: %d\\n\", err);\n"
+            "                }\n"
+            "                return;\n"
+            "            }\n"
+            "            }\n"
+            "            if (!lb_relayed && LbStunAnswer(datagram, got)) continue;   /* docs/400 */\n")
+    replace(wifi_424,
+            "                const bool sibling =\n"
+            "                    from.sin_addr.s_addr == htonl(INADDR_LOOPBACK) &&\n"
+            "                    src_port >= base_port_ &&\n"
+            "                    src_port < base_port_ + kMaxInstances;\n"
+            "            if (!sibling) ++lb_remote_rx_;   /* docs/400 */\n"
+            "            if (lb_listen_ && lb_peer_ip_ == 0u && !sibling) {\n",
+            "                const bool sibling =\n"
+            "                    !lb_relayed &&\n"
+            "                    from.sin_addr.s_addr == htonl(INADDR_LOOPBACK) &&\n"
+            "                    src_port >= base_port_ &&\n"
+            "                    src_port < base_port_ + kMaxInstances;\n"
+            "            /* docs/424: the direct route left alone while on the relay. */\n"
+            "            if (!sibling && !lb_relayed && lb_relay_direct_off()) continue;\n"
+            "            if (!sibling && !lb_relayed) ++lb_remote_rx_;   /* docs/400 */\n"
+            "            if (lb_listen_ && lb_peer_ip_ == 0u && !sibling && !lb_relayed) {\n")
+    replace(wifi_424,
+            "    void LbHelloTo(uint32_t ip_be, uint16_t port) {\n"
+            "    #ifdef _WIN32\n",
+            "    void LbHelloTo(uint32_t ip_be, uint16_t port) {\n"
+            "        if (lb_relay_direct_off()) return;   /* docs/424 */\n"
+            "    #ifdef _WIN32\n")
+    replace(wifi_424,
+            "    void LbMaybeHello() {\n"
+            "#ifdef _WIN32\n"
+            "        if (!enabled_ || socket_ == INVALID_SOCKET) return;\n",
+            "    void LbMaybeHello() {\n"
+            "#ifdef _WIN32\n"
+            "        if (!enabled_ || socket_ == INVALID_SOCKET) return;\n"
+            "        if (lb_relay_direct_off()) return;   /* docs/424 */\n")
+    done.append("wifi_net.cpp: the master server's relay carries the datagrams (docs/424)")
 
     # Last, once every patch has been written: hold the mtime of any file whose
     # patched CONTENT is unchanged since the previous build, so make does not

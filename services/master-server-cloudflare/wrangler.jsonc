@@ -14,6 +14,11 @@
 			{
 				"name": "DIRECTORY",
 				"class_name": "Directory"
+			},
+			// docs/424: the relay, one room per lobby (src/relay.js).
+			{
+				"name": "RELAY",
+				"class_name": "RelayRoom"
 			}
 		]
 	},
@@ -22,6 +27,12 @@
 			"tag": "v1",
 			"new_sqlite_classes": [
 				"Directory"
+			]
+		},
+		{
+			"tag": "relay-v1",
+			"new_sqlite_classes": [
+				"RelayRoom"
 			]
 		}
 	],

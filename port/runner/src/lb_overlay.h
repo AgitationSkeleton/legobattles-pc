@@ -518,6 +518,8 @@ int  lb_setting_master_https(void);
 // when the setting allows; once per name per run.
 void lb_mapfetch_request(const char* name);
 int  lb_setting_fetch_maps(void);
+int  lb_setting_fast_link(void);      /* docs/423 */
+int  lb_relay_status(char* out, int cap);   /* lb_relay.cpp, docs/424 */
 // docs/413: a message for the player that the game's own screens cannot show,
 // drawn over the game whether or not the menu is open (lb_overlay.cpp).
 void lb_overlay_notice(const char* text);

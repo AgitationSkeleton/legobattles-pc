@@ -25,14 +25,14 @@ wheel zooms; Space or right-click deselects; Z/X/C/V are A/B/X/Y, Q/E are L/R,
 Enter is Start and Backspace Select (all rebindable). On the profile-name and
 cheat-code screens, just type.
 
-**Multiplayer** uses the game's own Multiplayer menu. Hosting advertises your
-lobby on the public lobby server (`lbserver.viosarcade.xyz`); the Join screen
-lists the lobbies there. When you host, the game asks your router to forward
-its port (UPnP; on by default, in the Multiplayer section), and the server
-introduces the two players so both routers let the game's traffic through, so
-most home networks need no manual port forwarding.
-The settings menu's Multiplayer section shows whether anything has arrived from
-the other player.
+**Multiplayer** uses the game's own Multiplayer menu.
+
+- **The lobby servers.** Hosting advertises your lobby on the public lobby servers: `lbserver.viosarcade.xyz` and, with the default setting Both, `king.legobattles.win` too. The Join screen lists the lobbies of both.
+- **Connecting.** When you host, the game asks your router to forward its port (UPnP; on by default, in the Multiplayer section). The server introduces the two players so both routers let the game's traffic through, so most home networks need no manual port forwarding.
+- **When no direct connection is possible.** Behind a VPN, carrier-grade NAT or a strict firewall, a joiner whose direct connection carries nothing for five seconds is connected through `lbserver.viosarcade.xyz`'s relay instead.
+- **Speed.** The "Fast online link" setting (on by default) keeps an online match at full speed by buffering a few steps instead of waiting a network round trip on every one. Every player in a match needs the same setting.
+
+The settings menu's Multiplayer section shows whether anything has arrived from the other player, and whether the relay is in use.
 
 **Saves:** your save is `saves\LEGO Battles.sav`, whatever your ROM file is
 called. A save from a cartridge or an emulator, of either region, imports from

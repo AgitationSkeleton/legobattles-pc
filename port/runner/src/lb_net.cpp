@@ -95,6 +95,9 @@ uint16_t g_manual_port = 0u;     // under g_mutex
 // The room code of the lobby the bridge was last pointed at, so a joiner can
 // tell the master server it is in that lobby (and leaving it). Under g_mutex.
 std::string g_peer_code;
+// docs/424: the server that listed that lobby, whose relay can reach it.
+std::string g_peer_server;
+int g_peer_sport = 0;
 
 // Winsock is already started by the runner before boot() -- it prints
 // "[wifi_net] Winsock initialized (WSAStartup 2.2)" -- so there is deliberately
@@ -506,6 +509,10 @@ namespace {
 // second server is tried only if the first never answered.
 std::atomic<bool> g_stun_asked{false};
 void request_stun() {
+    // docs/424: LB_NO_STUN=1, a test aid -- a host advertises the address the
+    // server sees, so two instances on one machine reach each other directly.
+    static const bool off = std::getenv("LB_NO_STUN") != nullptr;
+    if (off) return;
     if (g_stun_asked.exchange(true)) return;
     std::thread([]() {
         static const struct { const char* host; uint16_t port; } kStun[] = {
@@ -1237,6 +1244,8 @@ extern "C" void lb_net_join_by_code(const char* server, int port,
                         g_join_ip = ip;
                         g_join_port = (uint16_t)p;
                         g_peer_code = c;
+                        g_peer_server = s;      // docs/424
+                        g_peer_sport = port;
                     }
                     remember_manual_peer(ip, (uint16_t)p);
                     msg = peer_set_text(ip, p, addr.c_str());
@@ -1299,6 +1308,8 @@ extern "C" int lb_net_join_index(int index) {
             ls = g_lobby_srv[(size_t)index].first;
             lp = g_lobby_srv[(size_t)index].second;
         }
+        g_peer_server = ls;   // docs/424
+        g_peer_sport = lp;
     }
     post_punch(ls, lp, lobby.code);   // docs/400
     return 1;
@@ -1498,6 +1509,8 @@ void point_at_listed_host() {
     {
         std::lock_guard<std::mutex> lock(g_mutex);
         g_peer_code = code;
+        g_peer_server = via.first.empty() ? g_list_server : via.first;   // docs/424
+        g_peer_sport = via.first.empty() ? g_list_port : via.second;
     }
     uint32_t cur_ip = 0u;
     uint16_t cur_port = 0u;
@@ -1523,6 +1536,123 @@ void point_at_listed_host() {
         lp = via.second;
     }
     post_punch(ls, lp, code);   // docs/400
+}
+// ---- docs/424: the master server's relay --------------------------------
+//
+// A HOST opens its lobby's relay room once it is listed, and keeps it while
+// it hosts, so a player who cannot reach it directly can still join. A JOINER
+// uses the relay only when the direct route has carried nothing for 5 s since
+// the bridge was pointed at the lobby (LB_TEST_FORCE_RELAY: at once).
+//
+// The room is on the server that listed the lobby. With Both, a lobby from
+// the second server is looked up in the first server's list (same address and
+// port) for its code there, since the first is this port's own server.
+extern "C" void lb_relay_host_start(const char* server, int port, const char* code,
+                                    const char* token);
+extern "C" void lb_relay_join_start(const char* server, int port, const char* code);
+extern "C" void lb_relay_stop(void);
+extern "C" int lb_relay_role(void);
+extern "C" int lb_relay_forced(void);
+
+uint32_t    g_rw_ip = 0u;          // the peer being watched
+uint16_t    g_rw_port = 0u;
+long long   g_rw_at = 0;           // when it was set
+unsigned    g_rw_rx = 0u;          // direct datagrams received by then
+std::string g_rw_tried;            // the lobby the relay was last tried for
+long long   g_rw_idle_at = 0;      // a joiner's relay with nothing to carry since
+std::string g_rh_code;             // the lobby the host's room was opened for
+
+void relay_target(const std::string& primary, int primary_port, std::string* srv,
+                  int* sport, std::string* code) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    *code = g_peer_code;
+    *srv = g_peer_server;
+    *sport = g_peer_sport;
+    if (srv->empty() || *srv == primary) return;
+    // Listed by the other server: the same lobby in this server's list.
+    const char* addr = nullptr;
+    int lport = 0;
+    for (size_t i = 0; i < g_lobbies.size(); ++i)
+        if (*code == g_lobbies[i].code && i < g_lobby_srv.size() &&
+            g_lobby_srv[i].first == *srv) {
+            addr = g_lobbies[i].address;
+            lport = g_lobbies[i].port;
+        }
+    if (!addr) return;
+    for (size_t i = 0; i < g_lobbies.size(); ++i) {
+        const bool ours = i >= g_lobby_srv.size() || g_lobby_srv[i].first.empty() ||
+                          g_lobby_srv[i].first == primary;
+        if (ours && g_lobbies[i].port == lport && std::strcmp(g_lobbies[i].address, addr) == 0) {
+            *code = g_lobbies[i].code;
+            *srv = primary;
+            *sport = primary_port;
+            return;
+        }
+    }
+}
+
+void relay_tick(int s, const char* server, int port, long long now_ms) {
+    // The host's room, for as long as it hosts.
+    if (g_hosting.load()) {
+        std::string srv, code, token;
+        int sport = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_host_mutex);
+            srv = g_host_server;
+            sport = g_host_port;
+            code = g_host_code;
+            token = g_host_token;
+        }
+        if (!code.empty() && code != g_rh_code) {
+            g_rh_code = code;
+            lb_relay_host_start(srv.c_str(), sport, code.c_str(), token.c_str());
+        }
+        return;
+    }
+    if (!g_rh_code.empty()) {
+        g_rh_code.clear();
+        if (lb_relay_role() == 1) lb_relay_stop();
+    }
+
+    // The joiner's fallback.
+    uint32_t ip = 0u;
+    uint16_t pport = 0u;
+    int learned = 0;
+    nds_local_wireless_peer(&ip, &pport, &learned);
+    unsigned sent = 0u, recvd = 0u;
+    nds_local_wireless_stats(&sent, &recvd);
+    if (ip != g_rw_ip || pport != g_rw_port) {
+        g_rw_ip = ip;
+        g_rw_port = pport;
+        g_rw_at = now_ms;
+        g_rw_rx = recvd;
+        g_rw_tried.clear();
+        if (lb_relay_role() == 2) lb_relay_stop();   // a different lobby now
+    }
+    // 9/6 the Join screen, 7 connecting, 5 in the host's lobby, 12 its match.
+    const bool joining = s == 9 || s == 6 || s == 7 || s == 5 || s == 12;
+    if (lb_relay_role() == 2) {
+        if (joining) g_rw_idle_at = 0;
+        else if (!g_rw_idle_at) g_rw_idle_at = now_ms;
+        else if (now_ms - g_rw_idle_at > 3000) {
+            lb_relay_stop();
+            g_rw_idle_at = 0;
+        }
+        return;
+    }
+    if (!ip || !joining) return;
+    const bool quiet = recvd == g_rw_rx;
+    if (!lb_relay_forced() && !(quiet && now_ms - g_rw_at > 5000)) return;
+    std::string srv, code;
+    int sport = 0;
+    relay_target(server ? server : "", port, &srv, &sport, &code);
+    if (code.empty() || srv.empty() || code == g_rw_tried) return;
+    g_rw_tried = code;
+    std::fprintf(stderr, "[lb_net] %s; trying the relay for lobby %s on %s\n",
+                 lb_relay_forced() ? "LB_TEST_FORCE_RELAY" :
+                 "no direct traffic from the host in 5 s",
+                 code.c_str(), srv.c_str());
+    lb_relay_join_start(srv.c_str(), sport, code.c_str());
 }
 }  // namespace
 
@@ -1691,6 +1821,8 @@ extern "C" void lb_net_auto_tick(const char* server, int port,
         restore_manual_peer();
         g_auto_peers = false;
     }
+
+    relay_tick(s, server, port, now_ms);   // docs/424
 }
 
 // LB_MP_PEER=host:port and LB_MP_LISTEN=1 do from the command line what the
