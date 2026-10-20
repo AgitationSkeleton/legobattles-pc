@@ -1144,6 +1144,10 @@ def main():
     # run with nothing selected sees one lonely quest button and
     # concludes the HUD is one element.
     ap.add_argument("--select-hero", action="store_true")
+    ap.add_argument("--fogmark", default=None, metavar="NX,NY",
+                    help="with --select-hero: order the hero to native NX,NY "
+                         "(band coordinates allowed) and photograph the move "
+                         "marker in a burst (docs/421, the fog's cursor hole)")
     # Click a unit that is standing OUTSIDE the native 256 columns, through
     # the real frontend mapping, and prove it got selected.
     ap.add_argument("--bandpark", type=int, default=None,
@@ -1718,6 +1722,13 @@ def main():
         # reconnaissance is a loop of "tap here, look at the picture, tap
         # there", and every turn of it used to mean editing a table above.
         for spec in args.tap:
+            # "k:MASK[,WAIT]" presses DS buttons (the keys mask, e.g. 8 is
+            # Start) instead of tapping -- the pause menu (docs/421).
+            if spec.startswith("k:"):
+                q = spec[2:].split(",")
+                route = list(route) + [("key", int(q[0], 0), 1,
+                                        float(q[1]) if len(q) > 1 else 2.5)]
+                continue
             q = spec.split(",")
             route = list(route) + [(int(q[0]), int(q[1]),
                                     float(q[2]) if len(q) > 2 else 2.5)]
@@ -1733,7 +1744,9 @@ def main():
                 _, mask, presses, wait = step
                 for _ in range(presses):
                     d.cmd("keys", mask=0x3FF & ~mask)
-                    time.sleep(0.12)
+                    # 0.25 s, --pause-cycle's: 0.12 s missed the pause menu's
+                    # START (docs/421).
+                    time.sleep(0.25)
                     d.cmd("keys", mask=0x3FF)
                     time.sleep(0.35)
                 time.sleep(wait)
@@ -2072,6 +2085,60 @@ def main():
                 tap(d, aim[0], aim[1], 1.0)
                 capture(os.path.join(stepdir, "select-%02d.png" % attempt))
                 time.sleep(0.8)
+
+        if args.fogmark:
+            # docs/421: THE FOG'S CURSOR HOLE. With the hero selected
+            # (--select-hero), order it to a fogged point given in native
+            # coordinates (the band's lie outside 0..255 / 0..191), through
+            # the real window mapping, and photograph the move marker in a
+            # burst. Needs LB_VERBOSE=1 for the [lb_geom] line.
+            logq = os.path.join(out, "stderr.log")
+            g = None
+            for _ in range(10):
+                try:
+                    with open(logq, "rb") as fh:
+                        tail = fh.read()[-200000:].decode("latin-1", "replace")
+                    import re as _re
+                    ls = [l for l in tail.splitlines() if l.startswith("[lb_geom]")]
+                    m = _re.search(r"guest=(\d+)x(\d+) field=(-?\d+),(-?\d+) "
+                                   r"(\d+)x(\d+)", ls[-1]) if ls else None
+                    g = tuple(int(v) for v in m.groups()) if m else None
+                except OSError:
+                    g = None
+                if g:
+                    break
+                time.sleep(1.0)
+            if not g:
+                print("fogmark: no [lb_geom] line (LB_VERBOSE=1?)")
+            else:
+                gw, gh, fx, fy, fw, fh_ = g
+                nx, ny = (int(v) for v in args.fogmark.split(","))
+                bx, by = render_band(gw), render_band_top(gh)
+
+                def to_win(ax, ay):
+                    return (int(round(fx + (ax + bx) * fw / float(gw))),
+                            int(round(fy + (ay + by) * fh_ / float(gh))))
+
+                # Select the hero where it stands, band or not, with a click.
+                hp = hero_pos(logq)
+                if hp:
+                    hx, hy = to_win(hp[0], hp[1])
+                    d.cmd("frontend_input", action="click", x=hx, y=hy, down=True)
+                    time.sleep(0.12)
+                    d.cmd("frontend_input", action="click", x=hx, y=hy, down=False)
+                    time.sleep(0.6)
+                    print("fogmark: hero at native %d,%d, clicked at window %d,%d"
+                          % (hp[0], hp[1], hx, hy))
+                    capture(os.path.join(out, "fogmark-selected.png"))
+                wx, wy = to_win(nx, ny)
+                d.cmd("frontend_input", action="click", x=wx, y=wy, down=True)
+                time.sleep(0.12)
+                d.cmd("frontend_input", action="click", x=wx, y=wy, down=False)
+                print("fogmark: native %d,%d -> window %d,%d (guest %dx%d, band "
+                      "%d,%d, field %d,%d %dx%d)" % (nx, ny, wx, wy, gw, gh, bx, by,
+                                                     fx, fy, fw, fh_))
+                for k in range(6):
+                    capture(os.path.join(out, "fogmark-%02d.png" % k))
 
         if args.bandselect:
             # DOES A CLICK IN THE WIDENED BAND SELECT?

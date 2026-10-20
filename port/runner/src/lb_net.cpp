@@ -76,6 +76,12 @@ std::vector<LbLobby> g_lobbies;
 // order) on the worker thread, INADDR_NONE when it cannot be. Resolving there
 // rather than at Join keeps a DNS lookup off the frame.
 std::vector<uint32_t> g_lobby_ip;
+// docs/419: parallel too: the master server that listed each lobby, which a
+// Join introduces itself through. With "Both" the list holds two servers'.
+std::vector<std::pair<std::string, int>> g_lobby_srv;
+// docs/419: the second server "Both" lists on and browses, or empty.
+std::string g_extra_server;   // under g_mutex
+int g_extra_port = 0;         // under g_mutex
 std::string g_status = "Not queried yet.";
 std::atomic<bool> g_busy{false};
 // Bumped every time a list lands, so the automatic join can tell a new list
@@ -95,9 +101,40 @@ std::string g_peer_code;
 // no WSAStartup here. Calling it again would be harmless but claiming ownership
 // of somebody else's initialisation is not.
 
+}  // namespace
+// docs/419: HTTPS first, when the setting is on (lb_https.cpp, WinHTTP): port
+// 80 becomes 443, any other port is tried as it is. A server without TLS
+// leaves the plain request below to go ahead, and the log says so once.
+extern "C" int lb_setting_master_https(void);   /* lb_overlay.cpp */
+bool lb_https_request(const std::string& host, int port, const std::string& method,
+                      const std::string& path, const std::string& body,
+                      std::string* reply, std::string* error);
+namespace {
 std::string http_request(const std::string& host, int port,
                          const std::string& method, const std::string& path,
                          const std::string& body, std::string* error) {
+    if (lb_setting_master_https()) {
+        std::string reply, herr;
+        if (lb_https_request(host, port == 80 ? 443 : port, method, path, body, &reply,
+                             &herr)) {
+            static std::mutex ok_mu;
+            static std::string ok_said;
+            std::lock_guard<std::mutex> lk(ok_mu);
+            if (ok_said != host) {
+                ok_said = host;
+                std::fprintf(stderr, "[lb_net] HTTPS to %s\n", host.c_str());
+            }
+            return reply;
+        }
+        static std::mutex said_mu;
+        static std::string said;
+        std::lock_guard<std::mutex> lk(said_mu);
+        if (said != host) {
+            said = host;
+            std::fprintf(stderr, "[lb_net] HTTPS to %s failed (%s); plain HTTP "
+                         "instead\n", host.c_str(), herr.c_str());
+        }
+    }
     char port_text[16];
     std::snprintf(port_text, sizeof(port_text), "%d", port);
 
@@ -360,7 +397,8 @@ std::string peer_set_text(uint32_t ip_be, int port, const char* listed) {
     return out + " -- now use the game's Multiplayer > Join screen";
 }
 
-void parse_lobbies(const std::string& json, const std::string& server) {
+void parse_lobbies(const std::string& json, const std::string& server, int sport = 0,
+                   bool append = false) {
     std::vector<LbLobby> out;
     std::vector<uint32_t> ips;
     size_t at = json.find("\"lobbies\"");
@@ -405,8 +443,23 @@ void parse_lobbies(const std::string& json, const std::string& server) {
         if (out.size() >= 64) break;
     }
     std::lock_guard<std::mutex> lock(g_mutex);
-    g_lobbies.swap(out);
-    g_lobby_ip.swap(ips);
+    if (append) {   // docs/419: the second server's, after the first's
+        for (size_t k = 0; k < out.size(); ++k) {
+            bool dup = false;   // one lobby listed on both is shown once
+            for (size_t j = 0; j < g_lobbies.size(); ++j)
+                if (j < g_lobby_ip.size() && g_lobby_ip[j] == ips[k] &&
+                    g_lobbies[j].port == out[k].port)
+                    dup = true;
+            if (dup) continue;
+            g_lobbies.push_back(out[k]);
+            g_lobby_ip.push_back(ips[k]);
+            g_lobby_srv.push_back({server, sport});
+        }
+    } else {
+        g_lobbies.swap(out);
+        g_lobby_ip.swap(ips);
+        g_lobby_srv.assign(g_lobbies.size(), {server, sport});
+    }
     g_status = g_lobbies.empty() ? "No lobbies advertised."
                                  : std::to_string(g_lobbies.size()) + " lobby(ies).";
     g_list_gen.fetch_add(1u);
@@ -713,19 +766,33 @@ extern "C" void lb_net_refresh_lobbies(const char* host, int port) {
         g_status = "Querying...";
     }
     std::string h = host ? host : "";
-    std::thread([h, port]() {
+    std::string xh;
+    int xp = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        xh = g_extra_server;
+        xp = g_extra_port;
+    }
+    std::thread([h, port, xh, xp]() {
         std::string error;
         const std::string body = http_request(h, port, "GET", "/list", "", &error);
         if (body.empty()) {
             std::lock_guard<std::mutex> lock(g_mutex);
             g_lobbies.clear();
             g_lobby_ip.clear();
+            g_lobby_srv.clear();
             g_status = error.empty() ? "empty reply" : error;
         } else {
-            parse_lobbies(body, h);
+            parse_lobbies(body, h, port);
             std::lock_guard<std::mutex> lock(g_mutex);
             g_list_server = h;     // docs/400: a row's Join introduces itself here
             g_list_port = port;
+        }
+        // docs/419: "Both" -- the second server's lobbies after the first's.
+        if (!xh.empty() && !(xh == h && xp == port)) {
+            std::string xerr;
+            const std::string xbody = http_request(xh, xp, "GET", "/list", "", &xerr);
+            if (!xbody.empty()) parse_lobbies(xbody, xh, xp, true);
         }
         g_busy = false;
     }).detach();
@@ -778,7 +845,16 @@ std::atomic<int> g_host_players{1};
 // "starting" unlisted, "playing" the match), and its map once one loaded.
 std::string g_host_state = "open";   // under g_host_mutex
 std::string g_host_map;              // under g_host_mutex
+// docs/419: the same lobby's listing on the second server ("Both"), or empty.
+std::string g_host2_server, g_host2_code, g_host2_token;   // under g_host_mutex
+int g_host2_port = 0;                                      // under g_host_mutex
 }  // namespace
+
+extern "C" void lb_net_set_extra_server(const char* host, int port) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    g_extra_server = host ? host : "";
+    g_extra_port = port;
+}
 
 extern "C" void lb_net_announce(const char* server, int port, const char* name,
                                 const char* host_name, const char* map_name,
@@ -822,7 +898,14 @@ extern "C" void lb_net_announce(const char* server, int port, const char* name,
     nds_local_wireless_set_listen(1);
     request_stun();   // docs/400
     std::string s = server ? server : "";
-    std::thread([s, port, body, game_port]() {
+    std::string xh;   // docs/419: and the second server, for Both
+    int xp = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        xh = g_extra_server;
+        xp = g_extra_port;
+    }
+    std::thread([s, port, body, game_port, xh, xp]() {
         // docs/400: THE ADDRESS AND PORT THE ROUTER GAVE THIS SOCKET, from
         // STUN, rather than the address the server saw the HTTP request come
         // from and the port bound here. They differ whenever the router
@@ -861,7 +944,26 @@ extern "C" void lb_net_announce(const char* server, int port, const char* name,
         std::string error;
         const std::string reply =
             http_request(s, port, "POST", "/announce", b, &error);
+        // docs/419: Both -- the same lobby on the second server, its own code
+        // and token, beaten, polled and removed alongside the first.
+        std::string c2, t2;
+        if (!xh.empty() && !(xh == s && xp == port) && !reply.empty()) {
+            std::string e2;
+            const std::string r2 = http_request(xh, xp, "POST", "/announce", b, &e2);
+            c2 = field(r2, 0, "code");
+            t2 = field(r2, 0, "token");
+            if (c2.empty())
+                std::fprintf(stderr, "[lb_net] not listed on %s too: %s\n", xh.c_str(),
+                             e2.empty() ? field(r2, 0, "error").c_str() : e2.c_str());
+            else
+                std::fprintf(stderr, "[lb_net] also listed on %s as room %s\n",
+                             xh.c_str(), c2.c_str());
+        }
         std::lock_guard<std::mutex> lock(g_host_mutex);
+        g_host2_server = c2.empty() ? std::string() : xh;
+        g_host2_port = xp;
+        g_host2_code = c2;
+        g_host2_token = t2;
         if (reply.empty()) {
             g_host_status = error.empty() ? "no reply" : error;
         } else {
@@ -902,18 +1004,30 @@ void host_poll(long long now_ms) {
     if (learned) return;
     std::string server, code, token, state;
     int port;
+    std::vector<std::pair<std::string, int>> where;   // docs/419: and Both's
+    std::vector<std::string> bodies;
     {
         std::lock_guard<std::mutex> lock(g_host_mutex);
         server = g_host_server; code = g_host_code;
         token = g_host_token;   port = g_host_port;
         state = g_host_state;
+        if (!g_host2_code.empty()) {
+            where.push_back({g_host2_server, g_host2_port});
+            bodies.push_back("{\"code\":\"" + g_host2_code + "\",\"token\":\"" +
+                             g_host2_token + "\"}");
+        }
     }
     if (code.empty() || state != "open") return;
     g_last_poll = now_ms;
     g_polling = true;
-    const std::string body =
-        "{\"code\":\"" + code + "\",\"token\":\"" + token + "\"}";
-    std::thread([server, port, body]() {
+    where.insert(where.begin(), {server, port});
+    bodies.insert(bodies.begin(),
+                  "{\"code\":\"" + code + "\",\"token\":\"" + token + "\"}");
+    std::thread([where, bodies]() {
+      for (size_t w = 0; w < where.size(); ++w) {
+        const std::string& server = where[w].first;
+        const int port = where[w].second;
+        const std::string& body = bodies[w];
         std::string error;
         const std::string reply =
             http_request(server, port, "POST", "/poll", body, &error);
@@ -938,6 +1052,7 @@ void host_poll(long long now_ms) {
                              "answering it\n", who.c_str());
             }
         }
+      }
         g_polling = false;
     }).detach();
 }
@@ -974,6 +1089,24 @@ extern "C" void lb_net_host_tick(long long now_ms) {
         std::string error;
         http_request(server, port, "POST", "/heartbeat", body, &error);
     }).detach();
+    // docs/419: Both -- the second server's listing, with its own code and token.
+    std::string s2, c2, t2;
+    int p2 = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_host_mutex);
+        s2 = g_host2_server; c2 = g_host2_code; t2 = g_host2_token; p2 = g_host2_port;
+    }
+    if (!c2.empty()) {
+        std::string b2 = body;
+        const std::string from = "\"code\":\"" + code + "\",\"token\":\"" + token + "\"";
+        const std::string to = "\"code\":\"" + c2 + "\",\"token\":\"" + t2 + "\"";
+        const size_t at = b2.find(from);
+        if (at != std::string::npos) b2.replace(at, from.size(), to);
+        std::thread([s2, p2, b2]() {
+            std::string error;
+            http_request(s2, p2, "POST", "/heartbeat", b2, &error);
+        }).detach();
+    }
 }
 
 namespace {
@@ -993,6 +1126,19 @@ void stop_hosting_impl(const char* reason = "disband") {
         token = g_host_token;   port = g_host_port;
         g_host_status = "Not hosting.";
         g_host_code.clear();
+        // docs/419: Both -- take the second listing down as well.
+        if (!g_host2_code.empty()) {
+            const std::string b2 = "{\"code\":\"" + g_host2_code + "\",\"token\":\"" +
+                                   g_host2_token + "\",\"reason\":" + json_str(reason) + "}";
+            const std::string s2 = g_host2_server;
+            const int p2 = g_host2_port;
+            std::thread([s2, p2, b2]() {
+                std::string error;
+                http_request(s2, p2, "POST", "/remove", b2, &error);
+            }).detach();
+            g_host2_code.clear();
+            g_host2_server.clear();
+        }
     }
     if (code.empty()) return;
     const std::string body =
@@ -1148,6 +1294,11 @@ extern "C" int lb_net_join_index(int index) {
         std::lock_guard<std::mutex> lock(g_mutex);
         ls = g_list_server;
         lp = g_list_port;
+        // docs/419: through the server that listed this lobby.
+        if ((size_t)index < g_lobby_srv.size() && !g_lobby_srv[(size_t)index].first.empty()) {
+            ls = g_lobby_srv[(size_t)index].first;
+            lp = g_lobby_srv[(size_t)index].second;
+        }
     }
     post_punch(ls, lp, lobby.code);   // docs/400
     return 1;
@@ -1319,6 +1470,7 @@ void point_at_listed_host() {
     uint32_t ip = 0u;
     uint16_t port = 0u;
     char code[8] = "";
+    std::pair<std::string, int> via;   // docs/419: the server that listed it
     {
         std::lock_guard<std::mutex> lock(g_mutex);
         for (size_t i = g_lobbies.size(); i-- > 0;) {
@@ -1338,6 +1490,7 @@ void point_at_listed_host() {
             ip = at;
             port = (uint16_t)l.port;
             std::snprintf(code, sizeof code, "%s", l.code);
+            if (i < g_lobby_srv.size()) via = g_lobby_srv[i];
             break;
         }
     }
@@ -1364,6 +1517,10 @@ void point_at_listed_host() {
         std::lock_guard<std::mutex> lock(g_mutex);
         ls = g_list_server;
         lp = g_list_port;
+    }
+    if (!via.first.empty()) {   // docs/419
+        ls = via.first;
+        lp = via.second;
     }
     post_punch(ls, lp, code);   // docs/400
 }

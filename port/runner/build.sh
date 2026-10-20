@@ -67,6 +67,10 @@ cp -p "$W/port/runner/src/lb_mods.cpp" "$TREE/runner/src/"
 # Online chat and the swear filter (docs/415); the words only as hashes.
 cp -p "$W/port/runner/src/lb_chat.cpp" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_chat_words.h" "$TREE/runner/src/"
+# HTTPS for the master server (docs/419). Its own TU for <windows.h>.
+cp -p "$W/port/runner/src/lb_https.cpp" "$TREE/runner/src/"
+# A host's mod map from the community archive (docs/420).
+cp -p "$W/port/runner/src/lb_mapfetch.cpp" "$TREE/runner/src/"
 # The first-run setup: the player's own ROM, Europe or USA (docs/394).
 cp -p "$W/port/runner/src/lb_setup.cpp" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_music.cpp" "$TREE/runner/src/"

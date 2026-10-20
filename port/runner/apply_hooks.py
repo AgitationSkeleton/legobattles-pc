@@ -7477,6 +7477,10 @@ def apply(runner_dir, imgui_dir):
           "src/lb_mods.cpp",
           # Online chat and the swear filter (docs/415).
           "src/lb_chat.cpp",
+          # HTTPS for the master server (docs/419), for <windows.h>.
+          "src/lb_https.cpp",
+          # A host's mod map from the community archive (docs/420).
+          "src/lb_mapfetch.cpp",
           # The first-run setup (docs/394).
           "src/lb_setup.cpp",
           "%s/imgui.cpp" % imgui,
@@ -7574,7 +7578,9 @@ def apply(runner_dir, imgui_dir):
     # Saves tab keeps the text field it already had.
     edit(cmake, "target_link_libraries(nds_runner PRIVATE nds_banks",
          ["if(WIN32)",
-          "    target_link_libraries(nds_runner PRIVATE comdlg32)",
+          "    target_link_libraries(nds_runner PRIVATE comdlg32 winhttp)",   # docs/419: HTTPS
+          "    find_library(LB_ZLIB NAMES libz.a z)",   # docs/420: inflate, statically
+          "    target_link_libraries(nds_runner PRIVATE ${LB_ZLIB})",
           "endif()"])
     done.append("CMakeLists.txt: comdlg32 for the native file picker")
 

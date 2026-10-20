@@ -24,6 +24,7 @@
 #include "lb_overlay.h"
 #include "lb_balance_data.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdio>
 #include <cstdint>
@@ -272,6 +273,12 @@ struct Written {
 std::vector<Edit> g_live;          // the player's set (settings)
 std::vector<Edit> g_play;          // a replay's set
 bool g_play_on = false;
+// docs/418: an online host's set, which a joiner runs in place of its own
+// (with the host's pack and Same Builders), and the seed that names it.
+std::vector<Edit> g_host;
+bool g_host_on = false;
+int g_host_slot = 0, g_host_builders = 0;
+unsigned long long g_host_seed = 0ull;
 std::vector<Written> g_written;    // what is in RAM now, to take it out
 unsigned g_gen = 1u, g_written_gen = 0u;
 unsigned g_live_gen = 1u;          // the player's set, for the recorder
@@ -317,7 +324,9 @@ void write_w(uint32_t a, int w, uint32_t v) {
 
 bool guest_ram(uint32_t a) { return a >= 0x02000000u && a < 0x02400000u; }
 
-std::vector<Edit>& active() { return g_play_on ? g_play : g_live; }
+std::vector<Edit>& active() {
+    return g_play_on ? g_play : g_host_on ? g_host : g_live;
+}
 
 void put(std::vector<Edit>& set, int rec, int field, int value) {
     for (size_t i = 0; i < set.size(); ++i) {
@@ -346,7 +355,10 @@ extern "C" int lb_balance_field_count(int kind) {
 // docs/416: a global's value for the game now -- the replay's or the player's
 // set -- or -1 for the game's own. Offline only, like every value here.
 extern "C" int lb_balance_global(int field) {
-    if (lb_balance_custom_blocked()) return -1;
+    // docs/418: online, the host's set (a host's own is this machine's).
+    const int net = lb_net_guest_state();
+    const bool hosting = net == 10 || net == 2 || net == 3 || net == 4 || net == 11;
+    if (lb_balance_custom_blocked() && !g_host_on && !hosting) return -1;
     for (const Edit& e : active())
         if (e.rec == kGlobalRecord && e.field == field) return e.value;
     return -1;
@@ -443,6 +455,9 @@ extern "C" void lb_balance_custom_clear_all(void) {
     if (!g_play_on) ++g_gen;
 }
 extern "C" int lb_balance_custom_size(void) { return (int)g_live.size(); }
+// docs/418: any of the player's (or host's) values are in RAM now -- which,
+// like a pack, can change the Imperial builder the patcher finds the block by.
+extern "C" int lb_balance_custom_written(void) { return g_written.empty() ? 0 : 1; }
 extern "C" unsigned lb_balance_custom_generation(void) { return g_live_gen; }
 
 extern "C" int lb_balance_custom_text(char* out, int cap) {
@@ -513,7 +528,7 @@ extern "C" int lb_balance_custom_apply(unsigned int base) {
     g_written_gen = g_gen;
     if (n)
         std::fprintf(stderr, "[lb_balance] %d value(s) of the %s set written\n",
-                     n, g_play_on ? "recording's" : "player's");
+                     n, g_play_on ? "recording's" : g_host_on ? "host's" : "player's");
     return n;
 }
 
@@ -539,6 +554,98 @@ extern "C" void lb_balance_custom_play_end(void) {
     g_play.clear();
     ++g_gen;
 }
+
+// ── docs/418: THE HOST'S BALANCE, ONLINE ───────────────────────────────────
+//
+// Every machine in a match must run one rule set. A host's set is its pack,
+// its Same Builders source and its own values; it travels to the joiners
+// with the host's rules (lb_teams.cpp), named by a SEED: FNV-1a 64 over the
+// pack, the builders and the values in (record, field) order. A joiner runs
+// the set it received in place of its own -- the pack and builders through
+// the patcher (lb_patches.cpp), the values as the active set here -- and
+// cannot ready until it is in force; leaving the lobby gives it its own back.
+
+namespace {
+unsigned long long seed_of(int slot, int builders, std::vector<Edit> set) {
+    std::sort(set.begin(), set.end(), [](const Edit& a, const Edit& b) {
+        return a.rec != b.rec ? a.rec < b.rec : a.field < b.field;
+    });
+    unsigned long long h = 0xCBF29CE484222325ull;
+    auto mix = [&](uint32_t v) {
+        for (int i = 0; i < 4; ++i) {
+            h ^= (v >> (8 * i)) & 0xFFu;
+            h *= 0x100000001B3ull;
+        }
+    };
+    mix((uint32_t)slot);
+    mix((uint32_t)builders);
+    for (const Edit& e : set) {
+        mix((uint32_t)e.rec);
+        mix((uint32_t)e.field);
+        mix((uint32_t)e.value);
+    }
+    return h;
+}
+}  // namespace
+
+// This machine's own set, for a host to send: its seed, and the values in
+// (record, field) order.
+extern "C" unsigned long long lb_balance_local_seed(int slot, int builders) {
+    return seed_of(slot, builders, g_live);
+}
+extern "C" int lb_balance_local_values(int* triples, int max) {
+    std::vector<Edit> s = g_live;
+    std::sort(s.begin(), s.end(), [](const Edit& a, const Edit& b) {
+        return a.rec != b.rec ? a.rec < b.rec : a.field < b.field;
+    });
+    int n = 0;
+    for (const Edit& e : s) {
+        if (n >= max) break;
+        triples[3 * n] = e.rec;
+        triples[3 * n + 1] = e.field;
+        triples[3 * n + 2] = e.value;
+        ++n;
+    }
+    return (int)s.size();
+}
+
+// A joiner's: the host's set, complete. Returns 1 when its seed checks out
+// (and it is now the active set), 0 when it does not (and nothing changed).
+extern "C" int lb_balance_host_set(unsigned long long seed, int slot, int builders,
+                                   const int* triples, int n) {
+    std::vector<Edit> s;
+    for (int i = 0; i < n; ++i) {
+        const int rec = triples[3 * i], field = triples[3 * i + 1];
+        const int value = triples[3 * i + 2];
+        if (field_of(rec, field) && value >= 0) put(s, rec, field, value);
+    }
+    // Seed 0 is an older host's: no balance sent, so the game's own.
+    if (seed != 0ull && seed_of(slot, builders, s) != seed) return 0;
+    if (g_host_on && g_host_seed == seed) return 1;
+    g_host = std::move(s);
+    g_host_slot = slot;
+    g_host_builders = builders;
+    g_host_seed = seed;
+    g_host_on = true;
+    ++g_gen;
+    std::fprintf(stderr, "[lb_balance] the host's balance: pack %d, builders %d, "
+                 "%zu value(s), seed %016llX\n", slot, builders, g_host.size(), seed);
+    return 1;
+}
+extern "C" void lb_balance_host_clear(void) {
+    if (!g_host_on) return;
+    g_host_on = false;
+    g_host.clear();
+    g_host_seed = 0ull;
+    ++g_gen;
+    std::fprintf(stderr, "[lb_balance] the host's balance is gone; this "
+                 "machine's own is back\n");
+}
+extern "C" int lb_balance_host_on(void) { return g_host_on ? 1 : 0; }
+extern "C" int lb_balance_host_slot(void) { return g_host_slot; }
+extern "C" int lb_balance_host_builders(void) { return g_host_builders; }
+extern "C" unsigned long long lb_balance_host_seed(void) { return g_host_seed; }
+extern "C" int lb_balance_host_size(void) { return (int)g_host.size(); }
 
 extern "C" const char* lb_balance_custom_blocked(void) {
     const int net = lb_net_guest_state();

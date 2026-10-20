@@ -301,6 +301,7 @@ int lb_setting_cap(int build_limit_class);
 int  lb_balance_apply(int slot, unsigned int blueprint_base,
                       char* error, int error_size);
 int  lb_balance_is_applied(void);
+int  lb_balance_custom_written(void);   /* docs/418 */
 int  lb_balance_applied_slot(void);
 const char* lb_balance_name(int slot);
 int  lb_balance_byte_count(int slot);
@@ -318,6 +319,26 @@ unsigned int lb_balance_extent(void);   // one past any pack's last byte
 // Brick's worth); lb_balance_global gives the one in force, or -1.
 enum { LB_BAL_UNITS = 0, LB_BAL_ATTACKS = 1, LB_BAL_GLOBALS = 2 };
 int lb_balance_global(int field);
+// docs/418: the host's balance online. A host sends its own set (seed and
+// values, lb_teams.cpp); a joiner runs the host's in place of its own.
+unsigned long long lb_balance_local_seed(int slot, int builders);
+int  lb_balance_local_values(int* triples, int max);   /* returns the count */
+int  lb_balance_host_set(unsigned long long seed, int slot, int builders,
+                         const int* triples, int n);
+void lb_balance_host_clear(void);
+int  lb_balance_host_on(void);
+int  lb_balance_host_slot(void);
+int  lb_balance_host_builders(void);
+int  lb_balance_host_size(void);
+unsigned long long lb_balance_host_seed(void);
+// lb_patches.cpp: the pack, Same Builders source and seed this machine would
+// send as a host; and whether the host's set is fully in force on a joiner.
+int  lb_rules_host_balance(unsigned long long* seed, int* slot, int* builders,
+                           int* triples, int max);   /* lb_teams.cpp; -1 not yet */
+int  lb_balance_effective_slot(void);
+int  lb_balance_effective_builders(void);
+int  lb_balance_host_set_current(void);
+const char* lb_balance_host_set_why(void);
 // docs/408: units' fields 0..9 are the table's columns; 10..14 the spells.
 enum { LB_BAL_SPELL_FIELD0 = 10, LB_BAL_SPELLS = 5 };
 int         lb_balance_field_count(int kind);
@@ -489,6 +510,14 @@ int                lb_mods_find_hash(unsigned long long hash);
 // (hash and name filled), 0 not listed, -1 the host sends no list, -2 no
 // fresh rules yet (lb_teams.cpp).
 int  lb_rules_host_map(unsigned key, unsigned long long* hash, char* name, int cap);
+// docs/419: the second master server "Both" lists on and browses ("" none),
+// and whether to try HTTPS first (lb_net.cpp, lb_overlay.cpp).
+void lb_net_set_extra_server(const char* host, int port);
+int  lb_setting_master_https(void);
+// docs/420: fetch a host's mod map from the community archive (lb_mapfetch.cpp),
+// when the setting allows; once per name per run.
+void lb_mapfetch_request(const char* name);
+int  lb_setting_fetch_maps(void);
 // docs/413: a message for the player that the game's own screens cannot show,
 // drawn over the game whether or not the menu is open (lb_overlay.cpp).
 void lb_overlay_notice(const char* text);

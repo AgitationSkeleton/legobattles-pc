@@ -319,6 +319,11 @@ struct Settings {
     // (services/master-server-cloudflare), on plain HTTP port 80. The local
     // Python one (services/master-server) still works: 127.0.0.1, 28555.
     char master_host[128] = "lbserver.viosarcade.xyz";
+    // docs/419: list on and browse both known servers; and HTTPS first.
+    bool master_both = false;
+    bool master_https = true;
+    // docs/420: a lobby's mod map this machine lacks is fetched from the archive.
+    bool fetch_maps = true;
     int  master_port = 80;
     char player_name[32] = "Player";
     // The multiplayer player name is derived from the save file's name. On,
@@ -603,6 +608,12 @@ extern "C" void lb_settings_save(void) {
     std::snprintf(buf, sizeof buf, "  \"upnp\": %s,\n",
                   g_set.upnp ? "true" : "false"); o += buf;
     json_put_str(o, "master_host", g_set.master_host, true);
+    std::snprintf(buf, sizeof buf, "  \"master_both\": %s,\n",
+                  g_set.master_both ? "true" : "false"); o += buf;   // docs/419
+    std::snprintf(buf, sizeof buf, "  \"master_https\": %s,\n",
+                  g_set.master_https ? "true" : "false"); o += buf;   // docs/419
+    std::snprintf(buf, sizeof buf, "  \"fetch_maps\": %s,\n",
+                  g_set.fetch_maps ? "true" : "false"); o += buf;   // docs/420
     std::snprintf(buf, sizeof buf, "  \"master_port\": %d,\n",
                   g_set.master_port); o += buf;
     // docs/404: the Balance tab's values, "record:field=value,...".
@@ -699,6 +710,9 @@ extern "C" void lb_settings_load(void) {
     json_get_int(s, "plantation_name", &g_set.plantation_name);     // docs/392
     json_get_int(s, "default_opponent", &g_set.default_opponent);   // docs/392
     json_get_str(s, "master_host", g_set.master_host, sizeof g_set.master_host);
+    json_get_bool(s, "master_both", &g_set.master_both);     // docs/419
+    json_get_bool(s, "master_https", &g_set.master_https);   // docs/419
+    json_get_bool(s, "fetch_maps", &g_set.fetch_maps);       // docs/420
     json_get_int(s, "master_port", &g_set.master_port);
     // docs/394: a file that still holds the OLD default (the local Python
     // server, which every build wrote before there was a public one) moves to
@@ -1798,30 +1812,52 @@ void tab_multiplayer() {
                 cur = i;
         static bool custom_open = false;
         if (cur < nk) custom_open = false;
-        const char* shown = (cur < nk && !custom_open) ? kKnown[cur].label : "Custom";
+        // docs/419: "Both" is the first server with the second beside it.
+        const bool both = g_set.master_both && cur == 0 && !custom_open;
+        const char* shown = both ? "Both"
+                          : (cur < nk && !custom_open) ? kKnown[cur].label : "Custom";
         if (ImGui::BeginCombo("Master server", shown)) {
             for (int i = 0; i < nk; ++i)
-                if (ImGui::Selectable(kKnown[i].label, cur == i && !custom_open)) {
+                if (ImGui::Selectable(kKnown[i].label, cur == i && !custom_open && !both)) {
                     std::snprintf(g_set.master_host, sizeof g_set.master_host,
                                   "%s", kKnown[i].host);
                     g_set.master_port = kKnown[i].port;
+                    g_set.master_both = false;
                     custom_open = false;
                 }
-            if (ImGui::Selectable("Custom", cur == nk || custom_open))
+            if (ImGui::Selectable("Both", both)) {
+                std::snprintf(g_set.master_host, sizeof g_set.master_host, "%s",
+                              kKnown[0].host);
+                g_set.master_port = kKnown[0].port;
+                g_set.master_both = true;
+                custom_open = false;
+            }
+            if (ImGui::Selectable("Custom", (cur == nk || custom_open) && !both)) {
                 custom_open = true;
+                g_set.master_both = false;
+            }
             ImGui::EndCombo();
         }
         help("Where lobbies are listed. It lists them and introduces a\n"
              "joining player to the host so both routers let the game's\n"
              "traffic through; no port forwarding is needed on most home\n"
              "routers. king.legobattles.win is another player's server and\n"
-             "may be offline.");
+             "may be offline. Both lists a hosted lobby on both servers and\n"
+             "shows the lobbies of both.");
         badge(WIRED);
         if (cur == nk || custom_open) {
             ImGui::InputText("Address", g_set.master_host,
                              IM_ARRAYSIZE(g_set.master_host));
             ImGui::InputInt("Port", &g_set.master_port);
         }
+        ImGui::Checkbox("Use HTTPS with the master server", &g_set.master_https);
+        help("Talks to the master server over an encrypted connection when\n"
+             "it offers one (port 443 for a server on port 80), and over\n"
+             "plain HTTP when it does not.");
+        ImGui::Checkbox("Fetch a host's mod map I don't have", &g_set.fetch_maps);
+        help("When a host picks a mod map that is not in your mods folder,\n"
+             "look for it by name in the community map archive (GitHub) and\n"
+             "put it in mods/maps/_archive. Restart the game to use it.");
     }
 
     ImGui::Separator();
@@ -2692,6 +2728,76 @@ void bans_store(const unsigned char bits[24]) {
     std::snprintf(g_set.banned_units, sizeof g_set.banned_units, "%s", o.c_str());
 }
 
+// docs/410: the ban list as a file, like the Balance values: the blueprint
+// numbers, with the names beside them for a reader (ignored on import).
+bool bans_export(const char* path, const unsigned char bits[24]) {
+    std::string names;
+    for (int bp = 0; bp < 192; ++bp)
+        if ((bits[bp >> 3] >> (bp & 7)) & 1) {
+            if (!names.empty()) names += ", ";
+            names += lb_teams_unit_name(bp);
+        }
+    std::string o = "{\n  \"lb_bans\": 1,\n";
+    json_put_str(o, "banned_units", g_set.banned_units, true);
+    json_put_str(o, "names", names.c_str(), false);
+    o += "}\n";
+    FILE* f = std::fopen(path, "wb");
+    const bool ok = f && std::fwrite(o.data(), 1, o.size(), f) == o.size();
+    if (f) std::fclose(f);
+    return ok;
+}
+// Into g_set.banned_units and `bits`; the count of banned units, or -1 when
+// the file is not a ban list.
+int bans_import(const char* path, unsigned char bits[24]) {
+    std::string s;
+    if (FILE* f = std::fopen(path, "rb")) {
+        char chunk[4096];
+        size_t got;
+        while ((got = std::fread(chunk, 1, sizeof chunk, f)) > 0 && s.size() < (1u << 16))
+            s.append(chunk, got);
+        std::fclose(f);
+    }
+    if (s.find("\"lb_bans\"") == std::string::npos ||
+        s.find("\"banned_units\"") == std::string::npos)
+        return -1;
+    char list[512] = "";
+    json_get_str(s, "banned_units", list, sizeof list);
+    std::snprintf(g_set.banned_units, sizeof g_set.banned_units, "%s", list);
+    bans_bits(bits);   // drops anything out of range, and the King team
+    bans_store(bits);
+    int n = 0;
+    for (int bp = 0; bp < 192; ++bp) n += (bits[bp >> 3] >> (bp & 7)) & 1;
+    return n;
+}
+
+// docs/419: LB_BAN_ROUNDTRIP=<path> exports the current list there, clears
+// it, imports the file back and logs whether the list came back the same:
+// the Export and Import buttons' own code, without their file dialogs.
+// LB_BAN_ROUNDTRIP_SET=<list> first sets a list to try. Test aid only.
+void bans_roundtrip_if_asked() {
+    static bool done = false;
+    const char* path = std::getenv("LB_BAN_ROUNDTRIP");
+    if (done || !path || !lb_teams_unit_name(1)) return;
+    done = true;
+    const std::string mine = g_set.banned_units;   // put back afterwards
+    if (const char* set = std::getenv("LB_BAN_ROUNDTRIP_SET"))
+        std::snprintf(g_set.banned_units, sizeof g_set.banned_units, "%s", set);
+    unsigned char bits[24], back[24];
+    bans_bits(bits);
+    bans_store(bits);
+    const std::string before = g_set.banned_units;
+    const bool wrote = bans_export(path, bits);
+    g_set.banned_units[0] = '\0';
+    const int n = bans_import(path, back);
+    std::fprintf(stderr, "[lb_bans] round trip through %s: wrote %s, read %d unit(s), "
+                 "list %s (\"%s\" -> \"%s\")\n", path, wrote ? "yes" : "NO", n,
+                 before == g_set.banned_units && std::memcmp(bits, back, 24) == 0
+                     ? "IDENTICAL" : "DIFFERS",
+                 before.c_str(), g_set.banned_units);
+    std::fflush(stderr);
+    std::snprintf(g_set.banned_units, sizeof g_set.banned_units, "%s", mine.c_str());
+}
+
 void tab_ban_units() {
     if (!tab_begin("Ban Units")) return;
     const int net = lb_net_guest_state();
@@ -2761,45 +2867,18 @@ void tab_ban_units() {
     ImGui::SameLine();
     if (ImGui::Button("Export...") &&
         lb_pick_json_file(path, (int)sizeof path, 1)) {
-        std::string names;
-        for (int bp = 0; bp < 192; ++bp)
-            if ((bits[bp >> 3] >> (bp & 7)) & 1) {
-                if (!names.empty()) names += ", ";
-                names += lb_teams_unit_name(bp);
-            }
-        std::string o = "{\n  \"lb_bans\": 1,\n";
-        json_put_str(o, "banned_units", g_set.banned_units, true);
-        json_put_str(o, "names", names.c_str(), false);
-        o += "}\n";
-        FILE* f = std::fopen(path, "wb");
-        msg_bad = !f || std::fwrite(o.data(), 1, o.size(), f) != o.size();
-        if (f) std::fclose(f);
+        msg_bad = !bans_export(path, bits);
         msg = msg_bad ? "Could not write that file." : "Exported the ban list.";
     }
     ImGui::SameLine();
     if (ImGui::Button("Import...") &&
         lb_pick_json_file(path, (int)sizeof path, 0)) {
-        std::string s;
-        if (FILE* f = std::fopen(path, "rb")) {
-            char chunk[4096];
-            size_t got;
-            while ((got = std::fread(chunk, 1, sizeof chunk, f)) > 0 &&
-                   s.size() < (1u << 16))
-                s.append(chunk, got);
-            std::fclose(f);
-        }
-        char list[512] = "";
-        json_get_str(s, "banned_units", list, sizeof list);
-        if (s.find("\"lb_bans\"") == std::string::npos ||
-            s.find("\"banned_units\"") == std::string::npos) {
+        const int n = bans_import(path, bits);
+        if (n < 0) {
             msg = "That is not a ban list file.";
             msg_bad = true;
         } else {
-            std::snprintf(g_set.banned_units, sizeof g_set.banned_units, "%s", list);
-            bans_bits(bits);   // drops anything out of range, and the King team
             changed = true;
-            int n = 0;
-            for (int bp = 0; bp < 192; ++bp) n += (bits[bp >> 3] >> (bp & 7)) & 1;
             msg = "Imported " + std::to_string(n) + " banned unit(s).";
             msg_bad = false;
         }
@@ -4774,6 +4853,20 @@ bool bal_header(bool picks = false) {
     }
     if (const char* why = lb_balance_custom_blocked()) {
         ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.3f, 1.0f), "Locked: %s.", why);
+        // docs/418: online, whose numbers are in force, named by the seed
+        // both machines compare.
+        if (lb_balance_host_on()) {
+            ImGui::TextDisabled("The host's balance is in force here: %s, %d value(s) "
+                                "(seed %016llX)%s.",
+                                lb_balance_name(lb_balance_host_slot()),
+                                lb_balance_host_size(), lb_balance_host_seed(),
+                                lb_balance_host_set_current() ? "" : ", being applied");
+        } else {
+            const int s = lb_balance_effective_slot(), b = lb_balance_effective_builders();
+            ImGui::TextDisabled("Yours go to the players who join: %s, %d value(s) "
+                                "(seed %016llX).", lb_balance_name(s),
+                                lb_balance_custom_size(), lb_balance_local_seed(s, b));
+        }
         return true;
     }
     ImGui::TextDisabled(picks ? "Pick a spell. It applies at once, in a battle "
@@ -5451,6 +5544,14 @@ extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
                          bad ? "  <-- MISMATCH" : "");
         }
 
+        // docs/419: LB_EXTRA_SERVER is in place before the self-test runs.
+        if (const char* x = std::getenv("LB_EXTRA_SERVER")) {
+            if (const char* c = std::strchr(x, ':')) {
+                char h[128];
+                std::snprintf(h, sizeof h, "%.*s", (int)(c - x), x);
+                lb_net_set_extra_server(h, std::atoi(c + 1));
+            }
+        }
         lb_net_selftest_if_asked();
         lb_net_apply_env_peer();
     }
@@ -5458,6 +5559,21 @@ extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
     // Keep an advertised lobby alive. The server drops it after 90 s, and the
     // overlay is already called every frame, so this is cheaper than a timer
     // thread; the call itself returns immediately unless a beat is due.
+    // docs/419: Both lists on and browses king.legobattles.win as well (the
+    // Multiplayer tab's second known server), every frame, panel open or not.
+    // LB_EXTRA_SERVER=host:port stands in for it (a test aid: two local
+    // servers instead of the public ones).
+    static const char* extra_env = std::getenv("LB_EXTRA_SERVER");
+    if (extra_env && std::strchr(extra_env, ':')) {
+        char h[128];
+        std::snprintf(h, sizeof h, "%.*s", (int)(std::strchr(extra_env, ':') - extra_env),
+                      extra_env);
+        lb_net_set_extra_server(h, std::atoi(std::strchr(extra_env, ':') + 1));
+    } else if (g_set.master_both) {
+        lb_net_set_extra_server("king.legobattles.win", 28555);
+    } else {
+        lb_net_set_extra_server("", 0);
+    }
     lb_net_host_tick((long long)SDL_GetTicks64());
     // The game's own Host and Join screens drive the
     // master server. Every frame, whatever panel is open, for the same reason
@@ -5490,6 +5606,7 @@ extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
     draw_battlefield(renderer);
     draw_notice();   // docs/413
     lb_swear_selftest_if_asked();   // docs/415
+    bans_roundtrip_if_asked();      // docs/419
     lb_chat_draw(renderer);         // docs/415
     // docs/384: the tabs draw heads with this renderer, and the enemy team
     // and the ban list reach lb_teams.cpp whether or not the panel is open.
@@ -5983,6 +6100,16 @@ extern "C" int lb_setting_swear_filter(void) {
     return forced >= 0 ? forced : (g_set.swear_filter ? 1 : 0);
 }
 extern "C" int lb_setting_chat_toasts(void) { return g_set.chat_toasts ? 1 : 0; }
+extern "C" int lb_setting_fetch_maps(void) { return g_set.fetch_maps ? 1 : 0; }   // docs/420
+// docs/419. LB_MASTER_HTTPS=0|1 forces it (a test aid).
+extern "C" int lb_setting_master_https(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_MASTER_HTTPS");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.master_https ? 1 : 0);
+}
 extern "C" const char* lb_overlay_player_name(void) { return mp_player_name(); }
 
 extern "C" int lb_setting_smooth_models(void) {   // docs/411; LB_SMOOTH_MODELS

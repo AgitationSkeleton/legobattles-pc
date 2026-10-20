@@ -342,7 +342,62 @@ void message_line(SDL_Renderer* r, const Msg& m, float icon, float width) {
 
 // LB_CHAT_TEST_SEND=<text> sends once, LB_CHAT_TEST_DELAY seconds (5) after
 // this machine is first online. Test aid only.
+// LB_CHAT_TEST_TYPE=<text> types a message as a player would: five seconds
+// after this machine is online, a T key event, then (lb_chat_open) the text
+// as text events, then Return. Everything goes through SDL's own queue, the
+// overlay's key handling and the chat box. Test aid only.
+// The game window's id: ImGui's SDL2 backend drops an event for a window it
+// does not know, and keeps the id as the main viewport's handle.
+Uint32 window_id() {
+    return (Uint32)(intptr_t)ImGui::GetMainViewport()->PlatformHandle;
+}
+void push_key(SDL_Scancode sc, SDL_Keycode sym) {
+    for (int down = 1; down >= 0; --down) {
+        SDL_Event e{};
+        e.type = down ? SDL_KEYDOWN : SDL_KEYUP;
+        e.key.windowID = window_id();
+        e.key.state = down ? SDL_PRESSED : SDL_RELEASED;
+        e.key.keysym.scancode = sc;
+        e.key.keysym.sym = sym;
+        SDL_PushEvent(&e);
+    }
+}
+void push_text(const std::string& all) {
+    for (size_t i = 0; i < all.size(); i += 8) {
+        SDL_Event e{};
+        e.type = SDL_TEXTINPUT;
+        e.text.windowID = window_id();
+        std::snprintf(e.text.text, sizeof e.text.text, "%s", all.substr(i, 8).c_str());
+        SDL_PushEvent(&e);
+    }
+}
+// The steps: T five seconds after this machine is online; the text half a
+// second after the box opened (once its field has the keyboard); Return a
+// second after that.
+void test_type_tick() {
+    static const char* text = std::getenv("LB_CHAT_TEST_TYPE");
+    static unsigned long long since = 0, opened = 0;
+    static int step = 0;
+    if (!text || !*text || step >= 3 || !online()) return;
+    const unsigned long long now = SDL_GetTicks64();
+    if (!since) since = now;
+    if (step == 0 && now - since >= 5000ull) {
+        push_key(SDL_SCANCODE_T, SDLK_t);
+        step = 1;
+    } else if (step >= 1 && g_open) {
+        if (!opened) opened = now;
+        if (step == 1 && now - opened >= 500ull) {
+            push_text(text);
+            step = 2;
+        } else if (step == 2 && now - opened >= 1500ull) {
+            push_key(SDL_SCANCODE_RETURN, SDLK_RETURN);
+            step = 3;
+        }
+    }
+}
+
 void test_send_tick() {
+    test_type_tick();
     static const char* text = std::getenv("LB_CHAT_TEST_SEND");
     static unsigned long long since = 0;
     if (!text || !*text) return;
@@ -384,6 +439,15 @@ extern "C" void lb_chat_open(void) {
     if (!online()) return;
     g_open = true;
     g_focus = true;
+    std::fprintf(stderr, "[lb_chat] the chat box opened\n");
+    std::fflush(stderr);
+    // LB_CHAT_TEST_TYPE: the opening key's own "t" follows its key event, as
+    // a keyboard's does, to be swallowed (test_type_tick types the rest).
+    static bool typed = false;
+    if (std::getenv("LB_CHAT_TEST_TYPE") && !typed) {
+        typed = true;
+        push_text("t");
+    }
 }
 extern "C" void lb_chat_close(void) {
     g_open = false;

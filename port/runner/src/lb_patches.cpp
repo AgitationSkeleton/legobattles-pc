@@ -4879,12 +4879,18 @@ extern "C" int lb_net_local_hero(void) {
 
 void ready_toggle_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kReadyToggle);
-    if (g_lobby_withheld && lobby_joined()) {
+    // docs/418: nor before the host's balance is wholly in force here.
+    const bool balance = lb_net_guest_state() == 5 && !lb_balance_host_set_current();
+    std::fprintf(stderr, "[lb_balance] lobby: Ready pressed (state %d, host's balance: "
+                 "%s)\n", lb_net_guest_state(), lb_balance_host_set_why());
+    std::fflush(stderr);
+    if ((g_lobby_withheld || balance) && lobby_joined()) {
         const uint8_t b = bus_read_u8(kLocalLobbyByte);
         // The toggle flips bit 0; set, it flips to "not ready".
         if (!(b & 1u)) bus_write_u8(kLocalLobbyByte, (uint8_t)(b | 1u));
-        std::fprintf(stderr, "[lb_mods] lobby: Ready refused; this machine "
-                     "lacks the host's map\n");
+        std::fprintf(stderr, "[lb_mods] lobby: Ready refused; %s\n",
+                     g_lobby_withheld ? "this machine lacks the host's map"
+                                      : "the host's balance is not in force yet");
         std::fflush(stderr);
     }
     if (original) original();
@@ -4939,6 +4945,22 @@ void lobby_packet_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kLobbyPacket);
     const uint32_t pkt = g_cpu.R[1];
     if (lobby_joined() || lb_net_is_hosting_state()) lobby_names_filter(pkt);
+    // docs/418: not ready while the host's balance is not in force here.
+    if (lb_net_guest_state() == 5 && !lb_balance_host_set_current()) {
+        const uint8_t b = bus_read_u8(kLocalLobbyByte);
+        if (b & 1u) {
+            bus_write_u8(kLocalLobbyByte, (uint8_t)(b & ~1u));
+            static unsigned said = 0;
+            if (said++ < 8) {
+                std::fprintf(stderr, "[lb_balance] lobby: ready withdrawn; the host's "
+                             "balance is not in force (host set %d, pack %d of %d, "
+                             "values %s)\n", lb_balance_host_on(),
+                             lb_balance_applied_slot(), lb_balance_host_slot(),
+                             lb_balance_custom_dirty() ? "pending" : "written");
+                std::fflush(stderr);
+            }
+        }
+    }
     if (!lobby_joined()) g_lobby_withheld = false;
     else if (guest_ptr(pkt) && bus_read_u8(pkt) == 2u) {
         const uint32_t key = bus_read_u32(pkt + 0xCu);
@@ -4996,6 +5018,8 @@ void lobby_packet_override(void) {
                                   "mods/maps and join again.",
                                   name[0] ? name : "?");
                     lb_overlay_notice(text);
+                    // docs/420: and look for it in the community archive.
+                    if (name[0]) lb_mapfetch_request(name);
                 }
             }
         }
@@ -5549,6 +5573,32 @@ extern "C" int lb_same_builders_applied(void) { return g_builders_patched; }
 // and one more, because a battle is being set up before its view exists:
 //   * no unit on the field (the entity pool, as lb_field walks it).
 extern "C" int lb_net_guest_state(void);   /* src/lb_net.cpp */
+
+// docs/418: the same test for the HOST'S set on a joiner: it is put in force
+// in the joined lobby (state 5), which is where the host's rules arrive; never
+// in a battle, loading or ending one.
+const char* host_layer_blocked() {
+    const int net = lb_net_guest_state();
+    if (net != 5 || !lb_balance_host_on()) return lb_blueprint_edit_blocked();
+    const uint32_t view = bus_read_u32(kViewSlot);
+    if (guest_ptr(view) && bus_read_u32(view + 0x1Cu) != 0u)
+        return "not during a battle (the pause menu counts)";
+    if (lb_field_entity_at(0, nullptr, nullptr, nullptr, nullptr))
+        return "not while a battle is loading or ending";
+    return nullptr;
+}
+
+// docs/418: this machine's own pack and Same Builders source (what a host
+// sends), and the host's on a joiner that has its set.
+extern "C" int lb_balance_effective_slot(void) {
+    int slot = lb_setting_balance_patch();
+    if (const char* spec = std::getenv("LB_BALANCE")) slot = std::atoi(spec);
+    return slot;
+}
+extern "C" int lb_balance_effective_builders(void) {
+    const int b = lb_setting_same_builders();
+    return b < 0 || b > 6 ? 0 : b;
+}
 
 extern "C" const char* lb_blueprint_edit_blocked(void) {
     const int net = lb_net_guest_state();
@@ -12052,10 +12102,12 @@ extern "C" void lb_patches_on_vblank(void) {
         g_bp_frames = 0u;
         return;
     } else if (!blueprint_block_valid(g_blueprint_base) && !g_builders_patched &&
-               !lb_balance_is_applied()) {
+               !lb_balance_is_applied() && !lb_balance_custom_written()) {
         // A balance patch legitimately changes the Imperial builder's stats, so
         // the fingerprint stops matching once one is applied. Re-finding then
-        // would search forever and never validate.
+        // would search forever and never validate. docs/418: so do the
+        // player's own values (record 62's), which until then lost the block
+        // and re-snapshotted the edited bytes as the game's own.
         g_blueprint_base = 0u;
         return;
     }
@@ -12084,16 +12136,42 @@ extern "C" void lb_patches_on_vblank(void) {
     // What the settings want. LB_BALANCE=<slot> applies a balance patch
     // without the UI, so it can be verified headlessly (a test aid, like
     // LB_AUTOPLAY).
-    int slot = lb_setting_balance_patch();
-    if (const char* spec = std::getenv("LB_BALANCE")) slot = std::atoi(spec);
-    int builders = lb_setting_same_builders();   // docs/396: 0, or the source
-    if (builders < 0 || builders > 6) builders = 0;
+    // docs/418: a joiner takes the host's balance (pack, builders, values)
+    // once all of it has arrived, and gives it back when it is no longer in
+    // the host's lobby or match.
+    {
+        const int net = lb_net_guest_state();
+        if (net == 5 || net == 12 || net == 7) {
+            unsigned long long seed = 0;
+            int hs = 0, hb = 0;
+            const int total = lb_rules_host_balance(&seed, &hs, &hb, nullptr, 0);
+            if (total >= 0 && (!lb_balance_host_on() || seed != lb_balance_host_seed())) {
+                static std::vector<int> vals;
+                vals.assign(3u * (size_t)total + 3u, 0);
+                const int n = lb_rules_host_balance(&seed, &hs, &hb, vals.data(), total);
+                if (n >= 0 && !lb_balance_host_set(seed, hs, hb, vals.data(), n))
+                    std::fprintf(stderr, "[lb_balance] the host's balance did not "
+                                 "match its seed %016llX; asking again\n", seed);
+            }
+        } else if (lb_balance_host_on()) {
+            lb_balance_host_clear();
+        }
+    }
+    int slot = lb_balance_effective_slot();
+    int builders = lb_balance_effective_builders();   // docs/396: 0, or the source
+    if (lb_balance_host_on()) {   // docs/418
+        slot = lb_balance_host_slot();
+        builders = lb_balance_host_builders();
+        if (builders < 0 || builders > 6) builders = 0;
+    }
     const int creatures = lb_creatures_live() ? 1 : 0;   // docs/410
     if (slot == lb_balance_applied_slot() && builders == g_builders_patched &&
         creatures == g_creatures_patched) {
         // docs/404: only the player's own values changed. They may change in
-        // an offline battle (a recording carries each change); not online.
-        if (lb_balance_custom_dirty() && !lb_balance_custom_blocked())
+        // an offline battle (a recording carries each change); not online --
+        // except the host's set, in the joined lobby (docs/418).
+        if (lb_balance_custom_dirty() &&
+            (!lb_balance_custom_blocked() || !host_layer_blocked()))
             lb_balance_custom_apply(g_blueprint_base);
         return;
     }
@@ -12104,7 +12182,9 @@ extern "C" void lb_patches_on_vblank(void) {
     // it is what always happened at the load.
     if (!discovered) {
         static int said_slot = -1, said_builders = -1;
-        if (const char* why = lb_blueprint_edit_blocked()) {
+        // docs/418: the host's set (and its creatures rule) goes in in the
+        // joined lobby; this machine's own changes still wait.
+        if (const char* why = host_layer_blocked()) {
             if (said_slot != slot || said_builders != builders) {
                 said_slot = slot;
                 said_builders = builders;
@@ -12163,6 +12243,33 @@ extern "C" void lb_patches_on_vblank(void) {
                      "Robot 80, Shark 400\n");
     }
     lb_balance_custom_apply(g_blueprint_base);   // docs/404: the top layer
+}
+
+// docs/418: the host's balance is wholly in force on this joiner -- its pack,
+// its Same Builders source, the creatures rule and every value written.
+// Which of those is not yet so, for the log.
+extern "C" const char* lb_balance_host_set_why(void) {
+    if (!lb_balance_host_on()) return "the host's set has not arrived";
+    if (!g_blueprint_base || !g_bp_settled) return "the blueprints are not settled";
+    int b = lb_balance_host_builders();
+    if (b < 0 || b > 6) b = 0;
+    if (lb_balance_applied_slot() != lb_balance_host_slot()) return "the pack is not in";
+    if (g_builders_patched != b) return "Same Builders is not in";
+    if (g_creatures_patched != (lb_creatures_live() ? 1 : 0)) return "the creatures rule is not in";
+    if (lb_balance_custom_dirty()) {
+        const char* why = host_layer_blocked();
+        return why ? why : "the values are not written yet";
+    }
+    return "in force";
+}
+
+extern "C" int lb_balance_host_set_current(void) {
+    if (!lb_balance_host_on() || !g_blueprint_base || !g_bp_settled) return 0;
+    int b = lb_balance_host_builders();
+    if (b < 0 || b > 6) b = 0;
+    return lb_balance_applied_slot() == lb_balance_host_slot() &&
+           g_builders_patched == b && !lb_balance_custom_dirty() &&
+           g_creatures_patched == (lb_creatures_live() ? 1 : 0);
 }
 
 

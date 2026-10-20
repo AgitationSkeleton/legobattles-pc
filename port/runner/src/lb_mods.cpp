@@ -39,6 +39,7 @@
 #include <SDL.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -540,10 +541,22 @@ void scan(const std::vector<uint8_t>& rom, const Nitro& own) {
             if (dt.empty() || !slurp(dt, &m.detail)) {
                 int s = 0;
                 if (lower(stem).rfind("mp", 0) == 0) s = std::atoi(stem.c_str() + 2);
+                // docs/419: else a folder named for its slot, "18-Better
+                // Outbreak" (the Better Free Play maps pack's own convention).
+                const std::string fn = f.filename().string();
+                if ((s < 1 || s > 30) && !fn.empty() && std::isdigit((unsigned char)fn[0])) {
+                    size_t d = 0;
+                    while (d < fn.size() && std::isdigit((unsigned char)fn[d])) ++d;
+                    if (d < fn.size() && (fn[d] == '-' || fn[d] == ' '))
+                        s = std::atoi(fn.c_str());
+                }
                 char stock[40];
                 std::snprintf(stock, sizeof stock, "BP/DetailTiles_mp%02d.tbp",
                               s >= 1 && s <= 30 ? s : 1);
                 mem_read(rom, own, stock, &m.detail);
+                std::fprintf(stderr, "[lb_mods] %s: no detail tiles of its own; "
+                             "slot mp%02d's\n", f.filename().string().c_str(),
+                             s >= 1 && s <= 30 ? s : 1);
             }
             m.slot = 1000 + loose_n;
             m.source = "mods/maps/" + f.lexically_relative(loose).generic_string();
@@ -761,6 +774,16 @@ extern "C" const char* lb_mods_name(int k) {
     return (k >= 0 && k < (int)g_maps.size()) ? g_maps[(size_t)k].name.c_str() : "";
 }
 extern "C" const char* lb_mods_status(void) { return g_status.c_str(); }
+// docs/420: the mods folder (LB_MODS_DIR, else beside the executable).
+extern "C" const char* lb_mods_dir(void) {
+    static std::string d;
+    if (d.empty()) {
+        const char* alt = std::getenv("LB_MODS_DIR");
+        d = alt && *alt ? std::string(alt)
+                        : (std::filesystem::path(exe_dir()) / "mods").string();
+    }
+    return d.c_str();
+}
 // docs/413: a map's content hash (map, detail tiles, minimaps), the identity
 // a multiplayer lobby compares; and the map holding a hash, or -1.
 extern "C" unsigned long long lb_mods_hash(int k) {

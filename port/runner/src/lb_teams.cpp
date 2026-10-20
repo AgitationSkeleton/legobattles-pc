@@ -704,6 +704,16 @@ uint8_t g_flags_recv = 0;                  // docs/406; under g_rules_mu
 struct RecvMap { unsigned key; unsigned long long hash; std::string name; };
 std::vector<RecvMap> g_maps_recv;          // under g_rules_mu
 bool g_maps_recv_has = false;              // under g_rules_mu
+// docs/418: the host's balance as it arrives, page by page (under g_rules_mu):
+// the seed being assembled, its pack and builders, the values so far and
+// which pages have come; `g_bal_done` once every page of that seed has.
+// `g_bal_absent`: the host's rules carry no balance (a build before it).
+unsigned long long g_bal_seed = 0ull;
+int g_bal_slot = 0, g_bal_builders = 0, g_bal_total = 0, g_bal_pages = 0;
+std::vector<int> g_bal_values;             // triples
+std::vector<bool> g_bal_seen;
+bool g_bal_done = false, g_bal_absent = false;
+constexpr int kBalPerPage = 60;
 // When they last arrived. A host sends them every 250 ms from opening its
 // lobby to the end of the match, so rules older than a few seconds belong to
 // a lobby this player has left and are not applied.
@@ -1323,9 +1333,69 @@ extern "C" int lb_rules_outgoing(unsigned char* buf, int cap) {
         ++maps;
     }
     buf[count_at] = (unsigned char)maps;
+    // docs/418: then one page of the host's balance: 'B', a version, the seed
+    // (u64), the pack, the Same Builders source, the value count (u16), this
+    // page and the page count, then up to 60 values of (record u16, field
+    // u8, value u32). The pages go round, one per datagram.
+    {
+        static std::vector<int> vals(3 * 4096);
+        static int page = 0;
+        const int slot = lb_balance_effective_slot();
+        const int builders = lb_balance_effective_builders();
+        const int total = std::min(lb_balance_local_values(vals.data(), 4096), 4096);
+        const int pages = total ? (total + kBalPerPage - 1) / kBalPerPage : 1;
+        if (pages <= 255) {
+            page = (page + 1) % pages;
+            const int first = page * kBalPerPage;
+            const int cnt = std::min(kBalPerPage, total - first);
+            if (n + 18 + 7 * std::max(cnt, 0) <= cap) {
+                const unsigned long long seed = lb_balance_local_seed(slot, builders);
+                buf[n++] = 'B';
+                buf[n++] = 1;
+                for (int b = 0; b < 8; ++b) buf[n++] = (unsigned char)(seed >> (8 * b));
+                buf[n++] = (unsigned char)slot;
+                buf[n++] = (unsigned char)builders;
+                buf[n++] = (unsigned char)(total & 0xFF);
+                buf[n++] = (unsigned char)(total >> 8);
+                buf[n++] = (unsigned char)page;
+                buf[n++] = (unsigned char)pages;
+                buf[n++] = (unsigned char)std::max(cnt, 0);
+                for (int i = 0; i < cnt; ++i) {
+                    const int* t = &vals[3 * (first + i)];
+                    buf[n++] = (unsigned char)(t[0] & 0xFF);
+                    buf[n++] = (unsigned char)(t[0] >> 8);
+                    buf[n++] = (unsigned char)t[1];
+                    for (int b = 0; b < 4; ++b) buf[n++] = (unsigned char)(t[2] >> (8 * b));
+                }
+            }
+        }
+    }
     std::lock_guard<std::mutex> lk(g_rules_mu);
     std::memcpy(buf + 6, g_bans_local, kBanBytes);
     return n;
+}
+
+// docs/418: the host's balance for a joiner, once every page of one seed has
+// arrived: the seed, pack, builders and up to `max` values (triples), and
+// the value count is returned. -1 before then. An older host's rules carry
+// no balance; that is the game's own (seed 0, nothing else).
+extern "C" int lb_rules_host_balance(unsigned long long* seed, int* slot, int* builders,
+                                     int* triples, int max) {
+    std::lock_guard<std::mutex> lk(g_rules_mu);
+    if (!rules_fresh()) return -1;
+    if (g_bal_absent) {
+        *seed = 0ull;
+        *slot = *builders = 0;
+        return 0;
+    }
+    if (!g_bal_done) return -1;
+    *seed = g_bal_seed;
+    *slot = g_bal_slot;
+    *builders = g_bal_builders;
+    const int n = std::min(g_bal_total, max);
+    if (triples && n > 0)
+        std::memcpy(triples, g_bal_values.data(), sizeof(int) * 3u * (size_t)n);
+    return g_bal_total;
 }
 
 // docs/413: what the host's rules say of the lobby key `key`: 1, with its
@@ -1379,8 +1449,8 @@ extern "C" void lb_rules_incoming(const unsigned char* buf, int len,
     // docs/413: the host's mod maps, after the flags.
     std::vector<RecvMap> maps;
     bool has_maps = false;
+    int at = 6 + n + 2;   // docs/418: and where the balance page starts
     {
-        int at = 6 + n + 2;
         if (fn >= 1 && len > at) {
             const int count = buf[at++];
             has_maps = true;
@@ -1400,6 +1470,52 @@ extern "C" void lb_rules_incoming(const unsigned char* buf, int len,
             }
             if (!has_maps) maps.clear();
         }
+    }
+    // docs/418: then one page of the host's balance.
+    bool bal_done_now = false;
+    // A page is 17 bytes before its values (an empty set is exactly that).
+    if (has_maps && at + 17 <= len && buf[at] == 'B' && buf[at + 1] == 1) {
+        g_bal_absent = false;
+        unsigned long long seed = 0;
+        for (int b = 0; b < 8; ++b) seed |= (unsigned long long)buf[at + 2 + b] << (8 * b);
+        const int slot = buf[at + 10], builders = buf[at + 11];
+        const int total = buf[at + 12] | (buf[at + 13] << 8);
+        const int page = buf[at + 14], pages = buf[at + 15], cnt = buf[at + 16];
+        at += 17;
+        if (seed != g_bal_seed || total != g_bal_total || pages != g_bal_pages) {
+            g_bal_seed = seed;
+            g_bal_slot = slot;
+            g_bal_builders = builders;
+            g_bal_total = total;
+            g_bal_pages = pages;
+            g_bal_values.assign(3u * (size_t)total, 0);
+            g_bal_seen.assign((size_t)std::max(pages, 1), false);
+            g_bal_done = false;
+        }
+        const int first = page * kBalPerPage;
+        if (pages >= 1 && page < pages && first + cnt <= total && at + 7 * cnt <= len &&
+            !g_bal_done) {
+            for (int i = 0; i < cnt; ++i, at += 7) {
+                int* t = &g_bal_values[3u * (size_t)(first + i)];
+                t[0] = buf[at] | (buf[at + 1] << 8);
+                t[1] = buf[at + 2];
+                t[2] = (int)((uint32_t)buf[at + 3] | ((uint32_t)buf[at + 4] << 8) |
+                             ((uint32_t)buf[at + 5] << 16) | ((uint32_t)buf[at + 6] << 24));
+            }
+            g_bal_seen[(size_t)page] = true;
+            if (std::all_of(g_bal_seen.begin(), g_bal_seen.end(), [](bool b) { return b; })) {
+                g_bal_done = true;
+                bal_done_now = true;
+            }
+        }
+    } else if (!has_maps || at >= len) {
+        g_bal_absent = true;   // an older host: no balance in its rules
+    }
+    if (bal_done_now) {
+        std::fprintf(stderr, "[lb_teams] the host's balance from instance %u: "
+                     "seed %016llX, %d value(s) in %d page(s)\n", sender,
+                     g_bal_seed, g_bal_total, g_bal_pages);
+        std::fflush(stderr);
     }
     const bool maps_changed = !g_bans_recv_ok || has_maps != g_maps_recv_has ||
                               maps.size() != g_maps_recv.size();
