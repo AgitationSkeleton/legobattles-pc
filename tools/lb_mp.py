@@ -65,6 +65,12 @@ def launch(out, index, port, extra_env, base_port=None):
 
     env = dict(os.environ)
     env["NDS_DEBUG_ALLOW_WRITES"] = "1"
+    # OWNER RULE (2026-10-21): an automated test never plays under the owner's
+    # names. The seeded save's profile carries one, and an online test lists
+    # it on the public lobby servers and in their Discord log, so each
+    # instance renames its profile at the main menu (LB_TEST_RENAME, saved by
+    # the game itself) to a neutral test name. --env LB_TEST_RENAME=... wins.
+    env.setdefault("LB_TEST_RENAME", "Tester%d" % (index + 1))
     # On the test display, as lb_exp.py (docs/396).
     env.setdefault("LB_DISPLAY_W", "1920")
     env.setdefault("LB_DISPLAY_H", "1080")

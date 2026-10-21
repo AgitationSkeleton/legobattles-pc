@@ -217,6 +217,8 @@ int lb_setting_criminal_leader_name(void);
 // Storehouse) and Free Play's opening opponent (0..5 factions, 6 Custom,
 // 7 Random; 1 Wizard is the cartridge's own).
 int lb_setting_plantation_name(void);
+// docs/425: cosmetic renames 0 Claw Tank, 1 Gemma, 2 Broadside (0 off, 1 on).
+int lb_setting_rename(int which);
 int lb_setting_default_opponent(void);
 
 // Rebindable input: SDL scancode -> DS key bit, from the rebindable table. Replaces
@@ -304,6 +306,7 @@ int  lb_balance_is_applied(void);
 int  lb_balance_custom_written(void);   /* docs/418 */
 int  lb_balance_applied_slot(void);
 const char* lb_balance_name(int slot);
+int lb_balance_pack_count(void);   /* docs/426: presets in the generated table */
 int  lb_balance_byte_count(int slot);
 // docs/386: the loaded bytes every pack touches, taken before any is applied,
 // and taking the applied pack back out with them.
@@ -341,6 +344,12 @@ int  lb_balance_host_set_current(void);
 const char* lb_balance_host_set_why(void);
 // docs/408: units' fields 0..9 are the table's columns; 10..14 the spells.
 enum { LB_BAL_SPELL_FIELD0 = 10, LB_BAL_SPELLS = 5 };
+// docs/426: units' fields 15..25 are the Traits section (lb_balance.cpp).
+enum { LB_BAL_TRAIT_FIELD0 = 15, LB_BAL_TRAITS = 11, LB_BAL_SPEED_FIELD = 4 };
+// docs/426: a blueprint diffed against the player's own; fills msg; returns the
+// number of values set, or -1 on failure.
+int lb_balance_import_file(const char* path, char* msg, int msg_cap);
+int lb_pick_balance_rom_file(char* buf, int cap);
 int         lb_balance_field_count(int kind);
 const char* lb_balance_field_name(int kind, int field);
 int         lb_balance_field_max(int kind, int field);   // the field's range
@@ -523,6 +532,13 @@ int  lb_relay_status(char* out, int cap);   /* lb_relay.cpp, docs/424 */
 // docs/413: a message for the player that the game's own screens cannot show,
 // drawn over the game whether or not the menu is open (lb_overlay.cpp).
 void lb_overlay_notice(const char* text);
+// docs/427: the notification sound (lb_sfx.cpp), on its own audio device.
+int  lb_setting_notify_sound(void);    /* 0 off, 1 Group set (default) .. 8 */
+int  lb_setting_notify_volume(void);   /* 0..100 */
+const char* lb_sfx_choice_name(int i);
+void lb_sfx_tick(void);
+void lb_sfx_preview(void);
+void lb_sfx_notify(void);              /* at most once per 300 ms */
 // docs/415: online chat and the swear filter (lb_chat.cpp). The bridge takes
 // the datagrams to send and hands over the ones received; the overlay opens,
 // closes and draws the chat box and toasts.

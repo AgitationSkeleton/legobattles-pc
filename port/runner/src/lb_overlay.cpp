@@ -301,6 +301,9 @@ struct Settings {
     // Music
     int  music_mode = 0;           // 0 vanilla, 1 random, 2 faction, 3 map,
                                    // 4..9 always one side (docs/387)
+    // docs/427: the notification sound, local only (never the emulated DS).
+    int  notify_sound = 1;         // 0 off, 1 Group set (default) .. 8 Magic
+    int  notify_volume = 60;       // percent
 
     // Cosmetic, CLIENT-LOCAL (docs/356): what this machine's text calls the
     // Space Criminal Leader -- 0 the cartridge's own words, 1 Kranxx,
@@ -309,6 +312,10 @@ struct Settings {
     // docs/392, the same kind: what this machine's text calls the Pirates'
     // Plantation -- 0 the cartridge's word, 1 Hide-Away, 2 Storehouse.
     int  plantation_name = 0;
+    // docs/425, the same kind: 0 the cartridge's word, 1 the new name.
+    int  rename_claw_tank = 0;    // Crystal Reaper
+    int  rename_gemma = 0;        // Doctor Kelvin
+    int  rename_broadside = 0;    // Governor Tyranny
     // docs/392: the choice Free Play's opponent screen opens on -- 0..5 the
     // six factions in the game's order (King, Wizard, Pirate, Imperial,
     // Earth, Alien), 6 Custom, 7 Random. 1, Wizard, is the cartridge's own.
@@ -598,10 +605,20 @@ extern "C" void lb_settings_save(void) {
                   g_set.unlock_campaigns ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"music_mode\": %d,\n",
                   g_set.music_mode); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"notify_sound\": %d,\n",
+                  g_set.notify_sound); o += buf;   // docs/427
+    std::snprintf(buf, sizeof buf, "  \"notify_volume\": %d,\n",
+                  g_set.notify_volume); o += buf;
     std::snprintf(buf, sizeof buf, "  \"criminal_leader_name\": %d,\n",
                   g_set.criminal_leader_name); o += buf;
     std::snprintf(buf, sizeof buf, "  \"plantation_name\": %d,\n",
                   g_set.plantation_name); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"rename_claw_tank\": %d,\n",
+                  g_set.rename_claw_tank); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"rename_gemma\": %d,\n",
+                  g_set.rename_gemma); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"rename_broadside\": %d,\n",
+                  g_set.rename_broadside); o += buf;
     std::snprintf(buf, sizeof buf, "  \"default_opponent\": %d,\n",
                   g_set.default_opponent); o += buf;
     std::snprintf(buf, sizeof buf, "  \"name_from_save\": %s,\n",
@@ -714,9 +731,16 @@ extern "C" void lb_settings_load(void) {
     json_get_bool(s, "unlock_art", &g_set.unlock_art);
     json_get_bool(s, "unlock_campaigns", &g_set.unlock_campaigns);
     json_get_int(s, "music_mode", &g_set.music_mode);
+    json_get_int(s, "notify_sound", &g_set.notify_sound);       // docs/427
+    json_get_int(s, "notify_volume", &g_set.notify_volume);
+    g_set.notify_sound = std::max(0, std::min(8, g_set.notify_sound));
+    g_set.notify_volume = std::max(0, std::min(100, g_set.notify_volume));
     // A file written before this key existed keeps the default (off).
     json_get_int(s, "criminal_leader_name", &g_set.criminal_leader_name);
     json_get_int(s, "plantation_name", &g_set.plantation_name);     // docs/392
+    json_get_int(s, "rename_claw_tank", &g_set.rename_claw_tank);   // docs/425
+    json_get_int(s, "rename_gemma", &g_set.rename_gemma);
+    json_get_int(s, "rename_broadside", &g_set.rename_broadside);
     json_get_int(s, "default_opponent", &g_set.default_opponent);   // docs/392
     json_get_str(s, "master_host", g_set.master_host, sizeof g_set.master_host);
     json_get_bool(s, "master_both", &g_set.master_both);     // docs/419
@@ -758,11 +782,17 @@ extern "C" void lb_settings_load(void) {
 
     // Clamp anything a hand-edited file could put out of range.
     if (g_ui_scale < 0.75f || g_ui_scale > 3.0f) g_ui_scale = 1.0f;
-    if (g_set.balance_patch < 0 || g_set.balance_patch > 3) g_set.balance_patch = 0;
+    if (g_set.balance_patch < 0 || g_set.balance_patch > lb_balance_pack_count())
+        g_set.balance_patch = 0;
     if (g_set.criminal_leader_name < 0 || g_set.criminal_leader_name > 2)
         g_set.criminal_leader_name = 0;
     if (g_set.plantation_name < 0 || g_set.plantation_name > 2)
         g_set.plantation_name = 0;
+    if (g_set.rename_claw_tank < 0 || g_set.rename_claw_tank > 1)
+        g_set.rename_claw_tank = 0;
+    if (g_set.rename_gemma < 0 || g_set.rename_gemma > 1) g_set.rename_gemma = 0;
+    if (g_set.rename_broadside < 0 || g_set.rename_broadside > 1)
+        g_set.rename_broadside = 0;
     if (g_set.default_opponent < 0 || g_set.default_opponent > 7)
         g_set.default_opponent = 1;
     std::fprintf(stderr, "[lb_settings] loaded %s\n", path.c_str());
@@ -1060,6 +1090,15 @@ void tab_end() {
     if (!g_menu_id) ImGui::EndTabItem();
 }
 
+// docs/427: one or two plain lines at the top of a page: what it does, how to
+// use it, and whether it reaches online play or stays on this machine.
+void guide(const char* text) {
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped("%s", text);
+    ImGui::PopStyleColor();
+    ImGui::Spacing();
+}
+
 void tab_display() {
     if (!tab_begin("Display")) return;
 
@@ -1182,10 +1221,15 @@ void tab_display() {
     // during a battle; lb_patches.cpp's map_parse_override renames the map's
     // tileset as it loads, so that one applies from the next battle.
     ImGui::Separator();
-    const char* palettes[] = {"Per-Mod", "Vanilla", "FactionWars", "Random"};
+    guide("Level Palettes: the colours the maps are drawn in. Pick one and start a "
+          "battle. This is local only: other players do not see it.");
+    const char* palettes[] = {"Per-Mod", "Vanilla", "FactionWars / FunLite2", "Random"};
     ImGui::Combo("Level Palettes", &g_set.level_palette, palettes,
                  IM_ARRAYSIZE(palettes));
-    help("The terrain's colours. FactionWars is that romhack's recolour of\n"
+    help("FunLite2's Pirate and Mars palettes are these exactly; its King\n"
+         "palette is the same except that its water colours are black,\n"
+         "which this does not copy.\n"
+         "The terrain's colours. FactionWars is that romhack's recolour of\n"
          "the three tilesets (REbalance ships the same); Random picks one\n"
          "per level. Per-Mod is the ROM's own palettes for now: a mod map\n"
          "found in several mods has no single palette of its own.\n"
@@ -1193,7 +1237,7 @@ void tab_display() {
     badge(WIRED);
     // docs/410: a separate choice for the mods folder's maps.
     const char* modpals[] = {"Same as Level Palettes", "Per-Mod", "Vanilla",
-                             "FactionWars", "Random"};
+                             "FactionWars / FunLite2", "Random"};
     ImGui::Combo("Mod Map Palettes", &g_set.mod_palette, modpals,
                  IM_ARRAYSIZE(modpals));
     help("The colours of the maps from the mods folder. Same as Level\n"
@@ -1459,9 +1503,9 @@ void tab_enhancements() {
 // docs/404: the balance packs, in Balance > Presets.
 void draw_balance_pack() {
     ImGui::Text("Balance Patch");
-    const char* packs[] = {"Off (Vanilla)", "Rebalance", "FactionWars", "Funlite"};
-    ImGui::Combo("##balance_patch", &g_set.balance_patch, packs,
-                 IM_ARRAYSIZE(packs));
+    ImGui::Combo("##balance_patch", &g_set.balance_patch,
+                 [](void*, int i) { return lb_balance_name(i); }, nullptr,
+                 lb_balance_pack_count() + 1);
     // Only the STAT changes are bundled. These mods also alter maps and
     // tilesets -- REbalance ships 14 custom maps -- and those are not
     // distributed here; see docs/101 for what each pack contains.
@@ -1524,32 +1568,8 @@ void draw_after_balance_pack() {
     // selected the top screen's unit panel reads "Plisken" under his portrait
     // (docs/356 s6). The cheat-keyboard route in docs/356 is the other place
     // it shows.
-    ImGui::Separator();
-    ImGui::Text("Change Space Criminal Leader Name");
-    ImGui::SameLine();
-    ImGui::TextDisabled("(this machine only)");
-    const char* leader_names[] = {"Off", "Kranxx", "Plisken"};
-    ImGui::Combo("##criminal_leader_name", &g_set.criminal_leader_name,
-                 leader_names, IM_ARRAYSIZE(leader_names));
-    help("Cosmetic and local: renames him in this game's text only.\n"
-         "Nothing reaches other players; gameplay is unchanged.\n"
-         "A screen already open shows the new name once reopened.");
-    badge(WIRED);
-
-    // docs/392: renames the Pirate structure "Plantation" to "Hide-Away" or
-    // "Storehouse". The same in-place edit of the loaded LOC
-    // table as the name above (apply_plantation_name in lb_patches.cpp):
-    // string 445, the building's name, and 866-868, "Build a Plantation".
-    ImGui::Text("Change Pirate Plantation Name");
-    ImGui::SameLine();
-    ImGui::TextDisabled("(this machine only)");
-    const char* plantation_names[] = {"Off", "Hide-Away", "Storehouse"};
-    ImGui::Combo("##plantation_name", &g_set.plantation_name,
-                 plantation_names, IM_ARRAYSIZE(plantation_names));
-    help("Cosmetic and local: renames the Pirates' farm building in this\n"
-         "game's text only (each language gets its own word). Gameplay is\n"
-         "unchanged. A screen already open shows it once reopened.");
-    badge(WIRED);
+    // (The two LOC-table renames that were here moved to the Renames section,
+    // tab_renames below.)
 
     // docs/385: an enhancement, on by default, that fixes the monkey cage.
     // Cosmetic and this machine's only, like the name above:
@@ -1576,6 +1596,83 @@ void draw_after_balance_pack() {
          "whichever hero came first in the selection, which depends on\n"
          "where the box was dragged.\n"
          "Only this player's menu changes; no rule of the match does.");
+    badge(WIRED);
+    tab_end();
+}
+
+// docs/425: Enhancements > Renames. Every cosmetic rename, all Off (the
+// cartridge's own words) by default; each is this machine's text only.
+// Plantation and Space Criminal Leader edit the loaded LOC table in place
+// (apply_plantation_name / apply_leader_name, docs/392, docs/356); the other
+// three are longer than the words they replace, so string_from_id_override in
+// lb_patches.cpp supplies the rewritten text as it is fetched.
+void tab_renames() {
+    if (!tab_begin("Renames")) return;
+    guide("Change the names the game shows for some characters and places. Pick a name "
+          "below. This is local only: it changes text on your screens, other players "
+          "do not see it, and gameplay is unchanged.");
+
+    // docs/356: apply_leader_name; seen with LB_LEADER_NAME=2 (9 strings).
+    ImGui::Separator();
+    ImGui::Text("Change Space Criminal Leader Name");
+    ImGui::SameLine();
+    ImGui::TextDisabled("(this machine only)");
+    const char* leader_names[] = {"Off", "Kranxx", "Plisken"};
+    ImGui::Combo("##criminal_leader_name", &g_set.criminal_leader_name,
+                 leader_names, IM_ARRAYSIZE(leader_names));
+    help("Cosmetic and local: renames him in this game's text only.\n"
+         "Nothing reaches other players; gameplay is unchanged.\n"
+         "A screen already open shows the new name once reopened.");
+    badge(WIRED);
+
+    // docs/392: "Plantation" -> "Hide-Away" or "Storehouse" (string 445, the
+    // building's name, and 866-868, "Build a Plantation").
+    ImGui::Text("Change Pirate Plantation Name");
+    ImGui::SameLine();
+    ImGui::TextDisabled("(this machine only)");
+    const char* plantation_names[] = {"Off", "Hide-Away", "Storehouse"};
+    ImGui::Combo("##plantation_name", &g_set.plantation_name,
+                 plantation_names, IM_ARRAYSIZE(plantation_names));
+    help("Cosmetic and local: renames the Pirates' farm building in this\n"
+         "game's text only (each language gets its own word). Gameplay is\n"
+         "unchanged. A screen already open shows it once reopened.");
+    badge(WIRED);
+
+    // docs/425: the three whole-word renames.
+    ImGui::Separator();
+    ImGui::Text("Rename Claw Tank");
+    ImGui::SameLine();
+    ImGui::TextDisabled("(this machine only)");
+    const char* claw_names[] = {"Off", "Crystal Reaper"};
+    ImGui::Combo("##rename_claw_tank", &g_set.rename_claw_tank,
+                 claw_names, IM_ARRAYSIZE(claw_names));
+    help("Cosmetic and local: \"Claw Tank\" reads \"Crystal Reaper\" in this\n"
+         "game's text only. Gameplay and other players are unaffected.\n"
+         "A screen already open shows it once reopened.");
+    badge(WIRED);
+
+    ImGui::Text("Rename Gemma");
+    ImGui::SameLine();
+    ImGui::TextDisabled("(this machine only)");
+    const char* gemma_names[] = {"Off", "Doctor Kelvin"};
+    ImGui::Combo("##rename_gemma", &g_set.rename_gemma,
+                 gemma_names, IM_ARRAYSIZE(gemma_names));
+    help("Cosmetic and local: \"Gemma\" reads \"Doctor Kelvin\" in this\n"
+         "game's text only (the credits keep her full name). Gameplay and\n"
+         "other players are unaffected. A screen already open shows it once\n"
+         "reopened.");
+    badge(WIRED);
+
+    ImGui::Text("Rename Broadside");
+    ImGui::SameLine();
+    ImGui::TextDisabled("(this machine only)");
+    const char* broadside_names[] = {"Off", "Governor Tyranny"};
+    ImGui::Combo("##rename_broadside", &g_set.rename_broadside,
+                 broadside_names, IM_ARRAYSIZE(broadside_names));
+    help("Cosmetic and local: \"Broadside\" reads \"Governor Tyranny\" in this\n"
+         "game's text only (\"Governor Broadside\" becomes \"Governor\n"
+         "Tyranny\"; the ship Lady Broadside is unchanged). Gameplay and other\n"
+         "players are unaffected. A screen already open shows it once reopened.");
     badge(WIRED);
     tab_end();
 }
@@ -1812,6 +1909,10 @@ void tab_input() {
 
 void tab_multiplayer() {
     if (!tab_begin("Multiplayer")) return;
+    guide("Choose the server and how you connect. To play online, one player hosts and "
+          "the others join from the game's own menu. Keep Both servers and the fast "
+          "online link the same as the host's; the relay starts by itself if a direct "
+          "link fails.");
 
     // docs/400: the known servers by name; Custom shows the fields.
     {
@@ -2175,6 +2276,9 @@ void tab_demo() {
 
 void tab_saves() {
     if (!tab_begin("Saves")) return;
+    guide("Import brings in a save from a cartridge or another emulator (any region); "
+          "Export keeps a copy of yours. Pick the file with Browse, then press the "
+          "button. Saves are local only: they never go online.");
 
     uint32_t live_size = 0;
     const uint8_t* live = live_save(&live_size);
@@ -2969,6 +3073,19 @@ void tab_music() {
         else
             ImGui::TextDisabled("  This port wants side %d (%s).", want,
                                 (want < 6) ? kSideName[want] : "?");
+    }
+    ImGui::Spacing();
+    // docs/427: the notification sound -- local only, its own audio device.
+    ImGui::Separator();
+    guide("Notification sound: a short sound when another player's chat message or a "
+          "notice arrives. Local only: it plays on your computer, never online.");
+    {
+        const char* items[9];
+        for (int i = 0; i < 9; ++i) items[i] = lb_sfx_choice_name(i);
+        ImGui::Combo("Notification sound", &g_set.notify_sound, items, 9);
+        ImGui::SliderInt("Volume##notify", &g_set.notify_volume, 0, 100, "%d%%");
+        if (ImGui::Button("Play")) lb_sfx_preview();
+        ImGui::SetItemTooltip("Plays the chosen sound once (it is read from your own ROM).");
     }
     ImGui::Spacing();
     // HOW IT WORKS, kept here rather than printed at the player.
@@ -4899,17 +5016,22 @@ bool bal_header(bool picks = false) {
         }
         return true;
     }
+    ImGui::PushTextWrapPos(0.0f);
     ImGui::TextDisabled(picks ? "Pick a spell. It applies at once, in a battle "
                                 "too; recordings carry it. Yellow choices are "
                                 "yours: right-click one to put it back."
                               : "Type a value and press Enter. It applies at once, "
                                 "in a battle too; recordings carry it. Yellow "
                                 "values are yours: right-click one to put it back.");
+    ImGui::PopTextWrapPos();
     return true;
 }
 
 void tab_balance_units() {
     if (!tab_begin("Balance Units")) return;
+    guide("Change a unit's cost, health, damage and speed. Click a value to edit it; "
+          "yellow means you changed it, and right-click puts it back. Online, the "
+          "host's balance applies to everyone.");
     static bool faction_env = false;   // LB_BAL_FACTION=0..7, a test aid
     if (!faction_env) {
         faction_env = true;
@@ -4972,6 +5094,153 @@ void tab_balance_units() {
                 char pname[48] = "";
                 if (p >= 0) lb_balance_record_name(p, pname, (int)sizeof pname);
                 ImGui::TextDisabled("%s", pname);
+            }
+            ImGui::EndTable();
+        }
+    }
+    tab_end();
+}
+
+// docs/426: the Entities Editor's other unit fields, in their own section.
+void tab_balance_traits() {
+    if (!tab_begin("Balance Traits")) return;
+    guide("Change where a unit can go, its size, its shot and its sight. Click a value "
+          "to edit it. Online, the host's balance applies to everyone.");
+    if (bal_header()) {
+        const bool locked = lb_balance_custom_blocked() != nullptr;
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("Where a unit can go, how big it is, what shot it uses "
+                            "and how far it sees. Yellow = yours; right-click to put back.");
+        ImGui::PopTextWrapPos();
+        SDL_Texture* atlas = lb_teams_hud_atlas(g_team_renderer);
+        static const char* const kCols[] = {
+            "Land", "Water", "Trees", "Bld collision", "Land<->water", "Not water-only",
+            "Hitbox", "Uninteract.", "Speed: none", "Projectile", "AI priority",
+            "Defogged"};
+        static const char* const kTips[] = {
+            "The unit can walk on land. (Read by FUN_0205079C.)",
+            "The unit can enter water. Ticking Land or Water also sets Building "
+            "collision, Land<->water and Not water-only the way the Entities Editor does.",
+            "The unit can walk through trees. (Read by FUN_02001510.)",
+            "Collides with buildings: the editor sets 0 for a unit that has Land and "
+            "Water, else 1. (FUN_0205079C.)",
+            "Crosses between land and water: the editor sets 1 with Land and Water.",
+            "The editor's BoatAntiFlag: ticked for every unit except water-only ones "
+            "(ships) and Shipyards. Ticking Water without Land clears it.",
+            "Hitbox size. (FUN_02001170.)",
+            "Uninteractable. UNCONFIRMED: the reader at +0x21 was not traced to the "
+            "blueprint, so this may do nothing.",
+            "No speed: writes 0x0000FFFF, as the Entities Editor's NONE does.",
+            "The projectile record a ranged unit fires, or Melee. A unit that "
+            "fires one has Melee damage 0.",
+            "AI priority: accumulated in the combat path (docs/25).",
+            "Defogged area: how far the unit clears the fog; FF clears the map. "
+            "A unit auto-attacks only within it, so raise it with Range "
+            "(Range above it is not used for auto-attack)."};
+        const int nc = 12;
+        if (ImGui::BeginTable("baltraits", 2 + nc,
+                              ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                                  ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY |
+                                  ImGuiTableFlags_SizingFixedFit)) {
+            ImGui::TableSetupScrollFreeze(2, 1);
+            ImGui::TableSetupColumn("##icon");
+            ImGui::TableSetupColumn("Name");
+            for (int c = 0; c < nc; ++c) ImGui::TableSetupColumn(kCols[c]);
+            ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+            for (int c = 0; c < nc + 2; ++c) {
+                ImGui::TableSetColumnIndex(c);
+                ImGui::TableHeader(ImGui::TableGetColumnName(c));
+                if (c >= 2 && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", kTips[c - 2]);
+            }
+            // Fields: F+0 Land, 1 Water, 2 Trees, 3 Bld collision, 4 Land<->water,
+            // 5 Hitbox, 6 Uninteractable, 7 Projectile, 8 AI priority, 9 Defogged,
+            // 10 Water-only.
+            const int F = LB_BAL_TRAIT_FIELD0;
+            const int n = lb_balance_record_count(LB_BAL_UNITS);
+            for (int rec = 0; rec < n; ++rec) {
+                if (bal_unlisted(rec)) continue;
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                float u0, v0, u1, v1;
+                if (atlas && lb_teams_hud_icon_uv(rec, &u0, &v0, &u1, &v1))
+                    ImGui::Image((ImTextureID)(intptr_t)atlas, ImVec2(24.0f, 24.0f),
+                                 ImVec2(u0, v0), ImVec2(u1, v1));
+                ImGui::TableNextColumn();
+                ImGui::TextUnformatted(bal_row_name(rec));
+                // Land, Water: a change also sets the dependent flags, as the editor does.
+                for (int k = 0; k < 2; ++k) {
+                    ImGui::TableNextColumn();
+                    const int was = lb_balance_custom_get(rec, F + k);
+                    const int wasv = lb_balance_value(rec, F + k);
+                    bal_flag(rec, F + k, locked);
+                    const int now = lb_balance_custom_get(rec, F + k);
+                    if (now >= 0 && (now != was) && wasv >= 0) {
+                        const bool l = lb_balance_value(rec, F) > 0;
+                        const bool w = lb_balance_value(rec, F + 1) > 0;
+                        bal_set(rec, F + 3, (l && w) ? 0 : 1);
+                        bal_set(rec, F + 4, (l && w) ? 1 : 0);
+                        // BoatAntiFlag is 0 for a water-only unit, 1 otherwise.
+                        bal_set(rec, F + 10, (w && !l) ? 0 : 1);
+                    }
+                }
+                ImGui::TableNextColumn(); bal_flag(rec, F + 2, locked);
+                ImGui::TableNextColumn(); bal_flag(rec, F + 3, locked);
+                ImGui::TableNextColumn(); bal_flag(rec, F + 4, locked);
+                ImGui::TableNextColumn(); bal_flag(rec, F + 10, locked);
+                ImGui::TableNextColumn(); bal_cell(LB_BAL_UNITS, rec, F + 5, locked);
+                ImGui::TableNextColumn(); bal_flag(rec, F + 6, locked);
+                ImGui::TableNextColumn();   // Speed: none
+                {
+                    const int sp = LB_BAL_SPEED_FIELD;
+                    const int live = lb_balance_value(rec, sp);
+                    const int custom = lb_balance_custom_get(rec, sp);
+                    ImGui::PushID(rec * 32 + 30);
+                    bool none = live == 0xFFFF;
+                    ImGui::BeginDisabled(locked || (live < 0 && custom < 0));
+                    if (ImGui::Checkbox("##none", &none))
+                        bal_set(rec, sp, none ? 0xFFFF : -1);
+                    ImGui::EndDisabled();
+                    ImGui::PopID();
+                }
+                ImGui::TableNextColumn();   // Projectile
+                {
+                    const int fld = F + 7;
+                    const int live = lb_balance_value(rec, fld);
+                    const int custom = lb_balance_custom_get(rec, fld);
+                    ImGui::PushID(rec * 32 + fld);
+                    if (custom >= 0)
+                        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.82f, 0.25f, 1.0f));
+                    char cur[48] = "Melee";
+                    const int first = lb_balance_record_first(LB_BAL_ATTACKS);
+                    const int cnt = lb_balance_record_count(LB_BAL_ATTACKS);
+                    if (live >= first && live < first + cnt)
+                        lb_balance_record_name(live, cur, (int)sizeof cur);
+                    else if (live >= 0 && live != 0xFFFF)
+                        std::snprintf(cur, sizeof cur, "#%d", live);
+                    ImGui::SetNextItemWidth(130.0f);
+                    ImGui::BeginDisabled(locked || live < 0);
+                    if (ImGui::BeginCombo("##proj", cur)) {
+                        if (ImGui::Selectable("Melee", live == 0xFFFF))
+                            bal_set(rec, fld, 0xFFFF);
+                        for (int p = first; p < first + cnt; ++p) {
+                            char nm[48];
+                            lb_balance_record_name(p, nm, (int)sizeof nm);
+                            char item[64];
+                            std::snprintf(item, sizeof item, "%s##%d", nm, p);
+                            if (ImGui::Selectable(item, p == live)) bal_set(rec, fld, p);
+                        }
+                        ImGui::EndCombo();
+                    }
+                    ImGui::EndDisabled();
+                    if (custom >= 0) {
+                        ImGui::PopStyleColor();
+                        if (!locked && ImGui::IsItemClicked(ImGuiMouseButton_Right))
+                            bal_set(rec, fld, -1);
+                    }
+                    ImGui::PopID();
+                }
+                ImGui::TableNextColumn(); bal_cell(LB_BAL_UNITS, rec, F + 8, locked);
+                ImGui::TableNextColumn(); bal_cell(LB_BAL_UNITS, rec, F + 9, locked);
             }
             ImGui::EndTable();
         }
@@ -5155,6 +5424,9 @@ void tab_balance_heroes() {
 
 void tab_balance_presets() {
     if (!tab_begin("Balance Presets")) return;
+    guide("Pick a mod's balance below, or use Import from ROM to take it from a mod's "
+          ".nds. Your own changes from the Balance pages are kept on top. Online, "
+          "the host's balance applies to everyone.");
     draw_balance_pack();
     ImGui::Separator();
     ImGui::Text("Your values: %d", lb_balance_custom_size());
@@ -5180,7 +5452,7 @@ void tab_balance_presets() {
     }
     ImGui::Spacing();
     ImGui::InputText("File", g_bal_path, sizeof g_bal_path);
-    if (ImGui::Button("Export...")) {
+    if (ImGui::Button("Export my balance (.json)...")) {
         if (lb_pick_json_file(g_bal_path, (int)sizeof g_bal_path, 1)) {
             static char text[32768];
             lb_balance_custom_text(text, (int)sizeof text);
@@ -5199,9 +5471,10 @@ void tab_balance_presets() {
                                             " value(s).";
         }
     }
+    ImGui::SetItemTooltip("Saves the chosen preset and every value you changed.");
     ImGui::SameLine();
     ImGui::BeginDisabled(lb_balance_custom_blocked() != nullptr);
-    if (ImGui::Button("Import...")) {
+    if (ImGui::Button("Import my balance (.json)...")) {
         if (lb_pick_json_file(g_bal_path, (int)sizeof g_bal_path, 0)) {
             std::string s;
             if (FILE* f = std::fopen(g_bal_path, "rb")) {
@@ -5221,7 +5494,7 @@ void tab_balance_presets() {
                 json_get_str(s, "values", text, sizeof text);
                 int pack = g_set.balance_patch;
                 json_get_int(s, "pack", &pack);
-                if (pack >= 0 && pack <= 3) g_set.balance_patch = pack;
+                if (pack >= 0 && pack <= lb_balance_pack_count()) g_set.balance_patch = pack;
                 const int n = lb_balance_custom_parse(text);
                 g_bal_msg = "Imported " + std::to_string(n) + " value(s) and the " +
                             lb_balance_name(g_set.balance_patch) + " pack.";
@@ -5229,11 +5502,38 @@ void tab_balance_presets() {
             }
         }
     }
+    ImGui::SetItemTooltip("Loads a file made by Export: the preset and the values in it.");
+    ImGui::SameLine();
+    // docs/426: every byte of a ROM's or Entities.ebp's blueprint that differs
+    // from the game's own and falls in a menu field becomes your value, on Vanilla.
+    if (ImGui::Button("Import from ROM...")) {
+        if (lb_pick_balance_rom_file(g_bal_path, (int)sizeof g_bal_path)) {
+            char msg[320];
+            const int n = lb_balance_import_file(g_bal_path, msg, (int)sizeof msg);
+            if (n >= 0) g_set.balance_patch = 0;
+            g_bal_msg = msg;
+            g_bal_msg_bad = n < 0;
+        }
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Reads a mod's balance from its .nds or an Entities.ebp; it "
+                          "replaces your changed values.\n"
+                          "A .nds or an Entities.ebp (raw or compressed): its numbers "
+                          "that differ from the game's own become your values,\n"
+                          "with the pack set to Vanilla. Changes outside the menu's "
+                          "fields are counted, not applied.");
     ImGui::EndDisabled();
     if (!g_bal_msg.empty())
         ImGui::TextColored(g_bal_msg_bad ? ImVec4(1.0f, 0.5f, 0.4f, 1.0f)
                                          : ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
                            "%s", g_bal_msg.c_str());
+    ImGui::Spacing();
+    ImGui::TextDisabled("Credits");   // docs/426
+    ImGui::TextUnformatted("FactionWars by Alpha47");
+    ImGui::TextUnformatted("Vanil+ by RynCat");
+    ImGui::TextUnformatted("Rebalance by RynCat");
+    ImGui::TextUnformatted("FunLite by Dream-Foxtrot");
+    ImGui::TextUnformatted("Fusion by NinjaGoat");
     tab_end();
 }
 
@@ -5244,10 +5544,12 @@ const std::vector<MenuHeader>& menu_headers() {
                       {"Music", "Music", tab_music},
                       {"Saves", "Saves", tab_saves}}},
         {"Enhancements", {{"Gameplay", "Enhancements", tab_enhancements},
+                          {"Renames", "Renames", tab_renames},
                           {"Team Builder", "Team Builder", tab_team_builder},
                           {"Ban Units", "Ban Units", tab_ban_units}}},
         {"Balance", {{"Units", "Balance Units", tab_balance_units},
                      {"Heroes", "Balance Heroes", tab_balance_heroes},
+                     {"Traits", "Balance Traits", tab_balance_traits},
                      {"Attacks", "Balance Attacks", tab_balance_attacks},
                      {"Presets", "Balance Presets", tab_balance_presets}}},
         {"Cheats", {{"Cheats", "Cheats", tab_cheats}}},
@@ -5471,9 +5773,15 @@ void draw_notice() {
 
 extern "C" void lb_overlay_notice(const char* text) {
     if (!text || !*text) return;
-    std::lock_guard<std::mutex> lk(g_notice_mu);
-    g_notice = text;
+    {
+        std::lock_guard<std::mutex> lk(g_notice_mu);
+        g_notice = text;
+    }
+    lb_sfx_notify();   // docs/427
 }
+
+extern "C" int lb_setting_notify_sound(void) { return g_set.notify_sound; }
+extern "C" int lb_setting_notify_volume(void) { return g_set.notify_volume; }
 
 extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
     if (std::getenv("LB_DIAG")) {
@@ -5489,6 +5797,7 @@ extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
     // See the note at its definition and docs/291.
     lb_field_bench_tick();  /* legobattles-decomp: docs/325 phase 1 */
     lb_map_dump_tick();
+    lb_sfx_tick();   // docs/427: decode the chosen notification sound
 
     if (g_ready) save_cache_tick();   // docs/388: the save's recent armies
 
@@ -6454,6 +6763,29 @@ extern "C" int lb_setting_plantation_name(void) {
     return (m < 0 || m > 2) ? 0 : m;
 }
 
+// docs/425: the cosmetic renames Claw Tank (0), Gemma (1), Broadside (2):
+// 0 the cartridge's word, 1 the new one. LB_RENAME_CLAW_TANK / LB_RENAME_GEMMA
+// / LB_RENAME_BROADSIDE=<0|1> force them, like LB_LEADER_NAME.
+extern "C" int lb_setting_rename(int which) {
+    static const char* const kEnv[3] = {"LB_RENAME_CLAW_TANK", "LB_RENAME_GEMMA",
+                                        "LB_RENAME_BROADSIDE"};
+    static int forced[3] = {-1, -1, -1};
+    static bool read_env = false;
+    if (!read_env) {
+        read_env = true;
+        for (int i = 0; i < 3; ++i)
+            if (const char* v = std::getenv(kEnv[i])) {
+                const int n = std::atoi(v);
+                if (n >= 0 && n <= 1) forced[i] = n;
+            }
+    }
+    if (which < 0 || which > 2) return 0;
+    const int own[3] = {g_set.rename_claw_tank, g_set.rename_gemma,
+                        g_set.rename_broadside};
+    const int m = forced[which] >= 0 ? forced[which] : own[which];
+    return (m < 0 || m > 1) ? 0 : m;
+}
+
 // docs/392: Free Play's opening opponent, 0..7 (lb_overlay.cpp's field).
 // LB_DEFAULT_OPPONENT=<0..7> forces it.
 extern "C" int lb_setting_default_opponent(void) {
@@ -6727,7 +7059,6 @@ extern "C" const char* lb_net_lobby_options_json(void) {
     static std::string out;
     static const char* kHotwire[] = {"Vanilla", "Specials only", "Anything (cheat)"};
     static const char* kTransport[] = {"Off (vanilla)", "Destroy them", "Hotwire them"};
-    static const char* kBalance[] = {"Off (Vanilla)", "Rebalance", "FactionWars", "Funlite"};
     static const char* kCapName[10] = {
         "Heroes", "Minifigures", "Specials", "Towers", "Buildings",
         nullptr, "Walls", "Bridges", nullptr, nullptr};   // docs/405: no gates
@@ -6743,7 +7074,8 @@ extern "C" const char* lb_net_lobby_options_json(void) {
         return r + "\"";
     };
     std::vector<std::pair<std::string, std::string>> kv;
-    kv.push_back({"Balance patch", pick(kBalance, 4, g_set.balance_patch)});
+    kv.push_back({"Balance patch", (g_set.balance_patch >= 0 && g_set.balance_patch <= lb_balance_pack_count())
+                      ? lb_balance_name(g_set.balance_patch) : "?"});
     kv.push_back({"Hotwire targets", pick(kHotwire, 3, g_set.hotwire_mode)});
     kv.push_back({"Transport occupants", pick(kTransport, 3, g_set.hotwire_transport)});
     kv.push_back({"EMP disables transports", g_set.emp_transports ? "On" : "Off"});

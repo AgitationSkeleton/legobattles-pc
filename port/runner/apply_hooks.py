@@ -7485,6 +7485,8 @@ def apply(runner_dir, imgui_dir):
           "src/lb_vwh.cpp",
           # The master server's relay (docs/424), for <winsock2.h>.
           "src/lb_relay.cpp",
+          # The notification sound (docs/427).
+          "src/lb_sfx.cpp",
           # The first-run setup (docs/394).
           "src/lb_setup.cpp",
           "%s/imgui.cpp" % imgui,

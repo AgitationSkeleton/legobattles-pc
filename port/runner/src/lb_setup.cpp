@@ -41,6 +41,7 @@
 #include <vector>
 
 extern "C" int lb_pick_rom_file(char* buf, int cap);   /* lb_filedlg.cpp */
+extern "C" int lb_pick_save_file(char* buf, int cap, int saving);   /* lb_filedlg.cpp */
 
 namespace {
 
@@ -386,6 +387,38 @@ void work(Job* job, fs::path src, fs::path root) {
     job->state = 2;
 }
 
+// docs/427: the optional save step. The file is copied to saves\LEGO Battles.sav
+// (the retail cartridge's fixed save, docs/401) if it carries the game's tag;
+// the boot then trims padding and rewrites the region tag exactly as
+// Settings > Saves > Import does.
+bool stage_save(const fs::path& root, const fs::path& src, std::string* msg, bool* bad) {
+    std::vector<uint8_t> d;
+    if (!read_all(src, &d) || d.size() < 16) {
+        *msg = "Could not read that file.";
+        *bad = true;
+        return false;
+    }
+    if (std::memcmp(d.data() + 3, "_BATTLE_SAVES", 13) != 0) {
+        *msg = "That file has no _BATTLE_SAVES tag, so it is not a LEGO Battles save.";
+        *bad = true;
+        return false;
+    }
+    std::error_code ec;
+    const fs::path dir = root / "saves";
+    fs::create_directories(dir, ec);
+    const fs::path dst = dir / "LEGO Battles.sav";
+    if (fs::exists(dst, ec)) fs::copy_file(dst, dir / "LEGO Battles.sav.setup-bak", fs::copy_options::overwrite_existing, ec);
+    fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
+    if (ec) {
+        *msg = "Could not copy the save into the saves folder.";
+        *bad = true;
+        return false;
+    }
+    *msg = "Save imported. It loads when the game starts.";
+    *bad = false;
+    return true;
+}
+
 }  // namespace
 
 // Returns 1 with the image to boot in `out` (as main.cpp's paths are), 0 if
@@ -440,6 +473,8 @@ extern "C" int lb_first_run_setup(const char* root_dir, const char* found,
 
     int result = 0;
     bool running = true;
+    std::string save_msg;
+    bool save_bad = false, save_done = false;
     while (running) {
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
@@ -491,13 +526,43 @@ extern "C" int lb_first_run_setup(const char* root_dir, const char* found,
             ImGui::PopStyleColor();
         }
         if (st == 2) {
-            ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
-                               "Your ROM is set up. The game will start now.");
-            std::lock_guard<std::mutex> lock(job.m);
-            const std::string p = job.result.string();
-            std::snprintf(out, (size_t)cap, "%s", p.c_str());
-            result = 1;
-            running = false;
+            ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "Your ROM is set up.");
+            // docs/427: an optional save, the same import Settings > Saves
+            // does (any region, padded files, the tag rewritten): staged as
+            // saves\LEGO Battles.sav, which the boot loads with
+            // lb_save_lenient_load + lb_save_adopt.
+            ImGui::Separator();
+            ImGui::TextWrapped("Import a save from a cartridge or an emulator (optional)");
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::TextWrapped("Any region's .sav works. You can also do this later in "
+                               "Settings > Saves.");
+            ImGui::PopStyleColor();
+            if (!save_msg.empty()) {
+                ImGui::PushStyleColor(ImGuiCol_Text, save_bad ? ImVec4(1.0f, 0.45f, 0.4f, 1.0f)
+                                                              : ImVec4(0.5f, 1.0f, 0.5f, 1.0f));
+                ImGui::TextWrapped("%s", save_msg.c_str());
+                ImGui::PopStyleColor();
+            }
+            bool go = false;
+            if (!save_done) {
+                if (ImGui::Button("Browse...", ImVec2(160, 0))) {
+                    char sb[1024] = "";
+                    if (lb_pick_save_file(sb, sizeof sb, 0)) {
+                        save_done = stage_save(root, from_utf8(sb), &save_msg, &save_bad);
+                    }
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Skip", ImVec2(120, 0))) go = true;
+            } else {
+                if (ImGui::Button("Start the game", ImVec2(200, 0))) go = true;
+            }
+            if (go) {
+                std::lock_guard<std::mutex> lock(job.m);
+                const std::string p = job.result.string();
+                std::snprintf(out, (size_t)cap, "%s", p.c_str());
+                result = 1;
+                running = false;
+            }
         }
         ImGui::End();
         ImGui::Render();

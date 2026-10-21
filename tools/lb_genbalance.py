@@ -29,12 +29,20 @@ MODS_DIR = os.environ.get("LB_MODS_DIR") or os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "roms", "lbmods")
 
 # slot order must match the overlay's dropdown: 1 Rebalance, 2 FactionWars,
-# 3 Funlite. Slot 0 is vanilla and has no table.
+# 3 Funlite, 4 FunLite2. Slot 0 is vanilla and has no table.
+# (name, rom, version shown in the dropdown) -- docs/426.
 MODS = [
-    ("Rebalance",   "REbalance_MapBase.nds"),
-    ("FactionWars", "FactionWars_MapBase.nds"),
-    ("Funlite",     "FUNLite_MapBase.nds"),
+    ("Rebalance",   "REbalance_MapBase.nds", "1.15.2"),
+    ("FactionWars", "FactionWars_MapBase.nds", "1.2"),
+    ("Funlite",     "FUNLite_MapBase.nds", "1.7.2"),
+    ("FunLite2",    "FunLite2-G(PvE).nds", "(PvE)"),
+    # docs/426: compressed Entities.ebp files, not ROMs.
+    ("FactionWars2", "factionwars 2.0.1.ebp", "2.0.1"),
+    ("Vanilplus",   "VanilPlus1.2.1.ebp", "1.2.1"),
+    ("Fusion",      "fusion 1-2.ebp", "1.2"),
 ]
+# Dropdown names where "<name> <version>" is not it.
+DISPLAY = {"FactionWars2": "FactionWars 2.0.1", "Vanilplus": "Vanil+ 1.2.1"}
 BASE = "VANILLA_MapBase.nds"
 TARGET = "BP/Entities.ebp"
 
@@ -47,6 +55,8 @@ def blueprint_from_rom(path):
     """
     with open(path, "rb") as fh:
         raw = fh.read()
+    if path.lower().endswith(".ebp"):   # a bare Entities.ebp, raw or COMP
+        return raw if raw[:4] == b"BPNZ" else lb_comp.comp_decode(raw)
     fnt_off, fnt_len = struct.unpack("<II", raw[0x40:0x48])
     fat_off, fat_len = struct.unpack("<II", raw[0x48:0x50])
     paths, _dirs = nds_extract.parse_fnt(raw[fnt_off:fnt_off + fnt_len])
@@ -86,12 +96,12 @@ def main():
     print("vanilla blueprint: %d bytes" % len(base))
 
     tables = []
-    for name, rom in MODS:
+    for name, rom, ver in MODS:
         mod = blueprint_from_rom(os.path.join(args.mods_dir, rom))
         r = runs(base, mod)
         changed = sum(len(b) for _, b in r)
         print("  %-12s %5d runs, %6d bytes changed" % (name, len(r), changed))
-        tables.append((name, r, changed))
+        tables.append((name, r, changed, ver))
 
     with open(args.out, "w", encoding="utf-8", newline="\n") as fh:
         fh.write("""// lb_balance_data.h - bundled balance-patch differences.
@@ -115,6 +125,17 @@ def main():
 //
 //   FactionWars and Funlite are community romhacks distributed with the same
 //   scope: entity statistics only.
+//
+//   Credits as the preset names them:
+//     FactionWars by Alpha47
+//     Vanil+ by RynCat
+//     Rebalance by RynCat
+//     FunLite by Dream-Foxtrot
+//     Fusion by NinjaGoat
+//
+//   FunLite2 (PvE) - the FUNLite line's second release; its author is
+//     dream-foxtrot (Foxtrot), who also made FUNLite. Only its
+//     BP/Entities.ebp is used here.
 //
 // Ryncat's README asks that all players in a multiplayer game use the same
 // patch. The port treats the balance selection as lobby-carried for that
@@ -140,7 +161,7 @@ typedef struct LbBalanceTable {
 } LbBalanceTable;
 
 """)
-        for idx, (name, r, changed) in enumerate(tables):
+        for idx, (name, r, changed, ver) in enumerate(tables):
             key = name.lower()
             for j, (off, data) in enumerate(r):
                 fh.write("static const uint8_t lb_%s_b%d[] = {%s};\n"
@@ -151,10 +172,12 @@ typedef struct LbBalanceTable {
             fh.write("};\n\n")
 
         fh.write("static const LbBalanceTable lb_balance_tables[] = {\n")
-        for name, r, changed in tables:
+        for name, r, changed, ver in tables:
             fh.write("    {\"%s\", lb_%s_runs, %uu, %uu, %uu},\n"
-                     % (name, name.lower(), len(r), changed, len(base)))
-        fh.write("};\n\n#endif  // LB_BALANCE_DATA_H\n")
+                     % (DISPLAY.get(name, "%s %s" % (name, ver)), name.lower(), len(r), changed, len(base)))
+        fh.write("};\n\n/* The number of presets: every pack bound derives from it. */\n"
+                 "#define LB_BALANCE_PACK_COUNT %d\n\n#endif  // LB_BALANCE_DATA_H\n"
+                 % len(tables))
 
     print("wrote %s" % args.out)
     return 0

@@ -20,6 +20,17 @@
 //   FactionWars and Funlite are community romhacks distributed with the same
 //   scope: entity statistics only.
 //
+//   Credits as the preset names them:
+//     FactionWars by Alpha47
+//     Vanil+ by RynCat
+//     Rebalance by RynCat
+//     FunLite by Dream-Foxtrot
+//     Fusion by NinjaGoat
+//
+//   FunLite2 (PvE) - the FUNLite line's second release; its author is
+//     dream-foxtrot (Foxtrot), who also made FUNLite. Only its
+//     BP/Entities.ebp is used here.
+//
 // Ryncat's README asks that all players in a multiplayer game use the same
 // patch. The port treats the balance selection as lobby-carried for that
 // reason (docs/86).
@@ -3148,10 +3159,3487 @@ static const LbBalanceRun lb_funlite_runs[] = {
     {25576u, 1u, lb_funlite_b569},
 };
 
-static const LbBalanceTable lb_balance_tables[] = {
-    {"Rebalance", lb_rebalance_runs, 520u, 835u, 75195u},
-    {"FactionWars", lb_factionwars_runs, 458u, 827u, 75195u},
-    {"Funlite", lb_funlite_runs, 570u, 893u, 75195u},
+static const uint8_t lb_funlite2_b0[] = {171,2};
+static const uint8_t lb_funlite2_b1[] = {1};
+static const uint8_t lb_funlite2_b2[] = {0,1};
+static const uint8_t lb_funlite2_b3[] = {64,6,52,8};
+static const uint8_t lb_funlite2_b4[] = {95};
+static const uint8_t lb_funlite2_b5[] = {15};
+static const uint8_t lb_funlite2_b6[] = {15};
+static const uint8_t lb_funlite2_b7[] = {2};
+static const uint8_t lb_funlite2_b8[] = {9,6};
+static const uint8_t lb_funlite2_b9[] = {18};
+static const uint8_t lb_funlite2_b10[] = {85,3};
+static const uint8_t lb_funlite2_b11[] = {1};
+static const uint8_t lb_funlite2_b12[] = {0,1};
+static const uint8_t lb_funlite2_b13[] = {108,7,58,7};
+static const uint8_t lb_funlite2_b14[] = {70};
+static const uint8_t lb_funlite2_b15[] = {5};
+static const uint8_t lb_funlite2_b16[] = {12};
+static const uint8_t lb_funlite2_b17[] = {2};
+static const uint8_t lb_funlite2_b18[] = {9,7,25,18};
+static const uint8_t lb_funlite2_b19[] = {51,3};
+static const uint8_t lb_funlite2_b20[] = {69,1};
+static const uint8_t lb_funlite2_b21[] = {40};
+static const uint8_t lb_funlite2_b22[] = {9,11};
+static const uint8_t lb_funlite2_b23[] = {52,8};
+static const uint8_t lb_funlite2_b24[] = {21,7};
+static const uint8_t lb_funlite2_b25[] = {34,2};
+static const uint8_t lb_funlite2_b26[] = {200};
+static const uint8_t lb_funlite2_b27[] = {38,2};
+static const uint8_t lb_funlite2_b28[] = {184};
+static const uint8_t lb_funlite2_b29[] = {30};
+static const uint8_t lb_funlite2_b30[] = {10};
+static const uint8_t lb_funlite2_b31[] = {11};
+static const uint8_t lb_funlite2_b32[] = {171};
+static const uint8_t lb_funlite2_b33[] = {94,1,154};
+static const uint8_t lb_funlite2_b34[] = {126,4};
+static const uint8_t lb_funlite2_b35[] = {50};
+static const uint8_t lb_funlite2_b36[] = {0};
+static const uint8_t lb_funlite2_b37[] = {24};
+static const uint8_t lb_funlite2_b38[] = {2};
+static const uint8_t lb_funlite2_b39[] = {11};
+static const uint8_t lb_funlite2_b40[] = {44};
+static const uint8_t lb_funlite2_b41[] = {72,3,232,3};
+static const uint8_t lb_funlite2_b42[] = {20};
+static const uint8_t lb_funlite2_b43[] = {11};
+static const uint8_t lb_funlite2_b44[] = {11};
+static const uint8_t lb_funlite2_b45[] = {38,2};
+static const uint8_t lb_funlite2_b46[] = {63};
+static const uint8_t lb_funlite2_b47[] = {11};
+static const uint8_t lb_funlite2_b48[] = {188};
+static const uint8_t lb_funlite2_b49[] = {89,6,170,10,52,8};
+static const uint8_t lb_funlite2_b50[] = {255,255,110};
+static const uint8_t lb_funlite2_b51[] = {12};
+static const uint8_t lb_funlite2_b52[] = {11};
+static const uint8_t lb_funlite2_b53[] = {51,3};
+static const uint8_t lb_funlite2_b54[] = {1};
+static const uint8_t lb_funlite2_b55[] = {244,1,42,3,184,11};
+static const uint8_t lb_funlite2_b56[] = {190};
+static const uint8_t lb_funlite2_b57[] = {80};
+static const uint8_t lb_funlite2_b58[] = {9};
+static const uint8_t lb_funlite2_b59[] = {11};
+static const uint8_t lb_funlite2_b60[] = {136,19};
+static const uint8_t lb_funlite2_b61[] = {138,2};
+static const uint8_t lb_funlite2_b62[] = {220,5};
+static const uint8_t lb_funlite2_b63[] = {138};
+static const uint8_t lb_funlite2_b64[] = {60};
+static const uint8_t lb_funlite2_b65[] = {119,1,28,2,207,3};
+static const uint8_t lb_funlite2_b66[] = {232,3};
+static const uint8_t lb_funlite2_b67[] = {220,5};
+static const uint8_t lb_funlite2_b68[] = {208,7};
+static const uint8_t lb_funlite2_b69[] = {134};
+static const uint8_t lb_funlite2_b70[] = {194};
+static const uint8_t lb_funlite2_b71[] = {169};
+static const uint8_t lb_funlite2_b72[] = {158,2,113,2};
+static const uint8_t lb_funlite2_b73[] = {24};
+static const uint8_t lb_funlite2_b74[] = {8,7,232,8,45,5};
+static const uint8_t lb_funlite2_b75[] = {185};
+static const uint8_t lb_funlite2_b76[] = {12};
+static const uint8_t lb_funlite2_b77[] = {10};
+static const uint8_t lb_funlite2_b78[] = {238,2};
+static const uint8_t lb_funlite2_b79[] = {208,7};
+static const uint8_t lb_funlite2_b80[] = {188};
+static const uint8_t lb_funlite2_b81[] = {1,1,0,1};
+static const uint8_t lb_funlite2_b82[] = {238,2,130,5,120,5,114,6,200,0,0};
+static const uint8_t lb_funlite2_b83[] = {0};
+static const uint8_t lb_funlite2_b84[] = {149};
+static const uint8_t lb_funlite2_b85[] = {4};
+static const uint8_t lb_funlite2_b86[] = {11,5,8,28,27,26};
+static const uint8_t lb_funlite2_b87[] = {1};
+static const uint8_t lb_funlite2_b88[] = {0,1};
+static const uint8_t lb_funlite2_b89[] = {238,2,116,4,176,4,52,8,186,0,0};
+static const uint8_t lb_funlite2_b90[] = {0};
+static const uint8_t lb_funlite2_b91[] = {35};
+static const uint8_t lb_funlite2_b92[] = {6};
+static const uint8_t lb_funlite2_b93[] = {9,5,4,11,18,29};
+static const uint8_t lb_funlite2_b94[] = {255,255};
+static const uint8_t lb_funlite2_b95[] = {1};
+static const uint8_t lb_funlite2_b96[] = {0,1};
+static const uint8_t lb_funlite2_b97[] = {250};
+static const uint8_t lb_funlite2_b98[] = {148,2,75};
+static const uint8_t lb_funlite2_b99[] = {20};
+static const uint8_t lb_funlite2_b100[] = {34,2};
+static const uint8_t lb_funlite2_b101[] = {1};
+static const uint8_t lb_funlite2_b102[] = {0,1};
+static const uint8_t lb_funlite2_b103[] = {100};
+static const uint8_t lb_funlite2_b104[] = {90,0,244,1};
+static const uint8_t lb_funlite2_b105[] = {204,0,0};
+static const uint8_t lb_funlite2_b106[] = {0};
+static const uint8_t lb_funlite2_b107[] = {16};
+static const uint8_t lb_funlite2_b108[] = {3};
+static const uint8_t lb_funlite2_b109[] = {9};
+static const uint8_t lb_funlite2_b110[] = {34,2};
+static const uint8_t lb_funlite2_b111[] = {1};
+static const uint8_t lb_funlite2_b112[] = {0,1};
+static const uint8_t lb_funlite2_b113[] = {200};
+static const uint8_t lb_funlite2_b114[] = {240,0,144,1};
+static const uint8_t lb_funlite2_b115[] = {204};
+static const uint8_t lb_funlite2_b116[] = {20};
+static const uint8_t lb_funlite2_b117[] = {8};
+static const uint8_t lb_funlite2_b118[] = {11};
+static const uint8_t lb_funlite2_b119[] = {188,3};
+static const uint8_t lb_funlite2_b120[] = {1};
+static const uint8_t lb_funlite2_b121[] = {0,1};
+static const uint8_t lb_funlite2_b122[] = {74,1};
+static const uint8_t lb_funlite2_b123[] = {169};
+static const uint8_t lb_funlite2_b124[] = {191,0,0};
+static const uint8_t lb_funlite2_b125[] = {0};
+static const uint8_t lb_funlite2_b126[] = {33};
+static const uint8_t lb_funlite2_b127[] = {3};
+static const uint8_t lb_funlite2_b128[] = {9};
+static const uint8_t lb_funlite2_b129[] = {1};
+static const uint8_t lb_funlite2_b130[] = {0,1};
+static const uint8_t lb_funlite2_b131[] = {188,2,72,3,101,4};
+static const uint8_t lb_funlite2_b132[] = {201};
+static const uint8_t lb_funlite2_b133[] = {9};
+static const uint8_t lb_funlite2_b134[] = {11};
+static const uint8_t lb_funlite2_b135[] = {102,2};
+static const uint8_t lb_funlite2_b136[] = {1};
+static const uint8_t lb_funlite2_b137[] = {98,2,26,4};
+static const uint8_t lb_funlite2_b138[] = {20};
+static const uint8_t lb_funlite2_b139[] = {10};
+static const uint8_t lb_funlite2_b140[] = {85};
+static const uint8_t lb_funlite2_b141[] = {89,6,170,10,52,8};
+static const uint8_t lb_funlite2_b142[] = {15};
+static const uint8_t lb_funlite2_b143[] = {5};
+static const uint8_t lb_funlite2_b144[] = {11};
+static const uint8_t lb_funlite2_b145[] = {255,255};
+static const uint8_t lb_funlite2_b146[] = {1};
+static const uint8_t lb_funlite2_b147[] = {132,3,116,4,70,5};
+static const uint8_t lb_funlite2_b148[] = {184};
+static const uint8_t lb_funlite2_b149[] = {40};
+static const uint8_t lb_funlite2_b150[] = {10};
+static const uint8_t lb_funlite2_b151[] = {11};
+static const uint8_t lb_funlite2_b152[] = {172,13};
+static const uint8_t lb_funlite2_b153[] = {238,2};
+static const uint8_t lb_funlite2_b154[] = {232,3};
+static const uint8_t lb_funlite2_b155[] = {144,1};
+static const uint8_t lb_funlite2_b156[] = {178,12};
+static const uint8_t lb_funlite2_b157[] = {30};
+static const uint8_t lb_funlite2_b158[] = {119,1,28,2,7,3};
+static const uint8_t lb_funlite2_b159[] = {220,5};
+static const uint8_t lb_funlite2_b160[] = {226,4};
+static const uint8_t lb_funlite2_b161[] = {28,2,213,2};
+static const uint8_t lb_funlite2_b162[] = {204};
+static const uint8_t lb_funlite2_b163[] = {12};
+static const uint8_t lb_funlite2_b164[] = {5};
+static const uint8_t lb_funlite2_b165[] = {157,3};
+static const uint8_t lb_funlite2_b166[] = {15};
+static const uint8_t lb_funlite2_b167[] = {5};
+static const uint8_t lb_funlite2_b168[] = {202,8,4,11,45,5};
+static const uint8_t lb_funlite2_b169[] = {12};
+static const uint8_t lb_funlite2_b170[] = {8};
+static const uint8_t lb_funlite2_b171[] = {238,2};
+static const uint8_t lb_funlite2_b172[] = {226,4};
+static const uint8_t lb_funlite2_b173[] = {154};
+static const uint8_t lb_funlite2_b174[] = {1};
+static const uint8_t lb_funlite2_b175[] = {0,1};
+static const uint8_t lb_funlite2_b176[] = {164,6,64,6,195,0,0};
+static const uint8_t lb_funlite2_b177[] = {0};
+static const uint8_t lb_funlite2_b178[] = {6};
+static const uint8_t lb_funlite2_b179[] = {11};
+static const uint8_t lb_funlite2_b180[] = {9,12,7,23};
+static const uint8_t lb_funlite2_b181[] = {171,2};
+static const uint8_t lb_funlite2_b182[] = {1};
+static const uint8_t lb_funlite2_b183[] = {0,1};
+static const uint8_t lb_funlite2_b184[] = {120,5,214,6,195,0,0};
+static const uint8_t lb_funlite2_b185[] = {0};
+static const uint8_t lb_funlite2_b186[] = {9};
+static const uint8_t lb_funlite2_b187[] = {9};
+static const uint8_t lb_funlite2_b188[] = {9,7,19,31};
+static const uint8_t lb_funlite2_b189[] = {3};
+static const uint8_t lb_funlite2_b190[] = {1};
+static const uint8_t lb_funlite2_b191[] = {0,1};
+static const uint8_t lb_funlite2_b192[] = {25};
+static const uint8_t lb_funlite2_b193[] = {90};
+static const uint8_t lb_funlite2_b194[] = {145};
+static const uint8_t lb_funlite2_b195[] = {20};
+static const uint8_t lb_funlite2_b196[] = {9,7};
+static const uint8_t lb_funlite2_b197[] = {34,2};
+static const uint8_t lb_funlite2_b198[] = {1};
+static const uint8_t lb_funlite2_b199[] = {0,1};
+static const uint8_t lb_funlite2_b200[] = {150};
+static const uint8_t lb_funlite2_b201[] = {119};
+static const uint8_t lb_funlite2_b202[] = {196,0,0};
+static const uint8_t lb_funlite2_b203[] = {0};
+static const uint8_t lb_funlite2_b204[] = {7};
+static const uint8_t lb_funlite2_b205[] = {8};
+static const uint8_t lb_funlite2_b206[] = {171};
+static const uint8_t lb_funlite2_b207[] = {1};
+static const uint8_t lb_funlite2_b208[] = {0,1};
+static const uint8_t lb_funlite2_b209[] = {235};
+static const uint8_t lb_funlite2_b210[] = {28,2,94,1};
+static const uint8_t lb_funlite2_b211[] = {191};
+static const uint8_t lb_funlite2_b212[] = {40};
+static const uint8_t lb_funlite2_b213[] = {10};
+static const uint8_t lb_funlite2_b214[] = {244,1,154};
+static const uint8_t lb_funlite2_b215[] = {119};
+static const uint8_t lb_funlite2_b216[] = {195,0,0};
+static const uint8_t lb_funlite2_b217[] = {0};
+static const uint8_t lb_funlite2_b218[] = {45};
+static const uint8_t lb_funlite2_b219[] = {9};
+static const uint8_t lb_funlite2_b220[] = {11};
+static const uint8_t lb_funlite2_b221[] = {102,2};
+static const uint8_t lb_funlite2_b222[] = {232,3,130,5,226,4};
+static const uint8_t lb_funlite2_b223[] = {200};
+static const uint8_t lb_funlite2_b224[] = {255};
+static const uint8_t lb_funlite2_b225[] = {11};
+static const uint8_t lb_funlite2_b226[] = {11};
+static const uint8_t lb_funlite2_b227[] = {144};
+static const uint8_t lb_funlite2_b228[] = {158,2,226,4};
+static const uint8_t lb_funlite2_b229[] = {195};
+static const uint8_t lb_funlite2_b230[] = {10};
+static const uint8_t lb_funlite2_b231[] = {9};
+static const uint8_t lb_funlite2_b232[] = {255,255};
+static const uint8_t lb_funlite2_b233[] = {1};
+static const uint8_t lb_funlite2_b234[] = {172,13,236,19,226,4};
+static const uint8_t lb_funlite2_b235[] = {195};
+static const uint8_t lb_funlite2_b236[] = {20};
+static const uint8_t lb_funlite2_b237[] = {9};
+static const uint8_t lb_funlite2_b238[] = {11};
+static const uint8_t lb_funlite2_b239[] = {188,3};
+static const uint8_t lb_funlite2_b240[] = {1};
+static const uint8_t lb_funlite2_b241[] = {244,1,164,1,226,4};
+static const uint8_t lb_funlite2_b242[] = {187};
+static const uint8_t lb_funlite2_b243[] = {30};
+static const uint8_t lb_funlite2_b244[] = {11};
+static const uint8_t lb_funlite2_b245[] = {11};
+static const uint8_t lb_funlite2_b246[] = {184,11};
+static const uint8_t lb_funlite2_b247[] = {38,2};
+static const uint8_t lb_funlite2_b248[] = {244,1};
+static const uint8_t lb_funlite2_b249[] = {71,9};
+static const uint8_t lb_funlite2_b250[] = {40};
+static const uint8_t lb_funlite2_b251[] = {119,1,28,2,163,2};
+static const uint8_t lb_funlite2_b252[] = {138};
+static const uint8_t lb_funlite2_b253[] = {220,5};
+static const uint8_t lb_funlite2_b254[] = {14};
+static const uint8_t lb_funlite2_b255[] = {20};
+static const uint8_t lb_funlite2_b256[] = {10};
+static const uint8_t lb_funlite2_b257[] = {11};
+static const uint8_t lb_funlite2_b258[] = {119};
+static const uint8_t lb_funlite2_b259[] = {154,1,38,2};
+static const uint8_t lb_funlite2_b260[] = {195};
+static const uint8_t lb_funlite2_b261[] = {24};
+static const uint8_t lb_funlite2_b262[] = {10};
+static const uint8_t lb_funlite2_b263[] = {11};
+static const uint8_t lb_funlite2_b264[] = {220,5,38,7,32,3};
+static const uint8_t lb_funlite2_b265[] = {15};
+static const uint8_t lb_funlite2_b266[] = {11};
+static const uint8_t lb_funlite2_b267[] = {238,2};
+static const uint8_t lb_funlite2_b268[] = {34,2};
+static const uint8_t lb_funlite2_b269[] = {1};
+static const uint8_t lb_funlite2_b270[] = {0,1};
+static const uint8_t lb_funlite2_b271[] = {142,3,52,8,114,6};
+static const uint8_t lb_funlite2_b272[] = {75};
+static const uint8_t lb_funlite2_b273[] = {50};
+static const uint8_t lb_funlite2_b274[] = {17};
+static const uint8_t lb_funlite2_b275[] = {4};
+static const uint8_t lb_funlite2_b276[] = {11};
+static const uint8_t lb_funlite2_b277[] = {9,12,25,17};
+static const uint8_t lb_funlite2_b278[] = {85,3};
+static const uint8_t lb_funlite2_b279[] = {142,3,8,7,220,5};
+static const uint8_t lb_funlite2_b280[] = {75};
+static const uint8_t lb_funlite2_b281[] = {70};
+static const uint8_t lb_funlite2_b282[] = {15};
+static const uint8_t lb_funlite2_b283[] = {3};
+static const uint8_t lb_funlite2_b284[] = {9,12,18,17};
+static const uint8_t lb_funlite2_b285[] = {34,2};
+static const uint8_t lb_funlite2_b286[] = {1};
+static const uint8_t lb_funlite2_b287[] = {50};
+static const uint8_t lb_funlite2_b288[] = {169,1};
+static const uint8_t lb_funlite2_b289[] = {32};
+static const uint8_t lb_funlite2_b290[] = {9,9};
+static const uint8_t lb_funlite2_b291[] = {51,3};
+static const uint8_t lb_funlite2_b292[] = {225};
+static const uint8_t lb_funlite2_b293[] = {44};
+static const uint8_t lb_funlite2_b294[] = {70};
+static const uint8_t lb_funlite2_b295[] = {0};
+static const uint8_t lb_funlite2_b296[] = {12};
+static const uint8_t lb_funlite2_b297[] = {4};
+static const uint8_t lb_funlite2_b298[] = {8};
+static const uint8_t lb_funlite2_b299[] = {85};
+static const uint8_t lb_funlite2_b300[] = {205};
+static const uint8_t lb_funlite2_b301[] = {118,2,44,1};
+static const uint8_t lb_funlite2_b302[] = {70};
+static const uint8_t lb_funlite2_b303[] = {11};
+static const uint8_t lb_funlite2_b304[] = {10};
+static const uint8_t lb_funlite2_b305[] = {85,3};
+static const uint8_t lb_funlite2_b306[] = {94,1};
+static const uint8_t lb_funlite2_b307[] = {213,2};
+static const uint8_t lb_funlite2_b308[] = {60};
+static const uint8_t lb_funlite2_b309[] = {0};
+static const uint8_t lb_funlite2_b310[] = {24};
+static const uint8_t lb_funlite2_b311[] = {3};
+static const uint8_t lb_funlite2_b312[] = {11};
+static const uint8_t lb_funlite2_b313[] = {188};
+static const uint8_t lb_funlite2_b314[] = {1};
+static const uint8_t lb_funlite2_b315[] = {200,0,134,1,7,3};
+static const uint8_t lb_funlite2_b316[] = {183};
+static const uint8_t lb_funlite2_b317[] = {25};
+static const uint8_t lb_funlite2_b318[] = {11};
+static const uint8_t lb_funlite2_b319[] = {11};
+static const uint8_t lb_funlite2_b320[] = {34};
+static const uint8_t lb_funlite2_b321[] = {144};
+static const uint8_t lb_funlite2_b322[] = {158,2,52,8};
+static const uint8_t lb_funlite2_b323[] = {9};
+static const uint8_t lb_funlite2_b324[] = {188,3};
+static const uint8_t lb_funlite2_b325[] = {52,8,184,11,196,9};
+static const uint8_t lb_funlite2_b326[] = {194};
+static const uint8_t lb_funlite2_b327[] = {8};
+static const uint8_t lb_funlite2_b328[] = {11};
+static const uint8_t lb_funlite2_b329[] = {11};
+static const uint8_t lb_funlite2_b330[] = {85,3};
+static const uint8_t lb_funlite2_b331[] = {1};
+static const uint8_t lb_funlite2_b332[] = {244,1,118};
+static const uint8_t lb_funlite2_b333[] = {52,8};
+static const uint8_t lb_funlite2_b334[] = {80};
+static const uint8_t lb_funlite2_b335[] = {11};
+static const uint8_t lb_funlite2_b336[] = {11};
+static const uint8_t lb_funlite2_b337[] = {160,15};
+static const uint8_t lb_funlite2_b338[] = {194};
+static const uint8_t lb_funlite2_b339[] = {101,4};
+static const uint8_t lb_funlite2_b340[] = {38};
+static const uint8_t lb_funlite2_b341[] = {208,7};
+static const uint8_t lb_funlite2_b342[] = {50};
+static const uint8_t lb_funlite2_b343[] = {119,1,28,2,7,3};
+static const uint8_t lb_funlite2_b344[] = {57,3};
+static const uint8_t lb_funlite2_b345[] = {220,5};
+static const uint8_t lb_funlite2_b346[] = {220,5};
+static const uint8_t lb_funlite2_b347[] = {134};
+static const uint8_t lb_funlite2_b348[] = {182};
+static const uint8_t lb_funlite2_b349[] = {12};
+static const uint8_t lb_funlite2_b350[] = {11};
+static const uint8_t lb_funlite2_b351[] = {11};
+static const uint8_t lb_funlite2_b352[] = {169};
+static const uint8_t lb_funlite2_b353[] = {158,2,157,3};
+static const uint8_t lb_funlite2_b354[] = {194};
+static const uint8_t lb_funlite2_b355[] = {12};
+static const uint8_t lb_funlite2_b356[] = {11};
+static const uint8_t lb_funlite2_b357[] = {11};
+static const uint8_t lb_funlite2_b358[] = {8,7,232,8,89,6};
+static const uint8_t lb_funlite2_b359[] = {192};
+static const uint8_t lb_funlite2_b360[] = {50};
+static const uint8_t lb_funlite2_b361[] = {11};
+static const uint8_t lb_funlite2_b362[] = {238,2};
+static const uint8_t lb_funlite2_b363[] = {220,5};
+static const uint8_t lb_funlite2_b364[] = {85,3};
+static const uint8_t lb_funlite2_b365[] = {1};
+static const uint8_t lb_funlite2_b366[] = {132,3,116,4,164,6,14,6};
+static const uint8_t lb_funlite2_b367[] = {75};
+static const uint8_t lb_funlite2_b368[] = {0};
+static const uint8_t lb_funlite2_b369[] = {14};
+static const uint8_t lb_funlite2_b370[] = {2};
+static const uint8_t lb_funlite2_b371[] = {11,6,8,27,4,13};
+static const uint8_t lb_funlite2_b372[] = {85,3};
+static const uint8_t lb_funlite2_b373[] = {132,3,116,4,120,5,76,4,199};
+static const uint8_t lb_funlite2_b374[] = {15};
+static const uint8_t lb_funlite2_b375[] = {9};
+static const uint8_t lb_funlite2_b376[] = {11,8,9,27,18,17};
+static const uint8_t lb_funlite2_b377[] = {171,2};
+static const uint8_t lb_funlite2_b378[] = {1};
+static const uint8_t lb_funlite2_b379[] = {88,2};
+static const uint8_t lb_funlite2_b380[] = {25};
+static const uint8_t lb_funlite2_b381[] = {2,9,9};
+static const uint8_t lb_funlite2_b382[] = {188};
+static const uint8_t lb_funlite2_b383[] = {220};
+static const uint8_t lb_funlite2_b384[] = {154};
+static const uint8_t lb_funlite2_b385[] = {188,2};
+static const uint8_t lb_funlite2_b386[] = {25};
+static const uint8_t lb_funlite2_b387[] = {15};
+static const uint8_t lb_funlite2_b388[] = {6};
+static const uint8_t lb_funlite2_b389[] = {10};
+static const uint8_t lb_funlite2_b390[] = {188};
+static const uint8_t lb_funlite2_b391[] = {44,1};
+static const uint8_t lb_funlite2_b392[] = {188,2};
+static const uint8_t lb_funlite2_b393[] = {198};
+static const uint8_t lb_funlite2_b394[] = {12};
+static const uint8_t lb_funlite2_b395[] = {8,20,10};
+static const uint8_t lb_funlite2_b396[] = {1};
+static const uint8_t lb_funlite2_b397[] = {2};
+static const uint8_t lb_funlite2_b398[] = {226,4,130,5,189,6};
+static const uint8_t lb_funlite2_b399[] = {205,0,0};
+static const uint8_t lb_funlite2_b400[] = {0};
+static const uint8_t lb_funlite2_b401[] = {60};
+static const uint8_t lb_funlite2_b402[] = {4,32,9};
+static const uint8_t lb_funlite2_b403[] = {102,2};
+static const uint8_t lb_funlite2_b404[] = {1};
+static const uint8_t lb_funlite2_b405[] = {138,2,116,4,52,8};
+static const uint8_t lb_funlite2_b406[] = {203};
+static const uint8_t lb_funlite2_b407[] = {9};
+static const uint8_t lb_funlite2_b408[] = {11};
+static const uint8_t lb_funlite2_b409[] = {51,3};
+static const uint8_t lb_funlite2_b410[] = {194};
+static const uint8_t lb_funlite2_b411[] = {184,11};
+static const uint8_t lb_funlite2_b412[] = {199};
+static const uint8_t lb_funlite2_b413[] = {16};
+static const uint8_t lb_funlite2_b414[] = {71,10};
+static const uint8_t lb_funlite2_b415[] = {255,255};
+static const uint8_t lb_funlite2_b416[] = {3};
+static const uint8_t lb_funlite2_b417[] = {148,17,236,19,238};
+static const uint8_t lb_funlite2_b418[] = {200};
+static const uint8_t lb_funlite2_b419[] = {149};
+static const uint8_t lb_funlite2_b420[] = {8,70,11};
+static const uint8_t lb_funlite2_b421[] = {51,3};
+static const uint8_t lb_funlite2_b422[] = {1};
+static const uint8_t lb_funlite2_b423[] = {132,3,116,4,26,4};
+static const uint8_t lb_funlite2_b424[] = {199};
+static const uint8_t lb_funlite2_b425[] = {36};
+static const uint8_t lb_funlite2_b426[] = {11};
+static const uint8_t lb_funlite2_b427[] = {11};
+static const uint8_t lb_funlite2_b428[] = {148,17};
+static const uint8_t lb_funlite2_b429[] = {244};
+static const uint8_t lb_funlite2_b430[] = {226,4};
+static const uint8_t lb_funlite2_b431[] = {244,1};
+static const uint8_t lb_funlite2_b432[] = {71,9};
+static const uint8_t lb_funlite2_b433[] = {40};
+static const uint8_t lb_funlite2_b434[] = {119,1,28,2,107,3};
+static const uint8_t lb_funlite2_b435[] = {132,3};
+static const uint8_t lb_funlite2_b436[] = {220,5};
+static const uint8_t lb_funlite2_b437[] = {214,6};
+static const uint8_t lb_funlite2_b438[] = {28,2,113,2};
+static const uint8_t lb_funlite2_b439[] = {7};
+static const uint8_t lb_funlite2_b440[] = {32,3};
+static const uint8_t lb_funlite2_b441[] = {24};
+static const uint8_t lb_funlite2_b442[] = {7};
+static const uint8_t lb_funlite2_b443[] = {202,8,4,11,57,3};
+static const uint8_t lb_funlite2_b444[] = {120};
+static const uint8_t lb_funlite2_b445[] = {9};
+static const uint8_t lb_funlite2_b446[] = {238,2};
+static const uint8_t lb_funlite2_b447[] = {214,6};
+static const uint8_t lb_funlite2_b448[] = {255,255};
+static const uint8_t lb_funlite2_b449[] = {1,1,0,1};
+static const uint8_t lb_funlite2_b450[] = {132,3,130,5,164,6,8,7};
+static const uint8_t lb_funlite2_b451[] = {210};
+static const uint8_t lb_funlite2_b452[] = {0};
+static const uint8_t lb_funlite2_b453[] = {255};
+static const uint8_t lb_funlite2_b454[] = {11,55,11,30,9,7,11,29};
+static const uint8_t lb_funlite2_b455[] = {1};
+static const uint8_t lb_funlite2_b456[] = {238,2,142,3,220,5,8,7};
+static const uint8_t lb_funlite2_b457[] = {50};
+static const uint8_t lb_funlite2_b458[] = {18};
+static const uint8_t lb_funlite2_b459[] = {4};
+static const uint8_t lb_funlite2_b460[] = {8,7,6,9,29};
+static const uint8_t lb_funlite2_b461[] = {85,3};
+static const uint8_t lb_funlite2_b462[] = {1,1,0,1};
+static const uint8_t lb_funlite2_b463[] = {70};
+static const uint8_t lb_funlite2_b464[] = {210};
+static const uint8_t lb_funlite2_b465[] = {210};
+static const uint8_t lb_funlite2_b466[] = {12};
+static const uint8_t lb_funlite2_b467[] = {2,9,11};
+static const uint8_t lb_funlite2_b468[] = {255,255};
+static const uint8_t lb_funlite2_b469[] = {200};
+static const uint8_t lb_funlite2_b470[] = {104};
+static const uint8_t lb_funlite2_b471[] = {75};
+static const uint8_t lb_funlite2_b472[] = {50};
+static const uint8_t lb_funlite2_b473[] = {0};
+static const uint8_t lb_funlite2_b474[] = {20};
+static const uint8_t lb_funlite2_b475[] = {5,10,8};
+static const uint8_t lb_funlite2_b476[] = {222,1};
+static const uint8_t lb_funlite2_b477[] = {244,1,222,3,52,8};
+static const uint8_t lb_funlite2_b478[] = {198};
+static const uint8_t lb_funlite2_b479[] = {5,21,11};
+static const uint8_t lb_funlite2_b480[] = {51,3};
+static const uint8_t lb_funlite2_b481[] = {1};
+static const uint8_t lb_funlite2_b482[] = {0,1};
+static const uint8_t lb_funlite2_b483[] = {244,1,154};
+static const uint8_t lb_funlite2_b484[] = {82,3};
+static const uint8_t lb_funlite2_b485[] = {15};
+static const uint8_t lb_funlite2_b486[] = {12};
+static const uint8_t lb_funlite2_b487[] = {6};
+static const uint8_t lb_funlite2_b488[] = {11};
+static const uint8_t lb_funlite2_b489[] = {34,2};
+static const uint8_t lb_funlite2_b490[] = {1};
+static const uint8_t lb_funlite2_b491[] = {0,1};
+static const uint8_t lb_funlite2_b492[] = {88,2,116,4,120,5};
+static const uint8_t lb_funlite2_b493[] = {255,255,65};
+static const uint8_t lb_funlite2_b494[] = {40};
+static const uint8_t lb_funlite2_b495[] = {20};
+static const uint8_t lb_funlite2_b496[] = {8};
+static const uint8_t lb_funlite2_b497[] = {11};
+static const uint8_t lb_funlite2_b498[] = {255,255};
+static const uint8_t lb_funlite2_b499[] = {232,3,116,4,194,1};
+static const uint8_t lb_funlite2_b500[] = {255,255,175};
+static const uint8_t lb_funlite2_b501[] = {30};
+static const uint8_t lb_funlite2_b502[] = {11};
+static const uint8_t lb_funlite2_b503[] = {85};
+static const uint8_t lb_funlite2_b504[] = {196,9,82,8,114,6};
+static const uint8_t lb_funlite2_b505[] = {203};
+static const uint8_t lb_funlite2_b506[] = {12};
+static const uint8_t lb_funlite2_b507[] = {9};
+static const uint8_t lb_funlite2_b508[] = {11};
+static const uint8_t lb_funlite2_b509[] = {0};
+static const uint8_t lb_funlite2_b510[] = {1};
+static const uint8_t lb_funlite2_b511[] = {132,3,116,4,58,7};
+static const uint8_t lb_funlite2_b512[] = {199};
+static const uint8_t lb_funlite2_b513[] = {40};
+static const uint8_t lb_funlite2_b514[] = {11};
+static const uint8_t lb_funlite2_b515[] = {11};
+static const uint8_t lb_funlite2_b516[] = {184,11};
+static const uint8_t lb_funlite2_b517[] = {38};
+static const uint8_t lb_funlite2_b518[] = {127,8};
+static const uint8_t lb_funlite2_b519[] = {45};
+static const uint8_t lb_funlite2_b520[] = {119,1,28,2,163,2};
+static const uint8_t lb_funlite2_b521[] = {138};
+static const uint8_t lb_funlite2_b522[] = {220,5};
+static const uint8_t lb_funlite2_b523[] = {14};
+static const uint8_t lb_funlite2_b524[] = {213,2};
+static const uint8_t lb_funlite2_b525[] = {16};
+static const uint8_t lb_funlite2_b526[] = {119};
+static const uint8_t lb_funlite2_b527[] = {154,1,45,5};
+static const uint8_t lb_funlite2_b528[] = {199};
+static const uint8_t lb_funlite2_b529[] = {12};
+static const uint8_t lb_funlite2_b530[] = {7};
+static const uint8_t lb_funlite2_b531[] = {220,5,38,7,45,5};
+static const uint8_t lb_funlite2_b532[] = {203};
+static const uint8_t lb_funlite2_b533[] = {12};
+static const uint8_t lb_funlite2_b534[] = {11};
+static const uint8_t lb_funlite2_b535[] = {238,2};
+static const uint8_t lb_funlite2_b536[] = {5};
+static const uint8_t lb_funlite2_b537[] = {226,4};
+static const uint8_t lb_funlite2_b538[] = {52,8};
+static const uint8_t lb_funlite2_b539[] = {52,8};
+static const uint8_t lb_funlite2_b540[] = {172,13};
+static const uint8_t lb_funlite2_b541[] = {172,13};
+static const uint8_t lb_funlite2_b542[] = {236,19};
+static const uint8_t lb_funlite2_b543[] = {236,19};
+static const uint8_t lb_funlite2_b544[] = {119};
+static const uint8_t lb_funlite2_b545[] = {232,3,130,5,8,7,132};
+static const uint8_t lb_funlite2_b546[] = {149};
+static const uint8_t lb_funlite2_b547[] = {11};
+static const uint8_t lb_funlite2_b548[] = {11,11};
+static const uint8_t lb_funlite2_b549[] = {29,26,27};
+static const uint8_t lb_funlite2_b550[] = {144,1,222,3,119,1};
+static const uint8_t lb_funlite2_b551[] = {255};
+static const uint8_t lb_funlite2_b552[] = {9,20,11};
+static const uint8_t lb_funlite2_b553[] = {188};
+static const uint8_t lb_funlite2_b554[] = {170,5,130,5,194,1};
+static const uint8_t lb_funlite2_b555[] = {200};
+static const uint8_t lb_funlite2_b556[] = {255};
+static const uint8_t lb_funlite2_b557[] = {11};
+static const uint8_t lb_funlite2_b558[] = {136,19};
+static const uint8_t lb_funlite2_b559[] = {34,2};
+static const uint8_t lb_funlite2_b560[] = {238,2,116,4,120,5,138,2};
+static const uint8_t lb_funlite2_b561[] = {32};
+static const uint8_t lb_funlite2_b562[] = {5,9,31};
+static const uint8_t lb_funlite2_b563[] = {8};
+static const uint8_t lb_funlite2_b564[] = {85,3};
+static const uint8_t lb_funlite2_b565[] = {1};
+static const uint8_t lb_funlite2_b566[] = {200};
+static const uint8_t lb_funlite2_b567[] = {94,1};
+static const uint8_t lb_funlite2_b568[] = {199};
+static const uint8_t lb_funlite2_b569[] = {15};
+static const uint8_t lb_funlite2_b570[] = {6};
+static const uint8_t lb_funlite2_b571[] = {11};
+static const uint8_t lb_funlite2_b572[] = {51,3};
+static const uint8_t lb_funlite2_b573[] = {107,3,116,4,188};
+static const uint8_t lb_funlite2_b574[] = {200};
+static const uint8_t lb_funlite2_b575[] = {149};
+static const uint8_t lb_funlite2_b576[] = {9};
+static const uint8_t lb_funlite2_b577[] = {184,11};
+static const uint8_t lb_funlite2_b578[] = {222};
+static const uint8_t lb_funlite2_b579[] = {13,2};
+static const uint8_t lb_funlite2_b580[] = {197,0,0};
+static const uint8_t lb_funlite2_b581[] = {0};
+static const uint8_t lb_funlite2_b582[] = {4};
+static const uint8_t lb_funlite2_b583[] = {16,39};
+static const uint8_t lb_funlite2_b584[] = {16,39};
+static const uint8_t lb_funlite2_b585[] = {222};
+static const uint8_t lb_funlite2_b586[] = {1};
+static const uint8_t lb_funlite2_b587[] = {238,2,116,4,208,7,52,8,183,0,0};
+static const uint8_t lb_funlite2_b588[] = {0};
+static const uint8_t lb_funlite2_b589[] = {36};
+static const uint8_t lb_funlite2_b590[] = {7};
+static const uint8_t lb_funlite2_b591[] = {8,5};
+static const uint8_t lb_funlite2_b592[] = {12,22,8};
+static const uint8_t lb_funlite2_b593[] = {171,2};
+static const uint8_t lb_funlite2_b594[] = {1,1,0,1};
+static const uint8_t lb_funlite2_b595[] = {25};
+static const uint8_t lb_funlite2_b596[] = {90,0,19,1};
+static const uint8_t lb_funlite2_b597[] = {12};
+static const uint8_t lb_funlite2_b598[] = {8,15,11};
+static const uint8_t lb_funlite2_b599[] = {171,2};
+static const uint8_t lb_funlite2_b600[] = {1};
+static const uint8_t lb_funlite2_b601[] = {138,2,116,4,89,6};
+static const uint8_t lb_funlite2_b602[] = {255,255,65};
+static const uint8_t lb_funlite2_b603[] = {35};
+static const uint8_t lb_funlite2_b604[] = {12};
+static const uint8_t lb_funlite2_b605[] = {55,9};
+static const uint8_t lb_funlite2_b606[] = {184,11};
+static const uint8_t lb_funlite2_b607[] = {188,3};
+static const uint8_t lb_funlite2_b608[] = {1};
+static const uint8_t lb_funlite2_b609[] = {232,3,116,4,20,5,208,7};
+static const uint8_t lb_funlite2_b610[] = {100};
+static const uint8_t lb_funlite2_b611[] = {0};
+static const uint8_t lb_funlite2_b612[] = {15};
+static const uint8_t lb_funlite2_b613[] = {4,18,11,5,7,6,25,26};
+static const uint8_t lb_funlite2_b614[] = {255,255};
+static const uint8_t lb_funlite2_b615[] = {1};
+static const uint8_t lb_funlite2_b616[] = {109,1,116,4,94,1};
+static const uint8_t lb_funlite2_b617[] = {255,255,25};
+static const uint8_t lb_funlite2_b618[] = {10};
+static const uint8_t lb_funlite2_b619[] = {15};
+static const uint8_t lb_funlite2_b620[] = {9,5,11};
+static const uint8_t lb_funlite2_b621[] = {85,3};
+static const uint8_t lb_funlite2_b622[] = {194};
+static const uint8_t lb_funlite2_b623[] = {28,2,251,4};
+static const uint8_t lb_funlite2_b624[] = {187};
+static const uint8_t lb_funlite2_b625[] = {20};
+static const uint8_t lb_funlite2_b626[] = {9};
+static const uint8_t lb_funlite2_b627[] = {136,19};
+static const uint8_t lb_funlite2_b628[] = {171};
+static const uint8_t lb_funlite2_b629[] = {107,3};
+static const uint8_t lb_funlite2_b630[] = {196,0,0};
+static const uint8_t lb_funlite2_b631[] = {0};
+static const uint8_t lb_funlite2_b632[] = {12};
+static const uint8_t lb_funlite2_b633[] = {9,9,11};
+static const uint8_t lb_funlite2_b634[] = {1};
+static const uint8_t lb_funlite2_b635[] = {0,1};
+static const uint8_t lb_funlite2_b636[] = {184,11};
+static const uint8_t lb_funlite2_b637[] = {11,71,11};
+static const uint8_t lb_funlite2_b638[] = {119};
+static const uint8_t lb_funlite2_b639[] = {1};
+static const uint8_t lb_funlite2_b640[] = {250,0,44,1,8,7,158,7,191,0,0};
+static const uint8_t lb_funlite2_b641[] = {0};
+static const uint8_t lb_funlite2_b642[] = {15};
+static const uint8_t lb_funlite2_b643[] = {5};
+static const uint8_t lb_funlite2_b644[] = {11,16};
+static const uint8_t lb_funlite2_b645[] = {17,11,25};
+static const uint8_t lb_funlite2_b646[] = {1};
+static const uint8_t lb_funlite2_b647[] = {44,1,28,2,32,3};
+static const uint8_t lb_funlite2_b648[] = {60};
+static const uint8_t lb_funlite2_b649[] = {0};
+static const uint8_t lb_funlite2_b650[] = {20};
+static const uint8_t lb_funlite2_b651[] = {5,11,11};
+static const uint8_t lb_funlite2_b652[] = {171,2};
+static const uint8_t lb_funlite2_b653[] = {0};
+static const uint8_t lb_funlite2_b654[] = {144};
+static const uint8_t lb_funlite2_b655[] = {224,1,32,3};
+static const uint8_t lb_funlite2_b656[] = {207};
+static const uint8_t lb_funlite2_b657[] = {25};
+static const uint8_t lb_funlite2_b658[] = {11};
+static const uint8_t lb_funlite2_b659[] = {184,11};
+static const uint8_t lb_funlite2_b660[] = {222};
+static const uint8_t lb_funlite2_b661[] = {1};
+static const uint8_t lb_funlite2_b662[] = {238,2,116,4,108,7,52,8};
+static const uint8_t lb_funlite2_b663[] = {150};
+static const uint8_t lb_funlite2_b664[] = {100};
+static const uint8_t lb_funlite2_b665[] = {40};
+static const uint8_t lb_funlite2_b666[] = {6};
+static const uint8_t lb_funlite2_b667[] = {11,5};
+static const uint8_t lb_funlite2_b668[] = {18,6,10};
+static const uint8_t lb_funlite2_b669[] = {171,2};
+static const uint8_t lb_funlite2_b670[] = {1};
+static const uint8_t lb_funlite2_b671[] = {225};
+static const uint8_t lb_funlite2_b672[] = {180,0,232,3};
+static const uint8_t lb_funlite2_b673[] = {204,0,0};
+static const uint8_t lb_funlite2_b674[] = {0};
+static const uint8_t lb_funlite2_b675[] = {24};
+static const uint8_t lb_funlite2_b676[] = {5,11,9};
+static const uint8_t lb_funlite2_b677[] = {85};
+static const uint8_t lb_funlite2_b678[] = {98,2,101,4};
+static const uint8_t lb_funlite2_b679[] = {203};
+static const uint8_t lb_funlite2_b680[] = {20};
+static const uint8_t lb_funlite2_b681[] = {11};
+static const uint8_t lb_funlite2_b682[] = {184,11};
+static const uint8_t lb_funlite2_b683[] = {171};
+static const uint8_t lb_funlite2_b684[] = {1};
+static const uint8_t lb_funlite2_b685[] = {157,3};
+static const uint8_t lb_funlite2_b686[] = {12};
+static const uint8_t lb_funlite2_b687[] = {3,11,11};
+static const uint8_t lb_funlite2_b688[] = {136,19};
+static const uint8_t lb_funlite2_b689[] = {171,2};
+static const uint8_t lb_funlite2_b690[] = {1};
+static const uint8_t lb_funlite2_b691[] = {220,5,52,8,183};
+static const uint8_t lb_funlite2_b692[] = {30};
+static const uint8_t lb_funlite2_b693[] = {9};
+static const uint8_t lb_funlite2_b694[] = {11,5,9,25,10,19};
+static const uint8_t lb_funlite2_b695[] = {255,255};
+static const uint8_t lb_funlite2_b696[] = {1};
+static const uint8_t lb_funlite2_b697[] = {52,8,232,3,52,8,176,4};
+static const uint8_t lb_funlite2_b698[] = {5};
+static const uint8_t lb_funlite2_b699[] = {0};
+static const uint8_t lb_funlite2_b700[] = {8};
+static const uint8_t lb_funlite2_b701[] = {7,55,9,30,7,8,13,29};
+static const uint8_t lb_funlite2_b702[] = {188};
+static const uint8_t lb_funlite2_b703[] = {232,3,2,3,176,4,108,7,192};
+static const uint8_t lb_funlite2_b704[] = {8};
+static const uint8_t lb_funlite2_b705[] = {9,5};
+static const uint8_t lb_funlite2_b706[] = {23};
+static const uint8_t lb_funlite2_b707[] = {12};
+static const uint8_t lb_funlite2_b708[] = {85,3};
+static const uint8_t lb_funlite2_b709[] = {64,6,52,8};
+static const uint8_t lb_funlite2_b710[] = {125};
+static const uint8_t lb_funlite2_b711[] = {24};
+static const uint8_t lb_funlite2_b712[] = {4};
+static const uint8_t lb_funlite2_b713[] = {9,7};
+static const uint8_t lb_funlite2_b714[] = {5};
+static const uint8_t lb_funlite2_b715[] = {18};
+static const uint8_t lb_funlite2_b716[] = {85,3};
+static const uint8_t lb_funlite2_b717[] = {238,2,116,4,176,4,138,2};
+static const uint8_t lb_funlite2_b718[] = {25};
+static const uint8_t lb_funlite2_b719[] = {6};
+static const uint8_t lb_funlite2_b720[] = {9,5,7,11};
+static const uint8_t lb_funlite2_b721[] = {29};
+static const uint8_t lb_funlite2_b722[] = {171,2};
+static const uint8_t lb_funlite2_b723[] = {232,3,130,5,208,7,214,6};
+static const uint8_t lb_funlite2_b724[] = {5};
+static const uint8_t lb_funlite2_b725[] = {0};
+static const uint8_t lb_funlite2_b726[] = {24};
+static const uint8_t lb_funlite2_b727[] = {7,45,9,26,9,27};
+static const uint8_t lb_funlite2_b728[] = {8};
+static const uint8_t lb_funlite2_b729[] = {255,255};
+static const uint8_t lb_funlite2_b730[] = {1};
+static const uint8_t lb_funlite2_b731[] = {0,1};
+static const uint8_t lb_funlite2_b732[] = {119};
+static const uint8_t lb_funlite2_b733[] = {142,3,20,5,220,5};
+static const uint8_t lb_funlite2_b734[] = {40};
+static const uint8_t lb_funlite2_b735[] = {11,55,11,30,9,10,17,27};
+static const uint8_t lb_funlite2_b736[] = {0};
+static const uint8_t lb_funlite2_b737[] = {5};
+static const uint8_t lb_funlite2_b738[] = {35};
+static const uint8_t lb_funlite2_b739[] = {5};
+static const uint8_t lb_funlite2_b740[] = {35};
+static const uint8_t lb_funlite2_b741[] = {0,0};
+static const uint8_t lb_funlite2_b742[] = {110};
+static const uint8_t lb_funlite2_b743[] = {130};
+static const uint8_t lb_funlite2_b744[] = {110};
+static const uint8_t lb_funlite2_b745[] = {130};
+static const uint8_t lb_funlite2_b746[] = {0};
+static const uint8_t lb_funlite2_b747[] = {50};
+static const uint8_t lb_funlite2_b748[] = {50};
+static const uint8_t lb_funlite2_b749[] = {50};
+static const uint8_t lb_funlite2_b750[] = {50};
+static const uint8_t lb_funlite2_b751[] = {0};
+static const uint8_t lb_funlite2_b752[] = {0};
+static const uint8_t lb_funlite2_b753[] = {0};
+static const uint8_t lb_funlite2_b754[] = {0};
+static const uint8_t lb_funlite2_b755[] = {75};
+static const uint8_t lb_funlite2_b756[] = {105};
+static const uint8_t lb_funlite2_b757[] = {75};
+static const uint8_t lb_funlite2_b758[] = {105};
+static const uint8_t lb_funlite2_b759[] = {1};
+static const uint8_t lb_funlite2_b760[] = {0};
+static const uint8_t lb_funlite2_b761[] = {65};
+static const uint8_t lb_funlite2_b762[] = {85};
+static const uint8_t lb_funlite2_b763[] = {65};
+static const uint8_t lb_funlite2_b764[] = {85};
+static const uint8_t lb_funlite2_b765[] = {0};
+static const uint8_t lb_funlite2_b766[] = {0};
+static const uint8_t lb_funlite2_b767[] = {0};
+static const uint8_t lb_funlite2_b768[] = {0};
+static const uint8_t lb_funlite2_b769[] = {0};
+static const uint8_t lb_funlite2_b770[] = {0};
+static const uint8_t lb_funlite2_b771[] = {140};
+static const uint8_t lb_funlite2_b772[] = {255};
+static const uint8_t lb_funlite2_b773[] = {140};
+static const uint8_t lb_funlite2_b774[] = {255};
+static const uint8_t lb_funlite2_b775[] = {50};
+static const uint8_t lb_funlite2_b776[] = {75};
+static const uint8_t lb_funlite2_b777[] = {50};
+static const uint8_t lb_funlite2_b778[] = {75};
+static const uint8_t lb_funlite2_b779[] = {30};
+static const uint8_t lb_funlite2_b780[] = {45};
+static const uint8_t lb_funlite2_b781[] = {30};
+static const uint8_t lb_funlite2_b782[] = {45};
+static const uint8_t lb_funlite2_b783[] = {0,10};
+static const uint8_t lb_funlite2_b784[] = {0};
+static const uint8_t lb_funlite2_b785[] = {0};
+static const uint8_t lb_funlite2_b786[] = {0,0};
+static const uint8_t lb_funlite2_b787[] = {0,0};
+static const uint8_t lb_funlite2_b788[] = {94,1,38,2,94,1,38,2};
+static const uint8_t lb_funlite2_b789[] = {0};
+static const uint8_t lb_funlite2_b790[] = {0};
+static const uint8_t lb_funlite2_b791[] = {0};
+static const uint8_t lb_funlite2_b792[] = {15};
+static const uint8_t lb_funlite2_b793[] = {35};
+static const uint8_t lb_funlite2_b794[] = {15};
+static const uint8_t lb_funlite2_b795[] = {35};
+static const uint8_t lb_funlite2_b796[] = {0};
+static const uint8_t lb_funlite2_b797[] = {0};
+static const uint8_t lb_funlite2_b798[] = {1};
+static const uint8_t lb_funlite2_b799[] = {94,1,94,1,94,1,94,1};
+static const uint8_t lb_funlite2_b800[] = {1};
+static const uint8_t lb_funlite2_b801[] = {0};
+static const uint8_t lb_funlite2_b802[] = {0,0};
+static const uint8_t lb_funlite2_b803[] = {0,0};
+static const uint8_t lb_funlite2_b804[] = {0};
+static const uint8_t lb_funlite2_b805[] = {0};
+static const uint8_t lb_funlite2_b806[] = {0};
+static const uint8_t lb_funlite2_b807[] = {21};
+static const uint8_t lb_funlite2_b808[] = {0};
+static const uint8_t lb_funlite2_b809[] = {0};
+static const uint8_t lb_funlite2_b810[] = {0};
+static const uint8_t lb_funlite2_b811[] = {15};
+static const uint8_t lb_funlite2_b812[] = {35};
+static const uint8_t lb_funlite2_b813[] = {15};
+static const uint8_t lb_funlite2_b814[] = {35};
+static const uint8_t lb_funlite2_b815[] = {0};
+static const uint8_t lb_funlite2_b816[] = {0};
+static const uint8_t lb_funlite2_b817[] = {0};
+static const uint8_t lb_funlite2_b818[] = {50};
+static const uint8_t lb_funlite2_b819[] = {194,1,50};
+static const uint8_t lb_funlite2_b820[] = {194,1};
+static const uint8_t lb_funlite2_b821[] = {0};
+static const uint8_t lb_funlite2_b822[] = {0,0};
+static const uint8_t lb_funlite2_b823[] = {0};
+static const uint8_t lb_funlite2_b824[] = {1};
+static const uint8_t lb_funlite2_b825[] = {12};
+static const uint8_t lb_funlite2_b826[] = {0};
+static const uint8_t lb_funlite2_b827[] = {50};
+static const uint8_t lb_funlite2_b828[] = {75};
+static const uint8_t lb_funlite2_b829[] = {50};
+static const uint8_t lb_funlite2_b830[] = {75};
+static const LbBalanceRun lb_funlite2_runs[] = {
+    {16u, 2u, lb_funlite2_b0},
+    {28u, 1u, lb_funlite2_b1},
+    {30u, 2u, lb_funlite2_b2},
+    {102u, 4u, lb_funlite2_b3},
+    {108u, 1u, lb_funlite2_b4},
+    {110u, 1u, lb_funlite2_b5},
+    {113u, 1u, lb_funlite2_b6},
+    {115u, 1u, lb_funlite2_b7},
+    {119u, 2u, lb_funlite2_b8},
+    {122u, 1u, lb_funlite2_b9},
+    {140u, 2u, lb_funlite2_b10},
+    {152u, 1u, lb_funlite2_b11},
+    {154u, 2u, lb_funlite2_b12},
+    {226u, 4u, lb_funlite2_b13},
+    {232u, 1u, lb_funlite2_b14},
+    {234u, 1u, lb_funlite2_b15},
+    {237u, 1u, lb_funlite2_b16},
+    {239u, 1u, lb_funlite2_b17},
+    {243u, 4u, lb_funlite2_b18},
+    {264u, 2u, lb_funlite2_b19},
+    {350u, 2u, lb_funlite2_b20},
+    {361u, 1u, lb_funlite2_b21},
+    {364u, 2u, lb_funlite2_b22},
+    {474u, 2u, lb_funlite2_b23},
+    {488u, 2u, lb_funlite2_b24},
+    {512u, 2u, lb_funlite2_b25},
+    {594u, 1u, lb_funlite2_b26},
+    {598u, 2u, lb_funlite2_b27},
+    {602u, 1u, lb_funlite2_b28},
+    {609u, 1u, lb_funlite2_b29},
+    {611u, 1u, lb_funlite2_b30},
+    {613u, 1u, lb_funlite2_b31},
+    {636u, 1u, lb_funlite2_b32},
+    {718u, 3u, lb_funlite2_b33},
+    {722u, 2u, lb_funlite2_b34},
+    {728u, 1u, lb_funlite2_b35},
+    {730u, 1u, lb_funlite2_b36},
+    {733u, 1u, lb_funlite2_b37},
+    {735u, 1u, lb_funlite2_b38},
+    {737u, 1u, lb_funlite2_b39},
+    {842u, 1u, lb_funlite2_b40},
+    {844u, 4u, lb_funlite2_b41},
+    {857u, 1u, lb_funlite2_b42},
+    {859u, 1u, lb_funlite2_b43},
+    {861u, 1u, lb_funlite2_b44},
+    {966u, 2u, lb_funlite2_b45},
+    {970u, 1u, lb_funlite2_b46},
+    {985u, 1u, lb_funlite2_b47},
+    {1008u, 1u, lb_funlite2_b48},
+    {1090u, 6u, lb_funlite2_b49},
+    {1098u, 3u, lb_funlite2_b50},
+    {1105u, 1u, lb_funlite2_b51},
+    {1109u, 1u, lb_funlite2_b52},
+    {1132u, 2u, lb_funlite2_b53},
+    {1149u, 1u, lb_funlite2_b54},
+    {1214u, 6u, lb_funlite2_b55},
+    {1222u, 1u, lb_funlite2_b56},
+    {1229u, 1u, lb_funlite2_b57},
+    {1231u, 1u, lb_funlite2_b58},
+    {1233u, 1u, lb_funlite2_b59},
+    {1342u, 2u, lb_funlite2_b60},
+    {1462u, 2u, lb_funlite2_b61},
+    {1466u, 2u, lb_funlite2_b62},
+    {1586u, 1u, lb_funlite2_b63},
+    {1600u, 1u, lb_funlite2_b64},
+    {1710u, 6u, lb_funlite2_b65},
+    {1838u, 2u, lb_funlite2_b66},
+    {1958u, 2u, lb_funlite2_b67},
+    {1962u, 2u, lb_funlite2_b68},
+    {2084u, 1u, lb_funlite2_b69},
+    {2086u, 1u, lb_funlite2_b70},
+    {2206u, 1u, lb_funlite2_b71},
+    {2208u, 4u, lb_funlite2_b72},
+    {2221u, 1u, lb_funlite2_b73},
+    {2330u, 6u, lb_funlite2_b74},
+    {2338u, 1u, lb_funlite2_b75},
+    {2345u, 1u, lb_funlite2_b76},
+    {2347u, 1u, lb_funlite2_b77},
+    {2454u, 2u, lb_funlite2_b78},
+    {2458u, 2u, lb_funlite2_b79},
+    {2496u, 1u, lb_funlite2_b80},
+    {2508u, 4u, lb_funlite2_b81},
+    {2578u, 11u, lb_funlite2_b82},
+    {2590u, 1u, lb_funlite2_b83},
+    {2593u, 1u, lb_funlite2_b84},
+    {2595u, 1u, lb_funlite2_b85},
+    {2597u, 6u, lb_funlite2_b86},
+    {2632u, 1u, lb_funlite2_b87},
+    {2634u, 2u, lb_funlite2_b88},
+    {2702u, 11u, lb_funlite2_b89},
+    {2714u, 1u, lb_funlite2_b90},
+    {2717u, 1u, lb_funlite2_b91},
+    {2719u, 1u, lb_funlite2_b92},
+    {2721u, 6u, lb_funlite2_b93},
+    {2744u, 2u, lb_funlite2_b94},
+    {2756u, 1u, lb_funlite2_b95},
+    {2758u, 2u, lb_funlite2_b96},
+    {2826u, 1u, lb_funlite2_b97},
+    {2828u, 3u, lb_funlite2_b98},
+    {2844u, 1u, lb_funlite2_b99},
+    {2868u, 2u, lb_funlite2_b100},
+    {2880u, 1u, lb_funlite2_b101},
+    {2882u, 2u, lb_funlite2_b102},
+    {2950u, 1u, lb_funlite2_b103},
+    {2952u, 4u, lb_funlite2_b104},
+    {2958u, 3u, lb_funlite2_b105},
+    {2962u, 1u, lb_funlite2_b106},
+    {2965u, 1u, lb_funlite2_b107},
+    {2967u, 1u, lb_funlite2_b108},
+    {2969u, 1u, lb_funlite2_b109},
+    {2992u, 2u, lb_funlite2_b110},
+    {3004u, 1u, lb_funlite2_b111},
+    {3006u, 2u, lb_funlite2_b112},
+    {3074u, 1u, lb_funlite2_b113},
+    {3076u, 4u, lb_funlite2_b114},
+    {3082u, 1u, lb_funlite2_b115},
+    {3089u, 1u, lb_funlite2_b116},
+    {3091u, 1u, lb_funlite2_b117},
+    {3093u, 1u, lb_funlite2_b118},
+    {3116u, 2u, lb_funlite2_b119},
+    {3128u, 1u, lb_funlite2_b120},
+    {3130u, 2u, lb_funlite2_b121},
+    {3198u, 2u, lb_funlite2_b122},
+    {3202u, 1u, lb_funlite2_b123},
+    {3206u, 3u, lb_funlite2_b124},
+    {3210u, 1u, lb_funlite2_b125},
+    {3213u, 1u, lb_funlite2_b126},
+    {3215u, 1u, lb_funlite2_b127},
+    {3217u, 1u, lb_funlite2_b128},
+    {3252u, 1u, lb_funlite2_b129},
+    {3254u, 2u, lb_funlite2_b130},
+    {3322u, 6u, lb_funlite2_b131},
+    {3330u, 1u, lb_funlite2_b132},
+    {3339u, 1u, lb_funlite2_b133},
+    {3341u, 1u, lb_funlite2_b134},
+    {3364u, 2u, lb_funlite2_b135},
+    {3377u, 1u, lb_funlite2_b136},
+    {3448u, 4u, lb_funlite2_b137},
+    {3461u, 1u, lb_funlite2_b138},
+    {3465u, 1u, lb_funlite2_b139},
+    {3488u, 1u, lb_funlite2_b140},
+    {3570u, 6u, lb_funlite2_b141},
+    {3585u, 1u, lb_funlite2_b142},
+    {3587u, 1u, lb_funlite2_b143},
+    {3589u, 1u, lb_funlite2_b144},
+    {3612u, 2u, lb_funlite2_b145},
+    {3629u, 1u, lb_funlite2_b146},
+    {3694u, 6u, lb_funlite2_b147},
+    {3702u, 1u, lb_funlite2_b148},
+    {3709u, 1u, lb_funlite2_b149},
+    {3711u, 1u, lb_funlite2_b150},
+    {3713u, 1u, lb_funlite2_b151},
+    {3822u, 2u, lb_funlite2_b152},
+    {3942u, 2u, lb_funlite2_b153},
+    {3946u, 2u, lb_funlite2_b154},
+    {4066u, 2u, lb_funlite2_b155},
+    {4070u, 2u, lb_funlite2_b156},
+    {4080u, 1u, lb_funlite2_b157},
+    {4190u, 6u, lb_funlite2_b158},
+    {4438u, 2u, lb_funlite2_b159},
+    {4442u, 2u, lb_funlite2_b160},
+    {4564u, 4u, lb_funlite2_b161},
+    {4570u, 1u, lb_funlite2_b162},
+    {4577u, 1u, lb_funlite2_b163},
+    {4579u, 1u, lb_funlite2_b164},
+    {4690u, 2u, lb_funlite2_b165},
+    {4701u, 1u, lb_funlite2_b166},
+    {4703u, 1u, lb_funlite2_b167},
+    {4810u, 6u, lb_funlite2_b168},
+    {4825u, 1u, lb_funlite2_b169},
+    {4827u, 1u, lb_funlite2_b170},
+    {4934u, 2u, lb_funlite2_b171},
+    {4938u, 2u, lb_funlite2_b172},
+    {4976u, 1u, lb_funlite2_b173},
+    {4988u, 1u, lb_funlite2_b174},
+    {4990u, 2u, lb_funlite2_b175},
+    {5062u, 7u, lb_funlite2_b176},
+    {5070u, 1u, lb_funlite2_b177},
+    {5075u, 1u, lb_funlite2_b178},
+    {5077u, 1u, lb_funlite2_b179},
+    {5079u, 4u, lb_funlite2_b180},
+    {5100u, 2u, lb_funlite2_b181},
+    {5112u, 1u, lb_funlite2_b182},
+    {5114u, 2u, lb_funlite2_b183},
+    {5186u, 7u, lb_funlite2_b184},
+    {5194u, 1u, lb_funlite2_b185},
+    {5199u, 1u, lb_funlite2_b186},
+    {5201u, 1u, lb_funlite2_b187},
+    {5203u, 4u, lb_funlite2_b188},
+    {5225u, 1u, lb_funlite2_b189},
+    {5236u, 1u, lb_funlite2_b190},
+    {5238u, 2u, lb_funlite2_b191},
+    {5306u, 1u, lb_funlite2_b192},
+    {5308u, 1u, lb_funlite2_b193},
+    {5310u, 1u, lb_funlite2_b194},
+    {5321u, 1u, lb_funlite2_b195},
+    {5324u, 2u, lb_funlite2_b196},
+    {5348u, 2u, lb_funlite2_b197},
+    {5360u, 1u, lb_funlite2_b198},
+    {5362u, 2u, lb_funlite2_b199},
+    {5430u, 1u, lb_funlite2_b200},
+    {5434u, 1u, lb_funlite2_b201},
+    {5438u, 3u, lb_funlite2_b202},
+    {5442u, 1u, lb_funlite2_b203},
+    {5447u, 1u, lb_funlite2_b204},
+    {5449u, 1u, lb_funlite2_b205},
+    {5472u, 1u, lb_funlite2_b206},
+    {5484u, 1u, lb_funlite2_b207},
+    {5486u, 2u, lb_funlite2_b208},
+    {5554u, 1u, lb_funlite2_b209},
+    {5556u, 4u, lb_funlite2_b210},
+    {5562u, 1u, lb_funlite2_b211},
+    {5569u, 1u, lb_funlite2_b212},
+    {5573u, 1u, lb_funlite2_b213},
+    {5678u, 3u, lb_funlite2_b214},
+    {5682u, 1u, lb_funlite2_b215},
+    {5686u, 3u, lb_funlite2_b216},
+    {5690u, 1u, lb_funlite2_b217},
+    {5693u, 1u, lb_funlite2_b218},
+    {5695u, 1u, lb_funlite2_b219},
+    {5697u, 1u, lb_funlite2_b220},
+    {5720u, 2u, lb_funlite2_b221},
+    {5802u, 6u, lb_funlite2_b222},
+    {5810u, 1u, lb_funlite2_b223},
+    {5817u, 1u, lb_funlite2_b224},
+    {5819u, 1u, lb_funlite2_b225},
+    {5821u, 1u, lb_funlite2_b226},
+    {5926u, 1u, lb_funlite2_b227},
+    {5928u, 4u, lb_funlite2_b228},
+    {5934u, 1u, lb_funlite2_b229},
+    {5941u, 1u, lb_funlite2_b230},
+    {5945u, 1u, lb_funlite2_b231},
+    {5968u, 2u, lb_funlite2_b232},
+    {5985u, 1u, lb_funlite2_b233},
+    {6050u, 6u, lb_funlite2_b234},
+    {6058u, 1u, lb_funlite2_b235},
+    {6065u, 1u, lb_funlite2_b236},
+    {6067u, 1u, lb_funlite2_b237},
+    {6069u, 1u, lb_funlite2_b238},
+    {6092u, 2u, lb_funlite2_b239},
+    {6109u, 1u, lb_funlite2_b240},
+    {6174u, 6u, lb_funlite2_b241},
+    {6182u, 1u, lb_funlite2_b242},
+    {6189u, 1u, lb_funlite2_b243},
+    {6191u, 1u, lb_funlite2_b244},
+    {6193u, 1u, lb_funlite2_b245},
+    {6302u, 2u, lb_funlite2_b246},
+    {6422u, 2u, lb_funlite2_b247},
+    {6546u, 2u, lb_funlite2_b248},
+    {6550u, 2u, lb_funlite2_b249},
+    {6560u, 1u, lb_funlite2_b250},
+    {6670u, 6u, lb_funlite2_b251},
+    {6798u, 1u, lb_funlite2_b252},
+    {6918u, 2u, lb_funlite2_b253},
+    {7044u, 1u, lb_funlite2_b254},
+    {7057u, 1u, lb_funlite2_b255},
+    {7059u, 1u, lb_funlite2_b256},
+    {7061u, 1u, lb_funlite2_b257},
+    {7166u, 1u, lb_funlite2_b258},
+    {7168u, 4u, lb_funlite2_b259},
+    {7174u, 1u, lb_funlite2_b260},
+    {7181u, 1u, lb_funlite2_b261},
+    {7183u, 1u, lb_funlite2_b262},
+    {7185u, 1u, lb_funlite2_b263},
+    {7290u, 6u, lb_funlite2_b264},
+    {7305u, 1u, lb_funlite2_b265},
+    {7307u, 1u, lb_funlite2_b266},
+    {7414u, 2u, lb_funlite2_b267},
+    {7456u, 2u, lb_funlite2_b268},
+    {7468u, 1u, lb_funlite2_b269},
+    {7470u, 2u, lb_funlite2_b270},
+    {7540u, 6u, lb_funlite2_b271},
+    {7548u, 1u, lb_funlite2_b272},
+    {7550u, 1u, lb_funlite2_b273},
+    {7553u, 1u, lb_funlite2_b274},
+    {7555u, 1u, lb_funlite2_b275},
+    {7557u, 1u, lb_funlite2_b276},
+    {7559u, 4u, lb_funlite2_b277},
+    {7580u, 2u, lb_funlite2_b278},
+    {7664u, 6u, lb_funlite2_b279},
+    {7672u, 1u, lb_funlite2_b280},
+    {7674u, 1u, lb_funlite2_b281},
+    {7677u, 1u, lb_funlite2_b282},
+    {7679u, 1u, lb_funlite2_b283},
+    {7683u, 4u, lb_funlite2_b284},
+    {7704u, 2u, lb_funlite2_b285},
+    {7717u, 1u, lb_funlite2_b286},
+    {7786u, 1u, lb_funlite2_b287},
+    {7790u, 2u, lb_funlite2_b288},
+    {7801u, 1u, lb_funlite2_b289},
+    {7804u, 2u, lb_funlite2_b290},
+    {7828u, 2u, lb_funlite2_b291},
+    {7910u, 1u, lb_funlite2_b292},
+    {7912u, 1u, lb_funlite2_b293},
+    {7920u, 1u, lb_funlite2_b294},
+    {7922u, 1u, lb_funlite2_b295},
+    {7925u, 1u, lb_funlite2_b296},
+    {7927u, 1u, lb_funlite2_b297},
+    {7929u, 1u, lb_funlite2_b298},
+    {7952u, 1u, lb_funlite2_b299},
+    {8034u, 1u, lb_funlite2_b300},
+    {8036u, 4u, lb_funlite2_b301},
+    {8049u, 1u, lb_funlite2_b302},
+    {8051u, 1u, lb_funlite2_b303},
+    {8053u, 1u, lb_funlite2_b304},
+    {8076u, 2u, lb_funlite2_b305},
+    {8158u, 2u, lb_funlite2_b306},
+    {8162u, 2u, lb_funlite2_b307},
+    {8168u, 1u, lb_funlite2_b308},
+    {8170u, 1u, lb_funlite2_b309},
+    {8173u, 1u, lb_funlite2_b310},
+    {8175u, 1u, lb_funlite2_b311},
+    {8177u, 1u, lb_funlite2_b312},
+    {8200u, 1u, lb_funlite2_b313},
+    {8217u, 1u, lb_funlite2_b314},
+    {8282u, 6u, lb_funlite2_b315},
+    {8290u, 1u, lb_funlite2_b316},
+    {8297u, 1u, lb_funlite2_b317},
+    {8299u, 1u, lb_funlite2_b318},
+    {8301u, 1u, lb_funlite2_b319},
+    {8324u, 1u, lb_funlite2_b320},
+    {8406u, 1u, lb_funlite2_b321},
+    {8408u, 4u, lb_funlite2_b322},
+    {8425u, 1u, lb_funlite2_b323},
+    {8448u, 2u, lb_funlite2_b324},
+    {8530u, 6u, lb_funlite2_b325},
+    {8538u, 1u, lb_funlite2_b326},
+    {8545u, 1u, lb_funlite2_b327},
+    {8547u, 1u, lb_funlite2_b328},
+    {8549u, 1u, lb_funlite2_b329},
+    {8572u, 2u, lb_funlite2_b330},
+    {8589u, 1u, lb_funlite2_b331},
+    {8654u, 3u, lb_funlite2_b332},
+    {8658u, 2u, lb_funlite2_b333},
+    {8669u, 1u, lb_funlite2_b334},
+    {8671u, 1u, lb_funlite2_b335},
+    {8673u, 1u, lb_funlite2_b336},
+    {8782u, 2u, lb_funlite2_b337},
+    {8902u, 1u, lb_funlite2_b338},
+    {8906u, 2u, lb_funlite2_b339},
+    {9026u, 1u, lb_funlite2_b340},
+    {9030u, 2u, lb_funlite2_b341},
+    {9040u, 1u, lb_funlite2_b342},
+    {9150u, 6u, lb_funlite2_b343},
+    {9278u, 2u, lb_funlite2_b344},
+    {9398u, 2u, lb_funlite2_b345},
+    {9402u, 2u, lb_funlite2_b346},
+    {9524u, 1u, lb_funlite2_b347},
+    {9530u, 1u, lb_funlite2_b348},
+    {9537u, 1u, lb_funlite2_b349},
+    {9539u, 1u, lb_funlite2_b350},
+    {9541u, 1u, lb_funlite2_b351},
+    {9646u, 1u, lb_funlite2_b352},
+    {9648u, 4u, lb_funlite2_b353},
+    {9654u, 1u, lb_funlite2_b354},
+    {9661u, 1u, lb_funlite2_b355},
+    {9663u, 1u, lb_funlite2_b356},
+    {9665u, 1u, lb_funlite2_b357},
+    {9770u, 6u, lb_funlite2_b358},
+    {9778u, 1u, lb_funlite2_b359},
+    {9785u, 1u, lb_funlite2_b360},
+    {9787u, 1u, lb_funlite2_b361},
+    {9894u, 2u, lb_funlite2_b362},
+    {9898u, 2u, lb_funlite2_b363},
+    {9936u, 2u, lb_funlite2_b364},
+    {9949u, 1u, lb_funlite2_b365},
+    {10018u, 8u, lb_funlite2_b366},
+    {10028u, 1u, lb_funlite2_b367},
+    {10030u, 1u, lb_funlite2_b368},
+    {10033u, 1u, lb_funlite2_b369},
+    {10035u, 1u, lb_funlite2_b370},
+    {10037u, 6u, lb_funlite2_b371},
+    {10060u, 2u, lb_funlite2_b372},
+    {10142u, 9u, lb_funlite2_b373},
+    {10157u, 1u, lb_funlite2_b374},
+    {10159u, 1u, lb_funlite2_b375},
+    {10161u, 6u, lb_funlite2_b376},
+    {10184u, 2u, lb_funlite2_b377},
+    {10197u, 1u, lb_funlite2_b378},
+    {10270u, 2u, lb_funlite2_b379},
+    {10276u, 1u, lb_funlite2_b380},
+    {10283u, 3u, lb_funlite2_b381},
+    {10308u, 1u, lb_funlite2_b382},
+    {10390u, 1u, lb_funlite2_b383},
+    {10392u, 1u, lb_funlite2_b384},
+    {10394u, 2u, lb_funlite2_b385},
+    {10400u, 1u, lb_funlite2_b386},
+    {10405u, 1u, lb_funlite2_b387},
+    {10407u, 1u, lb_funlite2_b388},
+    {10409u, 1u, lb_funlite2_b389},
+    {10432u, 1u, lb_funlite2_b390},
+    {10514u, 2u, lb_funlite2_b391},
+    {10518u, 2u, lb_funlite2_b392},
+    {10522u, 1u, lb_funlite2_b393},
+    {10529u, 1u, lb_funlite2_b394},
+    {10531u, 3u, lb_funlite2_b395},
+    {10569u, 1u, lb_funlite2_b396},
+    {10573u, 1u, lb_funlite2_b397},
+    {10638u, 6u, lb_funlite2_b398},
+    {10646u, 3u, lb_funlite2_b399},
+    {10650u, 1u, lb_funlite2_b400},
+    {10653u, 1u, lb_funlite2_b401},
+    {10655u, 3u, lb_funlite2_b402},
+    {10680u, 2u, lb_funlite2_b403},
+    {10693u, 1u, lb_funlite2_b404},
+    {10762u, 6u, lb_funlite2_b405},
+    {10770u, 1u, lb_funlite2_b406},
+    {10779u, 1u, lb_funlite2_b407},
+    {10781u, 1u, lb_funlite2_b408},
+    {10804u, 2u, lb_funlite2_b409},
+    {10886u, 1u, lb_funlite2_b410},
+    {10890u, 2u, lb_funlite2_b411},
+    {10894u, 1u, lb_funlite2_b412},
+    {10901u, 1u, lb_funlite2_b413},
+    {10904u, 2u, lb_funlite2_b414},
+    {10928u, 2u, lb_funlite2_b415},
+    {10945u, 1u, lb_funlite2_b416},
+    {11010u, 5u, lb_funlite2_b417},
+    {11018u, 1u, lb_funlite2_b418},
+    {11025u, 1u, lb_funlite2_b419},
+    {11027u, 3u, lb_funlite2_b420},
+    {11052u, 2u, lb_funlite2_b421},
+    {11069u, 1u, lb_funlite2_b422},
+    {11134u, 6u, lb_funlite2_b423},
+    {11142u, 1u, lb_funlite2_b424},
+    {11149u, 1u, lb_funlite2_b425},
+    {11151u, 1u, lb_funlite2_b426},
+    {11153u, 1u, lb_funlite2_b427},
+    {11262u, 2u, lb_funlite2_b428},
+    {11382u, 1u, lb_funlite2_b429},
+    {11386u, 2u, lb_funlite2_b430},
+    {11506u, 2u, lb_funlite2_b431},
+    {11510u, 2u, lb_funlite2_b432},
+    {11520u, 1u, lb_funlite2_b433},
+    {11630u, 6u, lb_funlite2_b434},
+    {11758u, 2u, lb_funlite2_b435},
+    {11878u, 2u, lb_funlite2_b436},
+    {11882u, 2u, lb_funlite2_b437},
+    {12004u, 4u, lb_funlite2_b438},
+    {12019u, 1u, lb_funlite2_b439},
+    {12130u, 2u, lb_funlite2_b440},
+    {12141u, 1u, lb_funlite2_b441},
+    {12143u, 1u, lb_funlite2_b442},
+    {12250u, 6u, lb_funlite2_b443},
+    {12265u, 1u, lb_funlite2_b444},
+    {12267u, 1u, lb_funlite2_b445},
+    {12374u, 2u, lb_funlite2_b446},
+    {12378u, 2u, lb_funlite2_b447},
+    {12416u, 2u, lb_funlite2_b448},
+    {12428u, 4u, lb_funlite2_b449},
+    {12498u, 8u, lb_funlite2_b450},
+    {12508u, 1u, lb_funlite2_b451},
+    {12510u, 1u, lb_funlite2_b452},
+    {12513u, 1u, lb_funlite2_b453},
+    {12515u, 8u, lb_funlite2_b454},
+    {12553u, 1u, lb_funlite2_b455},
+    {12622u, 8u, lb_funlite2_b456},
+    {12634u, 1u, lb_funlite2_b457},
+    {12637u, 1u, lb_funlite2_b458},
+    {12639u, 1u, lb_funlite2_b459},
+    {12642u, 5u, lb_funlite2_b460},
+    {12664u, 2u, lb_funlite2_b461},
+    {12676u, 4u, lb_funlite2_b462},
+    {12746u, 1u, lb_funlite2_b463},
+    {12748u, 1u, lb_funlite2_b464},
+    {12750u, 1u, lb_funlite2_b465},
+    {12761u, 1u, lb_funlite2_b466},
+    {12763u, 3u, lb_funlite2_b467},
+    {12788u, 2u, lb_funlite2_b468},
+    {12870u, 1u, lb_funlite2_b469},
+    {12872u, 1u, lb_funlite2_b470},
+    {12874u, 1u, lb_funlite2_b471},
+    {12880u, 1u, lb_funlite2_b472},
+    {12882u, 1u, lb_funlite2_b473},
+    {12885u, 1u, lb_funlite2_b474},
+    {12887u, 3u, lb_funlite2_b475},
+    {12912u, 2u, lb_funlite2_b476},
+    {12994u, 6u, lb_funlite2_b477},
+    {13002u, 1u, lb_funlite2_b478},
+    {13011u, 3u, lb_funlite2_b479},
+    {13036u, 2u, lb_funlite2_b480},
+    {13048u, 1u, lb_funlite2_b481},
+    {13050u, 2u, lb_funlite2_b482},
+    {13118u, 3u, lb_funlite2_b483},
+    {13122u, 2u, lb_funlite2_b484},
+    {13128u, 1u, lb_funlite2_b485},
+    {13133u, 1u, lb_funlite2_b486},
+    {13135u, 1u, lb_funlite2_b487},
+    {13137u, 1u, lb_funlite2_b488},
+    {13160u, 2u, lb_funlite2_b489},
+    {13172u, 1u, lb_funlite2_b490},
+    {13174u, 2u, lb_funlite2_b491},
+    {13242u, 6u, lb_funlite2_b492},
+    {13250u, 3u, lb_funlite2_b493},
+    {13254u, 1u, lb_funlite2_b494},
+    {13257u, 1u, lb_funlite2_b495},
+    {13259u, 1u, lb_funlite2_b496},
+    {13261u, 1u, lb_funlite2_b497},
+    {13284u, 2u, lb_funlite2_b498},
+    {13366u, 6u, lb_funlite2_b499},
+    {13374u, 3u, lb_funlite2_b500},
+    {13381u, 1u, lb_funlite2_b501},
+    {13385u, 1u, lb_funlite2_b502},
+    {13408u, 1u, lb_funlite2_b503},
+    {13490u, 6u, lb_funlite2_b504},
+    {13498u, 1u, lb_funlite2_b505},
+    {13505u, 1u, lb_funlite2_b506},
+    {13507u, 1u, lb_funlite2_b507},
+    {13509u, 1u, lb_funlite2_b508},
+    {13545u, 1u, lb_funlite2_b509},
+    {13549u, 1u, lb_funlite2_b510},
+    {13614u, 6u, lb_funlite2_b511},
+    {13622u, 1u, lb_funlite2_b512},
+    {13629u, 1u, lb_funlite2_b513},
+    {13631u, 1u, lb_funlite2_b514},
+    {13633u, 1u, lb_funlite2_b515},
+    {13742u, 2u, lb_funlite2_b516},
+    {13986u, 1u, lb_funlite2_b517},
+    {13990u, 2u, lb_funlite2_b518},
+    {14000u, 1u, lb_funlite2_b519},
+    {14110u, 6u, lb_funlite2_b520},
+    {14238u, 1u, lb_funlite2_b521},
+    {14358u, 2u, lb_funlite2_b522},
+    {14484u, 1u, lb_funlite2_b523},
+    {14486u, 2u, lb_funlite2_b524},
+    {14497u, 1u, lb_funlite2_b525},
+    {14606u, 1u, lb_funlite2_b526},
+    {14608u, 4u, lb_funlite2_b527},
+    {14614u, 1u, lb_funlite2_b528},
+    {14621u, 1u, lb_funlite2_b529},
+    {14623u, 1u, lb_funlite2_b530},
+    {14730u, 6u, lb_funlite2_b531},
+    {14738u, 1u, lb_funlite2_b532},
+    {14745u, 1u, lb_funlite2_b533},
+    {14747u, 1u, lb_funlite2_b534},
+    {14854u, 2u, lb_funlite2_b535},
+    {14980u, 1u, lb_funlite2_b536},
+    {14982u, 2u, lb_funlite2_b537},
+    {15106u, 2u, lb_funlite2_b538},
+    {15230u, 2u, lb_funlite2_b539},
+    {15354u, 2u, lb_funlite2_b540},
+    {15478u, 2u, lb_funlite2_b541},
+    {15602u, 2u, lb_funlite2_b542},
+    {15726u, 2u, lb_funlite2_b543},
+    {16012u, 1u, lb_funlite2_b544},
+    {16094u, 7u, lb_funlite2_b545},
+    {16109u, 1u, lb_funlite2_b546},
+    {16111u, 1u, lb_funlite2_b547},
+    {16113u, 2u, lb_funlite2_b548},
+    {16116u, 3u, lb_funlite2_b549},
+    {16218u, 6u, lb_funlite2_b550},
+    {16233u, 1u, lb_funlite2_b551},
+    {16235u, 3u, lb_funlite2_b552},
+    {16260u, 1u, lb_funlite2_b553},
+    {16342u, 6u, lb_funlite2_b554},
+    {16350u, 1u, lb_funlite2_b555},
+    {16357u, 1u, lb_funlite2_b556},
+    {16361u, 1u, lb_funlite2_b557},
+    {16470u, 2u, lb_funlite2_b558},
+    {16508u, 2u, lb_funlite2_b559},
+    {16590u, 8u, lb_funlite2_b560},
+    {16605u, 1u, lb_funlite2_b561},
+    {16610u, 3u, lb_funlite2_b562},
+    {16614u, 1u, lb_funlite2_b563},
+    {16632u, 2u, lb_funlite2_b564},
+    {16645u, 1u, lb_funlite2_b565},
+    {16714u, 1u, lb_funlite2_b566},
+    {16718u, 2u, lb_funlite2_b567},
+    {16722u, 1u, lb_funlite2_b568},
+    {16729u, 1u, lb_funlite2_b569},
+    {16731u, 1u, lb_funlite2_b570},
+    {16733u, 1u, lb_funlite2_b571},
+    {16756u, 2u, lb_funlite2_b572},
+    {16838u, 5u, lb_funlite2_b573},
+    {16846u, 1u, lb_funlite2_b574},
+    {16853u, 1u, lb_funlite2_b575},
+    {16857u, 1u, lb_funlite2_b576},
+    {16966u, 2u, lb_funlite2_b577},
+    {17128u, 1u, lb_funlite2_b578},
+    {17214u, 2u, lb_funlite2_b579},
+    {17218u, 3u, lb_funlite2_b580},
+    {17222u, 1u, lb_funlite2_b581},
+    {17227u, 1u, lb_funlite2_b582},
+    {17586u, 2u, lb_funlite2_b583},
+    {17834u, 2u, lb_funlite2_b584},
+    {17996u, 1u, lb_funlite2_b585},
+    {18009u, 1u, lb_funlite2_b586},
+    {18078u, 11u, lb_funlite2_b587},
+    {18090u, 1u, lb_funlite2_b588},
+    {18093u, 1u, lb_funlite2_b589},
+    {18095u, 1u, lb_funlite2_b590},
+    {18097u, 2u, lb_funlite2_b591},
+    {18100u, 3u, lb_funlite2_b592},
+    {18120u, 2u, lb_funlite2_b593},
+    {18132u, 4u, lb_funlite2_b594},
+    {18202u, 1u, lb_funlite2_b595},
+    {18204u, 4u, lb_funlite2_b596},
+    {18217u, 1u, lb_funlite2_b597},
+    {18219u, 3u, lb_funlite2_b598},
+    {18244u, 2u, lb_funlite2_b599},
+    {18257u, 1u, lb_funlite2_b600},
+    {18326u, 6u, lb_funlite2_b601},
+    {18334u, 3u, lb_funlite2_b602},
+    {18338u, 1u, lb_funlite2_b603},
+    {18341u, 1u, lb_funlite2_b604},
+    {18344u, 2u, lb_funlite2_b605},
+    {18454u, 2u, lb_funlite2_b606},
+    {18492u, 2u, lb_funlite2_b607},
+    {18505u, 1u, lb_funlite2_b608},
+    {18574u, 8u, lb_funlite2_b609},
+    {18584u, 1u, lb_funlite2_b610},
+    {18586u, 1u, lb_funlite2_b611},
+    {18589u, 1u, lb_funlite2_b612},
+    {18591u, 8u, lb_funlite2_b613},
+    {18616u, 2u, lb_funlite2_b614},
+    {18629u, 1u, lb_funlite2_b615},
+    {18698u, 6u, lb_funlite2_b616},
+    {18706u, 3u, lb_funlite2_b617},
+    {18710u, 1u, lb_funlite2_b618},
+    {18713u, 1u, lb_funlite2_b619},
+    {18715u, 3u, lb_funlite2_b620},
+    {18740u, 2u, lb_funlite2_b621},
+    {18822u, 1u, lb_funlite2_b622},
+    {18824u, 4u, lb_funlite2_b623},
+    {18830u, 1u, lb_funlite2_b624},
+    {18837u, 1u, lb_funlite2_b625},
+    {18841u, 1u, lb_funlite2_b626},
+    {18950u, 2u, lb_funlite2_b627},
+    {18988u, 1u, lb_funlite2_b628},
+    {19074u, 2u, lb_funlite2_b629},
+    {19078u, 3u, lb_funlite2_b630},
+    {19082u, 1u, lb_funlite2_b631},
+    {19085u, 1u, lb_funlite2_b632},
+    {19087u, 3u, lb_funlite2_b633},
+    {19247u, 1u, lb_funlite2_b634},
+    {19250u, 2u, lb_funlite2_b635},
+    {19322u, 2u, lb_funlite2_b636},
+    {19335u, 3u, lb_funlite2_b637},
+    {19980u, 1u, lb_funlite2_b638},
+    {19993u, 1u, lb_funlite2_b639},
+    {20062u, 11u, lb_funlite2_b640},
+    {20074u, 1u, lb_funlite2_b641},
+    {20077u, 1u, lb_funlite2_b642},
+    {20079u, 1u, lb_funlite2_b643},
+    {20081u, 2u, lb_funlite2_b644},
+    {20084u, 3u, lb_funlite2_b645},
+    {20117u, 1u, lb_funlite2_b646},
+    {20186u, 6u, lb_funlite2_b647},
+    {20196u, 1u, lb_funlite2_b648},
+    {20198u, 1u, lb_funlite2_b649},
+    {20201u, 1u, lb_funlite2_b650},
+    {20203u, 3u, lb_funlite2_b651},
+    {20228u, 2u, lb_funlite2_b652},
+    {20241u, 1u, lb_funlite2_b653},
+    {20310u, 1u, lb_funlite2_b654},
+    {20312u, 4u, lb_funlite2_b655},
+    {20318u, 1u, lb_funlite2_b656},
+    {20325u, 1u, lb_funlite2_b657},
+    {20329u, 1u, lb_funlite2_b658},
+    {20438u, 2u, lb_funlite2_b659},
+    {20476u, 1u, lb_funlite2_b660},
+    {20489u, 1u, lb_funlite2_b661},
+    {20558u, 8u, lb_funlite2_b662},
+    {20568u, 1u, lb_funlite2_b663},
+    {20570u, 1u, lb_funlite2_b664},
+    {20573u, 1u, lb_funlite2_b665},
+    {20575u, 1u, lb_funlite2_b666},
+    {20577u, 2u, lb_funlite2_b667},
+    {20580u, 3u, lb_funlite2_b668},
+    {20600u, 2u, lb_funlite2_b669},
+    {20613u, 1u, lb_funlite2_b670},
+    {20682u, 1u, lb_funlite2_b671},
+    {20684u, 4u, lb_funlite2_b672},
+    {20690u, 3u, lb_funlite2_b673},
+    {20694u, 1u, lb_funlite2_b674},
+    {20697u, 1u, lb_funlite2_b675},
+    {20699u, 3u, lb_funlite2_b676},
+    {20724u, 1u, lb_funlite2_b677},
+    {20808u, 4u, lb_funlite2_b678},
+    {20814u, 1u, lb_funlite2_b679},
+    {20821u, 1u, lb_funlite2_b680},
+    {20825u, 1u, lb_funlite2_b681},
+    {20934u, 2u, lb_funlite2_b682},
+    {20972u, 1u, lb_funlite2_b683},
+    {20986u, 1u, lb_funlite2_b684},
+    {21058u, 2u, lb_funlite2_b685},
+    {21069u, 1u, lb_funlite2_b686},
+    {21071u, 3u, lb_funlite2_b687},
+    {21430u, 2u, lb_funlite2_b688},
+    {21716u, 2u, lb_funlite2_b689},
+    {21729u, 1u, lb_funlite2_b690},
+    {21802u, 5u, lb_funlite2_b691},
+    {21813u, 1u, lb_funlite2_b692},
+    {21815u, 1u, lb_funlite2_b693},
+    {21817u, 6u, lb_funlite2_b694},
+    {21840u, 2u, lb_funlite2_b695},
+    {21853u, 1u, lb_funlite2_b696},
+    {21922u, 8u, lb_funlite2_b697},
+    {21932u, 1u, lb_funlite2_b698},
+    {21934u, 1u, lb_funlite2_b699},
+    {21937u, 1u, lb_funlite2_b700},
+    {21939u, 8u, lb_funlite2_b701},
+    {21964u, 1u, lb_funlite2_b702},
+    {22046u, 9u, lb_funlite2_b703},
+    {22063u, 1u, lb_funlite2_b704},
+    {22065u, 2u, lb_funlite2_b705},
+    {22068u, 1u, lb_funlite2_b706},
+    {22070u, 1u, lb_funlite2_b707},
+    {22088u, 2u, lb_funlite2_b708},
+    {22174u, 4u, lb_funlite2_b709},
+    {22180u, 1u, lb_funlite2_b710},
+    {22185u, 1u, lb_funlite2_b711},
+    {22187u, 1u, lb_funlite2_b712},
+    {22189u, 2u, lb_funlite2_b713},
+    {22192u, 1u, lb_funlite2_b714},
+    {22194u, 1u, lb_funlite2_b715},
+    {22212u, 2u, lb_funlite2_b716},
+    {22294u, 8u, lb_funlite2_b717},
+    {22309u, 1u, lb_funlite2_b718},
+    {22311u, 1u, lb_funlite2_b719},
+    {22313u, 4u, lb_funlite2_b720},
+    {22318u, 1u, lb_funlite2_b721},
+    {22336u, 2u, lb_funlite2_b722},
+    {22418u, 8u, lb_funlite2_b723},
+    {22428u, 1u, lb_funlite2_b724},
+    {22430u, 1u, lb_funlite2_b725},
+    {22433u, 1u, lb_funlite2_b726},
+    {22435u, 6u, lb_funlite2_b727},
+    {22442u, 1u, lb_funlite2_b728},
+    {22460u, 2u, lb_funlite2_b729},
+    {22472u, 1u, lb_funlite2_b730},
+    {22474u, 2u, lb_funlite2_b731},
+    {22542u, 1u, lb_funlite2_b732},
+    {22544u, 6u, lb_funlite2_b733},
+    {22557u, 1u, lb_funlite2_b734},
+    {22559u, 8u, lb_funlite2_b735},
+    {22674u, 1u, lb_funlite2_b736},
+    {22680u, 1u, lb_funlite2_b737},
+    {22682u, 1u, lb_funlite2_b738},
+    {22684u, 1u, lb_funlite2_b739},
+    {22686u, 1u, lb_funlite2_b740},
+    {22789u, 2u, lb_funlite2_b741},
+    {22796u, 1u, lb_funlite2_b742},
+    {22798u, 1u, lb_funlite2_b743},
+    {22800u, 1u, lb_funlite2_b744},
+    {22802u, 1u, lb_funlite2_b745},
+    {22908u, 1u, lb_funlite2_b746},
+    {22912u, 1u, lb_funlite2_b747},
+    {22914u, 1u, lb_funlite2_b748},
+    {22916u, 1u, lb_funlite2_b749},
+    {22918u, 1u, lb_funlite2_b750},
+    {23020u, 1u, lb_funlite2_b751},
+    {23251u, 1u, lb_funlite2_b752},
+    {23253u, 1u, lb_funlite2_b753},
+    {23256u, 1u, lb_funlite2_b754},
+    {23260u, 1u, lb_funlite2_b755},
+    {23262u, 1u, lb_funlite2_b756},
+    {23264u, 1u, lb_funlite2_b757},
+    {23266u, 1u, lb_funlite2_b758},
+    {23370u, 1u, lb_funlite2_b759},
+    {23484u, 1u, lb_funlite2_b760},
+    {23492u, 1u, lb_funlite2_b761},
+    {23494u, 1u, lb_funlite2_b762},
+    {23496u, 1u, lb_funlite2_b763},
+    {23498u, 1u, lb_funlite2_b764},
+    {23600u, 1u, lb_funlite2_b765},
+    {23713u, 1u, lb_funlite2_b766},
+    {23718u, 1u, lb_funlite2_b767},
+    {23721u, 1u, lb_funlite2_b768},
+    {23834u, 1u, lb_funlite2_b769},
+    {23837u, 1u, lb_funlite2_b770},
+    {23840u, 1u, lb_funlite2_b771},
+    {23842u, 1u, lb_funlite2_b772},
+    {23844u, 1u, lb_funlite2_b773},
+    {23846u, 1u, lb_funlite2_b774},
+    {24072u, 1u, lb_funlite2_b775},
+    {24074u, 1u, lb_funlite2_b776},
+    {24076u, 1u, lb_funlite2_b777},
+    {24078u, 1u, lb_funlite2_b778},
+    {24304u, 1u, lb_funlite2_b779},
+    {24306u, 1u, lb_funlite2_b780},
+    {24308u, 1u, lb_funlite2_b781},
+    {24310u, 1u, lb_funlite2_b782},
+    {24324u, 2u, lb_funlite2_b783},
+    {24409u, 1u, lb_funlite2_b784},
+    {24411u, 1u, lb_funlite2_b785},
+    {24413u, 2u, lb_funlite2_b786},
+    {24416u, 2u, lb_funlite2_b787},
+    {24420u, 8u, lb_funlite2_b788},
+    {24525u, 1u, lb_funlite2_b789},
+    {24530u, 1u, lb_funlite2_b790},
+    {24533u, 1u, lb_funlite2_b791},
+    {24536u, 1u, lb_funlite2_b792},
+    {24538u, 1u, lb_funlite2_b793},
+    {24540u, 1u, lb_funlite2_b794},
+    {24542u, 1u, lb_funlite2_b795},
+    {24645u, 1u, lb_funlite2_b796},
+    {24648u, 1u, lb_funlite2_b797},
+    {24759u, 1u, lb_funlite2_b798},
+    {24768u, 8u, lb_funlite2_b799},
+    {24875u, 1u, lb_funlite2_b800},
+    {24989u, 1u, lb_funlite2_b801},
+    {24993u, 2u, lb_funlite2_b802},
+    {24996u, 2u, lb_funlite2_b803},
+    {25105u, 1u, lb_funlite2_b804},
+    {25110u, 1u, lb_funlite2_b805},
+    {25113u, 1u, lb_funlite2_b806},
+    {25137u, 1u, lb_funlite2_b807},
+    {25221u, 1u, lb_funlite2_b808},
+    {25226u, 1u, lb_funlite2_b809},
+    {25229u, 1u, lb_funlite2_b810},
+    {25232u, 1u, lb_funlite2_b811},
+    {25234u, 1u, lb_funlite2_b812},
+    {25236u, 1u, lb_funlite2_b813},
+    {25238u, 1u, lb_funlite2_b814},
+    {25337u, 1u, lb_funlite2_b815},
+    {25342u, 1u, lb_funlite2_b816},
+    {25345u, 1u, lb_funlite2_b817},
+    {25348u, 1u, lb_funlite2_b818},
+    {25350u, 3u, lb_funlite2_b819},
+    {25354u, 2u, lb_funlite2_b820},
+    {25453u, 1u, lb_funlite2_b821},
+    {25457u, 2u, lb_funlite2_b822},
+    {25461u, 1u, lb_funlite2_b823},
+    {25463u, 1u, lb_funlite2_b824},
+    {25485u, 1u, lb_funlite2_b825},
+    {25573u, 1u, lb_funlite2_b826},
+    {25580u, 1u, lb_funlite2_b827},
+    {25582u, 1u, lb_funlite2_b828},
+    {25584u, 1u, lb_funlite2_b829},
+    {25586u, 1u, lb_funlite2_b830},
 };
+
+static const uint8_t lb_factionwars2_b0[] = {222};
+static const uint8_t lb_factionwars2_b1[] = {67};
+static const uint8_t lb_factionwars2_b2[] = {18};
+static const uint8_t lb_factionwars2_b3[] = {7};
+static const uint8_t lb_factionwars2_b4[] = {171};
+static const uint8_t lb_factionwars2_b5[] = {144,1,88,2,244};
+static const uint8_t lb_factionwars2_b6[] = {50};
+static const uint8_t lb_factionwars2_b7[] = {238,2};
+static const uint8_t lb_factionwars2_b8[] = {12};
+static const uint8_t lb_factionwars2_b9[] = {187};
+static const uint8_t lb_factionwars2_b10[] = {7};
+static const uint8_t lb_factionwars2_b11[] = {200,0,94};
+static const uint8_t lb_factionwars2_b12[] = {244};
+static const uint8_t lb_factionwars2_b13[] = {16};
+static const uint8_t lb_factionwars2_b14[] = {8};
+static const uint8_t lb_factionwars2_b15[] = {5,0,15,0};
+static const uint8_t lb_factionwars2_b16[] = {34};
+static const uint8_t lb_factionwars2_b17[] = {5};
+static const uint8_t lb_factionwars2_b18[] = {8};
+static const uint8_t lb_factionwars2_b19[] = {5,0,15,0,244,1};
+static const uint8_t lb_factionwars2_b20[] = {187};
+static const uint8_t lb_factionwars2_b21[] = {34};
+static const uint8_t lb_factionwars2_b22[] = {8};
+static const uint8_t lb_factionwars2_b23[] = {226};
+static const uint8_t lb_factionwars2_b24[] = {186,0,0};
+static const uint8_t lb_factionwars2_b25[] = {0};
+static const uint8_t lb_factionwars2_b26[] = {40};
+static const uint8_t lb_factionwars2_b27[] = {5};
+static const uint8_t lb_factionwars2_b28[] = {220,5};
+static const uint8_t lb_factionwars2_b29[] = {50};
+static const uint8_t lb_factionwars2_b30[] = {45};
+static const uint8_t lb_factionwars2_b31[] = {5};
+static const uint8_t lb_factionwars2_b32[] = {15,0,150};
+static const uint8_t lb_factionwars2_b33[] = {125};
+static const uint8_t lb_factionwars2_b34[] = {17};
+static const uint8_t lb_factionwars2_b35[] = {200};
+static const uint8_t lb_factionwars2_b36[] = {94};
+static const uint8_t lb_factionwars2_b37[] = {50};
+static const uint8_t lb_factionwars2_b38[] = {138};
+static const uint8_t lb_factionwars2_b39[] = {1};
+static const uint8_t lb_factionwars2_b40[] = {244,1,72,3};
+static const uint8_t lb_factionwars2_b41[] = {24};
+static const uint8_t lb_factionwars2_b42[] = {5};
+static const uint8_t lb_factionwars2_b43[] = {232};
+static const uint8_t lb_factionwars2_b44[] = {187};
+static const uint8_t lb_factionwars2_b45[] = {6};
+static const uint8_t lb_factionwars2_b46[] = {200,0,94};
+static const uint8_t lb_factionwars2_b47[] = {244};
+static const uint8_t lb_factionwars2_b48[] = {16};
+static const uint8_t lb_factionwars2_b49[] = {8};
+static const uint8_t lb_factionwars2_b50[] = {5,0,15,0};
+static const uint8_t lb_factionwars2_b51[] = {34};
+static const uint8_t lb_factionwars2_b52[] = {5};
+static const uint8_t lb_factionwars2_b53[] = {8};
+static const uint8_t lb_factionwars2_b54[] = {5,0,15,0,244,1};
+static const uint8_t lb_factionwars2_b55[] = {187};
+static const uint8_t lb_factionwars2_b56[] = {34};
+static const uint8_t lb_factionwars2_b57[] = {8};
+static const uint8_t lb_factionwars2_b58[] = {220,5};
+static const uint8_t lb_factionwars2_b59[] = {60};
+static const uint8_t lb_factionwars2_b60[] = {7};
+static const uint8_t lb_factionwars2_b61[] = {144};
+static const uint8_t lb_factionwars2_b62[] = {15};
+static const uint8_t lb_factionwars2_b63[] = {16};
+static const uint8_t lb_factionwars2_b64[] = {7};
+static const uint8_t lb_factionwars2_b65[] = {244};
+static const uint8_t lb_factionwars2_b66[] = {10};
+static const uint8_t lb_factionwars2_b67[] = {30};
+static const uint8_t lb_factionwars2_b68[] = {6};
+static const uint8_t lb_factionwars2_b69[] = {8};
+static const uint8_t lb_factionwars2_b70[] = {34,2};
+static const uint8_t lb_factionwars2_b71[] = {32,3};
+static const uint8_t lb_factionwars2_b72[] = {24};
+static const uint8_t lb_factionwars2_b73[] = {8};
+static const uint8_t lb_factionwars2_b74[] = {20};
+static const uint8_t lb_factionwars2_b75[] = {238,2,88,2};
+static const uint8_t lb_factionwars2_b76[] = {200,0,84,1};
+static const uint8_t lb_factionwars2_b77[] = {200,0,94};
+static const uint8_t lb_factionwars2_b78[] = {244};
+static const uint8_t lb_factionwars2_b79[] = {16};
+static const uint8_t lb_factionwars2_b80[] = {8};
+static const uint8_t lb_factionwars2_b81[] = {5,0,15,0};
+static const uint8_t lb_factionwars2_b82[] = {34};
+static const uint8_t lb_factionwars2_b83[] = {5};
+static const uint8_t lb_factionwars2_b84[] = {8};
+static const uint8_t lb_factionwars2_b85[] = {5,0,15,0,244,1};
+static const uint8_t lb_factionwars2_b86[] = {187};
+static const uint8_t lb_factionwars2_b87[] = {34};
+static const uint8_t lb_factionwars2_b88[] = {8};
+static const uint8_t lb_factionwars2_b89[] = {200};
+static const uint8_t lb_factionwars2_b90[] = {94,1};
+static const uint8_t lb_factionwars2_b91[] = {20};
+static const uint8_t lb_factionwars2_b92[] = {250};
+static const uint8_t lb_factionwars2_b93[] = {194};
+static const uint8_t lb_factionwars2_b94[] = {40};
+static const uint8_t lb_factionwars2_b95[] = {138};
+static const uint8_t lb_factionwars2_b96[] = {238};
+static const uint8_t lb_factionwars2_b97[] = {132,3,60,5,232,3};
+static const uint8_t lb_factionwars2_b98[] = {16};
+static const uint8_t lb_factionwars2_b99[] = {8};
+static const uint8_t lb_factionwars2_b100[] = {20};
+static const uint8_t lb_factionwars2_b101[] = {208,7};
+static const uint8_t lb_factionwars2_b102[] = {232,3};
+static const uint8_t lb_factionwars2_b103[] = {194};
+static const uint8_t lb_factionwars2_b104[] = {232,3};
+static const uint8_t lb_factionwars2_b105[] = {226,4};
+static const uint8_t lb_factionwars2_b106[] = {200,0,94};
+static const uint8_t lb_factionwars2_b107[] = {88,2};
+static const uint8_t lb_factionwars2_b108[] = {16};
+static const uint8_t lb_factionwars2_b109[] = {8};
+static const uint8_t lb_factionwars2_b110[] = {5,0,15,0,88,2};
+static const uint8_t lb_factionwars2_b111[] = {34};
+static const uint8_t lb_factionwars2_b112[] = {5};
+static const uint8_t lb_factionwars2_b113[] = {8};
+static const uint8_t lb_factionwars2_b114[] = {5,0,15,0,88};
+static const uint8_t lb_factionwars2_b115[] = {187};
+static const uint8_t lb_factionwars2_b116[] = {34};
+static const uint8_t lb_factionwars2_b117[] = {8};
+static const uint8_t lb_factionwars2_b118[] = {226,4};
+static const uint8_t lb_factionwars2_b119[] = {176,4};
+static const uint8_t lb_factionwars2_b120[] = {0};
+static const uint8_t lb_factionwars2_b121[] = {93,2};
+static const uint8_t lb_factionwars2_b122[] = {0};
+static const uint8_t lb_factionwars2_b123[] = {185};
+static const uint8_t lb_factionwars2_b124[] = {144};
+static const uint8_t lb_factionwars2_b125[] = {10};
+static const uint8_t lb_factionwars2_b126[] = {222,1};
+static const uint8_t lb_factionwars2_b127[] = {144,1,88,2,38,2};
+static const uint8_t lb_factionwars2_b128[] = {50};
+static const uint8_t lb_factionwars2_b129[] = {20};
+static const uint8_t lb_factionwars2_b130[] = {244};
+static const uint8_t lb_factionwars2_b131[] = {138,2};
+static const uint8_t lb_factionwars2_b132[] = {7};
+static const uint8_t lb_factionwars2_b133[] = {232,3};
+static const uint8_t lb_factionwars2_b134[] = {18};
+static const uint8_t lb_factionwars2_b135[] = {67};
+static const uint8_t lb_factionwars2_b136[] = {1};
+static const uint8_t lb_factionwars2_b137[] = {125};
+static const uint8_t lb_factionwars2_b138[] = {244};
+static const uint8_t lb_factionwars2_b139[] = {244};
+static const uint8_t lb_factionwars2_b140[] = {44,1,88,2};
+static const uint8_t lb_factionwars2_b141[] = {244};
+static const uint8_t lb_factionwars2_b142[] = {200,0,94};
+static const uint8_t lb_factionwars2_b143[] = {244};
+static const uint8_t lb_factionwars2_b144[] = {16};
+static const uint8_t lb_factionwars2_b145[] = {8};
+static const uint8_t lb_factionwars2_b146[] = {5,0,15,0};
+static const uint8_t lb_factionwars2_b147[] = {34};
+static const uint8_t lb_factionwars2_b148[] = {5};
+static const uint8_t lb_factionwars2_b149[] = {8};
+static const uint8_t lb_factionwars2_b150[] = {5,0,15,0,244,1};
+static const uint8_t lb_factionwars2_b151[] = {187};
+static const uint8_t lb_factionwars2_b152[] = {34};
+static const uint8_t lb_factionwars2_b153[] = {8};
+static const uint8_t lb_factionwars2_b154[] = {222};
+static const uint8_t lb_factionwars2_b155[] = {25};
+static const uint8_t lb_factionwars2_b156[] = {144,1};
+static const uint8_t lb_factionwars2_b157[] = {20};
+static const uint8_t lb_factionwars2_b158[] = {6};
+static const uint8_t lb_factionwars2_b159[] = {40};
+static const uint8_t lb_factionwars2_b160[] = {20};
+static const uint8_t lb_factionwars2_b161[] = {171,2};
+static const uint8_t lb_factionwars2_b162[] = {144};
+static const uint8_t lb_factionwars2_b163[] = {128,2};
+static const uint8_t lb_factionwars2_b164[] = {30};
+static const uint8_t lb_factionwars2_b165[] = {3};
+static const uint8_t lb_factionwars2_b166[] = {208,7,208,7,208,7};
+static const uint8_t lb_factionwars2_b167[] = {187};
+static const uint8_t lb_factionwars2_b168[] = {18};
+static const uint8_t lb_factionwars2_b169[] = {7,67,8};
+static const uint8_t lb_factionwars2_b170[] = {200,0,94};
+static const uint8_t lb_factionwars2_b171[] = {244};
+static const uint8_t lb_factionwars2_b172[] = {16};
+static const uint8_t lb_factionwars2_b173[] = {8};
+static const uint8_t lb_factionwars2_b174[] = {5,0,15,0};
+static const uint8_t lb_factionwars2_b175[] = {34};
+static const uint8_t lb_factionwars2_b176[] = {5};
+static const uint8_t lb_factionwars2_b177[] = {8};
+static const uint8_t lb_factionwars2_b178[] = {5,0,15,0,244,1};
+static const uint8_t lb_factionwars2_b179[] = {187};
+static const uint8_t lb_factionwars2_b180[] = {34};
+static const uint8_t lb_factionwars2_b181[] = {8};
+static const uint8_t lb_factionwars2_b182[] = {10};
+static const uint8_t lb_factionwars2_b183[] = {7};
+static const uint8_t lb_factionwars2_b184[] = {19};
+static const uint8_t lb_factionwars2_b185[] = {8};
+static const uint8_t lb_factionwars2_b186[] = {226,4,220,5};
+static const uint8_t lb_factionwars2_b187[] = {255,255,5};
+static const uint8_t lb_factionwars2_b188[] = {60};
+static const uint8_t lb_factionwars2_b189[] = {1};
+static const uint8_t lb_factionwars2_b190[] = {0,0};
+static const uint8_t lb_factionwars2_b191[] = {0};
+static const uint8_t lb_factionwars2_b192[] = {102};
+static const uint8_t lb_factionwars2_b193[] = {16};
+static const uint8_t lb_factionwars2_b194[] = {85};
+static const uint8_t lb_factionwars2_b195[] = {3};
+static const uint8_t lb_factionwars2_b196[] = {17};
+static const uint8_t lb_factionwars2_b197[] = {220,5,20,5};
+static const uint8_t lb_factionwars2_b198[] = {23};
+static const uint8_t lb_factionwars2_b199[] = {44,1,28,2,244,1};
+static const uint8_t lb_factionwars2_b200[] = {184};
+static const uint8_t lb_factionwars2_b201[] = {8};
+static const uint8_t lb_factionwars2_b202[] = {82,3,56,4,238};
+static const uint8_t lb_factionwars2_b203[] = {20};
+static const uint8_t lb_factionwars2_b204[] = {8};
+static const uint8_t lb_factionwars2_b205[] = {8};
+static const uint8_t lb_factionwars2_b206[] = {50};
+static const uint8_t lb_factionwars2_b207[] = {150,0};
+static const uint8_t lb_factionwars2_b208[] = {171,2};
+static const uint8_t lb_factionwars2_b209[] = {88,2};
+static const uint8_t lb_factionwars2_b210[] = {138};
+static const uint8_t lb_factionwars2_b211[] = {24};
+static const uint8_t lb_factionwars2_b212[] = {220,5};
+static const uint8_t lb_factionwars2_b213[] = {60};
+static const uint8_t lb_factionwars2_b214[] = {150};
+static const uint8_t lb_factionwars2_b215[] = {134};
+static const uint8_t lb_factionwars2_b216[] = {44,1};
+static const uint8_t lb_factionwars2_b217[] = {30};
+static const uint8_t lb_factionwars2_b218[] = {24};
+static const uint8_t lb_factionwars2_b219[] = {222};
+static const uint8_t lb_factionwars2_b220[] = {189};
+static const uint8_t lb_factionwars2_b221[] = {30};
+static const uint8_t lb_factionwars2_b222[] = {20,5};
+static const uint8_t lb_factionwars2_b223[] = {222};
+static const uint8_t lb_factionwars2_b224[] = {20};
+static const uint8_t lb_factionwars2_b225[] = {24};
+static const uint8_t lb_factionwars2_b226[] = {8};
+static const uint8_t lb_factionwars2_b227[] = {8};
+static const uint8_t lb_factionwars2_b228[] = {1};
+static const uint8_t lb_factionwars2_b229[] = {15};
+static const uint8_t lb_factionwars2_b230[] = {8};
+static const uint8_t lb_factionwars2_b231[] = {220,5};
+static const uint8_t lb_factionwars2_b232[] = {15};
+static const uint8_t lb_factionwars2_b233[] = {49,1};
+static const uint8_t lb_factionwars2_b234[] = {0};
+static const uint8_t lb_factionwars2_b235[] = {93,2};
+static const uint8_t lb_factionwars2_b236[] = {0};
+static const uint8_t lb_factionwars2_b237[] = {34,2};
+static const uint8_t lb_factionwars2_b238[] = {94};
+static const uint8_t lb_factionwars2_b239[] = {224,1};
+static const uint8_t lb_factionwars2_b240[] = {149,1};
+static const uint8_t lb_factionwars2_b241[] = {20};
+static const uint8_t lb_factionwars2_b242[] = {40};
+static const uint8_t lb_factionwars2_b243[] = {60};
+static const uint8_t lb_factionwars2_b244[] = {40};
+static const uint8_t lb_factionwars2_b245[] = {60};
+static const LbBalanceRun lb_factionwars2_runs[] = {
+    {264u, 1u, lb_factionwars2_b0},
+    {488u, 1u, lb_factionwars2_b1},
+    {609u, 1u, lb_factionwars2_b2},
+    {611u, 1u, lb_factionwars2_b3},
+    {636u, 1u, lb_factionwars2_b4},
+    {718u, 5u, lb_factionwars2_b5},
+    {728u, 1u, lb_factionwars2_b6},
+    {1090u, 2u, lb_factionwars2_b7},
+    {1105u, 1u, lb_factionwars2_b8},
+    {1222u, 1u, lb_factionwars2_b9},
+    {1231u, 1u, lb_factionwars2_b10},
+    {2082u, 3u, lb_factionwars2_b11},
+    {2086u, 1u, lb_factionwars2_b12},
+    {2097u, 1u, lb_factionwars2_b13},
+    {2101u, 1u, lb_factionwars2_b14},
+    {2206u, 4u, lb_factionwars2_b15},
+    {2221u, 1u, lb_factionwars2_b16},
+    {2223u, 1u, lb_factionwars2_b17},
+    {2225u, 1u, lb_factionwars2_b18},
+    {2330u, 6u, lb_factionwars2_b19},
+    {2338u, 1u, lb_factionwars2_b20},
+    {2345u, 1u, lb_factionwars2_b21},
+    {2347u, 1u, lb_factionwars2_b22},
+    {2582u, 1u, lb_factionwars2_b23},
+    {2586u, 3u, lb_factionwars2_b24},
+    {2590u, 1u, lb_factionwars2_b25},
+    {2593u, 1u, lb_factionwars2_b26},
+    {2595u, 1u, lb_factionwars2_b27},
+    {2708u, 2u, lb_factionwars2_b28},
+    {2712u, 1u, lb_factionwars2_b29},
+    {2826u, 1u, lb_factionwars2_b30},
+    {2950u, 1u, lb_factionwars2_b31},
+    {2952u, 3u, lb_factionwars2_b32},
+    {3074u, 1u, lb_factionwars2_b33},
+    {3089u, 1u, lb_factionwars2_b34},
+    {3198u, 1u, lb_factionwars2_b35},
+    {3202u, 1u, lb_factionwars2_b36},
+    {3208u, 1u, lb_factionwars2_b37},
+    {3450u, 1u, lb_factionwars2_b38},
+    {3505u, 1u, lb_factionwars2_b39},
+    {3570u, 4u, lb_factionwars2_b40},
+    {3585u, 1u, lb_factionwars2_b41},
+    {3587u, 1u, lb_factionwars2_b42},
+    {3698u, 1u, lb_factionwars2_b43},
+    {3702u, 1u, lb_factionwars2_b44},
+    {3711u, 1u, lb_factionwars2_b45},
+    {4562u, 3u, lb_factionwars2_b46},
+    {4566u, 1u, lb_factionwars2_b47},
+    {4577u, 1u, lb_factionwars2_b48},
+    {4581u, 1u, lb_factionwars2_b49},
+    {4686u, 4u, lb_factionwars2_b50},
+    {4701u, 1u, lb_factionwars2_b51},
+    {4703u, 1u, lb_factionwars2_b52},
+    {4705u, 1u, lb_factionwars2_b53},
+    {4810u, 6u, lb_factionwars2_b54},
+    {4818u, 1u, lb_factionwars2_b55},
+    {4825u, 1u, lb_factionwars2_b56},
+    {4827u, 1u, lb_factionwars2_b57},
+    {5064u, 2u, lb_factionwars2_b58},
+    {5068u, 1u, lb_factionwars2_b59},
+    {5203u, 1u, lb_factionwars2_b60},
+    {5434u, 1u, lb_factionwars2_b61},
+    {5440u, 1u, lb_factionwars2_b62},
+    {5569u, 1u, lb_factionwars2_b63},
+    {5571u, 1u, lb_factionwars2_b64},
+    {5682u, 1u, lb_factionwars2_b65},
+    {5697u, 1u, lb_factionwars2_b66},
+    {5817u, 1u, lb_factionwars2_b67},
+    {5819u, 1u, lb_factionwars2_b68},
+    {5943u, 1u, lb_factionwars2_b69},
+    {5968u, 2u, lb_factionwars2_b70},
+    {6054u, 2u, lb_factionwars2_b71},
+    {6065u, 1u, lb_factionwars2_b72},
+    {6067u, 1u, lb_factionwars2_b73},
+    {6189u, 1u, lb_factionwars2_b74},
+    {6298u, 4u, lb_factionwars2_b75},
+    {6422u, 4u, lb_factionwars2_b76},
+    {7042u, 3u, lb_factionwars2_b77},
+    {7046u, 1u, lb_factionwars2_b78},
+    {7057u, 1u, lb_factionwars2_b79},
+    {7061u, 1u, lb_factionwars2_b80},
+    {7166u, 4u, lb_factionwars2_b81},
+    {7181u, 1u, lb_factionwars2_b82},
+    {7183u, 1u, lb_factionwars2_b83},
+    {7185u, 1u, lb_factionwars2_b84},
+    {7290u, 6u, lb_factionwars2_b85},
+    {7298u, 1u, lb_factionwars2_b86},
+    {7305u, 1u, lb_factionwars2_b87},
+    {7307u, 1u, lb_factionwars2_b88},
+    {7790u, 1u, lb_factionwars2_b89},
+    {7914u, 2u, lb_factionwars2_b90},
+    {7928u, 1u, lb_factionwars2_b91},
+    {8038u, 1u, lb_factionwars2_b92},
+    {8042u, 1u, lb_factionwars2_b93},
+    {8049u, 1u, lb_factionwars2_b94},
+    {8286u, 1u, lb_factionwars2_b95},
+    {8410u, 1u, lb_factionwars2_b96},
+    {8530u, 6u, lb_factionwars2_b97},
+    {8545u, 1u, lb_factionwars2_b98},
+    {8547u, 1u, lb_factionwars2_b99},
+    {8669u, 1u, lb_factionwars2_b100},
+    {8782u, 2u, lb_factionwars2_b101},
+    {8906u, 2u, lb_factionwars2_b102},
+    {9154u, 1u, lb_factionwars2_b103},
+    {9278u, 2u, lb_factionwars2_b104},
+    {9402u, 2u, lb_factionwars2_b105},
+    {9522u, 3u, lb_factionwars2_b106},
+    {9526u, 2u, lb_factionwars2_b107},
+    {9537u, 1u, lb_factionwars2_b108},
+    {9541u, 1u, lb_factionwars2_b109},
+    {9646u, 6u, lb_factionwars2_b110},
+    {9661u, 1u, lb_factionwars2_b111},
+    {9663u, 1u, lb_factionwars2_b112},
+    {9665u, 1u, lb_factionwars2_b113},
+    {9770u, 5u, lb_factionwars2_b114},
+    {9778u, 1u, lb_factionwars2_b115},
+    {9785u, 1u, lb_factionwars2_b116},
+    {9787u, 1u, lb_factionwars2_b117},
+    {9898u, 2u, lb_factionwars2_b118},
+    {10022u, 2u, lb_factionwars2_b119},
+    {10041u, 1u, lb_factionwars2_b120},
+    {10148u, 2u, lb_factionwars2_b121},
+    {10162u, 1u, lb_factionwars2_b122},
+    {10514u, 1u, lb_factionwars2_b123},
+    {10518u, 1u, lb_factionwars2_b124},
+    {10529u, 1u, lb_factionwars2_b125},
+    {10556u, 2u, lb_factionwars2_b126},
+    {10638u, 6u, lb_factionwars2_b127},
+    {10648u, 1u, lb_factionwars2_b128},
+    {10653u, 1u, lb_factionwars2_b129},
+    {10762u, 1u, lb_factionwars2_b130},
+    {10766u, 2u, lb_factionwars2_b131},
+    {10779u, 1u, lb_factionwars2_b132},
+    {10890u, 2u, lb_factionwars2_b133},
+    {10901u, 1u, lb_factionwars2_b134},
+    {10904u, 1u, lb_factionwars2_b135},
+    {10945u, 1u, lb_factionwars2_b136},
+    {11630u, 1u, lb_factionwars2_b137},
+    {11632u, 1u, lb_factionwars2_b138},
+    {11634u, 1u, lb_factionwars2_b139},
+    {11754u, 4u, lb_factionwars2_b140},
+    {11878u, 1u, lb_factionwars2_b141},
+    {12002u, 3u, lb_factionwars2_b142},
+    {12006u, 1u, lb_factionwars2_b143},
+    {12017u, 1u, lb_factionwars2_b144},
+    {12021u, 1u, lb_factionwars2_b145},
+    {12126u, 4u, lb_factionwars2_b146},
+    {12141u, 1u, lb_factionwars2_b147},
+    {12143u, 1u, lb_factionwars2_b148},
+    {12145u, 1u, lb_factionwars2_b149},
+    {12250u, 6u, lb_factionwars2_b150},
+    {12258u, 1u, lb_factionwars2_b151},
+    {12265u, 1u, lb_factionwars2_b152},
+    {12267u, 1u, lb_factionwars2_b153},
+    {12788u, 1u, lb_factionwars2_b154},
+    {12880u, 1u, lb_factionwars2_b155},
+    {12998u, 2u, lb_factionwars2_b156},
+    {13009u, 1u, lb_factionwars2_b157},
+    {13011u, 1u, lb_factionwars2_b158},
+    {13128u, 1u, lb_factionwars2_b159},
+    {13257u, 1u, lb_factionwars2_b160},
+    {13284u, 2u, lb_factionwars2_b161},
+    {13366u, 1u, lb_factionwars2_b162},
+    {13368u, 2u, lb_factionwars2_b163},
+    {13381u, 1u, lb_factionwars2_b164},
+    {13549u, 1u, lb_factionwars2_b165},
+    {13614u, 6u, lb_factionwars2_b166},
+    {13622u, 1u, lb_factionwars2_b167},
+    {13629u, 1u, lb_factionwars2_b168},
+    {13631u, 3u, lb_factionwars2_b169},
+    {14482u, 3u, lb_factionwars2_b170},
+    {14486u, 1u, lb_factionwars2_b171},
+    {14497u, 1u, lb_factionwars2_b172},
+    {14501u, 1u, lb_factionwars2_b173},
+    {14606u, 4u, lb_factionwars2_b174},
+    {14621u, 1u, lb_factionwars2_b175},
+    {14623u, 1u, lb_factionwars2_b176},
+    {14625u, 1u, lb_factionwars2_b177},
+    {14730u, 6u, lb_factionwars2_b178},
+    {14738u, 1u, lb_factionwars2_b179},
+    {14745u, 1u, lb_factionwars2_b180},
+    {14747u, 1u, lb_factionwars2_b181},
+    {16109u, 1u, lb_factionwars2_b182},
+    {16111u, 1u, lb_factionwars2_b183},
+    {16233u, 1u, lb_factionwars2_b184},
+    {16235u, 1u, lb_factionwars2_b185},
+    {16342u, 4u, lb_factionwars2_b186},
+    {16598u, 3u, lb_factionwars2_b187},
+    {16605u, 1u, lb_factionwars2_b188},
+    {16607u, 1u, lb_factionwars2_b189},
+    {16611u, 2u, lb_factionwars2_b190},
+    {16614u, 1u, lb_factionwars2_b191},
+    {16632u, 1u, lb_factionwars2_b192},
+    {16729u, 1u, lb_factionwars2_b193},
+    {16756u, 1u, lb_factionwars2_b194},
+    {16855u, 1u, lb_factionwars2_b195},
+    {17996u, 1u, lb_factionwars2_b196},
+    {18082u, 4u, lb_factionwars2_b197},
+    {18102u, 1u, lb_factionwars2_b198},
+    {18202u, 6u, lb_factionwars2_b199},
+    {18210u, 1u, lb_factionwars2_b200},
+    {18219u, 1u, lb_factionwars2_b201},
+    {18326u, 5u, lb_factionwars2_b202},
+    {18341u, 1u, lb_factionwars2_b203},
+    {18343u, 1u, lb_factionwars2_b204},
+    {18345u, 1u, lb_factionwars2_b205},
+    {18698u, 1u, lb_factionwars2_b206},
+    {18700u, 2u, lb_factionwars2_b207},
+    {18740u, 2u, lb_factionwars2_b208},
+    {18822u, 2u, lb_factionwars2_b209},
+    {18826u, 1u, lb_factionwars2_b210},
+    {18837u, 1u, lb_factionwars2_b211},
+    {20068u, 2u, lb_factionwars2_b212},
+    {20072u, 1u, lb_factionwars2_b213},
+    {20186u, 1u, lb_factionwars2_b214},
+    {20188u, 1u, lb_factionwars2_b215},
+    {20190u, 2u, lb_factionwars2_b216},
+    {20196u, 1u, lb_factionwars2_b217},
+    {20201u, 1u, lb_factionwars2_b218},
+    {20228u, 1u, lb_factionwars2_b219},
+    {20318u, 1u, lb_factionwars2_b220},
+    {20325u, 1u, lb_factionwars2_b221},
+    {20564u, 2u, lb_factionwars2_b222},
+    {20600u, 1u, lb_factionwars2_b223},
+    {20692u, 1u, lb_factionwars2_b224},
+    {20821u, 1u, lb_factionwars2_b225},
+    {20823u, 1u, lb_factionwars2_b226},
+    {20825u, 1u, lb_factionwars2_b227},
+    {20986u, 1u, lb_factionwars2_b228},
+    {21813u, 1u, lb_factionwars2_b229},
+    {21815u, 1u, lb_factionwars2_b230},
+    {22176u, 2u, lb_factionwars2_b231},
+    {22185u, 1u, lb_factionwars2_b232},
+    {22300u, 2u, lb_factionwars2_b233},
+    {22318u, 1u, lb_factionwars2_b234},
+    {22424u, 2u, lb_factionwars2_b235},
+    {22439u, 1u, lb_factionwars2_b236},
+    {22460u, 2u, lb_factionwars2_b237},
+    {22542u, 1u, lb_factionwars2_b238},
+    {22544u, 2u, lb_factionwars2_b239},
+    {22548u, 2u, lb_factionwars2_b240},
+    {22557u, 1u, lb_factionwars2_b241},
+    {25580u, 1u, lb_factionwars2_b242},
+    {25582u, 1u, lb_factionwars2_b243},
+    {25584u, 1u, lb_factionwars2_b244},
+    {25586u, 1u, lb_factionwars2_b245},
+};
+
+static const uint8_t lb_vanilplus_b0[] = {50};
+static const uint8_t lb_vanilplus_b1[] = {45};
+static const uint8_t lb_vanilplus_b2[] = {144};
+static const uint8_t lb_vanilplus_b3[] = {15};
+static const uint8_t lb_vanilplus_b4[] = {171};
+static const uint8_t lb_vanilplus_b5[] = {244};
+static const uint8_t lb_vanilplus_b6[] = {30};
+static const uint8_t lb_vanilplus_b7[] = {171,2};
+static const uint8_t lb_vanilplus_b8[] = {232,3};
+static const uint8_t lb_vanilplus_b9[] = {60};
+static const uint8_t lb_vanilplus_b10[] = {188,3};
+static const uint8_t lb_vanilplus_b11[] = {1};
+static const uint8_t lb_vanilplus_b12[] = {184};
+static const uint8_t lb_vanilplus_b13[] = {30};
+static const uint8_t lb_vanilplus_b14[] = {8};
+static const uint8_t lb_vanilplus_b15[] = {194,1,28};
+static const uint8_t lb_vanilplus_b16[] = {40};
+static const uint8_t lb_vanilplus_b17[] = {75,0,104};
+static const uint8_t lb_vanilplus_b18[] = {94};
+static const uint8_t lb_vanilplus_b19[] = {20};
+static const uint8_t lb_vanilplus_b20[] = {7};
+static const uint8_t lb_vanilplus_b21[] = {200,0,104,1,144};
+static const uint8_t lb_vanilplus_b22[] = {8};
+static const uint8_t lb_vanilplus_b23[] = {44,1,164,1,244,1};
+static const uint8_t lb_vanilplus_b24[] = {42};
+static const uint8_t lb_vanilplus_b25[] = {8};
+static const uint8_t lb_vanilplus_b26[] = {186,0,0};
+static const uint8_t lb_vanilplus_b27[] = {0};
+static const uint8_t lb_vanilplus_b28[] = {60};
+static const uint8_t lb_vanilplus_b29[] = {5};
+static const uint8_t lb_vanilplus_b30[] = {8};
+static const uint8_t lb_vanilplus_b31[] = {200,0,0};
+static const uint8_t lb_vanilplus_b32[] = {0};
+static const uint8_t lb_vanilplus_b33[] = {60};
+static const uint8_t lb_vanilplus_b34[] = {5};
+static const uint8_t lb_vanilplus_b35[] = {8};
+static const uint8_t lb_vanilplus_b36[] = {50};
+static const uint8_t lb_vanilplus_b37[] = {20};
+static const uint8_t lb_vanilplus_b38[] = {24};
+static const uint8_t lb_vanilplus_b39[] = {44};
+static const uint8_t lb_vanilplus_b40[] = {50};
+static const uint8_t lb_vanilplus_b41[] = {30};
+static const uint8_t lb_vanilplus_b42[] = {34,2};
+static const uint8_t lb_vanilplus_b43[] = {188};
+static const uint8_t lb_vanilplus_b44[] = {238,2};
+static const uint8_t lb_vanilplus_b45[] = {132,3};
+static const uint8_t lb_vanilplus_b46[] = {204};
+static const uint8_t lb_vanilplus_b47[] = {188,3};
+static const uint8_t lb_vanilplus_b48[] = {1};
+static const uint8_t lb_vanilplus_b49[] = {20};
+static const uint8_t lb_vanilplus_b50[] = {7};
+static const uint8_t lb_vanilplus_b51[] = {194,1,28};
+static const uint8_t lb_vanilplus_b52[] = {50};
+static const uint8_t lb_vanilplus_b53[] = {75,0,104};
+static const uint8_t lb_vanilplus_b54[] = {94};
+static const uint8_t lb_vanilplus_b55[] = {20};
+static const uint8_t lb_vanilplus_b56[] = {7};
+static const uint8_t lb_vanilplus_b57[] = {200,0,104,1,144};
+static const uint8_t lb_vanilplus_b58[] = {8};
+static const uint8_t lb_vanilplus_b59[] = {44,1,164,1,244,1};
+static const uint8_t lb_vanilplus_b60[] = {42};
+static const uint8_t lb_vanilplus_b61[] = {8};
+static const uint8_t lb_vanilplus_b62[] = {196,0,0};
+static const uint8_t lb_vanilplus_b63[] = {0};
+static const uint8_t lb_vanilplus_b64[] = {40};
+static const uint8_t lb_vanilplus_b65[] = {5};
+static const uint8_t lb_vanilplus_b66[] = {23};
+static const uint8_t lb_vanilplus_b67[] = {132};
+static const uint8_t lb_vanilplus_b68[] = {195,0,0};
+static const uint8_t lb_vanilplus_b69[] = {0};
+static const uint8_t lb_vanilplus_b70[] = {30};
+static const uint8_t lb_vanilplus_b71[] = {5};
+static const uint8_t lb_vanilplus_b72[] = {24};
+static const uint8_t lb_vanilplus_b73[] = {90};
+static const uint8_t lb_vanilplus_b74[] = {94};
+static const uint8_t lb_vanilplus_b75[] = {7};
+static const uint8_t lb_vanilplus_b76[] = {100};
+static const uint8_t lb_vanilplus_b77[] = {35};
+static const uint8_t lb_vanilplus_b78[] = {1};
+static const uint8_t lb_vanilplus_b79[] = {7};
+static const uint8_t lb_vanilplus_b80[] = {222,1};
+static const uint8_t lb_vanilplus_b81[] = {1};
+static const uint8_t lb_vanilplus_b82[] = {38};
+static const uint8_t lb_vanilplus_b83[] = {40};
+static const uint8_t lb_vanilplus_b84[] = {8};
+static const uint8_t lb_vanilplus_b85[] = {171,2};
+static const uint8_t lb_vanilplus_b86[] = {82,3};
+static const uint8_t lb_vanilplus_b87[] = {8};
+static const uint8_t lb_vanilplus_b88[] = {171};
+static const uint8_t lb_vanilplus_b89[] = {1};
+static const uint8_t lb_vanilplus_b90[] = {94,1,72,3,138};
+static const uint8_t lb_vanilplus_b91[] = {195};
+static const uint8_t lb_vanilplus_b92[] = {8};
+static const uint8_t lb_vanilplus_b93[] = {194,1,28};
+static const uint8_t lb_vanilplus_b94[] = {30};
+static const uint8_t lb_vanilplus_b95[] = {75,0,104};
+static const uint8_t lb_vanilplus_b96[] = {94};
+static const uint8_t lb_vanilplus_b97[] = {20};
+static const uint8_t lb_vanilplus_b98[] = {7};
+static const uint8_t lb_vanilplus_b99[] = {200,0,104,1,144};
+static const uint8_t lb_vanilplus_b100[] = {195};
+static const uint8_t lb_vanilplus_b101[] = {8};
+static const uint8_t lb_vanilplus_b102[] = {44,1,164,1,244,1};
+static const uint8_t lb_vanilplus_b103[] = {42};
+static const uint8_t lb_vanilplus_b104[] = {8};
+static const uint8_t lb_vanilplus_b105[] = {226,4};
+static const uint8_t lb_vanilplus_b106[] = {17};
+static const uint8_t lb_vanilplus_b107[] = {17};
+static const uint8_t lb_vanilplus_b108[] = {25};
+static const uint8_t lb_vanilplus_b109[] = {50};
+static const uint8_t lb_vanilplus_b110[] = {24};
+static const uint8_t lb_vanilplus_b111[] = {154};
+static const uint8_t lb_vanilplus_b112[] = {19,1};
+static const uint8_t lb_vanilplus_b113[] = {24};
+static const uint8_t lb_vanilplus_b114[] = {7};
+static const uint8_t lb_vanilplus_b115[] = {154};
+static const uint8_t lb_vanilplus_b116[] = {40};
+static const uint8_t lb_vanilplus_b117[] = {1};
+static const uint8_t lb_vanilplus_b118[] = {7};
+static const uint8_t lb_vanilplus_b119[] = {222,1};
+static const uint8_t lb_vanilplus_b120[] = {1};
+static const uint8_t lb_vanilplus_b121[] = {38};
+static const uint8_t lb_vanilplus_b122[] = {8};
+static const uint8_t lb_vanilplus_b123[] = {171,2};
+static const uint8_t lb_vanilplus_b124[] = {82,3};
+static const uint8_t lb_vanilplus_b125[] = {8};
+static const uint8_t lb_vanilplus_b126[] = {102};
+static const uint8_t lb_vanilplus_b127[] = {1};
+static const uint8_t lb_vanilplus_b128[] = {94,1,72,3};
+static const uint8_t lb_vanilplus_b129[] = {30};
+static const uint8_t lb_vanilplus_b130[] = {8};
+static const uint8_t lb_vanilplus_b131[] = {194,1,28};
+static const uint8_t lb_vanilplus_b132[] = {40};
+static const uint8_t lb_vanilplus_b133[] = {75,0,104};
+static const uint8_t lb_vanilplus_b134[] = {94};
+static const uint8_t lb_vanilplus_b135[] = {20};
+static const uint8_t lb_vanilplus_b136[] = {7};
+static const uint8_t lb_vanilplus_b137[] = {200,0,104,1,144};
+static const uint8_t lb_vanilplus_b138[] = {8};
+static const uint8_t lb_vanilplus_b139[] = {44,1,164,1,244,1};
+static const uint8_t lb_vanilplus_b140[] = {42};
+static const uint8_t lb_vanilplus_b141[] = {8};
+static const uint8_t lb_vanilplus_b142[] = {132};
+static const uint8_t lb_vanilplus_b143[] = {30};
+static const uint8_t lb_vanilplus_b144[] = {7};
+static const uint8_t lb_vanilplus_b145[] = {26};
+static const uint8_t lb_vanilplus_b146[] = {232};
+static const uint8_t lb_vanilplus_b147[] = {199};
+static const uint8_t lb_vanilplus_b148[] = {7};
+static const uint8_t lb_vanilplus_b149[] = {30};
+static const uint8_t lb_vanilplus_b150[] = {199};
+static const uint8_t lb_vanilplus_b151[] = {40};
+static const uint8_t lb_vanilplus_b152[] = {154};
+static const uint8_t lb_vanilplus_b153[] = {1};
+static const uint8_t lb_vanilplus_b154[] = {82,3};
+static const uint8_t lb_vanilplus_b155[] = {30};
+static const uint8_t lb_vanilplus_b156[] = {102,2};
+static const uint8_t lb_vanilplus_b157[] = {138};
+static const uint8_t lb_vanilplus_b158[] = {8};
+static const uint8_t lb_vanilplus_b159[] = {171,2};
+static const uint8_t lb_vanilplus_b160[] = {82,3};
+static const uint8_t lb_vanilplus_b161[] = {188};
+static const uint8_t lb_vanilplus_b162[] = {4};
+static const uint8_t lb_vanilplus_b163[] = {38,2};
+static const uint8_t lb_vanilplus_b164[] = {199};
+static const uint8_t lb_vanilplus_b165[] = {30};
+static const uint8_t lb_vanilplus_b166[] = {194,1,28};
+static const uint8_t lb_vanilplus_b167[] = {40};
+static const uint8_t lb_vanilplus_b168[] = {75,0,104};
+static const uint8_t lb_vanilplus_b169[] = {94};
+static const uint8_t lb_vanilplus_b170[] = {20};
+static const uint8_t lb_vanilplus_b171[] = {7};
+static const uint8_t lb_vanilplus_b172[] = {200,0,104,1,144};
+static const uint8_t lb_vanilplus_b173[] = {8};
+static const uint8_t lb_vanilplus_b174[] = {44,1,164,1,244,1};
+static const uint8_t lb_vanilplus_b175[] = {42};
+static const uint8_t lb_vanilplus_b176[] = {8};
+static const uint8_t lb_vanilplus_b177[] = {199,0,0};
+static const uint8_t lb_vanilplus_b178[] = {0};
+static const uint8_t lb_vanilplus_b179[] = {5};
+static const uint8_t lb_vanilplus_b180[] = {45};
+static const uint8_t lb_vanilplus_b181[] = {10};
+static const uint8_t lb_vanilplus_b182[] = {24};
+static const uint8_t lb_vanilplus_b183[] = {44,1};
+static const uint8_t lb_vanilplus_b184[] = {40};
+static const uint8_t lb_vanilplus_b185[] = {34,2};
+static const uint8_t lb_vanilplus_b186[] = {1};
+static const uint8_t lb_vanilplus_b187[] = {0,1};
+static const uint8_t lb_vanilplus_b188[] = {188};
+static const uint8_t lb_vanilplus_b189[] = {8};
+static const uint8_t lb_vanilplus_b190[] = {0};
+static const uint8_t lb_vanilplus_b191[] = {138,2};
+static const uint8_t lb_vanilplus_b192[] = {199};
+static const uint8_t lb_vanilplus_b193[] = {30};
+static const uint8_t lb_vanilplus_b194[] = {6};
+static const uint8_t lb_vanilplus_b195[] = {194,1,28};
+static const uint8_t lb_vanilplus_b196[] = {30};
+static const uint8_t lb_vanilplus_b197[] = {75,0,104};
+static const uint8_t lb_vanilplus_b198[] = {94};
+static const uint8_t lb_vanilplus_b199[] = {20};
+static const uint8_t lb_vanilplus_b200[] = {7};
+static const uint8_t lb_vanilplus_b201[] = {200,0,104,1,144};
+static const uint8_t lb_vanilplus_b202[] = {8};
+static const uint8_t lb_vanilplus_b203[] = {44,1,164,1,244,1};
+static const uint8_t lb_vanilplus_b204[] = {42};
+static const uint8_t lb_vanilplus_b205[] = {8};
+static const uint8_t lb_vanilplus_b206[] = {5};
+static const uint8_t lb_vanilplus_b207[] = {44,1};
+static const uint8_t lb_vanilplus_b208[] = {232,3};
+static const uint8_t lb_vanilplus_b209[] = {232,3};
+static const uint8_t lb_vanilplus_b210[] = {214,6};
+static const uint8_t lb_vanilplus_b211[] = {214,6};
+static const uint8_t lb_vanilplus_b212[] = {196,9};
+static const uint8_t lb_vanilplus_b213[] = {196,9};
+static const uint8_t lb_vanilplus_b214[] = {138,2};
+static const uint8_t lb_vanilplus_b215[] = {30};
+static const uint8_t lb_vanilplus_b216[] = {27,29};
+static const uint8_t lb_vanilplus_b217[] = {154};
+static const uint8_t lb_vanilplus_b218[] = {199};
+static const uint8_t lb_vanilplus_b219[] = {40};
+static const uint8_t lb_vanilplus_b220[] = {194,1};
+static const uint8_t lb_vanilplus_b221[] = {40};
+static const uint8_t lb_vanilplus_b222[] = {214,6};
+static const uint8_t lb_vanilplus_b223[] = {132,3,194,1};
+static const uint8_t lb_vanilplus_b224[] = {4,6};
+static const uint8_t lb_vanilplus_b225[] = {20};
+static const uint8_t lb_vanilplus_b226[] = {171};
+static const uint8_t lb_vanilplus_b227[] = {44};
+static const uint8_t lb_vanilplus_b228[] = {60};
+static const uint8_t lb_vanilplus_b229[] = {214,6};
+static const uint8_t lb_vanilplus_b230[] = {244};
+static const uint8_t lb_vanilplus_b231[] = {100};
+static const uint8_t lb_vanilplus_b232[] = {50};
+static const uint8_t lb_vanilplus_b233[] = {136,19};
+static const uint8_t lb_vanilplus_b234[] = {154};
+static const uint8_t lb_vanilplus_b235[] = {76,4};
+static const uint8_t lb_vanilplus_b236[] = {8};
+static const uint8_t lb_vanilplus_b237[] = {138};
+static const uint8_t lb_vanilplus_b238[] = {190};
+static const uint8_t lb_vanilplus_b239[] = {40};
+static const uint8_t lb_vanilplus_b240[] = {214,6};
+static const uint8_t lb_vanilplus_b241[] = {184};
+static const uint8_t lb_vanilplus_b242[] = {40};
+static const uint8_t lb_vanilplus_b243[] = {171,2};
+static const uint8_t lb_vanilplus_b244[] = {214,6};
+static const uint8_t lb_vanilplus_b245[] = {50};
+static const uint8_t lb_vanilplus_b246[] = {50};
+static const uint8_t lb_vanilplus_b247[] = {238,2};
+static const uint8_t lb_vanilplus_b248[] = {11};
+static const uint8_t lb_vanilplus_b249[] = {214,6};
+static const uint8_t lb_vanilplus_b250[] = {226,4};
+static const uint8_t lb_vanilplus_b251[] = {13};
+static const uint8_t lb_vanilplus_b252[] = {120};
+static const uint8_t lb_vanilplus_b253[] = {94,1};
+static const uint8_t lb_vanilplus_b254[] = {34,2};
+static const uint8_t lb_vanilplus_b255[] = {2};
+static const uint8_t lb_vanilplus_b256[] = {138};
+static const uint8_t lb_vanilplus_b257[] = {214,6};
+static const uint8_t lb_vanilplus_b258[] = {226,4};
+static const uint8_t lb_vanilplus_b259[] = {9};
+static const uint8_t lb_vanilplus_b260[] = {44,1};
+static const uint8_t lb_vanilplus_b261[] = {20};
+static const uint8_t lb_vanilplus_b262[] = {10};
+static const uint8_t lb_vanilplus_b263[] = {0};
+static const uint8_t lb_vanilplus_b264[] = {194,1};
+static const uint8_t lb_vanilplus_b265[] = {30};
+static const uint8_t lb_vanilplus_b266[] = {8};
+static const uint8_t lb_vanilplus_b267[] = {214,6};
+static const uint8_t lb_vanilplus_b268[] = {1};
+static const uint8_t lb_vanilplus_b269[] = {214,6};
+static const uint8_t lb_vanilplus_b270[] = {208,7};
+static const uint8_t lb_vanilplus_b271[] = {184};
+static const uint8_t lb_vanilplus_b272[] = {7};
+static const uint8_t lb_vanilplus_b273[] = {10};
+static const uint8_t lb_vanilplus_b274[] = {76,4};
+static const uint8_t lb_vanilplus_b275[] = {18};
+static const uint8_t lb_vanilplus_b276[] = {138,2,192};
+static const uint8_t lb_vanilplus_b277[] = {8};
+static const uint8_t lb_vanilplus_b278[] = {222};
+static const uint8_t lb_vanilplus_b279[] = {5};
+static const uint8_t lb_vanilplus_b280[] = {188,2,194,1};
+static const uint8_t lb_vanilplus_b281[] = {4,6};
+static const uint8_t lb_vanilplus_b282[] = {194,1};
+static const uint8_t lb_vanilplus_b283[] = {30};
+static const uint8_t lb_vanilplus_b284[] = {30,29};
+static const uint8_t lb_vanilplus_b285[] = {25};
+static const uint8_t lb_vanilplus_b286[] = {20};
+static const uint8_t lb_vanilplus_b287[] = {30};
+static const uint8_t lb_vanilplus_b288[] = {20};
+static const uint8_t lb_vanilplus_b289[] = {30};
+static const uint8_t lb_vanilplus_b290[] = {25};
+static const uint8_t lb_vanilplus_b291[] = {35};
+static const uint8_t lb_vanilplus_b292[] = {25};
+static const uint8_t lb_vanilplus_b293[] = {35};
+static const uint8_t lb_vanilplus_b294[] = {75};
+static const uint8_t lb_vanilplus_b295[] = {85};
+static const uint8_t lb_vanilplus_b296[] = {75};
+static const uint8_t lb_vanilplus_b297[] = {85};
+static const uint8_t lb_vanilplus_b298[] = {75};
+static const uint8_t lb_vanilplus_b299[] = {75};
+static const uint8_t lb_vanilplus_b300[] = {0};
+static const uint8_t lb_vanilplus_b301[] = {0,0};
+static const uint8_t lb_vanilplus_b302[] = {0,0};
+static const uint8_t lb_vanilplus_b303[] = {100};
+static const uint8_t lb_vanilplus_b304[] = {125};
+static const uint8_t lb_vanilplus_b305[] = {100};
+static const uint8_t lb_vanilplus_b306[] = {125};
+static const uint8_t lb_vanilplus_b307[] = {0,0};
+static const uint8_t lb_vanilplus_b308[] = {45};
+static const uint8_t lb_vanilplus_b309[] = {50};
+static const uint8_t lb_vanilplus_b310[] = {45};
+static const uint8_t lb_vanilplus_b311[] = {50};
+static const uint8_t lb_vanilplus_b312[] = {0,0};
+static const uint8_t lb_vanilplus_b313[] = {25};
+static const uint8_t lb_vanilplus_b314[] = {35};
+static const uint8_t lb_vanilplus_b315[] = {25};
+static const uint8_t lb_vanilplus_b316[] = {35};
+static const uint8_t lb_vanilplus_b317[] = {65};
+static const uint8_t lb_vanilplus_b318[] = {65};
+static const uint8_t lb_vanilplus_b319[] = {20};
+static const uint8_t lb_vanilplus_b320[] = {30};
+static const uint8_t lb_vanilplus_b321[] = {20};
+static const uint8_t lb_vanilplus_b322[] = {30};
+static const uint8_t lb_vanilplus_b323[] = {15};
+static const uint8_t lb_vanilplus_b324[] = {25};
+static const uint8_t lb_vanilplus_b325[] = {15};
+static const uint8_t lb_vanilplus_b326[] = {25};
+static const uint8_t lb_vanilplus_b327[] = {0};
+static const uint8_t lb_vanilplus_b328[] = {0};
+static const uint8_t lb_vanilplus_b329[] = {0};
+static const LbBalanceRun lb_vanilplus_runs[] = {
+    {108u, 1u, lb_vanilplus_b0},
+    {346u, 1u, lb_vanilplus_b1},
+    {474u, 1u, lb_vanilplus_b2},
+    {480u, 1u, lb_vanilplus_b3},
+    {636u, 1u, lb_vanilplus_b4},
+    {722u, 1u, lb_vanilplus_b5},
+    {728u, 1u, lb_vanilplus_b6},
+    {1008u, 2u, lb_vanilplus_b7},
+    {1094u, 2u, lb_vanilplus_b8},
+    {1105u, 1u, lb_vanilplus_b9},
+    {1132u, 2u, lb_vanilplus_b10},
+    {1149u, 1u, lb_vanilplus_b11},
+    {1222u, 1u, lb_vanilplus_b12},
+    {1229u, 1u, lb_vanilplus_b13},
+    {1231u, 1u, lb_vanilplus_b14},
+    {1586u, 3u, lb_vanilplus_b15},
+    {1600u, 1u, lb_vanilplus_b16},
+    {2082u, 3u, lb_vanilplus_b17},
+    {2086u, 1u, lb_vanilplus_b18},
+    {2097u, 1u, lb_vanilplus_b19},
+    {2099u, 1u, lb_vanilplus_b20},
+    {2206u, 5u, lb_vanilplus_b21},
+    {2223u, 1u, lb_vanilplus_b22},
+    {2330u, 6u, lb_vanilplus_b23},
+    {2345u, 1u, lb_vanilplus_b24},
+    {2347u, 1u, lb_vanilplus_b25},
+    {2586u, 3u, lb_vanilplus_b26},
+    {2590u, 1u, lb_vanilplus_b27},
+    {2593u, 1u, lb_vanilplus_b28},
+    {2595u, 1u, lb_vanilplus_b29},
+    {2599u, 1u, lb_vanilplus_b30},
+    {2710u, 3u, lb_vanilplus_b31},
+    {2714u, 1u, lb_vanilplus_b32},
+    {2717u, 1u, lb_vanilplus_b33},
+    {2719u, 1u, lb_vanilplus_b34},
+    {2723u, 1u, lb_vanilplus_b35},
+    {2826u, 1u, lb_vanilplus_b36},
+    {2960u, 1u, lb_vanilplus_b37},
+    {2965u, 1u, lb_vanilplus_b38},
+    {3076u, 1u, lb_vanilplus_b39},
+    {3208u, 1u, lb_vanilplus_b40},
+    {3337u, 1u, lb_vanilplus_b41},
+    {3364u, 2u, lb_vanilplus_b42},
+    {3488u, 1u, lb_vanilplus_b43},
+    {3570u, 2u, lb_vanilplus_b44},
+    {3574u, 2u, lb_vanilplus_b45},
+    {3578u, 1u, lb_vanilplus_b46},
+    {3612u, 2u, lb_vanilplus_b47},
+    {3629u, 1u, lb_vanilplus_b48},
+    {3709u, 1u, lb_vanilplus_b49},
+    {3711u, 1u, lb_vanilplus_b50},
+    {4066u, 3u, lb_vanilplus_b51},
+    {4080u, 1u, lb_vanilplus_b52},
+    {4562u, 3u, lb_vanilplus_b53},
+    {4566u, 1u, lb_vanilplus_b54},
+    {4577u, 1u, lb_vanilplus_b55},
+    {4579u, 1u, lb_vanilplus_b56},
+    {4686u, 5u, lb_vanilplus_b57},
+    {4703u, 1u, lb_vanilplus_b58},
+    {4810u, 6u, lb_vanilplus_b59},
+    {4825u, 1u, lb_vanilplus_b60},
+    {4827u, 1u, lb_vanilplus_b61},
+    {5066u, 3u, lb_vanilplus_b62},
+    {5070u, 1u, lb_vanilplus_b63},
+    {5073u, 1u, lb_vanilplus_b64},
+    {5075u, 1u, lb_vanilplus_b65},
+    {5082u, 1u, lb_vanilplus_b66},
+    {5186u, 1u, lb_vanilplus_b67},
+    {5190u, 3u, lb_vanilplus_b68},
+    {5194u, 1u, lb_vanilplus_b69},
+    {5197u, 1u, lb_vanilplus_b70},
+    {5199u, 1u, lb_vanilplus_b71},
+    {5321u, 1u, lb_vanilplus_b72},
+    {5430u, 1u, lb_vanilplus_b73},
+    {5434u, 1u, lb_vanilplus_b74},
+    {5449u, 1u, lb_vanilplus_b75},
+    {5554u, 1u, lb_vanilplus_b76},
+    {5688u, 1u, lb_vanilplus_b77},
+    {5737u, 1u, lb_vanilplus_b78},
+    {5819u, 1u, lb_vanilplus_b79},
+    {5844u, 2u, lb_vanilplus_b80},
+    {5861u, 1u, lb_vanilplus_b81},
+    {5930u, 1u, lb_vanilplus_b82},
+    {5941u, 1u, lb_vanilplus_b83},
+    {5943u, 1u, lb_vanilplus_b84},
+    {5968u, 2u, lb_vanilplus_b85},
+    {6054u, 2u, lb_vanilplus_b86},
+    {6067u, 1u, lb_vanilplus_b87},
+    {6092u, 1u, lb_vanilplus_b88},
+    {6109u, 1u, lb_vanilplus_b89},
+    {6174u, 5u, lb_vanilplus_b90},
+    {6182u, 1u, lb_vanilplus_b91},
+    {6191u, 1u, lb_vanilplus_b92},
+    {6546u, 3u, lb_vanilplus_b93},
+    {6560u, 1u, lb_vanilplus_b94},
+    {7042u, 3u, lb_vanilplus_b95},
+    {7046u, 1u, lb_vanilplus_b96},
+    {7057u, 1u, lb_vanilplus_b97},
+    {7059u, 1u, lb_vanilplus_b98},
+    {7166u, 5u, lb_vanilplus_b99},
+    {7174u, 1u, lb_vanilplus_b100},
+    {7183u, 1u, lb_vanilplus_b101},
+    {7290u, 6u, lb_vanilplus_b102},
+    {7305u, 1u, lb_vanilplus_b103},
+    {7307u, 1u, lb_vanilplus_b104},
+    {7544u, 2u, lb_vanilplus_b105},
+    {7559u, 1u, lb_vanilplus_b106},
+    {7683u, 1u, lb_vanilplus_b107},
+    {7686u, 1u, lb_vanilplus_b108},
+    {7786u, 1u, lb_vanilplus_b109},
+    {7801u, 1u, lb_vanilplus_b110},
+    {7828u, 1u, lb_vanilplus_b111},
+    {7914u, 2u, lb_vanilplus_b112},
+    {7925u, 1u, lb_vanilplus_b113},
+    {7929u, 1u, lb_vanilplus_b114},
+    {7952u, 1u, lb_vanilplus_b115},
+    {8049u, 1u, lb_vanilplus_b116},
+    {8217u, 1u, lb_vanilplus_b117},
+    {8299u, 1u, lb_vanilplus_b118},
+    {8324u, 2u, lb_vanilplus_b119},
+    {8341u, 1u, lb_vanilplus_b120},
+    {8410u, 1u, lb_vanilplus_b121},
+    {8423u, 1u, lb_vanilplus_b122},
+    {8448u, 2u, lb_vanilplus_b123},
+    {8534u, 2u, lb_vanilplus_b124},
+    {8547u, 1u, lb_vanilplus_b125},
+    {8572u, 1u, lb_vanilplus_b126},
+    {8589u, 1u, lb_vanilplus_b127},
+    {8654u, 4u, lb_vanilplus_b128},
+    {8669u, 1u, lb_vanilplus_b129},
+    {8671u, 1u, lb_vanilplus_b130},
+    {9026u, 3u, lb_vanilplus_b131},
+    {9040u, 1u, lb_vanilplus_b132},
+    {9522u, 3u, lb_vanilplus_b133},
+    {9526u, 1u, lb_vanilplus_b134},
+    {9537u, 1u, lb_vanilplus_b135},
+    {9539u, 1u, lb_vanilplus_b136},
+    {9646u, 5u, lb_vanilplus_b137},
+    {9663u, 1u, lb_vanilplus_b138},
+    {9770u, 6u, lb_vanilplus_b139},
+    {9785u, 1u, lb_vanilplus_b140},
+    {9787u, 1u, lb_vanilplus_b141},
+    {10022u, 1u, lb_vanilplus_b142},
+    {10028u, 1u, lb_vanilplus_b143},
+    {10040u, 1u, lb_vanilplus_b144},
+    {10042u, 1u, lb_vanilplus_b145},
+    {10146u, 1u, lb_vanilplus_b146},
+    {10150u, 1u, lb_vanilplus_b147},
+    {10164u, 1u, lb_vanilplus_b148},
+    {10281u, 1u, lb_vanilplus_b149},
+    {10522u, 1u, lb_vanilplus_b150},
+    {10529u, 1u, lb_vanilplus_b151},
+    {10680u, 1u, lb_vanilplus_b152},
+    {10697u, 1u, lb_vanilplus_b153},
+    {10766u, 2u, lb_vanilplus_b154},
+    {10777u, 1u, lb_vanilplus_b155},
+    {10804u, 2u, lb_vanilplus_b156},
+    {10890u, 1u, lb_vanilplus_b157},
+    {10903u, 1u, lb_vanilplus_b158},
+    {10928u, 2u, lb_vanilplus_b159},
+    {11014u, 2u, lb_vanilplus_b160},
+    {11018u, 1u, lb_vanilplus_b161},
+    {11027u, 1u, lb_vanilplus_b162},
+    {11138u, 2u, lb_vanilplus_b163},
+    {11142u, 1u, lb_vanilplus_b164},
+    {11149u, 1u, lb_vanilplus_b165},
+    {11506u, 3u, lb_vanilplus_b166},
+    {11520u, 1u, lb_vanilplus_b167},
+    {12002u, 3u, lb_vanilplus_b168},
+    {12006u, 1u, lb_vanilplus_b169},
+    {12017u, 1u, lb_vanilplus_b170},
+    {12019u, 1u, lb_vanilplus_b171},
+    {12126u, 5u, lb_vanilplus_b172},
+    {12143u, 1u, lb_vanilplus_b173},
+    {12250u, 6u, lb_vanilplus_b174},
+    {12265u, 1u, lb_vanilplus_b175},
+    {12267u, 1u, lb_vanilplus_b176},
+    {12506u, 3u, lb_vanilplus_b177},
+    {12510u, 1u, lb_vanilplus_b178},
+    {12515u, 1u, lb_vanilplus_b179},
+    {12746u, 1u, lb_vanilplus_b180},
+    {12882u, 1u, lb_vanilplus_b181},
+    {12885u, 1u, lb_vanilplus_b182},
+    {12998u, 2u, lb_vanilplus_b183},
+    {13128u, 1u, lb_vanilplus_b184},
+    {13160u, 2u, lb_vanilplus_b185},
+    {13172u, 1u, lb_vanilplus_b186},
+    {13174u, 2u, lb_vanilplus_b187},
+    {13374u, 1u, lb_vanilplus_b188},
+    {13383u, 1u, lb_vanilplus_b189},
+    {13545u, 1u, lb_vanilplus_b190},
+    {13618u, 2u, lb_vanilplus_b191},
+    {13622u, 1u, lb_vanilplus_b192},
+    {13629u, 1u, lb_vanilplus_b193},
+    {13631u, 1u, lb_vanilplus_b194},
+    {13986u, 3u, lb_vanilplus_b195},
+    {14000u, 1u, lb_vanilplus_b196},
+    {14482u, 3u, lb_vanilplus_b197},
+    {14486u, 1u, lb_vanilplus_b198},
+    {14497u, 1u, lb_vanilplus_b199},
+    {14499u, 1u, lb_vanilplus_b200},
+    {14606u, 5u, lb_vanilplus_b201},
+    {14623u, 1u, lb_vanilplus_b202},
+    {14730u, 6u, lb_vanilplus_b203},
+    {14745u, 1u, lb_vanilplus_b204},
+    {14747u, 1u, lb_vanilplus_b205},
+    {14980u, 1u, lb_vanilplus_b206},
+    {14982u, 2u, lb_vanilplus_b207},
+    {15106u, 2u, lb_vanilplus_b208},
+    {15230u, 2u, lb_vanilplus_b209},
+    {15354u, 2u, lb_vanilplus_b210},
+    {15478u, 2u, lb_vanilplus_b211},
+    {15602u, 2u, lb_vanilplus_b212},
+    {15726u, 2u, lb_vanilplus_b213},
+    {16100u, 2u, lb_vanilplus_b214},
+    {16115u, 1u, lb_vanilplus_b215},
+    {16117u, 2u, lb_vanilplus_b216},
+    {16136u, 1u, lb_vanilplus_b217},
+    {16226u, 1u, lb_vanilplus_b218},
+    {16233u, 1u, lb_vanilplus_b219},
+    {16346u, 2u, lb_vanilplus_b220},
+    {16357u, 1u, lb_vanilplus_b221},
+    {16470u, 2u, lb_vanilplus_b222},
+    {16594u, 4u, lb_vanilplus_b223},
+    {16611u, 2u, lb_vanilplus_b224},
+    {16614u, 1u, lb_vanilplus_b225},
+    {16632u, 1u, lb_vanilplus_b226},
+    {16716u, 1u, lb_vanilplus_b227},
+    {16853u, 1u, lb_vanilplus_b228},
+    {16966u, 2u, lb_vanilplus_b229},
+    {17214u, 1u, lb_vanilplus_b230},
+    {17220u, 1u, lb_vanilplus_b231},
+    {17222u, 1u, lb_vanilplus_b232},
+    {17586u, 2u, lb_vanilplus_b233},
+    {17996u, 1u, lb_vanilplus_b234},
+    {18082u, 2u, lb_vanilplus_b235},
+    {18098u, 1u, lb_vanilplus_b236},
+    {18330u, 1u, lb_vanilplus_b237},
+    {18334u, 1u, lb_vanilplus_b238},
+    {18341u, 1u, lb_vanilplus_b239},
+    {18454u, 2u, lb_vanilplus_b240},
+    {18706u, 1u, lb_vanilplus_b241},
+    {18713u, 1u, lb_vanilplus_b242},
+    {18740u, 2u, lb_vanilplus_b243},
+    {18950u, 2u, lb_vanilplus_b244},
+    {19080u, 1u, lb_vanilplus_b245},
+    {19082u, 1u, lb_vanilplus_b246},
+    {19322u, 2u, lb_vanilplus_b247},
+    {19337u, 1u, lb_vanilplus_b248},
+    {19694u, 2u, lb_vanilplus_b249},
+    {20068u, 2u, lb_vanilplus_b250},
+    {20086u, 1u, lb_vanilplus_b251},
+    {20186u, 1u, lb_vanilplus_b252},
+    {20190u, 2u, lb_vanilplus_b253},
+    {20228u, 2u, lb_vanilplus_b254},
+    {20245u, 1u, lb_vanilplus_b255},
+    {20314u, 1u, lb_vanilplus_b256},
+    {20438u, 2u, lb_vanilplus_b257},
+    {20564u, 2u, lb_vanilplus_b258},
+    {20579u, 1u, lb_vanilplus_b259},
+    {20686u, 2u, lb_vanilplus_b260},
+    {20692u, 1u, lb_vanilplus_b261},
+    {20694u, 1u, lb_vanilplus_b262},
+    {20737u, 1u, lb_vanilplus_b263},
+    {20810u, 2u, lb_vanilplus_b264},
+    {20821u, 1u, lb_vanilplus_b265},
+    {20823u, 1u, lb_vanilplus_b266},
+    {20934u, 2u, lb_vanilplus_b267},
+    {20986u, 1u, lb_vanilplus_b268},
+    {21182u, 2u, lb_vanilplus_b269},
+    {21430u, 2u, lb_vanilplus_b270},
+    {21806u, 1u, lb_vanilplus_b271},
+    {21818u, 1u, lb_vanilplus_b272},
+    {21821u, 1u, lb_vanilplus_b273},
+    {21926u, 2u, lb_vanilplus_b274},
+    {21946u, 1u, lb_vanilplus_b275},
+    {22052u, 3u, lb_vanilplus_b276},
+    {22067u, 1u, lb_vanilplus_b277},
+    {22088u, 1u, lb_vanilplus_b278},
+    {22193u, 1u, lb_vanilplus_b279},
+    {22298u, 4u, lb_vanilplus_b280},
+    {22315u, 2u, lb_vanilplus_b281},
+    {22424u, 2u, lb_vanilplus_b282},
+    {22428u, 1u, lb_vanilplus_b283},
+    {22441u, 2u, lb_vanilplus_b284},
+    {22562u, 1u, lb_vanilplus_b285},
+    {22680u, 1u, lb_vanilplus_b286},
+    {22682u, 1u, lb_vanilplus_b287},
+    {22684u, 1u, lb_vanilplus_b288},
+    {22686u, 1u, lb_vanilplus_b289},
+    {22796u, 1u, lb_vanilplus_b290},
+    {22798u, 1u, lb_vanilplus_b291},
+    {22800u, 1u, lb_vanilplus_b292},
+    {22802u, 1u, lb_vanilplus_b293},
+    {23376u, 1u, lb_vanilplus_b294},
+    {23378u, 1u, lb_vanilplus_b295},
+    {23380u, 1u, lb_vanilplus_b296},
+    {23382u, 1u, lb_vanilplus_b297},
+    {23610u, 1u, lb_vanilplus_b298},
+    {23614u, 1u, lb_vanilplus_b299},
+    {23713u, 1u, lb_vanilplus_b300},
+    {23717u, 2u, lb_vanilplus_b301},
+    {23720u, 2u, lb_vanilplus_b302},
+    {23724u, 1u, lb_vanilplus_b303},
+    {23726u, 1u, lb_vanilplus_b304},
+    {23728u, 1u, lb_vanilplus_b305},
+    {23730u, 1u, lb_vanilplus_b306},
+    {23836u, 2u, lb_vanilplus_b307},
+    {23840u, 1u, lb_vanilplus_b308},
+    {23842u, 1u, lb_vanilplus_b309},
+    {23844u, 1u, lb_vanilplus_b310},
+    {23846u, 1u, lb_vanilplus_b311},
+    {23952u, 2u, lb_vanilplus_b312},
+    {23956u, 1u, lb_vanilplus_b313},
+    {23958u, 1u, lb_vanilplus_b314},
+    {23960u, 1u, lb_vanilplus_b315},
+    {23962u, 1u, lb_vanilplus_b316},
+    {24304u, 1u, lb_vanilplus_b317},
+    {24308u, 1u, lb_vanilplus_b318},
+    {24420u, 1u, lb_vanilplus_b319},
+    {24422u, 1u, lb_vanilplus_b320},
+    {24424u, 1u, lb_vanilplus_b321},
+    {24426u, 1u, lb_vanilplus_b322},
+    {24536u, 1u, lb_vanilplus_b323},
+    {24538u, 1u, lb_vanilplus_b324},
+    {24540u, 1u, lb_vanilplus_b325},
+    {24542u, 1u, lb_vanilplus_b326},
+    {25221u, 1u, lb_vanilplus_b327},
+    {25226u, 1u, lb_vanilplus_b328},
+    {25229u, 1u, lb_vanilplus_b329},
+};
+
+static const uint8_t lb_fusion_b0[] = {30};
+static const uint8_t lb_fusion_b1[] = {7,6};
+static const uint8_t lb_fusion_b2[] = {18,20};
+static const uint8_t lb_fusion_b3[] = {6};
+static const uint8_t lb_fusion_b4[] = {44,1};
+static const uint8_t lb_fusion_b5[] = {244};
+static const uint8_t lb_fusion_b6[] = {24};
+static const uint8_t lb_fusion_b7[] = {44};
+static const uint8_t lb_fusion_b8[] = {15};
+static const uint8_t lb_fusion_b9[] = {51,3};
+static const uint8_t lb_fusion_b10[] = {24};
+static const uint8_t lb_fusion_b11[] = {85};
+static const uint8_t lb_fusion_b12[] = {188,2};
+static const uint8_t lb_fusion_b13[] = {132,3};
+static const uint8_t lb_fusion_b14[] = {60};
+static const uint8_t lb_fusion_b15[] = {187};
+static const uint8_t lb_fusion_b16[] = {84};
+static const uint8_t lb_fusion_b17[] = {7};
+static const uint8_t lb_fusion_b18[] = {7};
+static const uint8_t lb_fusion_b19[] = {200,0};
+static const uint8_t lb_fusion_b20[] = {244,1};
+static const uint8_t lb_fusion_b21[] = {40};
+static const uint8_t lb_fusion_b22[] = {250,0,104};
+static const uint8_t lb_fusion_b23[] = {20};
+static const uint8_t lb_fusion_b24[] = {6};
+static const uint8_t lb_fusion_b25[] = {107,3,195,0,88,2};
+static const uint8_t lb_fusion_b26[] = {5};
+static const uint8_t lb_fusion_b27[] = {244,1,125,0,82,3};
+static const uint8_t lb_fusion_b28[] = {48};
+static const uint8_t lb_fusion_b29[] = {222};
+static const uint8_t lb_fusion_b30[] = {232,3};
+static const uint8_t lb_fusion_b31[] = {6,9,8,14};
+static const uint8_t lb_fusion_b32[] = {1};
+static const uint8_t lb_fusion_b33[] = {0,1};
+static const uint8_t lb_fusion_b34[] = {226,4};
+static const uint8_t lb_fusion_b35[] = {10};
+static const uint8_t lb_fusion_b36[] = {222};
+static const uint8_t lb_fusion_b37[] = {75};
+static const uint8_t lb_fusion_b38[] = {150,0,69,1};
+static const uint8_t lb_fusion_b39[] = {24};
+static const uint8_t lb_fusion_b40[] = {44};
+static const uint8_t lb_fusion_b41[] = {30};
+static const uint8_t lb_fusion_b42[] = {244};
+static const uint8_t lb_fusion_b43[] = {30};
+static const uint8_t lb_fusion_b44[] = {188,2};
+static const uint8_t lb_fusion_b45[] = {132,3};
+static const uint8_t lb_fusion_b46[] = {60};
+static const uint8_t lb_fusion_b47[] = {4};
+static const uint8_t lb_fusion_b48[] = {188};
+static const uint8_t lb_fusion_b49[] = {108};
+static const uint8_t lb_fusion_b50[] = {7};
+static const uint8_t lb_fusion_b51[] = {7};
+static const uint8_t lb_fusion_b52[] = {200,0};
+static const uint8_t lb_fusion_b53[] = {244,1};
+static const uint8_t lb_fusion_b54[] = {40};
+static const uint8_t lb_fusion_b55[] = {250,0,104};
+static const uint8_t lb_fusion_b56[] = {20};
+static const uint8_t lb_fusion_b57[] = {48,2,135,0,88,2};
+static const uint8_t lb_fusion_b58[] = {186};
+static const uint8_t lb_fusion_b59[] = {60};
+static const uint8_t lb_fusion_b60[] = {2};
+static const uint8_t lb_fusion_b61[] = {244,1,125,0,82,3};
+static const uint8_t lb_fusion_b62[] = {48};
+static const uint8_t lb_fusion_b63[] = {222};
+static const uint8_t lb_fusion_b64[] = {76,4};
+static const uint8_t lb_fusion_b65[] = {40};
+static const uint8_t lb_fusion_b66[] = {14};
+static const uint8_t lb_fusion_b67[] = {15,20};
+static const uint8_t lb_fusion_b68[] = {196,0,0};
+static const uint8_t lb_fusion_b69[] = {0};
+static const uint8_t lb_fusion_b70[] = {54};
+static const uint8_t lb_fusion_b71[] = {3};
+static const uint8_t lb_fusion_b72[] = {7};
+static const uint8_t lb_fusion_b73[] = {225,0,38,2};
+static const uint8_t lb_fusion_b74[] = {24};
+static const uint8_t lb_fusion_b75[] = {44};
+static const uint8_t lb_fusion_b76[] = {119,1};
+static const uint8_t lb_fusion_b77[] = {20};
+static const uint8_t lb_fusion_b78[] = {7};
+static const uint8_t lb_fusion_b79[] = {51,3};
+static const uint8_t lb_fusion_b80[] = {200};
+static const uint8_t lb_fusion_b81[] = {44};
+static const uint8_t lb_fusion_b82[] = {194,0,0};
+static const uint8_t lb_fusion_b83[] = {0};
+static const uint8_t lb_fusion_b84[] = {40};
+static const uint8_t lb_fusion_b85[] = {4};
+static const uint8_t lb_fusion_b86[] = {244,1};
+static const uint8_t lb_fusion_b87[] = {7};
+static const uint8_t lb_fusion_b88[] = {194};
+static const uint8_t lb_fusion_b89[] = {208,2};
+static const uint8_t lb_fusion_b90[] = {40};
+static const uint8_t lb_fusion_b91[] = {8};
+static const uint8_t lb_fusion_b92[] = {7,3};
+static const uint8_t lb_fusion_b93[] = {9};
+static const uint8_t lb_fusion_b94[] = {9};
+static const uint8_t lb_fusion_b95[] = {196};
+static const uint8_t lb_fusion_b96[] = {120};
+static const uint8_t lb_fusion_b97[] = {7};
+static const uint8_t lb_fusion_b98[] = {7};
+static const uint8_t lb_fusion_b99[] = {200,0};
+static const uint8_t lb_fusion_b100[] = {244,1};
+static const uint8_t lb_fusion_b101[] = {40};
+static const uint8_t lb_fusion_b102[] = {250,0,104};
+static const uint8_t lb_fusion_b103[] = {88,2};
+static const uint8_t lb_fusion_b104[] = {30};
+static const uint8_t lb_fusion_b105[] = {85,0,88,2};
+static const uint8_t lb_fusion_b106[] = {60};
+static const uint8_t lb_fusion_b107[] = {244,1,125,0,82,3};
+static const uint8_t lb_fusion_b108[] = {48};
+static const uint8_t lb_fusion_b109[] = {222};
+static const uint8_t lb_fusion_b110[] = {132,3};
+static const uint8_t lb_fusion_b111[] = {184,0,0};
+static const uint8_t lb_fusion_b112[] = {0};
+static const uint8_t lb_fusion_b113[] = {30};
+static const uint8_t lb_fusion_b114[] = {6};
+static const uint8_t lb_fusion_b115[] = {5,8};
+static const uint8_t lb_fusion_b116[] = {22,21};
+static const uint8_t lb_fusion_b117[] = {192,0,0};
+static const uint8_t lb_fusion_b118[] = {0};
+static const uint8_t lb_fusion_b119[] = {5};
+static const uint8_t lb_fusion_b120[] = {8};
+static const uint8_t lb_fusion_b121[] = {44,1};
+static const uint8_t lb_fusion_b122[] = {24};
+static const uint8_t lb_fusion_b123[] = {44};
+static const uint8_t lb_fusion_b124[] = {69,1};
+static const uint8_t lb_fusion_b125[] = {20};
+static const uint8_t lb_fusion_b126[] = {5};
+static const uint8_t lb_fusion_b127[] = {7};
+static const uint8_t lb_fusion_b128[] = {194};
+static const uint8_t lb_fusion_b129[] = {208,2,188};
+static const uint8_t lb_fusion_b130[] = {8};
+static const uint8_t lb_fusion_b131[] = {132,3};
+static const uint8_t lb_fusion_b132[] = {9};
+static const uint8_t lb_fusion_b133[] = {9};
+static const uint8_t lb_fusion_b134[] = {102};
+static const uint8_t lb_fusion_b135[] = {195};
+static const uint8_t lb_fusion_b136[] = {84};
+static const uint8_t lb_fusion_b137[] = {7};
+static const uint8_t lb_fusion_b138[] = {7};
+static const uint8_t lb_fusion_b139[] = {200,0};
+static const uint8_t lb_fusion_b140[] = {244,1};
+static const uint8_t lb_fusion_b141[] = {40};
+static const uint8_t lb_fusion_b142[] = {250,0,104};
+static const uint8_t lb_fusion_b143[] = {88,2};
+static const uint8_t lb_fusion_b144[] = {30};
+static const uint8_t lb_fusion_b145[] = {250,0,75,0,32,3};
+static const uint8_t lb_fusion_b146[] = {194};
+static const uint8_t lb_fusion_b147[] = {30};
+static const uint8_t lb_fusion_b148[] = {7};
+static const uint8_t lb_fusion_b149[] = {244,1,125,0,82,3};
+static const uint8_t lb_fusion_b150[] = {48};
+static const uint8_t lb_fusion_b151[] = {197,0,0};
+static const uint8_t lb_fusion_b152[] = {0};
+static const uint8_t lb_fusion_b153[] = {30};
+static const uint8_t lb_fusion_b154[] = {6};
+static const uint8_t lb_fusion_b155[] = {8};
+static const uint8_t lb_fusion_b156[] = {226,4,195};
+static const uint8_t lb_fusion_b157[] = {120};
+static const uint8_t lb_fusion_b158[] = {4};
+static const uint8_t lb_fusion_b159[] = {31,7,29,27};
+static const uint8_t lb_fusion_b160[] = {44};
+static const uint8_t lb_fusion_b161[] = {21};
+static const uint8_t lb_fusion_b162[] = {6};
+static const uint8_t lb_fusion_b163[] = {8};
+static const uint8_t lb_fusion_b164[] = {222};
+static const uint8_t lb_fusion_b165[] = {144};
+static const uint8_t lb_fusion_b166[] = {208,2};
+static const uint8_t lb_fusion_b167[] = {7};
+static const uint8_t lb_fusion_b168[] = {85};
+static const uint8_t lb_fusion_b169[] = {8};
+static const uint8_t lb_fusion_b170[] = {200,0};
+static const uint8_t lb_fusion_b171[] = {244,1};
+static const uint8_t lb_fusion_b172[] = {40};
+static const uint8_t lb_fusion_b173[] = {250,0,104};
+static const uint8_t lb_fusion_b174[] = {40};
+static const uint8_t lb_fusion_b175[] = {119};
+static const uint8_t lb_fusion_b176[] = {120,0,82,3};
+static const uint8_t lb_fusion_b177[] = {199};
+static const uint8_t lb_fusion_b178[] = {8};
+static const uint8_t lb_fusion_b179[] = {244,1,125,0,82,3};
+static const uint8_t lb_fusion_b180[] = {40};
+static const uint8_t lb_fusion_b181[] = {132};
+static const uint8_t lb_fusion_b182[] = {40};
+static const uint8_t lb_fusion_b183[] = {6,9,8,18};
+static const uint8_t lb_fusion_b184[] = {226,4,198,0,0};
+static const uint8_t lb_fusion_b185[] = {0};
+static const uint8_t lb_fusion_b186[] = {27};
+static const uint8_t lb_fusion_b187[] = {5};
+static const uint8_t lb_fusion_b188[] = {28};
+static const uint8_t lb_fusion_b189[] = {20};
+static const uint8_t lb_fusion_b190[] = {44};
+static const uint8_t lb_fusion_b191[] = {30};
+static const uint8_t lb_fusion_b192[] = {5};
+static const uint8_t lb_fusion_b193[] = {200};
+static const uint8_t lb_fusion_b194[] = {44};
+static const uint8_t lb_fusion_b195[] = {199,0,0};
+static const uint8_t lb_fusion_b196[] = {0};
+static const uint8_t lb_fusion_b197[] = {60};
+static const uint8_t lb_fusion_b198[] = {7};
+static const uint8_t lb_fusion_b199[] = {1};
+static const uint8_t lb_fusion_b200[] = {0,1};
+static const uint8_t lb_fusion_b201[] = {171,2};
+static const uint8_t lb_fusion_b202[] = {144};
+static const uint8_t lb_fusion_b203[] = {208,2,188};
+static const uint8_t lb_fusion_b204[] = {7};
+static const uint8_t lb_fusion_b205[] = {60};
+static const uint8_t lb_fusion_b206[] = {200,0};
+static const uint8_t lb_fusion_b207[] = {244,1};
+static const uint8_t lb_fusion_b208[] = {40};
+static const uint8_t lb_fusion_b209[] = {250,0,104};
+static const uint8_t lb_fusion_b210[] = {40};
+static const uint8_t lb_fusion_b211[] = {85,0,88,2};
+static const uint8_t lb_fusion_b212[] = {244,1,125,0,82,3};
+static const uint8_t lb_fusion_b213[] = {40};
+static const uint8_t lb_fusion_b214[] = {30};
+static const uint8_t lb_fusion_b215[] = {88,2};
+static const uint8_t lb_fusion_b216[] = {238,2};
+static const uint8_t lb_fusion_b217[] = {238,2};
+static const uint8_t lb_fusion_b218[] = {232,3};
+static const uint8_t lb_fusion_b219[] = {232,3};
+static const uint8_t lb_fusion_b220[] = {226,4};
+static const uint8_t lb_fusion_b221[] = {226,4};
+static const uint8_t lb_fusion_b222[] = {30};
+static const uint8_t lb_fusion_b223[] = {29};
+static const uint8_t lb_fusion_b224[] = {27};
+static const uint8_t lb_fusion_b225[] = {44};
+static const uint8_t lb_fusion_b226[] = {21};
+static const uint8_t lb_fusion_b227[] = {6};
+static const uint8_t lb_fusion_b228[] = {85};
+static const uint8_t lb_fusion_b229[] = {226,4};
+static const uint8_t lb_fusion_b230[] = {30};
+static const uint8_t lb_fusion_b231[] = {30};
+static const uint8_t lb_fusion_b232[] = {44};
+static const uint8_t lb_fusion_b233[] = {35};
+static const uint8_t lb_fusion_b234[] = {85};
+static const uint8_t lb_fusion_b235[] = {40};
+static const uint8_t lb_fusion_b236[] = {154};
+static const uint8_t lb_fusion_b237[] = {226,4};
+static const uint8_t lb_fusion_b238[] = {20};
+static const uint8_t lb_fusion_b239[] = {44};
+static const uint8_t lb_fusion_b240[] = {15};
+static const uint8_t lb_fusion_b241[] = {226,4};
+static const uint8_t lb_fusion_b242[] = {14};
+static const uint8_t lb_fusion_b243[] = {29};
+static const uint8_t lb_fusion_b244[] = {13};
+static const uint8_t lb_fusion_b245[] = {102,2};
+static const uint8_t lb_fusion_b246[] = {144};
+static const uint8_t lb_fusion_b247[] = {208,2};
+static const uint8_t lb_fusion_b248[] = {8};
+static const uint8_t lb_fusion_b249[] = {13};
+static const uint8_t lb_fusion_b250[] = {20};
+static const uint8_t lb_fusion_b251[] = {238,2};
+static const uint8_t lb_fusion_b252[] = {20};
+static const uint8_t lb_fusion_b253[] = {226,4};
+static const uint8_t lb_fusion_b254[] = {10};
+static const uint8_t lb_fusion_b255[] = {94,1};
+static const uint8_t lb_fusion_b256[] = {24};
+static const uint8_t lb_fusion_b257[] = {222};
+static const uint8_t lb_fusion_b258[] = {144};
+static const uint8_t lb_fusion_b259[] = {208,2};
+static const uint8_t lb_fusion_b260[] = {8};
+static const uint8_t lb_fusion_b261[] = {8};
+static const uint8_t lb_fusion_b262[] = {1};
+static const uint8_t lb_fusion_b263[] = {29};
+static const uint8_t lb_fusion_b264[] = {30};
+static const uint8_t lb_fusion_b265[] = {18};
+static const uint8_t lb_fusion_b266[] = {226,4};
+static const uint8_t lb_fusion_b267[] = {26};
+static const uint8_t lb_fusion_b268[] = {23};
+static const uint8_t lb_fusion_b269[] = {226,4};
+static const uint8_t lb_fusion_b270[] = {30};
+static const uint8_t lb_fusion_b271[] = {31};
+static const uint8_t lb_fusion_b272[] = {197,0,0};
+static const uint8_t lb_fusion_b273[] = {0};
+static const uint8_t lb_fusion_b274[] = {26};
+static const uint8_t lb_fusion_b275[] = {5};
+static const uint8_t lb_fusion_b276[] = {26};
+static const uint8_t lb_fusion_b277[] = {25};
+static const uint8_t lb_fusion_b278[] = {36};
+static const uint8_t lb_fusion_b279[] = {48};
+static const uint8_t lb_fusion_b280[] = {36};
+static const uint8_t lb_fusion_b281[] = {48};
+static const uint8_t lb_fusion_b282[] = {75};
+static const uint8_t lb_fusion_b283[] = {105};
+static const uint8_t lb_fusion_b284[] = {75};
+static const uint8_t lb_fusion_b285[] = {105};
+static const uint8_t lb_fusion_b286[] = {105};
+static const uint8_t lb_fusion_b287[] = {110};
+static const uint8_t lb_fusion_b288[] = {105};
+static const uint8_t lb_fusion_b289[] = {110};
+static const uint8_t lb_fusion_b290[] = {85};
+static const uint8_t lb_fusion_b291[] = {95};
+static const uint8_t lb_fusion_b292[] = {85};
+static const uint8_t lb_fusion_b293[] = {95};
+static const uint8_t lb_fusion_b294[] = {65};
+static const uint8_t lb_fusion_b295[] = {75};
+static const uint8_t lb_fusion_b296[] = {65};
+static const uint8_t lb_fusion_b297[] = {75};
+static const uint8_t lb_fusion_b298[] = {130};
+static const uint8_t lb_fusion_b299[] = {150};
+static const uint8_t lb_fusion_b300[] = {130};
+static const uint8_t lb_fusion_b301[] = {150};
+static const uint8_t lb_fusion_b302[] = {18};
+static const uint8_t lb_fusion_b303[] = {24};
+static const uint8_t lb_fusion_b304[] = {18};
+static const uint8_t lb_fusion_b305[] = {24};
+static const uint8_t lb_fusion_b306[] = {75};
+static const uint8_t lb_fusion_b307[] = {105};
+static const uint8_t lb_fusion_b308[] = {75};
+static const uint8_t lb_fusion_b309[] = {105};
+static const uint8_t lb_fusion_b310[] = {21};
+static const uint8_t lb_fusion_b311[] = {27};
+static const uint8_t lb_fusion_b312[] = {21};
+static const uint8_t lb_fusion_b313[] = {27};
+static const uint8_t lb_fusion_b314[] = {36};
+static const uint8_t lb_fusion_b315[] = {42};
+static const uint8_t lb_fusion_b316[] = {36};
+static const uint8_t lb_fusion_b317[] = {42};
+static const uint8_t lb_fusion_b318[] = {75};
+static const uint8_t lb_fusion_b319[] = {85};
+static const uint8_t lb_fusion_b320[] = {75};
+static const uint8_t lb_fusion_b321[] = {85};
+static const LbBalanceRun lb_fusion_runs[] = {
+    {108u, 1u, lb_fusion_b0},
+    {118u, 2u, lb_fusion_b1},
+    {121u, 2u, lb_fusion_b2},
+    {243u, 1u, lb_fusion_b3},
+    {350u, 2u, lb_fusion_b4},
+    {474u, 1u, lb_fusion_b5},
+    {485u, 1u, lb_fusion_b6},
+    {596u, 1u, lb_fusion_b7},
+    {609u, 1u, lb_fusion_b8},
+    {636u, 2u, lb_fusion_b9},
+    {733u, 1u, lb_fusion_b10},
+    {1008u, 1u, lb_fusion_b11},
+    {1090u, 2u, lb_fusion_b12},
+    {1094u, 2u, lb_fusion_b13},
+    {1105u, 1u, lb_fusion_b14},
+    {1222u, 1u, lb_fusion_b15},
+    {1229u, 1u, lb_fusion_b16},
+    {1231u, 1u, lb_fusion_b17},
+    {1233u, 1u, lb_fusion_b18},
+    {1462u, 2u, lb_fusion_b19},
+    {1586u, 2u, lb_fusion_b20},
+    {1600u, 1u, lb_fusion_b21},
+    {2082u, 3u, lb_fusion_b22},
+    {2097u, 1u, lb_fusion_b23},
+    {2099u, 1u, lb_fusion_b24},
+    {2206u, 6u, lb_fusion_b25},
+    {2223u, 1u, lb_fusion_b26},
+    {2330u, 6u, lb_fusion_b27},
+    {2345u, 1u, lb_fusion_b28},
+    {2496u, 1u, lb_fusion_b29},
+    {2582u, 2u, lb_fusion_b30},
+    {2599u, 4u, lb_fusion_b31},
+    {2632u, 1u, lb_fusion_b32},
+    {2634u, 2u, lb_fusion_b33},
+    {2708u, 2u, lb_fusion_b34},
+    {2723u, 1u, lb_fusion_b35},
+    {2744u, 1u, lb_fusion_b36},
+    {2950u, 1u, lb_fusion_b37},
+    {2952u, 4u, lb_fusion_b38},
+    {2965u, 1u, lb_fusion_b39},
+    {3076u, 1u, lb_fusion_b40},
+    {3089u, 1u, lb_fusion_b41},
+    {3202u, 1u, lb_fusion_b42},
+    {3337u, 1u, lb_fusion_b43},
+    {3570u, 2u, lb_fusion_b44},
+    {3574u, 2u, lb_fusion_b45},
+    {3585u, 1u, lb_fusion_b46},
+    {3587u, 1u, lb_fusion_b47},
+    {3702u, 1u, lb_fusion_b48},
+    {3709u, 1u, lb_fusion_b49},
+    {3711u, 1u, lb_fusion_b50},
+    {3713u, 1u, lb_fusion_b51},
+    {3942u, 2u, lb_fusion_b52},
+    {4066u, 2u, lb_fusion_b53},
+    {4080u, 1u, lb_fusion_b54},
+    {4562u, 3u, lb_fusion_b55},
+    {4577u, 1u, lb_fusion_b56},
+    {4686u, 6u, lb_fusion_b57},
+    {4694u, 1u, lb_fusion_b58},
+    {4701u, 1u, lb_fusion_b59},
+    {4703u, 1u, lb_fusion_b60},
+    {4810u, 6u, lb_fusion_b61},
+    {4825u, 1u, lb_fusion_b62},
+    {4976u, 1u, lb_fusion_b63},
+    {5062u, 2u, lb_fusion_b64},
+    {5068u, 1u, lb_fusion_b65},
+    {5079u, 1u, lb_fusion_b66},
+    {5081u, 2u, lb_fusion_b67},
+    {5190u, 3u, lb_fusion_b68},
+    {5194u, 1u, lb_fusion_b69},
+    {5197u, 1u, lb_fusion_b70},
+    {5199u, 1u, lb_fusion_b71},
+    {5203u, 1u, lb_fusion_b72},
+    {5432u, 4u, lb_fusion_b73},
+    {5445u, 1u, lb_fusion_b74},
+    {5556u, 1u, lb_fusion_b75},
+    {5558u, 2u, lb_fusion_b76},
+    {5569u, 1u, lb_fusion_b77},
+    {5571u, 1u, lb_fusion_b78},
+    {5596u, 2u, lb_fusion_b79},
+    {5678u, 1u, lb_fusion_b80},
+    {5680u, 1u, lb_fusion_b81},
+    {5686u, 3u, lb_fusion_b82},
+    {5690u, 1u, lb_fusion_b83},
+    {5693u, 1u, lb_fusion_b84},
+    {5695u, 1u, lb_fusion_b85},
+    {5806u, 2u, lb_fusion_b86},
+    {5819u, 1u, lb_fusion_b87},
+    {5926u, 1u, lb_fusion_b88},
+    {5928u, 2u, lb_fusion_b89},
+    {5941u, 1u, lb_fusion_b90},
+    {5943u, 1u, lb_fusion_b91},
+    {6054u, 2u, lb_fusion_b92},
+    {6067u, 1u, lb_fusion_b93},
+    {6069u, 1u, lb_fusion_b94},
+    {6182u, 1u, lb_fusion_b95},
+    {6189u, 1u, lb_fusion_b96},
+    {6191u, 1u, lb_fusion_b97},
+    {6193u, 1u, lb_fusion_b98},
+    {6422u, 2u, lb_fusion_b99},
+    {6546u, 2u, lb_fusion_b100},
+    {6560u, 1u, lb_fusion_b101},
+    {7042u, 3u, lb_fusion_b102},
+    {7046u, 2u, lb_fusion_b103},
+    {7057u, 1u, lb_fusion_b104},
+    {7168u, 4u, lb_fusion_b105},
+    {7181u, 1u, lb_fusion_b106},
+    {7290u, 6u, lb_fusion_b107},
+    {7305u, 1u, lb_fusion_b108},
+    {7456u, 1u, lb_fusion_b109},
+    {7542u, 2u, lb_fusion_b110},
+    {7546u, 3u, lb_fusion_b111},
+    {7550u, 1u, lb_fusion_b112},
+    {7553u, 1u, lb_fusion_b113},
+    {7555u, 1u, lb_fusion_b114},
+    {7558u, 2u, lb_fusion_b115},
+    {7561u, 2u, lb_fusion_b116},
+    {7670u, 3u, lb_fusion_b117},
+    {7674u, 1u, lb_fusion_b118},
+    {7679u, 1u, lb_fusion_b119},
+    {7683u, 1u, lb_fusion_b120},
+    {7914u, 2u, lb_fusion_b121},
+    {7925u, 1u, lb_fusion_b122},
+    {8036u, 1u, lb_fusion_b123},
+    {8038u, 2u, lb_fusion_b124},
+    {8049u, 1u, lb_fusion_b125},
+    {8051u, 1u, lb_fusion_b126},
+    {8299u, 1u, lb_fusion_b127},
+    {8406u, 1u, lb_fusion_b128},
+    {8408u, 3u, lb_fusion_b129},
+    {8423u, 1u, lb_fusion_b130},
+    {8534u, 2u, lb_fusion_b131},
+    {8547u, 1u, lb_fusion_b132},
+    {8549u, 1u, lb_fusion_b133},
+    {8572u, 1u, lb_fusion_b134},
+    {8662u, 1u, lb_fusion_b135},
+    {8669u, 1u, lb_fusion_b136},
+    {8671u, 1u, lb_fusion_b137},
+    {8673u, 1u, lb_fusion_b138},
+    {8902u, 2u, lb_fusion_b139},
+    {9026u, 2u, lb_fusion_b140},
+    {9040u, 1u, lb_fusion_b141},
+    {9522u, 3u, lb_fusion_b142},
+    {9526u, 2u, lb_fusion_b143},
+    {9537u, 1u, lb_fusion_b144},
+    {9646u, 6u, lb_fusion_b145},
+    {9654u, 1u, lb_fusion_b146},
+    {9661u, 1u, lb_fusion_b147},
+    {9663u, 1u, lb_fusion_b148},
+    {9770u, 6u, lb_fusion_b149},
+    {9785u, 1u, lb_fusion_b150},
+    {10026u, 3u, lb_fusion_b151},
+    {10030u, 1u, lb_fusion_b152},
+    {10033u, 1u, lb_fusion_b153},
+    {10035u, 1u, lb_fusion_b154},
+    {10039u, 1u, lb_fusion_b155},
+    {10148u, 3u, lb_fusion_b156},
+    {10157u, 1u, lb_fusion_b157},
+    {10159u, 1u, lb_fusion_b158},
+    {10163u, 4u, lb_fusion_b159},
+    {10516u, 1u, lb_fusion_b160},
+    {10529u, 1u, lb_fusion_b161},
+    {10531u, 1u, lb_fusion_b162},
+    {10779u, 1u, lb_fusion_b163},
+    {10804u, 1u, lb_fusion_b164},
+    {10886u, 1u, lb_fusion_b165},
+    {10888u, 2u, lb_fusion_b166},
+    {10903u, 1u, lb_fusion_b167},
+    {10928u, 1u, lb_fusion_b168},
+    {11027u, 1u, lb_fusion_b169},
+    {11382u, 2u, lb_fusion_b170},
+    {11506u, 2u, lb_fusion_b171},
+    {11520u, 1u, lb_fusion_b172},
+    {12002u, 3u, lb_fusion_b173},
+    {12017u, 1u, lb_fusion_b174},
+    {12126u, 1u, lb_fusion_b175},
+    {12128u, 4u, lb_fusion_b176},
+    {12134u, 1u, lb_fusion_b177},
+    {12143u, 1u, lb_fusion_b178},
+    {12250u, 6u, lb_fusion_b179},
+    {12265u, 1u, lb_fusion_b180},
+    {12502u, 1u, lb_fusion_b181},
+    {12508u, 1u, lb_fusion_b182},
+    {12519u, 4u, lb_fusion_b183},
+    {12628u, 5u, lb_fusion_b184},
+    {12634u, 1u, lb_fusion_b185},
+    {12637u, 1u, lb_fusion_b186},
+    {12639u, 1u, lb_fusion_b187},
+    {12643u, 1u, lb_fusion_b188},
+    {12885u, 1u, lb_fusion_b189},
+    {12996u, 1u, lb_fusion_b190},
+    {13009u, 1u, lb_fusion_b191},
+    {13011u, 1u, lb_fusion_b192},
+    {13118u, 1u, lb_fusion_b193},
+    {13120u, 1u, lb_fusion_b194},
+    {13126u, 3u, lb_fusion_b195},
+    {13130u, 1u, lb_fusion_b196},
+    {13133u, 1u, lb_fusion_b197},
+    {13135u, 1u, lb_fusion_b198},
+    {13172u, 1u, lb_fusion_b199},
+    {13174u, 2u, lb_fusion_b200},
+    {13284u, 2u, lb_fusion_b201},
+    {13366u, 1u, lb_fusion_b202},
+    {13368u, 3u, lb_fusion_b203},
+    {13383u, 1u, lb_fusion_b204},
+    {13629u, 1u, lb_fusion_b205},
+    {13862u, 2u, lb_fusion_b206},
+    {13986u, 2u, lb_fusion_b207},
+    {14000u, 1u, lb_fusion_b208},
+    {14482u, 3u, lb_fusion_b209},
+    {14497u, 1u, lb_fusion_b210},
+    {14608u, 4u, lb_fusion_b211},
+    {14730u, 6u, lb_fusion_b212},
+    {14745u, 1u, lb_fusion_b213},
+    {14980u, 1u, lb_fusion_b214},
+    {14982u, 2u, lb_fusion_b215},
+    {15106u, 2u, lb_fusion_b216},
+    {15230u, 2u, lb_fusion_b217},
+    {15354u, 2u, lb_fusion_b218},
+    {15478u, 2u, lb_fusion_b219},
+    {15602u, 2u, lb_fusion_b220},
+    {15726u, 2u, lb_fusion_b221},
+    {16109u, 1u, lb_fusion_b222},
+    {16114u, 1u, lb_fusion_b223},
+    {16117u, 1u, lb_fusion_b224},
+    {16220u, 1u, lb_fusion_b225},
+    {16233u, 1u, lb_fusion_b226},
+    {16235u, 1u, lb_fusion_b227},
+    {16260u, 1u, lb_fusion_b228},
+    {16342u, 2u, lb_fusion_b229},
+    {16605u, 1u, lb_fusion_b230},
+    {16610u, 1u, lb_fusion_b231},
+    {16716u, 1u, lb_fusion_b232},
+    {16729u, 1u, lb_fusion_b233},
+    {16756u, 1u, lb_fusion_b234},
+    {16853u, 1u, lb_fusion_b235},
+    {17996u, 1u, lb_fusion_b236},
+    {18084u, 2u, lb_fusion_b237},
+    {18098u, 1u, lb_fusion_b238},
+    {18204u, 1u, lb_fusion_b239},
+    {18217u, 1u, lb_fusion_b240},
+    {18580u, 2u, lb_fusion_b241},
+    {18594u, 1u, lb_fusion_b242},
+    {18700u, 1u, lb_fusion_b243},
+    {18713u, 1u, lb_fusion_b244},
+    {18740u, 2u, lb_fusion_b245},
+    {18822u, 1u, lb_fusion_b246},
+    {18824u, 2u, lb_fusion_b247},
+    {18841u, 1u, lb_fusion_b248},
+    {20082u, 1u, lb_fusion_b249},
+    {20201u, 1u, lb_fusion_b250},
+    {20310u, 2u, lb_fusion_b251},
+    {20325u, 1u, lb_fusion_b252},
+    {20564u, 2u, lb_fusion_b253},
+    {20578u, 1u, lb_fusion_b254},
+    {20686u, 2u, lb_fusion_b255},
+    {20697u, 1u, lb_fusion_b256},
+    {20724u, 1u, lb_fusion_b257},
+    {20806u, 1u, lb_fusion_b258},
+    {20808u, 2u, lb_fusion_b259},
+    {20823u, 1u, lb_fusion_b260},
+    {20825u, 1u, lb_fusion_b261},
+    {20986u, 1u, lb_fusion_b262},
+    {21818u, 1u, lb_fusion_b263},
+    {21942u, 1u, lb_fusion_b264},
+    {21946u, 1u, lb_fusion_b265},
+    {22052u, 2u, lb_fusion_b266},
+    {22066u, 1u, lb_fusion_b267},
+    {22190u, 1u, lb_fusion_b268},
+    {22300u, 2u, lb_fusion_b269},
+    {22309u, 1u, lb_fusion_b270},
+    {22314u, 1u, lb_fusion_b271},
+    {22426u, 3u, lb_fusion_b272},
+    {22430u, 1u, lb_fusion_b273},
+    {22433u, 1u, lb_fusion_b274},
+    {22435u, 1u, lb_fusion_b275},
+    {22438u, 1u, lb_fusion_b276},
+    {22562u, 1u, lb_fusion_b277},
+    {22796u, 1u, lb_fusion_b278},
+    {22798u, 1u, lb_fusion_b279},
+    {22800u, 1u, lb_fusion_b280},
+    {22802u, 1u, lb_fusion_b281},
+    {23028u, 1u, lb_fusion_b282},
+    {23030u, 1u, lb_fusion_b283},
+    {23032u, 1u, lb_fusion_b284},
+    {23034u, 1u, lb_fusion_b285},
+    {23144u, 1u, lb_fusion_b286},
+    {23146u, 1u, lb_fusion_b287},
+    {23148u, 1u, lb_fusion_b288},
+    {23150u, 1u, lb_fusion_b289},
+    {23376u, 1u, lb_fusion_b290},
+    {23378u, 1u, lb_fusion_b291},
+    {23380u, 1u, lb_fusion_b292},
+    {23382u, 1u, lb_fusion_b293},
+    {23608u, 1u, lb_fusion_b294},
+    {23610u, 1u, lb_fusion_b295},
+    {23612u, 1u, lb_fusion_b296},
+    {23614u, 1u, lb_fusion_b297},
+    {23724u, 1u, lb_fusion_b298},
+    {23726u, 1u, lb_fusion_b299},
+    {23728u, 1u, lb_fusion_b300},
+    {23730u, 1u, lb_fusion_b301},
+    {23840u, 1u, lb_fusion_b302},
+    {23842u, 1u, lb_fusion_b303},
+    {23844u, 1u, lb_fusion_b304},
+    {23846u, 1u, lb_fusion_b305},
+    {24304u, 1u, lb_fusion_b306},
+    {24306u, 1u, lb_fusion_b307},
+    {24308u, 1u, lb_fusion_b308},
+    {24310u, 1u, lb_fusion_b309},
+    {24420u, 1u, lb_fusion_b310},
+    {24422u, 1u, lb_fusion_b311},
+    {24424u, 1u, lb_fusion_b312},
+    {24426u, 1u, lb_fusion_b313},
+    {24536u, 1u, lb_fusion_b314},
+    {24538u, 1u, lb_fusion_b315},
+    {24540u, 1u, lb_fusion_b316},
+    {24542u, 1u, lb_fusion_b317},
+    {24652u, 1u, lb_fusion_b318},
+    {24654u, 1u, lb_fusion_b319},
+    {24656u, 1u, lb_fusion_b320},
+    {24658u, 1u, lb_fusion_b321},
+};
+
+static const LbBalanceTable lb_balance_tables[] = {
+    {"Rebalance 1.15.2", lb_rebalance_runs, 520u, 835u, 75195u},
+    {"FactionWars 1.2", lb_factionwars_runs, 458u, 827u, 75195u},
+    {"Funlite 1.7.2", lb_funlite_runs, 570u, 893u, 75195u},
+    {"FunLite2 (PvE)", lb_funlite2_runs, 831u, 1596u, 75195u},
+    {"FactionWars 2.0.1", lb_factionwars2_runs, 246u, 394u, 75195u},
+    {"Vanil+ 1.2.1", lb_vanilplus_runs, 330u, 495u, 75195u},
+    {"Fusion 1.2", lb_fusion_runs, 322u, 486u, 75195u},
+};
+
+/* The number of presets: every pack bound derives from it. */
+#define LB_BALANCE_PACK_COUNT 7
 
 #endif  // LB_BALANCE_DATA_H

@@ -9,7 +9,7 @@ Layout produced:
       LegoBattles.exe       the port
       *.dll                 the four MSYS2 runtime libraries it links against
       game.toml             the vanilla config
-      mods/                 custom map / balance DATA, not bootable ROMs
+      mods/                 extra maps (mod .nds, map folders), not bootable ROMs
       saves/                save files, never your originals
       settings.json         written by the port, beside the executable
       imgui.ini             window layout, likewise
@@ -17,8 +17,8 @@ Layout produced:
 
 ## Only the cartridge boots
 
-mods/ holds custom map and balance data the port reads; those files are
-not bootable. An earlier version of this launcher offered them as ROMs,
+mods/ holds extra maps the port reads (a mod's .nds, map folders); those
+files are not bootable. An earlier version of this launcher offered them as ROMs,
 and booting one produced a black screen that looked exactly like a
 broken port.
 """
@@ -38,7 +38,7 @@ REM ---------------------------------------------------------------------------
 REM LEGO Battles - port launcher.
 REM
 REM Only the cartridge in rom\ is booted. mods\ is a DATA directory the port
-REM reads custom map and balance data out of; those files are not bootable, and
+REM reads extra maps out of (a mod's .nds, map folders); they are not bootable, and
 REM launching one shows a black screen indistinguishable from a broken port.
 REM That mistake is exactly why this no longer offers them.
 REM
@@ -118,16 +118,31 @@ is only read; the image the port plays is kept in rom\\, so this is asked
 once. (play.bat starts it the old way, with a console log.)
 
 Multiplayer: the game's own Multiplayer menu. Hosting advertises your lobby
-on the public lobby server (lbserver.viosarcade.xyz, settings panel >
-Multiplayer); the Join screen lists the lobbies there. The lobby server
+on the public lobby servers (lbserver.viosarcade.xyz and
+king.legobattles.win: "Both", the default, in settings panel >
+Network > Multiplayer); the Join screen lists the lobbies of both. The lobby server
 introduces the two players so both routers let the game through: no port
-forwarding is needed on most home networks. The Multiplayer section shows
-whether anything has arrived from the other player.
+forwarding is needed on most home networks. If a joiner's direct connection
+carries nothing for five seconds (a VPN, a strict firewall), the two are
+connected through lbserver.viosarcade.xyz's relay instead. "Fast online
+link" (on by default; every player in a match needs it) keeps an online
+match at full speed. The Multiplayer section shows whether anything has
+arrived from the other player, and whether the relay is in use.
+
+Balance: the community balance packs Rebalance, FactionWars and Funlite are
+built in; pick one in settings panel > Balance > Presets. Single values are
+changed under Balance > Units, Heroes and Attacks, and saved to or loaded
+from a .json file with Presets' Export and Import.
+Online, everyone plays on the host's balance.
 
   rom\\      your own cartridge dump. This is the only thing that boots.
-  mods\\     custom MAP and balance data the port reads from. These are NOT
-            bootable ROMs -- pointing the emulator at one gives a black
-            screen. Select them in the settings panel, not the launcher.
+  mods\\     extra MAPS, added to the map lists at the next start: a
+            community mod's .nds (only its multiplayer maps are taken --
+            its balance changes are NOT read; see Balance above), or map
+            folders from the community archive in mods\\maps\\. A host's
+            mod map you lack is fetched into mods\\maps\\_archive. These
+            are NOT bootable ROMs -- pointing the emulator at one gives a
+            black screen.
   saves\\    your save is saves\\LEGO Battles.sav, whatever the ROM file is
             called. To use a save from a cartridge or an emulator (any
             region), import it: settings panel > Settings > Saves > Browse,
@@ -148,6 +163,45 @@ cheat-code screens, just type.
 
 The title screen takes a few seconds to appear; a black window at startup is
 the game booting, not a hang.
+
+How to
+======
+
+Use a mod's balance
+  1. Press F1. Open Balance > Presets.
+  2. Pick the mod's preset from the list; or press "Import from ROM..." and
+     choose the mod's .nds. This replaces the values you changed.
+  3. Start a battle. Online, the host's balance is the one everyone plays.
+
+Share your balance
+  1. In Balance > Presets, press "Export my balance (.json)..." and save the
+     file. It holds the chosen preset and every value you changed.
+  2. Send the file to the other player.
+  3. They press "Import my balance (.json)..." and choose it.
+
+Add mod maps
+  1. Put a mod's .nds in the mods\\ folder, or a map folder from the community
+     archive in mods\\maps\\.
+  2. Start the game again. The maps are in the map lists.
+  3. Only maps are taken. The mod's balance is not; use Import from ROM for that.
+
+Play online
+  1. Open the game's Multiplayer menu. One player picks Host; the others pick
+     Join and choose the lobby.
+  2. In F1 > Network > Multiplayer, leave the server on "Both", so the Join screen
+     lists every lobby.
+  3. Every player must have the same "Fast online link" setting.
+  4. Nothing else is needed. If a direct link fails, the relay starts by itself.
+
+Import a save
+  1. Press F1. Open Settings > Saves.
+  2. Press Browse and choose your .sav (a cartridge or an emulator, any region).
+  3. Press Import. The game restarts and loads it.
+
+Report a bug
+  1. Open the Discord bug channel.
+  2. Say what you were doing.
+  3. Attach the newest file in logs\\ and the newest lb-session-*.lbdemo.
 """
 
 

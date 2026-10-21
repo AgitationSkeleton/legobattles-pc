@@ -84,6 +84,14 @@ extern "C" int lb_pick_json_file(char* buf, int cap, int saving) {
     return pick_file(buf, cap, saving, kJsonFilter, L"json");
 }
 
+// docs/426: a ROM or an Entities.ebp to import balance values from.
+extern "C" int lb_pick_balance_rom_file(char* buf, int cap) {
+    static const wchar_t kFilter[] =
+        L"ROM or Entities.ebp (*.nds;*.ebp)\0*.nds;*.ebp\0"
+        L"All files (*.*)\0*.*\0";
+    return pick_file(buf, cap, 0, kFilter, L"nds");
+}
+
 namespace {
 int pick_file(char* buf, int cap, int saving, const wchar_t* filter,
               const wchar_t* ext) {
@@ -221,6 +229,11 @@ extern "C" int lb_pick_save_file(char* buf, int cap, int saving) {
 
 extern "C" int lb_pick_json_file(char* buf, int cap, int saving) {
     (void)buf; (void)cap; (void)saving;
+    return 0;
+}
+
+extern "C" int lb_pick_balance_rom_file(char* buf, int cap) {
+    (void)buf; (void)cap;
     return 0;
 }
 

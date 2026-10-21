@@ -28,6 +28,8 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstdint>
+#include <cstdlib>
+#include <string>
 #include <vector>
 
 extern "C" {
@@ -106,7 +108,7 @@ extern "C" int lb_balance_revert(unsigned int blueprint_base) {
     return 1;
 }
 
-// slot: 1 Rebalance, 2 FactionWars, 3 Funlite. Slot 0 is vanilla and does
+// slot: 1 Rebalance, 2 FactionWars, 3 Funlite, 4 FunLite2. Slot 0 is vanilla and does
 // nothing; lb_balance_revert takes a pack back out (docs/386).
 extern "C" int lb_balance_apply(int slot, unsigned int blueprint_base,
                                 char* error, int error_size) {
@@ -154,6 +156,8 @@ extern "C" void lb_balance_on_reset(void) {
     lb_balance_custom_on_reset();
 }
 extern "C" int lb_balance_applied_slot(void) { return g_applied_slot; }
+
+extern "C" int lb_balance_pack_count(void) { return kTableCount; }
 
 extern "C" const char* lb_balance_name(int slot) {
     if (slot <= 0 || slot > kTableCount) return "Off (Vanilla)";
@@ -206,8 +210,8 @@ const BalField kUnitFields[] = {
     {"Health", 0x62, 2, 0, 65535},
     {"Mana", 0x64, 2, 0, 65535},
     {"Speed", 0x0C, 4, 0, 0x7FFFFFFF},
-    {"Melee damage", 0x68, 1, 0, 255},
-    {"Melee spread", 0x6A, 1, 0, 255},
+    {"Melee damage", 0x68, 2, 0, 65535},   // docs/426: u16 (+0x69 is its high byte)
+    {"Melee spread", 0x6A, 2, 0, 65535},   // u16 (+0x6B)
     {"Attack interval", 0x6D, 1, 0, 255},
     {"Attack range", 0x6F, 1, 0, 255},
     {"Resource yield", 0x6C, 1, 0, 255},
@@ -219,6 +223,29 @@ const BalField kUnitFields[] = {
     {"Spell 3", 0x74, 1, 0, 0x22},
     {"Spell 4", 0x75, 1, 0, 0x22},
     {"Spell 5", 0x76, 1, 0, 0x22},
+    // docs/426: the Entities Editor's other unit fields, APPENDED so a stored
+    // balance_custom index keeps its meaning (LB_BAL_TRAIT_FIELD0 = 15). Readers:
+    //   +0x16/+0x17/+0x18/+0x1A: FUN_0205079C (0x0205079C) tests them in that
+    //     order on the blueprint at [entity+0xE0]+4; +0x1B in the same function;
+    //   +0x19 Trees: FUN_02001510 (0x02001510), a blueprint-byte getter;
+    //   +0x1D Hitbox size: FUN_02001170 (0x02001170) indexes its size table;
+    //   +0x66 Projectile: FUN_0205079C reads the u16 and tests it in a
+    //     projectile-id range (also FUN_02050F3C, FUN_02053F90);
+    //   +0x70 AI priority and +0x71 Defogged area: docs/25 (FUN_020638C8
+    //     accumulates +0x70; Sim::HarvestEngineer reads +0x71);
+    //   +0x21 Uninteractable: UNCONFIRMED -- FUN_020E8964 reads a +0x21 off a
+    //     [obj+4] record whose struct was not traced to the blueprint.
+    {"Land", 0x17, 1, 0, 1},
+    {"Water", 0x18, 1, 0, 1},
+    {"Trees", 0x19, 1, 0, 1},
+    {"Building collision", 0x1A, 1, 0, 1},
+    {"Land<->water", 0x1B, 1, 0, 1},
+    {"Hitbox size", 0x1D, 1, 0, 255},
+    {"Uninteractable", 0x21, 1, 0, 1},
+    {"Projectile", 0x66, 2, 0, 65535},
+    {"AI priority", 0x70, 1, 0, 255},
+    {"Defogged area", 0x71, 1, 0, 255},
+    {"Not water-only", 0x16, 1, 0, 1},   // the editor's BoatAntiFlag: 0 for a water-only unit
 };
 // docs/408: +0x70/+0x72 are NOT a copy of +0x6C/+0x6E. The hit (FUN_0206E408,
 // `ldrh [bp,#0x6c]`/`#0x6e`) and the impact and blast (FUN_0206E450,
@@ -247,6 +274,9 @@ const BalField kAttackFields[] = {
     {"Stopped by enemies", 0x68, 1, 0, 1},
     {"Stopped by walls", 0x69, 1, 0, 1},
     {"Explodes", 0x6B, 1, 0, 1},
+    // docs/426: appended. Reader FUN_02053F90 (0x02053F90, line ~235) tests it
+    // on the blueprint at [shot+0x160]+8: a shot over trees is not stopped.
+    {"Over trees", 0x65, 1, 0, 1},
 };
 // docs/416: values that are not in a blueprint but in the code, as one more
 // record after the projectiles. Field 0 is a Gold Brick's worth: FUN_0205F038
@@ -497,6 +527,95 @@ extern "C" int lb_balance_custom_parse(const char* text) {
     return (int)g_live.size();
 }
 
+// ── docs/426: IMPORT FROM A ROM OR AN Entities.ebp ─────────────────────────
+//
+// The file's blueprint is diffed against the player's own ROM's, record by
+// record. Every field whose bytes differ becomes a custom value (on Vanilla:
+// the caller sets the pack); a differing byte that no field covers is counted
+// and left alone, so nothing invisible changes.
+bool lb_mods_blueprint_file(const char* path, std::vector<uint8_t>* out,
+                            std::string* why);   // lb_mods.cpp
+bool lb_mods_blueprint_own(std::vector<uint8_t>* out);
+
+extern "C" int lb_balance_import_file(const char* path, char* msg, int msg_cap) {
+    auto say = [&](const std::string& s) {
+        if (msg && msg_cap > 0) std::snprintf(msg, (size_t)msg_cap, "%s", s.c_str());
+    };
+    std::string why;
+    std::vector<uint8_t> mod, van;
+    if (!lb_mods_blueprint_file(path, &mod, &why)) { say(why); return -1; }
+    if (!lb_mods_blueprint_own(&van)) {
+        say("the game's own blueprint is not available yet (is a ROM loaded?)");
+        return -1;
+    }
+    if (mod.size() != van.size()) {
+        say("that blueprint is a different size (" + std::to_string(mod.size()) +
+            " bytes, the game's is " + std::to_string(van.size()) + ")");
+        return -1;
+    }
+    g_live.clear();
+    int values = 0, outside = 0;
+    std::vector<int> per_field_units(64, 0), per_field_attacks(64, 0);
+    const uint32_t records_end = kFirstRecord + (uint32_t)kUnitRecords * kUnitSize +
+                                 (uint32_t)kAttackRecords * kAttackSize;
+    for (uint32_t i = 0; i < mod.size(); ++i)
+        if (i >= records_end && mod[i] != van[i]) ++outside;
+    for (int rec = 0; rec < kUnitRecords + kAttackRecords; ++rec) {
+        const uint32_t at = rec < kUnitRecords
+            ? kFirstRecord + (uint32_t)rec * kUnitSize
+            : kFirstRecord + (uint32_t)kUnitRecords * kUnitSize +
+                  (uint32_t)(rec - kUnitRecords) * kAttackSize;
+        const uint32_t size = rec < kUnitRecords ? kUnitSize : kAttackSize;
+        bool covered[0x80] = {false};
+        const int nf = lb_balance_field_count(kind_of(rec));
+        for (int fi = 0; fi < nf; ++fi) {
+            const BalField* f = field_of(rec, fi);
+            if (!f) continue;
+            uint32_t a = 0u, b = 0u;
+            for (int k = 0; k < f->width; ++k) {
+                covered[f->off + k] = true;
+                a |= (uint32_t)van[at + f->off + (uint32_t)k] << (8 * k);
+                b |= (uint32_t)mod[at + f->off + (uint32_t)k] << (8 * k);
+            }
+            if (a == b) continue;
+            if (b > (uint32_t)f->max) {   // a value the menu cannot hold
+                for (int k = 0; k < f->width; ++k)
+                    if (van[at + f->off + (uint32_t)k] != mod[at + f->off + (uint32_t)k])
+                        ++outside;
+                continue;
+            }
+            put(g_live, rec, fi, (int)b);
+            ++values;
+            (rec < kUnitRecords ? per_field_units : per_field_attacks)[(size_t)fi]++;
+        }
+        for (uint32_t o = 0; o < size; ++o)
+            if (!covered[o] && van[at + o] != mod[at + o]) ++outside;
+    }
+    int fields = 0;
+    for (int n : per_field_units) fields += n ? 1 : 0;
+    for (int n : per_field_attacks) fields += n ? 1 : 0;
+    ++g_live_gen;
+    if (!g_play_on) ++g_gen;
+    const char* base = path;
+    for (const char* p = path; *p; ++p)
+        if (*p == '/' || *p == '\\') base = p + 1;
+    std::fprintf(stderr, "[lb_balance] imported %s: %d values in %d fields, %d bytes "
+                 "outside the menu\n", base, values, fields, outside);
+    for (int fi = 0; fi < 64; ++fi) {
+        if (per_field_units[(size_t)fi])
+            std::fprintf(stderr, "[lb_balance]   unit %-18s %3d record(s)\n",
+                         kUnitFields[fi].name, per_field_units[(size_t)fi]);
+        if (per_field_attacks[(size_t)fi])
+            std::fprintf(stderr, "[lb_balance]   attack %-16s %3d record(s)\n",
+                         kAttackFields[fi].name, per_field_attacks[(size_t)fi]);
+    }
+    std::fflush(stderr);
+    say("Imported " + std::to_string(values) + " value(s) in " +
+        std::to_string(fields) + " field(s) from " + base + "; " +
+        std::to_string(outside) + " byte(s) outside the menu were left alone.");
+    return values;
+}
+
 extern "C" int lb_balance_custom_dirty(void) { return g_gen != g_written_gen ? 1 : 0; }
 
 extern "C" void lb_balance_custom_revert(unsigned int base) {
@@ -510,6 +629,15 @@ extern "C" void lb_balance_custom_revert(unsigned int base) {
 extern "C" int lb_balance_custom_apply(unsigned int base) {
     lb_balance_custom_revert(base);
     if (!base) return 0;
+    // docs/426 test aid: LB_BALANCE_IMPORT=<.nds or Entities.ebp> imports once.
+    static bool env_done = false;
+    if (!env_done) {
+        env_done = true;
+        if (const char* path = std::getenv("LB_BALANCE_IMPORT")) {
+            char msg[256];
+            lb_balance_import_file(path, msg, (int)sizeof msg);
+        }
+    }
     int n = 0;
     for (const Edit& e : active()) {
         if (kind_of(e.rec) == LB_BAL_GLOBALS) continue;   // docs/416: not in RAM

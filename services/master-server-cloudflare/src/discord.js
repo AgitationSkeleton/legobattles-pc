@@ -33,19 +33,28 @@ export function settingsText(options) {
   return lines.join('\n');
 }
 
+// Every channel the log goes to: the DISCORD_WEBHOOK secret and, posted
+// identically, DISCORD_WEBHOOK_2 (a second server's channel; `wrangler secret
+// put DISCORD_WEBHOOK_2`). Either may be absent.
+export function webhooks(env) {
+  return env ? [env.DISCORD_WEBHOOK, env.DISCORD_WEBHOOK_2].filter(Boolean) : [];
+}
+
 // One message. ctx: whatever can keep the Durable Object running until it is
 // sent -- its waitUntil.
 export function discord(env, ctx, text) {
-  if (!env || !env.DISCORD_WEBHOOK) return;
-  const send = fetch(env.DISCORD_WEBHOOK, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+  const body = JSON.stringify({
+    username: 'LEGO Battles server',
+    content: String(text).slice(0, 1900),
     // (no one is pinged, whatever a name says)
-    body: JSON.stringify({
-      username: 'LEGO Battles server',
-      content: String(text).slice(0, 1900),
-      allowed_mentions: { parse: [] },
-    }),
-  }).catch(() => {});
-  if (ctx && ctx.waitUntil) ctx.waitUntil(send);
+    allowed_mentions: { parse: [] },
+  });
+  for (const url of webhooks(env)) {
+    const send = fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    }).catch(() => {});
+    if (ctx && ctx.waitUntil) ctx.waitUntil(send);
+  }
 }

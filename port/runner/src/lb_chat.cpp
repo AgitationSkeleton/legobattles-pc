@@ -493,6 +493,7 @@ extern "C" void lb_chat_incoming(const unsigned char* buf, int len,
     if (hosting()) g_outbox.emplace_back(buf, buf + len);   // pass it on
     log_line("from", m);
     add(std::move(m));
+    lb_sfx_notify();   // docs/427: another player's message, not one's own
 }
 
 // Once a frame, inside the overlay's ImGui frame.

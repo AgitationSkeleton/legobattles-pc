@@ -44,6 +44,45 @@ suggestions. Attach the newest file in `logs\` and say what you were doing.
 Every session also records its inputs as `lb-session-*.lbdemo`, which replays
 the session exactly; attaching it usually makes a bug reproducible.
 
+## How to
+
+**Use a mod's balance**
+
+1. Press F1 and open Balance > Presets.
+2. Pick the mod's preset from the list, or press "Import from ROM..." and choose the mod's `.nds`. This replaces the values you changed.
+3. Start a battle. Online, the host's balance is the one everyone plays.
+
+**Share your balance**
+
+1. In Balance > Presets, press "Export my balance (.json)..." and save the file. It holds the chosen preset and every value you changed.
+2. Send the file to the other player.
+3. They press "Import my balance (.json)..." and choose it.
+
+**Add mod maps**
+
+1. Put a mod's `.nds` in the `mods\` folder, or a map folder from the community archive in `mods\maps\`.
+2. Start the game again. The maps are in the map lists.
+3. Only maps are taken. The mod's balance is not; use Import from ROM for that.
+
+**Play online**
+
+1. Open the game's Multiplayer menu. One player picks Host; the others pick Join and choose the lobby.
+2. In F1 > Network > Multiplayer, leave the server on "Both", so the Join screen lists every lobby.
+3. Every player must have the same "Fast online link" setting.
+4. Nothing else is needed. If a direct link fails, the relay starts by itself.
+
+**Import a save**
+
+1. Press F1 and open Settings > Saves.
+2. Press Browse and choose your `.sav` (a cartridge or an emulator, any region).
+3. Press Import. The game restarts and loads it.
+
+**Report a bug**
+
+1. Open the Discord bug channel.
+2. Say what you were doing.
+3. Attach the newest file in `logs\` and the newest `lb-session-*.lbdemo`.
+
 **This is a beta.** Online multiplayer is lightly tested, and the port has so
 far been tested on a single PC. Reports from other hardware and networks are
 the most useful thing a tester can send.

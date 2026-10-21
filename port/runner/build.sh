@@ -75,6 +75,8 @@ cp -p "$W/port/runner/src/lb_mapfetch.cpp" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_vwh.cpp" "$TREE/runner/src/"
 # The master server's relay (docs/424).
 cp -p "$W/port/runner/src/lb_relay.cpp" "$TREE/runner/src/"
+# The notification sound, on its own audio device (docs/427).
+cp -p "$W/port/runner/src/lb_sfx.cpp" "$TREE/runner/src/"
 # The first-run setup: the player's own ROM, Europe or USA (docs/394).
 cp -p "$W/port/runner/src/lb_setup.cpp" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_music.cpp" "$TREE/runner/src/"

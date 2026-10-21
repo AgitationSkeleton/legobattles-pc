@@ -4219,6 +4219,166 @@ void screen_update_override(void) {
     if (original) original();
 }
 
+// ---- docs/425: THREE MORE COSMETIC NAMES ------------------------------------
+//
+// "Claw Tank" -> "Crystal Reaper", "Gemma" -> "Doctor Kelvin", "Broadside" ->
+// "Governor Tyranny", each an Off/On option under Renames. CLIENT-LOCAL AND
+// COSMETIC, like the two names above: only the text a screen is about to copy
+// changes. Every replacement is LONGER than the word it replaces, so the string
+// cannot be edited in place in the (exact-size) LOC block. Instead this hooks
+// FUN_0203E1D4 (id -> String, the table's only reader), builds the rewritten
+// text on the host, puts it in a scratch just below the live stack and hands
+// that to FUN_020F1C88, the copy the function was about to make anyway. The
+// table itself is never written, so Off and a language change need no restore.
+//
+// Whole words only (ASCII letters/digits bound a word), case-sensitive, so the
+// Italian "gemma" (a jewel) and anything inside a longer word stay. Skipped on
+// purpose: "Gemma Lee" (the credits) and "Lady Broadside" (a ship). After
+// "Governor"/"Guvern\xC3\xB8r" Broadside becomes just "Tyranny". Danish
+// genitives (Gemmas, Broadsides) keep their "s".
+constexpr uint32_t kRenManager = 0x0215378Cu;
+constexpr uint32_t kRenIds = 0xBF8u;
+struct RenRule { const char* needle; const char* name; };
+// Rule 3 is a test aid only (LB_RENAME_PROBE=1): the title screen's line, which
+// every harness route shows, so the supply path can be seen working.
+constexpr int kRenCount = 4;
+constexpr RenRule kRenRules[kRenCount] = {{"Claw Tank", "Crystal Reaper"},
+                                          {"Gemma", "Doctor Kelvin"},
+                                          {"Broadside", "Governor Tyranny"},
+                                          {"Touch the Screen", "Tap the Screen"}};
+uint8_t g_ren_hit[kRenIds];        // per id: bit r set if rule r changes it
+uint32_t g_ren_file = 0u, g_ren_lang = 0u;
+unsigned g_ren_logged = 0u;        // active mask last logged for this table
+unsigned g_ren_skips = 0u;
+
+bool ren_alnum(char c) {
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+// src -> out with the rules in `mask` applied. True if anything changed.
+bool ren_rewrite(const char* src, uint32_t lang, unsigned mask, char* out, size_t cap) {
+    size_t o = 0, i = 0;
+    bool changed = false;
+    const size_t n = std::strlen(src);
+    while (i < n) {
+        int hit = -1;
+        if (!i || !ren_alnum(src[i - 1])) {
+            for (int r = 0; r < kRenCount && hit < 0; ++r) {
+                if (!(mask & (1u << r))) continue;
+                const size_t len = std::strlen(kRenRules[r].needle);
+                if (std::strncmp(src + i, kRenRules[r].needle, len) != 0) continue;
+                const char nx = src[i + len];
+                const bool genitive = lang == 7u && nx == 's' && !ren_alnum(src[i + len + 1]);
+                if (ren_alnum(nx) && !genitive) continue;
+                if (r == 1 && std::strncmp(src + i + len, " Lee", 4) == 0) continue;
+                if (r == 2 && ((i >= 5 && std::strncmp(src + i - 5, "Lady ", 5) == 0) ||
+                               (i >= 6 && std::strncmp(src + i - 6, "Ladyr ", 6) == 0)))
+                    continue;
+                hit = r;
+            }
+        }
+        if (hit < 0) {
+            if (o + 1 >= cap) return false;
+            out[o++] = src[i++];
+            continue;
+        }
+        const char* name = kRenRules[hit].name;
+        if (hit == 2 && ((i >= 9 && std::strncmp(src + i - 9, "Governor ", 9) == 0) ||
+                         (i >= 10 && std::strncmp(src + i - 10, "Guvern\xC3\xB8r ", 10) == 0)))
+            name = "Tyranny";
+        const size_t nl = std::strlen(name);
+        if (o + nl + 1 >= cap) return false;
+        std::memcpy(out + o, name, nl);
+        o += nl;
+        i += std::strlen(kRenRules[hit].needle);
+        changed = true;
+    }
+    out[o] = '\0';
+    return changed;
+}
+
+unsigned ren_active_mask() {
+    static const bool probe = std::getenv("LB_RENAME_PROBE") != nullptr;   // test aid
+    return (lb_setting_rename(0) ? 1u : 0u) | (lb_setting_rename(1) ? 2u : 0u) |
+           (lb_setting_rename(2) ? 4u : 0u) | (probe ? 8u : 0u);
+}
+
+// Rescan the loaded table when it (or the language) is new. False while no
+// settled table is loaded.
+bool ren_scan(unsigned active) {
+    if (bus_read_u16(kRenManager) != 0u) return false;
+    const uint32_t lang = bus_read_u32(kRenManager + 8u);
+    if (bus_read_u32(kRenManager + 4u) != lang) return false;
+    const uint32_t file = bus_read_u32(kRenManager + 0x0Cu);
+    if (file < 0x02000000u || file > 0x023E0000u) return false;
+    if (bus_read_u32(file) != 0x474E414Cu || bus_read_u32(file + 8u) != file + 0x0Cu)
+        return false;
+    if (file != g_ren_file || lang != g_ren_lang) {
+        std::memset(g_ren_hit, 0, sizeof g_ren_hit);
+        char src[512], dst[768];
+        for (uint32_t id = 0; id < kRenIds; ++id) {
+            const uint32_t at = bus_read_u32(file + 0x0Cu + id * 4u);
+            if (at < file + 0x2FECu || at >= file + 0x20000u) continue;
+            size_t k = 0;
+            for (; k < sizeof src - 1; ++k) {
+                src[k] = (char)bus_read_u8(at + (uint32_t)k);
+                if (!src[k]) break;
+            }
+            if (src[k]) continue;
+            for (int r = 0; r < kRenCount; ++r)
+                if (std::strstr(src, kRenRules[r].needle) &&
+                    ren_rewrite(src, lang, 1u << r, dst, sizeof dst))
+                    g_ren_hit[id] |= (uint8_t)(1u << r);
+        }
+        g_ren_file = file;
+        g_ren_lang = lang;
+        g_ren_logged = 0u;
+    }
+    if (active != g_ren_logged) {
+        g_ren_logged = active;
+        for (int r = 0; r < kRenCount; ++r) {
+            if (!(active & (1u << r))) continue;
+            int cnt = 0;
+            for (uint32_t id = 0; id < kRenIds; ++id)
+                if (g_ren_hit[id] & (1u << r)) ++cnt;
+            std::fprintf(stderr, "[lb_rename] \"%s\" -> \"%s\": %d string id(s) "
+                         "carry it (language %u, table 0x%08X)\n", kRenRules[r].needle,
+                         kRenRules[r].name, cnt, lang, file);
+        }
+        std::fflush(stderr);
+    }
+    return true;
+}
+
+// The rewritten copy of the string at `src`, in a scratch below the live stack
+// (the copy FUN_020F1C88 makes is immediate), or 0 to leave the text alone.
+uint32_t ren_supply(uint32_t src, unsigned mask) {
+    char in[512], out[768];
+    size_t k = 0;
+    for (; k < sizeof in - 1; ++k) {
+        in[k] = (char)bus_read_u8(src + (uint32_t)k);
+        if (!in[k]) break;
+    }
+    if (in[k] || !ren_rewrite(in, g_ren_lang, mask, out, sizeof out)) return 0u;
+    const uint32_t sp = g_cpu.R[13];
+    const uint32_t at = (sp - 0x800u) & ~3u;
+    const bool dtcm = (at >> 14) == (0x027E0000u >> 14) && (at & 0x3FFFu) >= 0x1000u;
+    const bool ram = at >= 0x02010000u && sp < 0x02400000u;
+    if (!dtcm && !ram) {
+        if (g_ren_skips++ < 4)
+            std::fprintf(stderr, "[lb_rename] no room below sp 0x%08X; text left\n", sp);
+        return 0u;
+    }
+    const size_t len = std::strlen(out);
+    for (size_t i = 0; i <= len; ++i) bus_write_u8(at + (uint32_t)i, (uint8_t)out[i]);
+    static unsigned shown = 0;
+    if (shown++ < 6) {
+        std::fprintf(stderr, "[lb_rename] text supplied: \"%.60s\" -> \"%.60s\"\n", in, out);
+        std::fflush(stderr);
+    }
+    return at;
+}
+
 void string_from_id_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kStringFromId);
     const int played = lb_demo_play_oppname();
@@ -4255,6 +4415,9 @@ void string_from_id_override(void) {
                          (unsigned)g_cpu.R[1]);
             std::fflush(stderr);
             if (text) {
+                if (const unsigned am = ren_active_mask())
+                    if (ren_scan(am))
+                        if (const uint32_t r = ren_supply(text, am)) text = r;
                 // FUN_020F1C88(dest, text), returning to FUN_0203E1D4's caller.
                 g_cpu.R[1] = text;
                 g_cpu.R[15] = kStringAssign;
@@ -4262,6 +4425,18 @@ void string_from_id_override(void) {
                 return;
             }
             g_cpu.R[1] = (uint32_t)id;
+        }
+    }
+    if (const unsigned am = ren_active_mask()) {
+        const uint32_t id = g_cpu.R[1];
+        if (id < kRenIds && ren_scan(am) && (g_ren_hit[id] & am)) {
+            const uint32_t at = loc_text_addr(id);
+            if (const uint32_t r = at ? ren_supply(at, am) : 0u) {
+                g_cpu.R[1] = r;
+                g_cpu.R[15] = kStringAssign;
+                runtime_dispatch_with_exchange(kStringAssign);
+                return;
+            }
         }
     }
     if (original) original();
@@ -4905,6 +5080,12 @@ extern "C" int lb_net_local_hero(void) {
         const unsigned bp = bus_read_u16(a);
         if (bp > 0u && bp < 182u) return (int)bp;
     }
+    // docs/427: a Team Builder (Custom) army leaves both of those without a
+    // hero -- an online chat went out as "hero -1" from a player fielding the
+    // Space Criminal Leader. The army record's hero slot has it.
+    LbTeam team;
+    if (lb_teams_read_save(&team, nullptr) && team.pick[0] > 0u && team.pick[0] < 182u)
+        return (int)team.pick[0];
     return -1;
 }
 

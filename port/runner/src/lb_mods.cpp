@@ -609,6 +609,57 @@ uint16_t header_crc(const uint8_t* h) {
 
 }  // namespace
 
+// docs/426: a decompressed BP/Entities.ebp ("BPNZ...") from a .nds (any mod) or
+// from an Entities.ebp, raw or in the game's COMP wrapper. Empty `why` on
+// success; otherwise what failed.
+bool lb_mods_blueprint_file(const char* path, std::vector<uint8_t>* out,
+                            std::string* why) {
+    std::vector<uint8_t> b;
+    FILE* f = path ? std::fopen(path, "rb") : nullptr;
+    if (!f) { *why = "cannot open that file"; return false; }
+    uint8_t magic[4] = {0, 0, 0, 0};
+    const size_t got = std::fread(magic, 1, 4, f);
+    std::fclose(f);
+    if (got == 4 && (std::memcmp(magic, "PMOC", 4) == 0 ||
+                     std::memcmp(magic, "BPNZ", 4) == 0)) {
+        f = std::fopen(path, "rb");
+        if (!f) { *why = "cannot open that file"; return false; }
+        std::fseek(f, 0, SEEK_END);
+        const long n = std::ftell(f);
+        std::fseek(f, 0, SEEK_SET);
+        if (n <= 0 || n > (8 << 20)) { std::fclose(f); *why = "wrong size for a blueprint"; return false; }
+        b.resize((size_t)n);
+        const bool ok = std::fread(b.data(), 1, b.size(), f) == b.size();
+        std::fclose(f);
+        if (!ok) { *why = "read failed"; return false; }
+    } else {
+        RomFile rom;
+        if (!rom.open(path) || !rom.read("BP/Entities.ebp", &b)) {
+            *why = "not a ROM with BP/Entities.ebp, nor an Entities.ebp";
+            return false;
+        }
+    }
+    if (!comp_unwrap(&b) || b.size() < 4 || std::memcmp(b.data(), "BPNZ", 4) != 0) {
+        *why = "that is not a LEGO Battles Entities.ebp";
+        return false;
+    }
+    *out = std::move(b);
+    return true;
+}
+
+// The player's own ROM's blueprint file, decompressed.
+extern "C" int lb_rom_read(const char* path, unsigned char* out, int cap);
+bool lb_mods_blueprint_own(std::vector<uint8_t>* out) {
+    const int n = lb_rom_read("BP/Entities.ebp", nullptr, 0);
+    if (n <= 0 || n > (8 << 20)) return false;
+    std::vector<uint8_t> b((size_t)n);
+    if (lb_rom_read("BP/Entities.ebp", b.data(), n) != n) return false;
+    if (!comp_unwrap(&b) || b.size() < 4 || std::memcmp(b.data(), "BPNZ", 4) != 0)
+        return false;
+    *out = std::move(b);
+    return true;
+}
+
 // Called with the player's cartridge before it reaches the emulator (main.cpp,
 // apply_hooks.py docs/391). Adds the mods folder's maps; leaves the image
 // untouched when there are none. Returns the number of maps added.
