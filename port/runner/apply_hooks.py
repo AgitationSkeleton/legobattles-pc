@@ -7487,6 +7487,8 @@ def apply(runner_dir, imgui_dir):
           "src/lb_relay.cpp",
           # The notification sound (docs/427).
           "src/lb_sfx.cpp",
+          # The picture of a match for the Discord log (docs/428).
+          "src/lb_matchpic.cpp",
           # The first-run setup (docs/394).
           "src/lb_setup.cpp",
           "%s/imgui.cpp" % imgui,

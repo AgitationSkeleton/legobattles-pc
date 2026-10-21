@@ -761,6 +761,34 @@ extern "C" int lb_rom_read(const char* path, unsigned char* out, int cap) {
     return (int)v.size();
 }
 
+// docs/428: the same, with the game's COMP wrapper removed (maps' minimaps).
+extern "C" int lb_rom_read_unwrapped(const char* path, unsigned char* out, int cap) {
+    std::vector<uint8_t> v;
+    if (!path || !nitro_file(path, &v) || !comp_unwrap(&v)) return -1;
+    const size_t n = cap > 0 ? std::min(v.size(), (size_t)cap) : 0u;
+    if (out && n) std::memcpy(out, v.data(), n);
+    return (int)v.size();
+}
+
+// docs/428: one blueprint's 24x24 battle-HUD icon as RGBA32 (0 = clear), for
+// the match picture. 0 when the atlas is not built yet or has no such icon.
+extern "C" int lb_teams_hud_icon_rgba(int bp, unsigned int out[576]) {
+    if (bp < 0 || bp >= 182 || !build_hud_atlas() || !g_hud_has[bp]) return 0;
+    const int x0 = (bp % 16) * 24, y0 = (bp / 16) * 24;
+    for (int y = 0; y < 24; ++y)
+        for (int x = 0; x < 24; ++x)
+            out[y * 24 + x] = g_hud_rgba[(size_t)(y0 + y) * kHudW + (x0 + x)];
+    return 1;
+}
+
+// docs/428: this machine's own ban bits (the host's rules, on the host).
+extern "C" int lb_teams_local_bans(unsigned char* bits, int n) {
+    if (!bits || n < 1) return 0;
+    std::lock_guard<std::mutex> lk(g_rules_mu);
+    for (int i = 0; i < n; ++i) bits[i] = i < kBanBytes ? g_bans_local[i] : 0;
+    return 1;
+}
+
 extern "C" int lb_teams_slot_count(int slot) {
     if (slot < 0 || slot >= LB_TEAM_SLOTS) return 0;
     int n = 0;

@@ -3888,7 +3888,11 @@ void roster_build_override(void) {
         unsigned char r[20];
         for (uint32_t i = 0; i < 20u; ++i) r[i] = (unsigned char)bus_read_u8(rec + i);
         char why[192];
-        if (lb_teams_enforce_bans(r, why, (int)sizeof why)) {
+        const bool banned_swap = lb_teams_enforce_bans(r, why, (int)sizeof why) != 0;
+        // docs/428: what this player fields, for the match picture (after the
+        // bans, so a King swap is what it shows). Observer only.
+        lb_matchpic_note_player((int)bus_read_u8(g_cpu.R[0] + 0x30u) - 0x84, r);
+        if (banned_swap) {
             for (uint32_t i = 0; i < 20u; ++i) bus_write_u8(rec + i, r[i]);
             std::fprintf(stderr, "[lb_bans] player %d switched to King at the "
                          "start: banned %s\n",
@@ -8599,6 +8603,7 @@ static void apply_plantation_name(void) {
 // file still loading, is reported as the stem itself. Observer only.
 namespace {
 char g_map_name[64] = "";
+char g_map_stem[32] = "";   // docs/428: the loader's stem, for the minimap files
 unsigned g_map_gen = 0;
 bool g_map_is_mod = false;   // docs/410: the level is a mods-folder map ("z/NN")
 
@@ -8617,6 +8622,7 @@ void map_load_observer(void) {
     }
     if (stem[0]) {
         std::snprintf(g_map_name, sizeof g_map_name, "%s", stem);
+        std::snprintf(g_map_stem, sizeof g_map_stem, "%s", stem);
         g_map_is_mod = stem[0] == 'z' && stem[1] == '/';   // docs/410
         if (stem[0] == 'z' && stem[1] == '/') {
             const int k = std::atoi(stem + 2) - 1;
@@ -8651,6 +8657,7 @@ void map_load_observer(void) {
 }  // namespace
 
 extern "C" const char* lb_level_map_name(void) { return g_map_name; }
+extern "C" const char* lb_level_map_stem(void) { return g_map_stem; }   // docs/428
 extern "C" unsigned lb_level_map_gen(void) { return g_map_gen; }
 extern "C" int lb_level_is_mod(void) { return g_map_is_mod ? 1 : 0; }   // docs/410
 

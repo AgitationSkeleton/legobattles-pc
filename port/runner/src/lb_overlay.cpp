@@ -333,6 +333,7 @@ struct Settings {
     // file on the default server is moved to Both (it was the old default).
     bool master_choice = false;
     bool master_https = true;
+    bool match_picture = true;     // docs/428
     // docs/420: a lobby's mod map this machine lacks is fetched from the archive.
     bool fetch_maps = true;
     bool fast_link = true;      // docs/423: the host-level WH
@@ -636,6 +637,8 @@ extern "C" void lb_settings_save(void) {
                   g_set.master_choice ? "true" : "false"); o += buf;   // docs/424
     std::snprintf(buf, sizeof buf, "  \"master_https\": %s,\n",
                   g_set.master_https ? "true" : "false"); o += buf;   // docs/419
+    std::snprintf(buf, sizeof buf, "  \"match_picture\": %s,\n",
+                  g_set.match_picture ? "true" : "false"); o += buf;   // docs/428
     std::snprintf(buf, sizeof buf, "  \"fetch_maps\": %s,\n",
                   g_set.fetch_maps ? "true" : "false"); o += buf;   // docs/420
     std::snprintf(buf, sizeof buf, "  \"fast_link\": %s,\n",
@@ -746,6 +749,7 @@ extern "C" void lb_settings_load(void) {
     json_get_bool(s, "master_both", &g_set.master_both);     // docs/419
     json_get_bool(s, "master_choice", &g_set.master_choice); // docs/424
     json_get_bool(s, "master_https", &g_set.master_https);   // docs/419
+    json_get_bool(s, "match_picture", &g_set.match_picture);   // docs/428
     json_get_bool(s, "fetch_maps", &g_set.fetch_maps);       // docs/420
     json_get_bool(s, "fast_link", &g_set.fast_link);         // docs/423
     json_get_int(s, "master_port", &g_set.master_port);
@@ -1974,6 +1978,10 @@ void tab_multiplayer() {
         help("Talks to the master server over an encrypted connection when\n"
              "it offers one (port 443 for a server on port 80), and over\n"
              "plain HTTP when it does not.");
+        ImGui::Checkbox("Post a picture of my matches to the lobby log",
+                        &g_set.match_picture);
+        help("When you host, a picture of the match (teams, units, map and\n"
+             "banned units) is sent to the master server for its Discord log.");
         ImGui::Checkbox("Fetch a host's mod map I don't have", &g_set.fetch_maps);
         help("When a host picks a mod map that is not in your mods folder,\n"
              "look for it by name in the community map archive (GitHub) and\n"
@@ -5798,6 +5806,7 @@ extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
     lb_field_bench_tick();  /* legobattles-decomp: docs/325 phase 1 */
     lb_map_dump_tick();
     lb_sfx_tick();   // docs/427: decode the chosen notification sound
+    lb_matchpic_tick();   // docs/428: LB_MATCHPIC_TEST only
 
     if (g_ready) save_cache_tick();   // docs/388: the save's recent armies
 
@@ -6463,6 +6472,7 @@ extern "C" int lb_setting_swear_filter(void) {
 extern "C" int lb_setting_chat_toasts(void) { return g_set.chat_toasts ? 1 : 0; }
 extern "C" int lb_setting_fetch_maps(void) { return g_set.fetch_maps ? 1 : 0; }   // docs/420
 extern "C" int lb_setting_fast_link(void) { return g_set.fast_link ? 1 : 0; }     // docs/423
+extern "C" int lb_setting_match_picture(void) { return g_set.match_picture ? 1 : 0; }   // docs/428
 // docs/419. LB_MASTER_HTTPS=0|1 forces it (a test aid).
 extern "C" int lb_setting_master_https(void) {
     static int forced = -2;

@@ -40,13 +40,15 @@
 // All of it is kept by ONE Durable Object, so a list is always consistent.
 
 import { DurableObject } from 'cloudflare:workers';
-import { discord, plain, lasted, settingsText } from './discord.js';
+import { discord, discordImage, plain, lasted, settingsText } from './discord.js';
 
 const TTL_MS = 90 * 1000;
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 const CODE_LENGTH = 4;
 const MAX_NAME = 24;
 const MAX_BODY = 8192;
+const MAX_IMAGE_BYTES = 400 * 1024;                     // docs/428
+const MAX_IMAGE_BODY = Math.ceil(MAX_IMAGE_BYTES * 4 / 3) + 4096;
 const NAME_OK = /^[\w \-'.!?]{1,24}$/u;
 
 function json(status, payload) {
@@ -260,7 +262,9 @@ export class Directory extends DurableObject {
     let body;
     try {
       const text = await request.text();
-      if (!text || text.length > MAX_BODY) throw new Error();
+      // docs/428: a match picture is a base64 PNG, far past the usual limit.
+      const limit = path === '/match_image' ? MAX_IMAGE_BODY : MAX_BODY;
+      if (!text || text.length > limit) throw new Error();
       body = JSON.parse(text);
       if (!body || typeof body !== 'object') throw new Error();
     } catch {
@@ -275,8 +279,38 @@ export class Directory extends DurableObject {
       case '/leave': return this.leave(body, now);
       case '/punch': return this.punch(body, peer, now);
       case '/poll': return this.poll(body, now);
+      case '/match_image': return this.matchImage(body, now);
       default: return json(404, { ok: false, error: 'no such endpoint' });
     }
+  }
+
+  // docs/428: the host's picture of its match (rosters, the map's Free Play
+  // preview, the bans), drawn by the game from its own ROM. One per match,
+  // posted as an image to every webhook. The server only checks that it is a
+  // PNG of a sensible size; it never sees game data otherwise.
+  async matchImage(body, now) {
+    const l = this.lobbies.get(String(body.code || '').toUpperCase());
+    if (!l || l.token !== String(body.token || ''))
+      return json(404, { ok: false, error: 'unknown lobby' });
+    if (l.image_posted) return json(409, { ok: false, error: 'already posted for this match' });
+    let png;
+    try {
+      const bin = atob(String(body.png || ''));
+      png = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; ++i) png[i] = bin.charCodeAt(i);
+    } catch {
+      return json(400, { ok: false, error: 'png is not base64' });
+    }
+    const sig = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    if (png.length < 64 || png.length > MAX_IMAGE_BYTES || sig.some((b, i) => png[i] !== b))
+      return json(400, { ok: false, error: 'not a PNG of an accepted size' });
+    l.image_posted = true;
+    await this.save();
+    const map = l.map_name || cleanName(body.map_name, '');
+    discordImage(this.env, this.ctx,
+                 `🗺️ **${plain(l.host_name)}**'s match` + (map ? ` on **${plain(map)}**` : '') + '.',
+                 png);
+    return json(200, { ok: true });
   }
 
   async announce(body, peer, now) {
@@ -328,7 +362,10 @@ export class Directory extends DurableObject {
       this.log(`▶️ **${plain(l.host_name)}**'s lobby \`${l.code}\` started a match` +
                (l.map_name ? ` on **${plain(l.map_name)}**` : '') + `: ${who}.`);
     }
-    if (state === 'open' && l.state !== 'open') l.state = 'open';   // back to the lobby
+    if (state === 'open' && l.state !== 'open') {   // back to the lobby
+      l.state = 'open';
+      l.image_posted = false;   // docs/428: the next match gets its own picture
+    }
     await this.save();
     return json(200, { ok: true, ttl: TTL_MS / 1000 });
   }

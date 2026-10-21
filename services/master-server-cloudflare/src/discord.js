@@ -40,6 +40,23 @@ export function webhooks(env) {
   return env ? [env.DISCORD_WEBHOOK, env.DISCORD_WEBHOOK_2].filter(Boolean) : [];
 }
 
+// docs/428: a message with a picture (a PNG's bytes), to every webhook: a
+// multipart post, the file shown by an embed as attachment://match.png.
+export function discordImage(env, ctx, text, png) {
+  for (const url of webhooks(env)) {
+    const form = new FormData();
+    form.append('payload_json', JSON.stringify({
+      username: 'LEGO Battles server',
+      content: String(text).slice(0, 1900),
+      embeds: [{ image: { url: 'attachment://match.png' } }],
+      allowed_mentions: { parse: [] },
+    }));
+    form.append('files[0]', new Blob([png], { type: 'image/png' }), 'match.png');
+    const send = fetch(url, { method: 'POST', body: form }).catch(() => {});
+    if (ctx && ctx.waitUntil) ctx.waitUntil(send);
+  }
+}
+
 // One message. ctx: whatever can keep the Durable Object running until it is
 // sent -- its waitUntil.
 export function discord(env, ctx, text) {

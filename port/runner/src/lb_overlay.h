@@ -539,6 +539,16 @@ const char* lb_sfx_choice_name(int i);
 void lb_sfx_tick(void);
 void lb_sfx_preview(void);
 void lb_sfx_notify(void);              /* at most once per 300 ms */
+// docs/428: the picture of a match for the master server's Discord log
+// (lb_matchpic.cpp). Roster hook -> note_player; lb_net -> on_playing.
+void lb_matchpic_note_player(int player, const unsigned char rec[20]);
+void lb_matchpic_on_playing(void);     /* host only, once per match */
+void lb_matchpic_tick(void);           /* LB_MATCHPIC_TEST */
+int  lb_setting_match_picture(void);
+const char* lb_level_map_stem(void);   /* "mpNN" / "z/NN" / campaign stem */
+int  lb_rom_read_unwrapped(const char* path, unsigned char* out, int cap);
+int  lb_teams_hud_icon_rgba(int blueprint, unsigned int out[576]);
+int  lb_teams_local_bans(unsigned char* bits, int n);
 // docs/415: online chat and the swear filter (lb_chat.cpp). The bridge takes
 // the datagrams to send and hands over the ones received; the overlay opens,
 // closes and draws the chat box and toasts.

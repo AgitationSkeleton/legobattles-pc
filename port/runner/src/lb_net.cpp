@@ -1403,6 +1403,56 @@ extern "C" int lb_net_profile_name(char* out, int cap) {
     return (int)std::strlen(out);
 }
 
+// docs/428: POST /match_image {code, token, png (base64), map_name}, once, from
+// a worker thread, to the host's listing on each master server it holds (the
+// second, "Both", with its own code and token). The server takes one per match.
+extern "C" void lb_net_post_match_image(const unsigned char* png, size_t n,
+                                        const char* map_name) {
+    if (!png || n == 0) return;
+    static const char kB64[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string b64;
+    b64.reserve((n + 2) / 3 * 4);
+    for (size_t i = 0; i < n; i += 3) {
+        const unsigned v = ((unsigned)png[i] << 16) |
+                           ((i + 1 < n ? png[i + 1] : 0u) << 8) |
+                           (i + 2 < n ? png[i + 2] : 0u);
+        b64 += kB64[(v >> 18) & 63];
+        b64 += kB64[(v >> 12) & 63];
+        b64 += i + 1 < n ? kB64[(v >> 6) & 63] : '=';
+        b64 += i + 2 < n ? kB64[v & 63] : '=';
+    }
+    struct Target { std::string server, code, token; int port; };
+    std::vector<Target> targets;
+    {
+        std::lock_guard<std::mutex> lock(g_host_mutex);
+        if (!g_host_code.empty())
+            targets.push_back({g_host_server, g_host_code, g_host_token, g_host_port});
+        if (!g_host2_code.empty())
+            targets.push_back({g_host2_server, g_host2_code, g_host2_token, g_host2_port});
+    }
+    if (targets.empty()) {
+        std::fprintf(stderr, "[lb_matchpic] no listing to post the picture to\n");
+        return;
+    }
+    const std::string name = map_name ? map_name : "";
+    std::thread([targets, b64, name]() {
+        for (const Target& t : targets) {
+            const std::string body = "{\"code\":" + json_str(t.code.c_str()) +
+                ",\"token\":" + json_str(t.token.c_str()) +
+                ",\"map_name\":" + json_str(name.c_str()) +
+                ",\"png\":\"" + b64 + "\"}";
+            std::string error;
+            const std::string reply =
+                http_request(t.server, t.port, "POST", "/match_image", body, &error);
+            std::fprintf(stderr, "[lb_matchpic] posted %zu bytes to %s:%d: %s\n",
+                         body.size(), t.server.c_str(), t.port,
+                         error.empty() ? reply.substr(0, 80).c_str() : error.c_str());
+            std::fflush(stderr);
+        }
+    }).detach();
+}
+
 // ── Automatic hosting and joining ─────────────────────────────────────────
 //
 // Everything here runs on the thread that calls lb_net_auto_tick -- the
@@ -1746,12 +1796,16 @@ extern "C" void lb_net_auto_tick(const char* server, int port,
                     if (!g_auto_play_at) g_auto_play_at = now_ms + 20000;
                     const bool fresh = lb_level_map_gen() != g_auto_map_gen;
                     if (fresh || now_ms >= g_auto_play_at) {
-                        std::lock_guard<std::mutex> lock(g_host_mutex);
-                        g_host_state = "playing";
-                        g_host_map = fresh ? lb_level_map_name() : "";
-                        g_last_beat = 0;
-                        std::fprintf(stderr, "[lb_net] match under way on "
-                                     "\"%s\"\n", g_host_map.c_str());
+                        {
+                            std::lock_guard<std::mutex> lock(g_host_mutex);
+                            g_host_state = "playing";
+                            g_host_map = fresh ? lb_level_map_name() : "";
+                            g_last_beat = 0;
+                            std::fprintf(stderr, "[lb_net] match under way on "
+                                         "\"%s\"\n", g_host_map.c_str());
+                        }
+                        // docs/428: one picture of the match, host only.
+                        lb_matchpic_on_playing();
                     }
                 }
             } else {
