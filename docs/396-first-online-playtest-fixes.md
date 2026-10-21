@@ -197,7 +197,7 @@ The profile-name keyboard (`User::CreateNewProfile`) and the cheat-code one
 - `LB_TEST_TYPE` is a test aid that types a string the first time a keyboard
   comes up.
 
-**Verified:** "Vio" typed into the profile-name keyboard. The game
+**Verified:** "Tester2" typed into the profile-name keyboard. The game
 capitalised the first letter, as it does for taps.
 
 ## Make All Builders The Same: a choice of builder

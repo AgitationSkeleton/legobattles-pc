@@ -179,7 +179,7 @@ std::string g_status = "idle";
 // event and published x = 0 to the touch slot for every tap in the demo --
 // sending every one of them to the far-left column. Measured: a replay of the
 // menu route selected nothing and ended on the name-entry keyboard, having
-// tapped an empty profile slot instead of "Max".
+// tapped an empty profile slot instead of "Tester".
 int g_last_down = -1, g_last_x = -1, g_last_y = -1;
 int g_last_ext = INT32_MIN;
 int g_last_ext_y = INT32_MIN;               // docs/383

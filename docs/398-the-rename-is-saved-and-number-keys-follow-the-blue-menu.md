@@ -27,9 +27,9 @@ The checksum is still unknown (docs/97, docs/176), so a forged file would be ref
 
 **Verified:**
 
-- Run `t398ren` renamed Max to Vio and logged `the game saved the profile (result 0)`.
+- Run `t398ren` renamed Tester to Tester2 and logged `the game saved the profile (result 0)`.
 - The save changed in its record head, bytes `0x10..0x16`.
-- Run `t398ren2` booted from that save: the profile name in RAM is `56 69 6F` ("Vio").
+- Run `t398ren2` booted from that save: the profile name in RAM is the new name.
 
 ## Number keys follow the blue menu
 

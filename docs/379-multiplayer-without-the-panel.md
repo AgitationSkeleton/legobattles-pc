@@ -92,7 +92,7 @@ remote bind prompts); two PCs that were given the same
   the same two-instance route (mp-mp379m):
   * **The master server logged:**
 
-        ANNOUNCE  41W5  LEGO Battles hosted by Max at 127.0.0.1:28900  (1/3)
+        ANNOUNCE  41W5  LEGO Battles hosted by Tester at 127.0.0.1:28900  (1/3)
         CLOSE     lobby 41W5 closed by its host
 
   * **The host logged:** `the game opened a lobby; advertising it on UDP
@@ -101,7 +101,7 @@ remote bind prompts); two PCs that were given the same
   * **The joiner logged:** `Join screen: bridge pointed at lobby 41W5
     (127.0.0.1:28900)`.
   * **Both** then reached the battle, IN SYNC in 3 of 3 samples.
-  * **What this shows:** "Max" is the seeded save's profile (defect 1). The
+  * **What this shows:** "Tester" is the seeded save's profile (defect 1). The
     port is the real bridge port, not 28700 (defect 3). Nobody pressed a
     panel button (defects 2 and 3).
 

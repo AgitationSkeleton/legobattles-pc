@@ -41,7 +41,7 @@ Three things that cost runs to learn:
 
 * **These menus need two taps.** The first selects, the second confirms. The
   profile screen needs the slot ACTIVELY selected before "Use" does anything,
-  and the old route tapped four pixels above the "Max" bar — so the screen
+  and the old route tapped four pixels above the "Tester" bar — so the screen
   looked selected (it is highlighted by default) and the button stayed inert.
 * **Touch does work.** That was in real doubt after the profile-name keyboard
   ignored it completely. Tapping the "Empty" slot and watching the highlight
@@ -54,7 +54,7 @@ Three things that cost runs to learn:
 The verified route, all measured:
 
     title           TOUCH 128, 96
-    profile "Max"   TOUCH 127, 75      select
+    profile "Tester"   TOUCH 127, 75      select
     profile Use     TOUCH 205,169
     Single Player   TOUCH  89, 52
     Free Play       TOUCH 171, 91      twice: select, then enter

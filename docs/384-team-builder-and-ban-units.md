@@ -268,7 +268,7 @@ the next.
 
 ## Verification
 
-* **Team Builder at the main menu** (profile "Max" loaded, run t384b,
+* **Team Builder at the main menu** (profile "Tester" loaded, run t384b,
   `exp-t384b/win/teambuilder-vs-armyscreen.png`):
   - All 160 heads decoded from the player's ROM, and the unit table agrees
     with the blueprints in RAM.

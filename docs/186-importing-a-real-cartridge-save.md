@@ -26,7 +26,7 @@ and are immediately overwritten — scratch, not part of the tag.)
 
 So this ROM expects **`AFE`**. The cartridge save carried **`AFN`**, from a build
 whose constant differs. Rewriting those three bytes and changing nothing else
-makes the same file load as profile "Max".
+makes the same file load as profile "Tester".
 
 **That also proves the record checksum does not cover the tag.** Each record
 carries its own checksum at +0x000 (docs/181), and both survived the edit

@@ -10,7 +10,7 @@ derived from the console's region at runtime.
 That matters when importing a save from a real cartridge: a save written by a
 build whose constant differs (e.g. `AFN`) is REJECTED by a build expecting `AFE`,
 and the game silently shows empty profile slots. Verified both ways -- the same
-save loads as profile "Max" once the tag is rewritten, with nothing else changed,
+save loads as profile "Tester" once the tag is rewritten, with nothing else changed,
 which also shows the checksum does not cover the tag.
 
     python tools/lb_save.py inspect <file.sav>

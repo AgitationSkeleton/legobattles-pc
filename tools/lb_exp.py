@@ -170,14 +170,14 @@ SEED_SAVE = os.path.join(ROOT, "saves", "lego_battles.sav")
 #
 #   * these menus need TWO taps -- the first selects, the second confirms. The
 #     profile screen needs the slot ACTIVELY selected before "Use" does
-#     anything, which is why tapping (128, 60), four pixels above the "Max"
+#     anything, which is why tapping (128, 60), four pixels above the "Tester"
 #     bar, left the screen looking selected and the button inert.
 #   * touch DOES work here. That was in doubt after the name keyboard ignored
 #     it entirely; tapping the "Empty" slot and watching the highlight move
 #     proved the mapping was right and the coordinates were not.
 ROUTE = [
     (128, 96, 3.0),    # title: touch to start
-    (127, 75, 2.5),    # profile: select "Max" (the seeded save's profile)
+    (127, 75, 2.5),    # profile: select "Tester" (the seeded save's profile)
     (205, 169, 3.5),   # profile: Use
     (89, 52, 3.0),     # main menu: Single Player
     (171, 91, 2.5),    # single player: select Free Play

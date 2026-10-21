@@ -16,7 +16,7 @@ profile slots with no error at all.
 
 Verified: builds, the tab appears in the overlay tab bar, the overlay renders
 in a live battle with no crash, and the AFN->AFE transformation is the same one
-that produced the working seeded save the route loads profile "Max" from every
+that produced the working seeded save the route loads profile "Tester" from every
 run. NOT yet verified: the tab's own contents by eye -- driving an ImGui click
 from the harness did not land, so a human should open it once.
 

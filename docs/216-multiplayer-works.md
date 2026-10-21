@@ -48,9 +48,9 @@ Two taps, select then confirm, like every menu in this game.
 | screen | host (instance 0) | client (instance 1) |
 |---|---|---|
 | Multiplayer | **Host**, the left icon at (72, 84) | **Join**, the right icon at (173, 84) |
-| | map select → rules → army → start | "Join Game" lists `Max` |
-| Game Lobby | `Max` red | taps the entry, joins |
-| | `Max` red + `Max` blue, "Waiting..." | both listed, "Ready" |
+| | map select → rules → army → start | "Join Game" lists `Tester` |
+| Game Lobby | `Tester` red | taps the entry, joins |
+| | `Tester` red + `Tester` blue, "Waiting..." | both listed, "Ready" |
 | minifig select | "Waiting..." | "Ready" |
 | **battle** | red base and units | blue base and units |
 
@@ -189,7 +189,7 @@ inst1  [lb_net] self-test: join first lobby -> Peer set to 127.0.0.1:28900
 ```
 
 and `screenshots/mp-ms3/i1-final.png` is the client's **Join Game** screen
-listing `Max`. The client was given **no address** — only the directory's.
+listing `Tester`. The client was given **no address** — only the directory's.
 
 Three things had to change for that to be true rather than nearly true:
 
@@ -262,8 +262,8 @@ nothing there until index 11.
 
 ### What the captures prove at each stage
 
-`screenshots/mp-hj8/i0-final.png` is the host's Game Lobby with `Max` red AND
-`Max` blue, the blue one check-marked, both slots filled, and Continue offered.
+`screenshots/mp-hj8/i0-final.png` is the host's Game Lobby with `Tester` red AND
+`Tester` blue, the blue one check-marked, both slots filled, and Continue offered.
 `i1-final.png` is the client's view of the same lobby with both players
 check-marked and its own button reading "Not Ready" -- which means it IS ready.
 

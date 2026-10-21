@@ -54,13 +54,23 @@ FORBIDDEN = re.compile(r"(\.nds|\.sav|\.bin|\.rom|\.lbdelta|\.sqlite3)$|(^|/)out
 # for an entity's team, and "session" its word for a recording.
 LEAKS = re.compile(
     r"Claude_RTSGames|ADMINI~1|\\Users\\Administrator|/Users/Administrator|"
-    r"\b[A-Z]:[\\/](Users|RETools|LSW2Project|Claude)|rangerquake|AlfaBlastr|"
+    r"\b[A-Z]:[\\/](Users|RETools|LSW2Project|Claude)|"
     r"\bthe (project )?owner\b ?(asked|said|saw|wrote|reported|photographed|noticed)|"
     r"\bthe owner, 20\d\d|\bthe owner:\s|\bowner'?s? (replay|route|request|report|playtest|screenshot|"
     r"monitor|surface|setup|demo|machine|desktop)|\bplaytest item|\bowner item|"
     r"\bmandate|dummy (head|screen|HDMI|display)|\bthe user's\b|"
     r"(?-i:(?<![A-Z_])SESSION[-_]LOG)|docs-ledger|ledger row|audit-2026-09-22|Written for: the project owner",
     re.I)
+# The owner's own names and account must never be published either. They are
+# kept OUTSIDE every repository (lb_private_names.txt beside this checkout,
+# one per line), so that this file -- which is published -- never carries them.
+_PRIVATE_NAMES = os.path.join(os.path.dirname(ROOT), "lb_private_names.txt")
+PRIVATE = None
+if os.path.exists(_PRIVATE_NAMES):
+    with open(_PRIVATE_NAMES, encoding="utf-8") as _fh:
+        _names = [re.escape(n.strip()) for n in _fh if n.strip()]
+    if _names:
+        PRIVATE = re.compile(r"\b(" + "|".join(_names) + r")\b", re.I)
 TEXT = re.compile(r"\.(md|txt|py|sh|ps1|bat|cmd|c|cc|cpp|h|hpp|inc|js|mjs|json|jsonc|"
                   r"toml|yml|yaml|tsv|csv|java|cmake)$|(^|/)(CMakeLists\.txt|\.gitignore)$", re.I)
 TEMPLATE = os.path.join(ROOT, "publish", "legobattles-pc")
@@ -127,6 +137,8 @@ def main():
                 for k, line in enumerate(fh, 1):
                     if LEAKS.search(line) and "lb_publish_pc.py" not in rel:
                         leaks.append("%s:%d  %s" % (rel, k, line.strip()[:120]))
+                    elif PRIVATE is not None and PRIVATE.search(line):
+                        leaks.append("%s:%d  (a private name)" % (rel, k))
     if bad:
         print("REFUSING: game-like files in the export:\n  " + "\n  ".join(bad), file=sys.stderr)
         return 1
