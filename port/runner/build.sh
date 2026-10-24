@@ -79,6 +79,10 @@ cp -p "$W/port/runner/src/lb_relay.cpp" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_sfx.cpp" "$TREE/runner/src/"
 # The picture of a match for the Discord log (docs/428).
 cp -p "$W/port/runner/src/lb_matchpic.cpp" "$TREE/runner/src/"
+# Map bans, per-map unit bans, Random maps, ban presets (docs/429).
+cp -p "$W/port/runner/src/lb_mapbans.cpp" "$TREE/runner/src/"
+# Discord Rich Presence over the local IPC pipe (docs/430, SG-0020).
+cp -p "$W/port/runner/src/lb_discord.cpp" "$TREE/runner/src/"
 # The first-run setup: the player's own ROM, Europe or USA (docs/394).
 cp -p "$W/port/runner/src/lb_setup.cpp" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_music.cpp" "$TREE/runner/src/"

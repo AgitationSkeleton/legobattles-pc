@@ -146,6 +146,10 @@ void        lb_request_profile_rename(const char* name);
 // the request at its between-frames safe point (lb_take_game_reset) and runs
 // the power-on boot, then lb_port_on_guest_reset (lb_patches.cpp).
 void        lb_request_game_reset(void);
+void        lb_request_swap_screens(void);   // SG-0012
+int         lb_screens_swapped(void);
+int         lb_setting_skip_intro(void);   // SG-0016
+int         lb_boot_skip_wanted(void);     // SG-0016, lb_patches.cpp
 int         lb_take_game_reset(void);
 void        lb_port_on_guest_reset(void);
 // docs/396: typing on the game's keyboards (lb_patches.cpp). ch is a
@@ -429,6 +433,14 @@ void (*lb_dispatch_original(int cpu, unsigned int addr))(void);
 
 void lb_overlay_set_field_rect(int x, int y, int w, int h, int guest_width,
                                int guest_height);
+// BR-0010 / SG-0011: DS Vanilla's two screens, in WINDOW PIXELS. The layout
+// is computed here from the window and the Display tab's two size sliders
+// (top[] and bot[] are x, y, w, h); the rect that shows the touch screen is
+// published for the mouse -> touch mapping (the top one while the screens are
+// swapped), so one coordinate space serves drawing and clicks.
+void lb_overlay_vanilla_layout(int win_w, int win_h, int w0, int w1, int* top,
+                               int* bot);
+int  lb_overlay_touch_rect(int* x, int* y, int* w, int* h);   /* 0 until published */
 
 // How many of the guest's columns the window is actually SHOWING.
 //
@@ -543,6 +555,12 @@ void lb_sfx_notify(void);              /* at most once per 300 ms */
 // (lb_matchpic.cpp). Roster hook -> note_player; lb_net -> on_playing.
 void lb_matchpic_note_player(int player, const unsigned char rec[20]);
 void lb_matchpic_on_playing(void);     /* host only, once per match */
+/* SG-0020 (lb_discord.cpp): Discord Rich Presence, once per frame. */
+void lb_discord_tick(void);
+int  lb_setting_discord_status(void);
+int  lb_setting_discord_hero(void);
+/* SG-0019: names (one per line) of the teams the game decided won / lost. */
+int lb_matchpic_result(char* winners, int wcap, char* losers, int lcap);
 void lb_matchpic_tick(void);           /* LB_MATCHPIC_TEST */
 int  lb_setting_match_picture(void);
 const char* lb_level_map_stem(void);   /* "mpNN" / "z/NN" / campaign stem */
@@ -647,7 +665,46 @@ int          lb_teams_enemy_army(int choice, unsigned char rec[20]);
 void         lb_teams_set_bans(const unsigned char* bits, int nbytes);
 int          lb_teams_received_bans(unsigned char* bits, int nbytes,
                                     unsigned* from);
-int          lb_teams_enforce_bans(unsigned char rec[20], char* why, int cap);
+// Returns 0 (unchanged), 1 (a banned pick: the King army) or 2 (Random team
+// (tourney): `player` fields a seeded random team). docs/429.
+int          lb_teams_enforce_bans(unsigned char rec[20], char* why, int cap,
+                                   int player);
+const char*  lb_teams_loc_text(unsigned id);   /* the game's text, this language */
+int          lb_rules_fresh(void);             /* a host's rules arrived lately */
+// ---- docs/429: map bans, per-map unit bans, Random maps, ban presets
+// (src/lb_mapbans.cpp). Maps are named by tokens: "s5" (stock map 5) and
+// "h<16 hex>" (a mod map's content hash); a list is comma-separated, and
+// the units banned on some maps only are "bp:tok+tok;bp:tok".
+void lb_maps_set_local(const char* banned_maps, const char* unit_map_bans,
+                       const char* preset_maps, int preset_active,
+                       int tourney_team, int random_maps);
+int  lb_maps_count(void);
+int  lb_maps_entry(int i, char* token, int tcap, char* name, int ncap, int* players);
+int  lb_maps_list_has(const char* list, const char* token);
+void lb_maps_list_toggle(char* list, int cap, const char* token);
+int  lb_maps_umb_get(const char* umb, int bp, char* toks, int cap);
+void lb_maps_umb_set(char* umb, int cap, int bp, const char* toks);
+void lb_maps_names_of(const char* toks, char* out, int cap);
+int  lb_maps_preset_count(void);
+const char* lb_maps_preset_name(int i);
+int  lb_maps_preset_resolve(int i, char* units, int ucap, char* maps, int mcap,
+                            char* umb, int bcap, char* msg, int gcap);
+int  lb_maps_mission_banned(unsigned mission);
+void lb_maps_fill_begin(void);
+void lb_maps_pool_add(unsigned mission);
+int  lb_maps_fill_extras(unsigned out[2]);
+int  lb_maps_extra_count(void);
+const char* lb_maps_extra_label(int idx);
+unsigned lb_maps_extra_redraw(int idx);
+void lb_maps_note_pick_id(unsigned name_id, int online);
+void lb_maps_forget(void);
+int  lb_maps_unit_banned_here(int bp);
+int  lb_maps_tourney_team(unsigned* seed);
+void lb_maps_new_seed(void);
+unsigned lb_maps_current_seed(void);
+int  lb_maps_received(char* maps, int mcap, char* umb, int ucap);
+int  lb_maps_wire_out(unsigned char* buf, int cap);
+int  lb_maps_wire_in(const unsigned char* p, int len, unsigned sender);
 int          lb_rules_outgoing(unsigned char* buf, int cap);
 void         lb_rules_incoming(const unsigned char* buf, int len,
                                unsigned int sender);
@@ -670,6 +727,8 @@ int          lb_ai_cheats_live(void);      /* lb_patches: offline only */
 int          lb_setting_ai_hero_rebuild(void);
 int          lb_demo_play_ai_hero_rebuild(void);
 int          lb_ai_hero_rebuild_live(void);
+// SG-0017: the AI casts single-target spells (Balance > Spells). Offline only.
+int          lb_setting_ai_tap_spells(void);
 // docs/408: a hotwired transport leaves its old owner's AI (kind 12).
 int          lb_setting_transport_release(void);
 int          lb_demo_play_transport_release(void);
@@ -678,6 +737,26 @@ int          lb_transport_release_live(void);
 int          lb_setting_creatures(void);
 int          lb_demo_play_creatures(void);
 int          lb_creatures_live(void);
+// BR-0011 / BR-0015: the rest of what changes the simulation, carried in an
+// 'S' page of the host's rules (lb_teams.cpp). On a joiner these are the
+// host's while joined, else this machine's.
+typedef struct LbHostSettings {
+    int hotwire_mode, hotwire_transport, transport_release, attack_boost,
+        fix_healing;
+    unsigned cheats;   /* bit i = cheat i */
+    int caps[10];
+} LbHostSettings;
+/* -1: this machine decides (not joined); 0: joined, no 'S' page (an older
+   host, or none yet): all zero; 1: the host's values. */
+int          lb_rules_host_settings(LbHostSettings* out);
+void         lb_rules_on_leave(void);      /* the lobby was left: forget its rules */
+int          lb_demo_play_attack_boost(void);
+int          lb_demo_play_fix_healing(void);
+int          lb_attack_boost_live(void);
+int          lb_fix_healing_live(void);
+int          lb_host_rules_current(void);  /* the host's S settings are in force here */
+const char*  lb_host_rules_why(void);
+int          lb_setting_cheats_locked(void);
 // docs/409: the field's size, recorded and replayed (lb_demo.cpp).
 void         lb_demo_field(int* w, int* h);
 

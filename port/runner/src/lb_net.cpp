@@ -1127,6 +1127,31 @@ void stop_hosting_impl(const char* reason = "disband") {
     if (!g_hosting.exchange(false)) return;
     std::string server, code, token;
     int port;
+    // SG-0019: a match that ended carries what the game decided: the names of
+    // the winners and of the losers (lb_matchpic.cpp reads the teams' states).
+    std::string result;
+    if (std::strcmp(reason, "end") == 0) {
+        char w[512], l[512];
+        if (lb_matchpic_result(w, (int)sizeof w, l, (int)sizeof l)) {
+            auto list = [](const char* text) {
+                std::string out = "[";
+                const char* p = text;
+                bool first = true;
+                while (*p) {
+                    const char* e = std::strchr(p, '\n');
+                    const std::string one = e ? std::string(p, e) : std::string(p);
+                    if (!one.empty()) {
+                        out += (first ? "" : ",") + json_str(one.c_str());
+                        first = false;
+                    }
+                    if (!e) break;
+                    p = e + 1;
+                }
+                return out + "]";
+            };
+            result = ",\"winners\":" + list(w) + ",\"losers\":" + list(l);
+        }
+    }
     {
         std::lock_guard<std::mutex> lock(g_host_mutex);
         server = g_host_server; code = g_host_code;
@@ -1136,7 +1161,7 @@ void stop_hosting_impl(const char* reason = "disband") {
         // docs/419: Both -- take the second listing down as well.
         if (!g_host2_code.empty()) {
             const std::string b2 = "{\"code\":\"" + g_host2_code + "\",\"token\":\"" +
-                                   g_host2_token + "\",\"reason\":" + json_str(reason) + "}";
+                                   g_host2_token + "\",\"reason\":" + json_str(reason) + result + "}";
             const std::string s2 = g_host2_server;
             const int p2 = g_host2_port;
             std::thread([s2, p2, b2]() {
@@ -1150,7 +1175,7 @@ void stop_hosting_impl(const char* reason = "disband") {
     if (code.empty()) return;
     const std::string body =
         "{\"code\":\"" + code + "\",\"token\":\"" + token + "\",\"reason\":" +
-        json_str(reason) + "}";
+        json_str(reason) + result + "}";
     std::thread([server, port, body]() {
         std::string error;
         http_request(server, port, "POST", "/remove", body, &error);
@@ -1461,6 +1486,7 @@ extern "C" void lb_net_post_match_image(const unsigned char* png, size_t n,
 
 namespace {
 int       g_auto_prev = 0;
+bool      g_pic_pending = false;   // BR-0004: the match picture waits for the new map
 long long g_auto_announce_at = 0;
 long long g_auto_refresh_at = 0;
 unsigned  g_auto_gen_applied = 0;
@@ -1713,6 +1739,14 @@ extern "C" void lb_net_auto_tick(const char* server, int port,
     const int prev = g_auto_prev;
     g_auto_prev = s;
 
+    // BR-0004: leaving a lobby (5, 12; 7 between them) forgets its rules, so
+    // the next host's are never mixed with the last one's.
+    {
+        const bool was_in = prev == 5 || prev == 12 || prev == 7;
+        const bool is_in = s == 5 || s == 12 || s == 7;
+        if (was_in && !is_in) lb_rules_on_leave();
+    }
+
     // A Join by code the worker resolved: to the bridge, on this thread.
     {
         bool pending;
@@ -1778,6 +1812,21 @@ extern "C" void lb_net_auto_tick(const char* server, int port,
                 std::lock_guard<std::mutex> lock(g_host_mutex);
                 state = g_host_state;
             }
+            // Test aid (docs/430): LB_NET_TEST_END=<seconds> ends the report of a
+            // match that has been "playing" that long, as if the lobby closed.
+            static long long test_end_at = 0;
+            if (state == "playing") {
+                const char* te = std::getenv("LB_NET_TEST_END");
+                if (te && std::atoi(te) > 0) {
+                    if (!test_end_at) test_end_at = now_ms + 1000LL * std::atoi(te);
+                    if (now_ms >= test_end_at) {
+                        test_end_at = 0;
+                        stop_hosting_impl("end");
+                        g_auto_hosted = false;
+                        std::fprintf(stderr, "[lb_net] LB_NET_TEST_END: match reported over\n");
+                    }
+                }
+            }
             if (s == 3 || s == 4 || s == 11) {
                 if (state == "open") {
                     // New strangers are no longer wanted. A client already
@@ -1788,6 +1837,7 @@ extern "C" void lb_net_auto_tick(const char* server, int port,
                     g_host_map.clear();
                     g_auto_map_gen = lb_level_map_gen();
                     g_auto_play_at = 0;
+                    g_pic_pending = false;
                     g_last_beat = 0;   // tell the server at once
                     std::fprintf(stderr, "[lb_net] the game started its match "
                                  "(state %d); lobby unlisted\n", s);
@@ -1805,8 +1855,21 @@ extern "C" void lb_net_auto_tick(const char* server, int port,
                                          "\"%s\"\n", g_host_map.c_str());
                         }
                         // docs/428: one picture of the match, host only.
-                        lb_matchpic_on_playing();
+                        // BR-0004: of THIS match's map -- when the map has not
+                        // loaded yet (the 20 s fallback), wait for it rather
+                        // than draw the previous game's.
+                        if (fresh) lb_matchpic_on_playing();
+                        else g_pic_pending = true;
                     }
+                }
+                if (s == 11 && g_pic_pending && lb_level_map_gen() != g_auto_map_gen) {
+                    g_pic_pending = false;
+                    {
+                        std::lock_guard<std::mutex> lock(g_host_mutex);
+                        g_host_map = lb_level_map_name();
+                        g_last_beat = 0;
+                    }
+                    lb_matchpic_on_playing();
                 }
             } else {
                 const bool played = state == "playing";

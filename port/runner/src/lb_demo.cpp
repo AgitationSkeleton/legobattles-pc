@@ -246,6 +246,10 @@ int g_rec_aicheats = 0, g_demo_aicheats = 0;
 int g_rec_aihero = 0, g_demo_aihero = 0;   // kind 11, the AI's hero rebuild
 int g_rec_trel = 0, g_demo_trel = 0;       // kind 12, docs/408
 int g_rec_crea = 0, g_demo_crea = 0;       // kind 13, docs/410
+// BR-0011: kinds 14 and 15, the attack boost and the healing fix, from
+// `sets=4`; a recording before it leaves them to this machine (-1).
+int g_rec_atk = 0, g_demo_atk = -1;
+int g_rec_heal = 0, g_demo_heal = -1;
 // docs/409: THE FIELD'S SIZE, which zoom and the window decide and which the
 // simulation sees (camera bounds, where a moved HUD button is touched). A
 // session that zoomed could not be replayed: four replays of one such
@@ -304,6 +308,7 @@ bool load(const char* path) {
     g_demo_aihero = 0;            // and the stock hero rebuild
     g_demo_trel = 0;              // and the stock transport ownership
     g_demo_crea = 0;              // and no creatures in armies
+    g_demo_atk = g_demo_heal = -1;   // BR-0011: and this machine's
     g_demo_fw = g_demo_fh = 0;    // docs/409: and the window's own field
     g_demo_has_rtc = false;       // and the clock the replaying run has
     g_armies.clear();
@@ -372,6 +377,7 @@ bool load(const char* path) {
                         g_demo_hwtransport = 0;
                         g_demo_hwmode = 0;
                         if (std::atoi(s2 + 5) >= 3) g_demo_cheats = 0;   // docs/406
+                        if (std::atoi(s2 + 5) >= 4) g_demo_atk = g_demo_heal = 0;
                     }
                 continue;
             }
@@ -571,6 +577,12 @@ extern "C" void lb_demo_field(int* w, int* h) {
         *h = g_demo_fh;
     }
 }
+extern "C" int lb_demo_play_attack_boost(void) {   // BR-0011
+    return (g_mode == Mode::Play || g_replay_done) ? g_demo_atk : -1;
+}
+extern "C" int lb_demo_play_fix_healing(void) {
+    return (g_mode == Mode::Play || g_replay_done) ? g_demo_heal : -1;
+}
 extern "C" int lb_demo_play_creatures(void) {   // docs/410
     return (g_mode == Mode::Play || g_replay_done) ? g_demo_crea : -1;
 }
@@ -629,6 +641,7 @@ extern "C" void lb_demo_start_record(const char* path) {
     g_rec_aihero = 0;
     g_rec_trel = 0;
     g_rec_crea = 0;
+    g_rec_atk = g_rec_heal = 0;
     g_rec_fw = g_rec_fh = 0;      // docs/409: the first frame writes the size
     // docs/396: a session on the PC's clock records the guest clock as it
     // stands now, so a replay runs on the same date (the 12/25 unlock).
@@ -642,7 +655,7 @@ extern "C" void lb_demo_start_record(const char* path) {
     std::fprintf(g_rec, "lbdemo 1 cadence=%d hudhit=%d camedge=%d camgrid=1 snd=%d "
                  "depth=%d exty=1 hudmemo=1 fp2d=1 fpline=1 quick=1 enemy8=1 cage=%d "
                  "ownhero=%d oppname=2 tileset=%d palette=%d pickseed=%u "
-                 "music=%d sets=3 balc=1%s\n",
+                 "music=%d sets=4 balc=1%s\n",
                  g_rec_cadence, lb_hud_hit_live() ? 1 : 0,
                  lb_camera_edge_live() ? 1 : 0,
                  lb_snd_cull_live() ? 1 : 0,
@@ -813,7 +826,7 @@ extern "C" void lb_demo_tick(void) {
             emit(e);
         }
         // docs/388: and the settings a replay takes from the recording.
-        const int now[14] = {lb_setting_force_tileset(),
+        const int now[16] = {lb_setting_force_tileset(),
                             lb_setting_level_palette(),
                             lb_setting_music_mode(),
                             lb_cage_fix_live() ? 1 : 0,
@@ -826,13 +839,15 @@ extern "C" void lb_demo_tick(void) {
                             lb_ai_cheats_live(),
                             lb_ai_hero_rebuild_live(),
                             lb_transport_release_live(),       // docs/408
-                            lb_creatures_live()};              // docs/410
-        int* const was[14] = {&g_rec_tileset, &g_rec_palette, &g_rec_music,
+                            lb_creatures_live(),               // docs/410
+                            lb_attack_boost_live(),            // BR-0011
+                            lb_fix_healing_live()};
+        int* const was[16] = {&g_rec_tileset, &g_rec_palette, &g_rec_music,
                               &g_rec_cage, &g_rec_ownhero, &g_rec_oppdef,
                               &g_rec_hwtransport, &g_rec_hwmode, &g_rec_emp,
                               &g_rec_cheats, &g_rec_aicheats, &g_rec_aihero,
-                              &g_rec_trel, &g_rec_crea};
-        for (int k = 0; k < 14; ++k) {
+                              &g_rec_trel, &g_rec_crea, &g_rec_atk, &g_rec_heal};
+        for (int k = 0; k < 16; ++k) {
             if (now[k] == *was[k]) continue;
             *was[k] = now[k];
             const Event e{g_frame, 's', k, now[k], 0, 0};
@@ -886,6 +901,8 @@ extern "C" void lb_demo_tick(void) {
             else if (e.a == 11) g_demo_aihero = e.b ? 1 : 0;
             else if (e.a == 12) g_demo_trel = e.b ? 1 : 0;   // docs/408
             else if (e.a == 13) g_demo_crea = e.b ? 1 : 0;   // docs/410
+            else if (e.a == 14) g_demo_atk = e.b ? 1 : 0;    // BR-0011
+            else if (e.a == 15) g_demo_heal = e.b ? 1 : 0;
         } else if (e.kind == 'b') {   /* docs/404: a Balance tab value */
             lb_balance_custom_play_set(e.a, e.b, e.c);
         } else if (e.kind == 'f') {   /* docs/409: the field's size */

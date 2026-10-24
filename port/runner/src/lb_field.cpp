@@ -1348,6 +1348,14 @@ static const uint32_t kScrollCallback = 0x020396E0u;
 // sweep or, worse, drift out of step with this one after a rescan and write a
 // camera into whatever object used to be live.
 uint32_t g_cam_obj = 0;
+static int g_cam_cooldown = 0;
+
+// The guest was reset (BR-0007): its RAM is re-initialised, so the cached
+// pointer now addresses zeroes that still pass plausible(). Forget it.
+extern "C" void lb_field_reset(void) {
+    g_cam_obj = 0;
+    g_cam_cooldown = 0;
+}
 
 extern "C" bool lb_field_camera(int* map_x, int* map_y) {
     // The view object moves between runs, so it is located rather than
@@ -1362,7 +1370,7 @@ extern "C" bool lb_field_camera(int* map_x, int* map_y) {
         const int16_t y = (int16_t)bus_read_u16(obj + 0x60u);
         return x > -256 && x < 8192 && y > -256 && y < 8192;
     };
-    static int cooldown = 0;
+    int& cooldown = g_cam_cooldown;
     if (!cached || !plausible(cached)) {
         // BACK OFF AFTER A MISS. Outside a battle there is no camera object,
         // and this rescan is a FULL main-RAM sweep -- about a million

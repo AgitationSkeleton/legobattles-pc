@@ -713,11 +713,18 @@ int g_bal_slot = 0, g_bal_builders = 0, g_bal_total = 0, g_bal_pages = 0;
 std::vector<int> g_bal_values;             // triples
 std::vector<bool> g_bal_seen;
 bool g_bal_done = false, g_bal_absent = false;
+// BR-0011: the host's 'S' page -- the other simulation settings.
+LbHostSettings g_set_recv = {};
+bool g_set_ok = false;
 constexpr int kBalPerPage = 60;
 // When they last arrived. A host sends them every 250 ms from opening its
 // lobby to the end of the match, so rules older than a few seconds belong to
 // a lobby this player has left and are not applied.
 std::chrono::steady_clock::time_point g_bans_recv_at{};   // under g_rules_mu
+// SG-0013 (docs/430): the host's build as its rules last said it, and the one
+// the joiner was last warned about (under g_rules_mu).
+std::string g_host_version, g_version_warned;
+std::chrono::steady_clock::time_point g_version_warned_at{};
 bool rules_fresh() {
     return g_bans_recv_ok &&
            std::chrono::steady_clock::now() - g_bans_recv_at <
@@ -787,6 +794,18 @@ extern "C" int lb_teams_local_bans(unsigned char* bits, int n) {
     std::lock_guard<std::mutex> lk(g_rules_mu);
     for (int i = 0; i < n; ++i) bits[i] = i < kBanBytes ? g_bans_local[i] : 0;
     return 1;
+}
+
+// docs/429: the game's text for a LOC id in the language it runs in (map names).
+extern "C" const char* lb_teams_loc_text(unsigned id) {
+    static thread_local std::string s;
+    s = loc_text(id);
+    return s.c_str();
+}
+
+extern "C" int lb_rules_fresh(void) {
+    std::lock_guard<std::mutex> lk(g_rules_mu);
+    return rules_fresh() ? 1 : 0;
 }
 
 extern "C" int lb_teams_slot_count(int slot) {
@@ -1284,15 +1303,37 @@ extern "C" void lb_teams_portrait_tick(void) {
     g_portrait_records = true;
 }
 
-// The 20-byte record for an opponent: the picks in the army record's layout,
-// +0x12 = 1, and +0x13 the builder's faction. FUN_02000E78 takes the buildings
-// from the builder's faction (FUN_02002C78), and the Start handler names the
-// opponent from +0x13 (GetFaction of the roster's +0x31), so both follow the
-// builder. Returns 0 if the team is not valid.
-extern "C" int lb_teams_enemy_army(int choice, unsigned char rec[20]) {
-    LbTeam t = g_enemy;
-    if (choice == 7) lb_teams_randomize(&t, 0);
-    if (!lb_teams_valid(&t)) lb_teams_king_default(&t);
+// docs/429: RANDOM TEAM (TOURNEY). A random army from a seed: each slot takes
+// one of its candidates, skipping every unit banned (everywhere in `bits`, or
+// on the chosen map). Not limited to what a save has unlocked, so every
+// machine -- which knows only the host's seed and rules -- draws the same
+// team for a player. splitmix64 over seed and player, never a library's
+// distribution.
+static void team_generate(unsigned seed, int player, const uint8_t* bits, LbTeam* t) {
+    unsigned long long st = ((unsigned long long)seed << 8) ^
+                            (0xA5ull + (unsigned long long)player * 0x9E3779B1ull);
+    auto next = [&]() {
+        unsigned long long z = (st += 0x9E3779B97F4A7C15ull);
+        z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ull;
+        z = (z ^ (z >> 27)) * 0x94D049BB133111EBull;
+        return z ^ (z >> 31);
+    };
+    for (int s = 0; s < LB_TEAM_SLOTS; ++s) {
+        std::vector<int> pool;
+        for (int k = 0; k < kSlots[s].n; ++k) {
+            const Cand& c = kSlots[s].c[k];
+            if (!cand_on(c)) continue;
+            if (!king_default(c.unit) &&
+                (ban_bit(bits, c.unit) || lb_maps_unit_banned_here(c.unit)))
+                continue;
+            pool.push_back(c.unit);
+        }
+        if (pool.empty()) pool.push_back(kKingDefault[s]);
+        t->pick[s] = (unsigned short)pool[(size_t)(next() % pool.size())];
+    }
+}
+
+static void team_to_record(const LbTeam& t, unsigned char rec[20]) {
     std::memset(rec, 0, 20);
     for (int s = 0; s < LB_TEAM_SLOTS; ++s) {
         rec[kSlots[s].rec_off] = (unsigned char)(t.pick[s] & 0xFF);
@@ -1301,6 +1342,35 @@ extern "C" int lb_teams_enemy_army(int choice, unsigned char rec[20]) {
     const Cand* b = find_cand(t.pick[1], nullptr);
     rec[0x12] = 1;
     rec[0x13] = (unsigned char)(0x7C + (b ? b->faction : 0));
+}
+
+// The 20-byte record for an opponent: the picks in the army record's layout,
+// +0x12 = 1, and +0x13 the builder's faction. FUN_02000E78 takes the buildings
+// from the builder's faction (FUN_02002C78), and the Start handler names the
+// opponent from +0x13 (GetFaction of the roster's +0x31), so both follow the
+// builder. Returns 0 if the team is not valid.
+extern "C" int lb_teams_enemy_army(int choice, unsigned char rec[20]) {
+    LbTeam t = g_enemy;
+    if (choice == 7) {
+        unsigned seed = 0;
+        if (lb_maps_tourney_team(&seed)) {   // docs/429
+            uint8_t bits[kBanBytes];
+            {
+                std::lock_guard<std::mutex> lk(g_rules_mu);
+                std::memcpy(bits, g_bans_local, sizeof bits);
+            }
+            team_generate(seed, 1, bits, &t);
+            std::fprintf(stderr, "[lb_maps] Random team (tourney), seed %u: the "
+                         "opponent fields %u %u %u %u %u | %u %u %u %u\n", seed,
+                         t.pick[0], t.pick[1], t.pick[2], t.pick[3], t.pick[4],
+                         t.pick[5], t.pick[6], t.pick[7], t.pick[8]);
+            std::fflush(stderr);
+        } else {
+            lb_teams_randomize(&t, 0);
+        }
+    }
+    if (!lb_teams_valid(&t)) lb_teams_king_default(&t);
+    team_to_record(t, rec);
     return 1;
 }
 
@@ -1398,9 +1468,94 @@ extern "C" int lb_rules_outgoing(unsigned char* buf, int cap) {
             }
         }
     }
+    // BR-0011: then the 'S' page, the other settings that change the
+    // simulation: 'S', a version, the byte count (23), hotwire targets,
+    // transport occupants, transport release, ranged attack boost, healing
+    // fix, the cheats (u32), the ten build limits, and a check (u32).
+    if (n + 26 <= cap) {
+        unsigned char* const at = buf + n;
+        at[0] = 'S';
+        at[1] = 1;
+        at[2] = 19;
+        at[3] = (unsigned char)lb_setting_hotwire_mode();
+        at[4] = (unsigned char)lb_setting_hotwire_transport();
+        at[5] = (unsigned char)(lb_setting_transport_release() ? 1 : 0);
+        at[6] = (unsigned char)(lb_setting_attack_boost_ranged() ? 1 : 0);
+        at[7] = (unsigned char)(lb_setting_fix_hotwired_healing() ? 1 : 0);
+        const unsigned cm = (unsigned)lb_cheat_mask_live();
+        for (int b = 0; b < 4; ++b) at[8 + b] = (unsigned char)(cm >> (8 * b));
+        for (int i = 0; i < 10; ++i) {
+            const int c = lb_setting_cap(i);
+            at[12 + i] = (unsigned char)(c < 0 ? 0 : c > 255 ? 255 : c);
+        }
+        unsigned h = 2166136261u;
+        for (int i = 3; i < 22; ++i) h = (h ^ at[i]) * 16777619u;
+        for (int b = 0; b < 4; ++b) at[22 + b] = (unsigned char)(h >> (8 * b));
+        n += 26;
+        // docs/429: then the 'M' page: the map bans, the unit bans on some
+        // maps only, and the tourney team flag and seed (lb_mapbans.cpp).
+        n += lb_maps_wire_out(buf + n, cap - n);
+    }
+    // SG-0013 (docs/430): then the host's build, as its own small page: 'V', a
+    // page version (1), a length byte and the text (at most 60 bytes), so a joiner
+    // can say that the two builds differ. Older builds stop reading before it.
+    {
+        const char* v = lb_port_version();
+        const int vl = (int)std::min<size_t>(std::strlen(v), 60);
+        if (n + 3 + vl <= cap) {
+            buf[n++] = 'V';
+            buf[n++] = 1;
+            buf[n++] = (unsigned char)vl;
+            std::memcpy(buf + n, v, (size_t)vl);
+            n += vl;
+        }
+    }
+    static int largest = 0;
+    if (n > largest) {
+        largest = n;
+        std::fprintf(stderr, "[lb_teams] the largest rules datagram so far: %d "
+                     "bytes\n", n);
+        std::fflush(stderr);
+    }
     std::lock_guard<std::mutex> lk(g_rules_mu);
     std::memcpy(buf + 6, g_bans_local, kBanBytes);
     return n;
+}
+
+// BR-0011: the host's other simulation settings for a joined machine: -1 when
+// this machine decides (not joined), 0 when joined without an 'S' page (an
+// older host, or its rules not yet in: all zero, the game's own), else 1 and
+// the values. Not gated on freshness, like the flags: a late datagram mid-
+// match must not change a rule on one machine only.
+extern "C" int lb_rules_host_settings(LbHostSettings* out) {
+    if (!net_joined(lb_net_guest_state())) return -1;
+    std::lock_guard<std::mutex> lk(g_rules_mu);
+    if (out) {
+        if (g_set_ok) *out = g_set_recv;
+        else std::memset(out, 0, sizeof *out);
+    }
+    return g_set_ok ? 1 : 0;
+}
+
+// BR-0004: the lobby was left; the rules it sent are not the next one's.
+extern "C" void lb_patches_lobby_forget(void);   /* lb_patches.cpp */
+extern "C" void lb_rules_on_leave(void) {
+    lb_patches_lobby_forget();
+    std::lock_guard<std::mutex> lk(g_rules_mu);
+    g_bans_recv_ok = false;
+    g_bans_recv_from = 0;
+    g_flags_recv = 0;
+    g_maps_recv.clear();
+    g_maps_recv_has = false;
+    g_bal_done = false;
+    g_bal_absent = false;
+    g_bal_seed = 0ull;
+    g_bal_total = g_bal_pages = 0;
+    g_bal_values.clear();
+    g_bal_seen.clear();
+    g_set_ok = false;
+    g_set_recv = LbHostSettings{};
+    lb_maps_forget();   // docs/429
 }
 
 // docs/418: the host's balance for a joiner, once every page of one seed has
@@ -1501,6 +1656,7 @@ extern "C" void lb_rules_incoming(const unsigned char* buf, int len,
     }
     // docs/418: then one page of the host's balance.
     bool bal_done_now = false;
+    int s_at = -1;
     // A page is 17 bytes before its values (an empty set is exactly that).
     if (has_maps && at + 17 <= len && buf[at] == 'B' && buf[at + 1] == 1) {
         g_bal_absent = false;
@@ -1510,6 +1666,8 @@ extern "C" void lb_rules_incoming(const unsigned char* buf, int len,
         const int total = buf[at + 12] | (buf[at + 13] << 8);
         const int page = buf[at + 14], pages = buf[at + 15], cnt = buf[at + 16];
         at += 17;
+        const int page_end = at + 7 * cnt;   // SG-0013: whatever the values below do
+        s_at = page_end;   // BR-0011: where the 'S' page would start
         if (seed != g_bal_seed || total != g_bal_total || pages != g_bal_pages) {
             g_bal_seed = seed;
             g_bal_slot = slot;
@@ -1536,9 +1694,65 @@ extern "C" void lb_rules_incoming(const unsigned char* buf, int len,
                 bal_done_now = true;
             }
         }
+        at = page_end;
     } else if (!has_maps || at >= len) {
         g_bal_absent = true;   // an older host: no balance in its rules
     }
+    // BR-0011: then the 'S' page; an older host has none.
+    bool set_changed = false;
+    if (s_at >= 0 && s_at + 26 <= len && buf[s_at] == 'S' && buf[s_at + 1] == 1 &&
+        buf[s_at + 2] == 19) {
+        const unsigned char* q = buf + s_at;
+        unsigned h = 2166136261u;
+        for (int i = 3; i < 22; ++i) h = (h ^ q[i]) * 16777619u;
+        const unsigned got = (unsigned)q[22] | ((unsigned)q[23] << 8) |
+                             ((unsigned)q[24] << 16) | ((unsigned)q[25] << 24);
+        if (h == got) {
+            LbHostSettings v = {};
+            v.hotwire_mode = q[3] <= 2 ? q[3] : 0;
+            v.hotwire_transport = q[4] <= 2 ? q[4] : 0;
+            v.transport_release = q[5] ? 1 : 0;
+            v.attack_boost = q[6] ? 1 : 0;
+            v.fix_healing = q[7] ? 1 : 0;
+            v.cheats = ((unsigned)q[8] | ((unsigned)q[9] << 8) |
+                        ((unsigned)q[10] << 16) | ((unsigned)q[11] << 24)) & 0x3FFFFu;
+            for (int i = 0; i < 10; ++i) v.caps[i] = q[12 + i];
+            set_changed = !g_set_ok || std::memcmp(&v, &g_set_recv, sizeof v) != 0;
+            g_set_recv = v;
+            g_set_ok = true;
+            at = s_at + 26;   // SG-0013: the 'V' page follows it
+        }
+    }
+    // docs/429: then the 'M' page, after the 'S' page; an older host has none.
+    {
+        const bool s_here = s_at >= 0 && s_at + 26 <= len && buf[s_at] == 'S' &&
+                            buf[s_at + 1] == 1 && buf[s_at + 2] == 19;
+        lb_maps_wire_in(s_here ? buf + s_at + 26 : buf, s_here ? len - (s_at + 26) : 0,
+                        sender);
+        // SG-0013: the 'V' page follows the 'M' page ('M', 1, a u16 length,
+        // the payload and a u32 check), so step over it.
+        const int m_at = s_at + 26;
+        if (s_here && m_at + 4 <= len && buf[m_at] == 'M' && buf[m_at + 1] == 1) {
+            const int m_end = m_at + 8 + (buf[m_at + 2] | (buf[m_at + 3] << 8));
+            if (m_end <= len) at = m_end;
+        }
+    }
+    if (set_changed) {
+        const LbHostSettings& v = g_set_recv;
+        std::fprintf(stderr, "[lb_teams] the host's settings from instance %u: "
+                     "hotwire %d, occupants %d, release %d, attack boost %d, heal "
+                     "fix %d, cheats %05X, caps %d,%d,%d,%d,%d,%d,%d,%d,%d,%d\n",
+                     sender, v.hotwire_mode, v.hotwire_transport,
+                     v.transport_release, v.attack_boost, v.fix_healing, v.cheats,
+                     v.caps[0], v.caps[1], v.caps[2], v.caps[3], v.caps[4],
+                     v.caps[5], v.caps[6], v.caps[7], v.caps[8], v.caps[9]);
+        std::fflush(stderr);
+    }
+    // SG-0013 (docs/430): the host's build page ('V'), straight after the
+    // balance page (or the maps, when the host sent no balance).
+    std::string host_version;
+    if (at + 3 <= len && buf[at] == 'V' && buf[at + 1] == 1 && at + 3 + buf[at + 2] <= len)
+        host_version.assign((const char*)buf + at + 3, buf[at + 2]);
     if (bal_done_now) {
         std::fprintf(stderr, "[lb_teams] the host's balance from instance %u: "
                      "seed %016llX, %d value(s) in %d page(s)\n", sender,
@@ -1549,6 +1763,24 @@ extern "C" void lb_rules_incoming(const unsigned char* buf, int len,
                               maps.size() != g_maps_recv.size();
     g_maps_recv = std::move(maps);
     g_maps_recv_has = has_maps;
+    if (!host_version.empty()) {
+        g_host_version = host_version;
+        const std::string mine = lb_port_version();
+        const auto now = std::chrono::steady_clock::now();
+        if (host_version != mine &&
+            (host_version != g_version_warned ||
+             now - g_version_warned_at > std::chrono::minutes(5))) {
+            g_version_warned = host_version;
+            g_version_warned_at = now;
+            std::fprintf(stderr, "[lb_teams] the host runs \"%s\", this build is \"%s\"\n",
+                         host_version.c_str(), mine.c_str());
+            std::fflush(stderr);
+            const std::string msg = "The host runs version " + host_version +
+                                    ", you run " + mine +
+                                    ": the match may go out of sync.";
+            lb_overlay_notice(msg.c_str());
+        }
+    }
     g_bans_recv_ok = true;
     g_bans_recv_from = sender;
     g_bans_recv_at = std::chrono::steady_clock::now();
@@ -1578,7 +1810,16 @@ extern "C" void lb_rules_incoming(const unsigned char* buf, int len,
 // changed to King once the game starts". Every machine makes this decision
 // from the HOST's list (its own on the host, the received one on a client),
 // so every machine builds the same rosters. Returns 1 when it replaced.
-extern "C" int lb_teams_enforce_bans(unsigned char rec[20], char* why, int cap) {
+extern "C" int lb_teams_enforce_bans(unsigned char rec[20], char* why, int cap,
+                                     int player) {
+    // Test aid: LB_TEST_PLAYER_HERO=<blueprint> makes every player bring that
+    // hero, to watch the bans (including those on the chosen map) act on it.
+    const char* test_hero = std::getenv("LB_TEST_PLAYER_HERO");
+    if (test_hero) {
+        const int bp = std::atoi(test_hero);
+        rec[kSlots[0].rec_off] = (unsigned char)(bp & 0xFF);
+        rec[kSlots[0].rec_off + 1] = (unsigned char)(bp >> 8);
+    }
     uint8_t bits[kBanBytes];
     const int net = lb_net_guest_state();
     {
@@ -1590,18 +1831,65 @@ extern "C" int lb_teams_enforce_bans(unsigned char rec[20], char* why, int cap) 
             std::memcpy(bits, g_bans_recv, sizeof bits);
         }
     }
+    // Test aid: LB_TOURNEY_SELFTEST=1 draws 3000 teams under these bans on this
+    // match's map and counts the banned units among them.
+    if (std::getenv("LB_TOURNEY_SELFTEST")) {
+        static bool done = false;
+        if (!done) {
+            done = true;
+            int bad = 0, invalid = 0, sheriff = 0, teams = 0;
+            for (unsigned sd = 1; sd <= 1000; ++sd)
+                for (int pl = 0; pl < 3; ++pl) {
+                    LbTeam t;
+                    team_generate(sd, pl, bits, &t);
+                    ++teams;
+                    if (!lb_teams_valid(&t)) ++invalid;
+                    for (int s = 0; s < LB_TEAM_SLOTS; ++s) {
+                        const int u = t.pick[s];
+                        if (!king_default(u) && (ban_bit(bits, u) || lb_maps_unit_banned_here(u)))
+                            ++bad;
+                        if (u == 177) ++sheriff;
+                    }
+                }
+            std::fprintf(stderr, "[lb_maps] tourney self-test: %d teams, %d banned unit "
+                         "pick(s), %d invalid team(s), Sheriff (177) drawn %d time(s)\n",
+                         teams, bad, invalid, sheriff);
+            std::fflush(stderr);
+        }
+    }
+    // docs/429: Random team (tourney) replaces every player's army, from the
+    // host's seed, skipping its bans (and the ones on this match's map).
+    unsigned seed = 0;
+    if (lb_maps_tourney_team(&seed) && player >= 0) {
+        LbTeam t;
+        team_generate(seed, player, bits, &t);
+        team_to_record(t, rec);
+        if (why && cap > 0)
+            std::snprintf(why, (size_t)cap, "seed %u: %u %u %u %u %u | %u %u %u %u",
+                          seed, t.pick[0], t.pick[1], t.pick[2], t.pick[3], t.pick[4],
+                          t.pick[5], t.pick[6], t.pick[7], t.pick[8]);
+        return 2;
+    }
     std::string names;
     for (int s = 0; s < LB_TEAM_SLOTS; ++s) {
         const int bp = rec[kSlots[s].rec_off] | (rec[kSlots[s].rec_off + 1] << 8);
         // docs/410: a creature counts as banned unless the host allows them.
         const bool creature = (bp == 169 || bp == 138 || bp == 155) &&
                               !lb_creatures_live();
-        if (!king_default(bp) && (ban_bit(bits, bp) || creature)) {
+        if (!king_default(bp) &&
+            (ban_bit(bits, bp) || creature || lb_maps_unit_banned_here(bp))) {
             if (!names.empty()) names += ", ";
             names += lb_teams_unit_name(bp);
         }
     }
-    if (names.empty()) return 0;
+    if (names.empty()) {
+        if (test_hero) {
+            std::fprintf(stderr, "[lb_bans] test hero %s: player %d may bring it on "
+                         "this map\n", test_hero, player);
+            std::fflush(stderr);
+        }
+        return 0;
+    }
     for (int s = 0; s < LB_TEAM_SLOTS; ++s) {
         rec[kSlots[s].rec_off] = (unsigned char)(kKingDefault[s] & 0xFF);
         rec[kSlots[s].rec_off + 1] = (unsigned char)(kKingDefault[s] >> 8);

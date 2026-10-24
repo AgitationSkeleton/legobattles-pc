@@ -17,8 +17,10 @@
 //                    state "open" (listed), "starting" (unlisted: the host
 //                    pressed Start) or "playing" (the match is on; the first
 //                    one is the "match started" message)
-//   POST /remove     {code, token, reason?}  reason "disband" (the default:
-//                    the lobby closed without a match) or "end" (a match ended)
+//   POST /remove     {code, token, reason?, winners?, losers?}  reason "disband"
+//                    (the default: the lobby closed without a match) or "end" (a
+//                    match ended; winners / losers: arrays of player names that
+//                    the "match ended" line names)
 //   POST /join       {code, name}   a player is in this lobby (the joiner says
 //   POST /leave      {code, name}   so; the cartridge's own lobby carries it)
 //
@@ -378,10 +380,19 @@ export class Directory extends DurableObject {
     this.lobbies.delete(code);
     await this.save();
     const reason = String(body.reason || '');
+    // SG-0019: the host says who won and who lost (names only, a few, cleaned).
+    const names = (v) => (Array.isArray(v) ? v : []).slice(0, 8)
+      .map((n) => cleanName(n, '')).filter((n) => n);
+    const winners = names(body.winners);
+    const losers = names(body.losers);
+    const bold = (list) => list.map((n) => '**' + plain(n) + '**').join(', ');
+    let result = '';
+    if (winners.length) result += ` ${bold(winners)} won` + (losers.length ? `, ${bold(losers)} lost.` : '.');
+    else if (losers.length) result += ` ${bold(losers)} lost.`;
     if (l.state === 'playing' || reason === 'end') {
       this.log(`⏹️ **${plain(l.host_name)}**'s match` +
                (l.map_name ? ` on **${plain(l.map_name)}**` : '') +
-               ` ended after ${lasted(now - (l.started || l.created))}.`);
+               ` ended after ${lasted(now - (l.started || l.created))}.` + result);
     } else {
       this.log(`❌ **${plain(l.host_name)}** disbanded the lobby \`${code}\`` +
                ` after ${lasted(now - l.created)}.`);

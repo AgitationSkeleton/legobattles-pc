@@ -36,6 +36,7 @@ extern "C" {
 
 extern "C" void lb_net_post_match_image(const unsigned char* png, size_t n,
                                         const char* map_name);
+extern "C" int lb_mods_world(int k);   // lb_mods.cpp: 0 King, 1 Pirate, 2 Mars
 
 namespace {
 
@@ -298,8 +299,27 @@ struct Player {
     bool have = false;
     int bp[9] = {};
     std::string name;
+    uint32_t colour = 0;   // BR-0008: the lobby's team colour (0: not known)
 };
 constexpr int kMaxPlayers = 8;
+
+// BR-0008: a player's team colour. The lobby record (0x0215B814 + 0x2C per
+// station) keeps the assigned colour in bits 2-4 of byte +0x20 (docs/412): 0 red,
+// 1 blue, 2 green, 3 yellow, 4 purple, 5 grey. The game's own sprite table
+// (0x02127F38, 6 colours x 3 shades, BGR555) gives the colour; shade 0 is the
+// light one, eased toward white so a name reads on the blue backdrop.
+uint32_t bgr555_to_rgba(unsigned c);
+uint32_t team_colour_rgba(unsigned c);
+uint32_t lobby_colour(int player) {
+    if (player < 0 || player >= 3) return 0;
+    return team_colour_rgba((bus_read_u8(0x0215B814u + 0x2Cu * (uint32_t)player + 0x20u) >> 2) & 7u);
+}
+uint32_t team_colour_rgba(unsigned c) {
+    if (c > 5u) return 0;
+    const uint32_t v = bgr555_to_rgba(bus_read_u16(0x02127F38u + 6u * c));
+    const int r = (int)(v & 255u), g = (int)((v >> 8) & 255u), b = (int)((v >> 16) & 255u);
+    return rgba(r + (255 - r) / 4, g + (255 - g) / 4, b + (255 - b) / 4);
+}
 Player g_players[kMaxPlayers];
 bool g_posted = false;   // this match's picture has gone
 
@@ -342,19 +362,74 @@ bool load_preview(const std::string& stem, std::vector<uint8_t>* idx, int* size)
     return *size > 0;
 }
 
-void draw_preview(Img& im, int x, int y, int w, const std::vector<uint8_t>& idx, int size) {
+// SG-0004 (docs/430): the map select's real palette. ARM9 table 0x020C4A54 is
+// indexed by world (0 King, 1 Pirate, 2 Mars) and points at a 16-entry BGR555
+// bank; the framework presents a 5-bit channel c as the 6-bit v = 2c + (c > 0),
+// then (v << 2) | (v >> 4).
+int widen5(unsigned c) {
+    const unsigned v = c * 2u + (c > 0u ? 1u : 0u);
+    return (int)(((v << 2) | (v >> 4)) & 255u);
+}
+uint32_t bgr555_to_rgba(unsigned c) {
+    return rgba(widen5(c & 31u), widen5((c >> 5) & 31u), widen5((c >> 10) & 31u));
+}
+
+// The map's world: a stock "mpNN" stem by the mission table (28-byte entries at
+// 0x02147DDC, the world in the field at +0x18); a mod map ("z/NN") by lb_mods.
+int map_world(const std::string& stem) {
+    if (stem.size() > 2 && stem[0] == 'z' && stem[1] == '/')
+        return lb_mods_world(std::atoi(stem.c_str() + 2) - 1);
+    for (uint32_t e = 0; e < 30u; ++e) {
+        const uint32_t ent = 0x02147DDCu + 28u * e;
+        const uint32_t s = bus_read_u32(ent);
+        if (s < 0x02000000u || s >= 0x02400000u) continue;
+        bool same = true;
+        for (size_t i = 0; i <= stem.size(); ++i)
+            if ((char)bus_read_u8(s + (uint32_t)i) != (i < stem.size() ? stem[i] : '\0')) {
+                same = false;
+                break;
+            }
+        if (same) return (int)bus_read_u32(ent + 0x18u);
+    }
+    return 0;
+}
+
+bool world_palette(int world, uint32_t out[16]) {
+    if (world < 0 || world > 2) world = 0;
+    const uint32_t bank = bus_read_u32(0x020C4A54u + 4u * (uint32_t)world);
+    if (bank < 0x02000000u || bank >= 0x02400000u) return false;
+    bool any = false;
+    for (int i = 0; i < 16; ++i) {
+        const unsigned c = bus_read_u16(bank + 2u * (uint32_t)i);
+        out[i] = i ? bgr555_to_rgba(c) : 0u;
+        any = any || c != 0u;
+    }
+    return any;
+}
+
+void draw_preview(Img& im, int x, int y, int w, const std::vector<uint8_t>& idx, int size,
+                  int world) {
     static const uint32_t kRamp[16] = {
         0, rgba(52, 70, 46), rgba(30, 44, 34), rgba(78, 116, 72), rgba(104, 142, 88),
         rgba(136, 168, 112), rgba(64, 90, 150), rgba(214, 196, 120), rgba(180, 150, 90),
         rgba(160, 160, 160), rgba(200, 200, 200), rgba(255, 255, 255), rgba(200, 80, 80),
         rgba(80, 80, 200), rgba(80, 200, 80), rgba(230, 230, 60)};
+    uint32_t pal[16];
+    const bool real = world_palette(world, pal);
+    static bool said = false;
+    if (!said) {
+        said = true;
+        std::fprintf(stderr, "[lb_matchpic] preview palette: %s (world %d)\n",
+                     real ? "the map select's" : "fallback ramp", world);
+    }
+    const uint32_t* kPal = real ? pal : kRamp;
     const int s = std::max(1, std::min(3, (w - 8) / size));
     const int px = x + (w - size * s) / 2;
     fill_rect(im, px - 3, y - 3, size * s + 6, size * s + 6, rgba(8, 14, 30), 200);
     for (int j = 0; j < size; ++j)
         for (int i = 0; i < size; ++i) {
             const int v = idx[(size_t)j * 128 + i];
-            const uint32_t c = v ? kRamp[v] : rgba(18, 30, 60);
+            const uint32_t c = v ? kPal[v] : rgba(18, 30, 60);
             fill_rect(im, px + i * s, y + j * s, s, s, c, 255);
         }
 }
@@ -400,7 +475,7 @@ Img render(const Match& m) {
         const Player& p = m.players[(size_t)i];
         const int x0 = colX[(size_t)i];
         fill_rect(im, x0 + 4, 4, colW - 8, rows_bottom - 6, rgba(0, 0, 0), 60);
-        const uint32_t col = kTeamColour[i % kMaxPlayers];
+        const uint32_t col = p.colour ? p.colour : kTeamColour[i % kMaxPlayers];
         draw_text(im, x0 + 10, 7, p.name.c_str(), col, colW - 20, true);
         for (int k = 0; k < 9; ++k) {
             const int y = kHead + k * kPitch;
@@ -415,7 +490,7 @@ Img render(const Match& m) {
     int size = 0;
     int py = kHead + 4;
     if (!m.map_stem.empty() && load_preview(m.map_stem, &idx, &size)) {
-        draw_preview(im, mapX + 4, py, mapW - 8, idx, size);
+        draw_preview(im, mapX + 4, py, mapW - 8, idx, size, map_world(m.map_stem));
         const int s = std::max(1, std::min(3, (mapW - 16) / size));
         py += size * s + 12;
     } else {
@@ -546,6 +621,7 @@ extern "C" void lb_matchpic_note_player(int player, const unsigned char rec[20])
         }
         name[ok ? n : 0] = '\0';
     }
+    p.colour = lobby_colour(player);
     p.name = name[0] ? name : ("Player " + std::to_string(player + 1));
     std::string ids;
     for (int k = 0; k < 9; ++k) {
@@ -556,7 +632,51 @@ extern "C" void lb_matchpic_note_player(int player, const unsigned char rec[20])
     std::fflush(stderr);
 }
 
+// ---- SG-0019: who won ------------------------------------------------------------
+// The game keeps every team in a pool (pointer at 0x0215540C -> object with the
+// team pointers' array at +8 and the count at +0xC). A team's state is the word
+// at +0x9C: 0 playing, 1 defeated, 2 won, 3 lost (FUN_02086770, docs/414). While
+// the host's match is on, the teams are read every frame and each team's last
+// non-zero state is kept (the pool is gone by the time the lobby closes). Team k
+// is player k (verified against the roster's order in the test runs, docs/430).
+// Read only. lb_net sends the result with the end-of-match /remove.
+int g_team_state[kMaxPlayers];
+bool g_watch = false;       // a host's match is on
+bool g_result_said = false;
+
+void watch_teams() {
+    const uint32_t pool = bus_read_u32(0x0215540Cu);
+    if (pool < 0x02000000u || pool >= 0x02400000u) return;
+    const uint32_t arr = bus_read_u32(pool + 8u);
+    const uint32_t cnt = bus_read_u32(pool + 0xCu);
+    if (arr < 0x02000000u || arr >= 0x02400000u || cnt == 0u || cnt > 8u) return;
+    static uint32_t said_cnt = 0;
+    if (said_cnt != cnt) {   // once: the teams and their owner bytes, to check the order
+        said_cnt = cnt;
+        for (uint32_t k = 0; k < cnt; ++k) {
+            const uint32_t t = bus_read_u32(arr + 4u * k);
+            if (t >= 0x02000000u && t < 0x02400000u)
+                std::fprintf(stderr, "[lb_matchpic] team %u: owner byte %02X, state %u\n", k,
+                             (unsigned)bus_read_u8(t + 0x14u), (unsigned)bus_read_u32(t + 0x9Cu));
+        }
+        std::fflush(stderr);
+    }
+    for (uint32_t k = 0; k < cnt; ++k) {
+        const uint32_t t = bus_read_u32(arr + 4u * k);
+        if (t < 0x02000000u || t >= 0x02400000u) continue;
+        const uint32_t st = bus_read_u32(t + 0x9Cu);
+        if (st == 0u || st > 4u || g_team_state[k] == (int)st) continue;
+        g_team_state[k] = (int)st;
+        std::fprintf(stderr, "[lb_matchpic] team %u (owner byte %02X) is now state %u\n",
+                     k, (unsigned)bus_read_u8(t + 0x14u), st);
+        std::fflush(stderr);
+    }
+}
+
 extern "C" void lb_matchpic_on_playing(void) {
+    for (int& s : g_team_state) s = 0;
+    g_watch = true;
+    g_result_said = false;
     if (!lb_setting_match_picture() || g_posted) return;
     Match m;
     for (const Player& p : g_players)
@@ -574,11 +694,44 @@ extern "C" void lb_matchpic_on_playing(void) {
     lb_net_post_match_image(png.data(), png.size(), m.map_name.c_str());
 }
 
+// The result for lb_net's end-of-match /remove: player names, one per line, in
+// two lists. Returns 1 when the game had decided anything. The match is over for
+// the watcher afterwards.
+extern "C" int lb_matchpic_result(char* winners, int wcap, char* losers, int lcap) {
+    if (wcap > 0) winners[0] = '\0';
+    if (lcap > 0) losers[0] = '\0';
+    const bool watched = g_watch;
+    g_watch = false;
+    if (!watched) return 0;
+    // Test aid: LB_MATCHPIC_FAKE_RESULT=1 -- when the game decided nothing, the
+    // first player is the winner and the others lost (exercises the wire path).
+    if (std::getenv("LB_MATCHPIC_FAKE_RESULT")) {
+        bool any = false;
+        for (int s : g_team_state) any = any || s != 0;
+        if (!any)
+            for (int k = 0; k < kMaxPlayers; ++k) g_team_state[k] = k == 0 ? 2 : 1;
+    }
+    std::string w, l;
+    for (int k = 0; k < kMaxPlayers; ++k) {
+        if (!g_players[k].have || g_team_state[k] == 0) continue;
+        std::string& dst = g_team_state[k] == 2 ? w : l;
+        if (g_team_state[k] == 4) continue;   // allied win in a game with no online flag
+        dst += g_players[k].name + "\n";
+    }
+    std::snprintf(winners, (size_t)wcap, "%s", w.c_str());
+    std::snprintf(losers, (size_t)lcap, "%s", l.c_str());
+    std::fprintf(stderr, "[lb_matchpic] result: winners [%s] losers [%s]\n",
+                 w.empty() ? "" : w.substr(0, w.size() - 1).c_str(),
+                 l.empty() ? "" : l.substr(0, l.size() - 1).c_str());
+    return !w.empty() || !l.empty();
+}
+
 // LB_MATCHPIC_TEST=1: two teams of the King default army, map 1, once the front
 // end has loaded the icons and the unit names.
 extern "C" void lb_matchpic_tick(void) {
     static int state = 0;   // 0 untested, 1 waiting, 2 done
     static int frames = 0;
+    if (g_watch) watch_teams();
     if (state == 2) return;
     if (state == 0) {
         const char* e = std::getenv("LB_MATCHPIC_TEST");
@@ -596,11 +749,14 @@ extern "C" void lb_matchpic_tick(void) {
         Player p;
         p.have = true;
         p.name = i ? "Tester2" : "Tester1";
+        p.colour = team_colour_rgba(i ? 4u : 0u);   // purple, red
         for (int k = 0; k < 9; ++k) p.bp[k] = kKing[k] + (i ? 20 : 0) * 0;
         m.players.push_back(p);
     }
-    m.map_stem = "mp01";
-    m.map_name = lb_level_map_name()[0] ? lb_level_map_name() : "Test Map (mp01)";
+    // LB_MATCHPIC_TEST_MAP=mp02 picks the map (a Mars one, say).
+    const char* tm = std::getenv("LB_MATCHPIC_TEST_MAP");
+    m.map_stem = tm && *tm ? tm : "mp01";
+    m.map_name = "Test Map (" + m.map_stem + ")";
     m.banned = {12, 13, 14, 31};
     std::vector<uint8_t> png;
     build_png(m, &png);

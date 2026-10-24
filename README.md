@@ -83,9 +83,8 @@ the session exactly; attaching it usually makes a bug reproducible.
 2. Say what you were doing.
 3. Attach the newest file in `logs\` and the newest `lb-session-*.lbdemo`.
 
-**This is a beta.** Online multiplayer is lightly tested, and the port has so
-far been tested on a single PC. Reports from other hardware and networks are
-the most useful thing a tester can send.
+The port has been played widely, online and offline. Reports from other
+hardware and networks are still the most useful thing a player can send.
 
 ## What is in this repository
 

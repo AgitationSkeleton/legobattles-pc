@@ -1228,6 +1228,14 @@ static unsigned release_stolen_transport(uint32_t e, uint8_t new_owner) {
 }
 
 extern "C" int lb_demo_play_transport_release(void);   /* src/lb_demo.cpp */
+extern "C" int lb_attack_boost_live(void) {   // BR-0011
+    const int played = lb_demo_play_attack_boost();
+    return played >= 0 ? played : lb_setting_attack_boost_ranged();
+}
+extern "C" int lb_fix_healing_live(void) {
+    const int played = lb_demo_play_fix_healing();
+    return played >= 0 ? played : lb_setting_fix_hotwired_healing();
+}
 extern "C" int lb_transport_release_live(void) {
     const int played = lb_demo_play_transport_release();
     return played >= 0 ? played : lb_setting_transport_release();
@@ -1261,7 +1269,7 @@ void set_owner_override() {
     }
     const uint32_t entity = g_cpu.R[0];
     const uint32_t owner_ptr = g_cpu.R[1];
-    const int mode = lb_setting_hotwire_transport();
+    const int mode = lb_hotwire_transport_live();   // BR-0011: not the raw setting
 
     // docs/392: THE OCCUPANTS OF A HOTWIRED TRANSPORT, ONE GUEST CALL AT A
     // TIME. Mode 1 destroys them, mode 2 hands them to the new owner.
@@ -1498,7 +1506,7 @@ void apply_damage_observer() {
     // r0 is the damage command, whose +0x24 is the projectile's handle -- the
     // same field func_0206E408 resolved on its way here.
     const uint32_t projectile = (g_cpu.R[14] == kRangedApplyRet &&
-                                 lb_setting_attack_boost_ranged())
+                                 lb_attack_boost_live())
                                     ? resolve_handle_kind(g_cpu.R[0] + 0x24u, 1u)
                                     : 0u;
     if (projectile) {
@@ -1630,7 +1638,7 @@ void heal_tick_override(void) {
 
     g_in_heal_tick = false;
     g_heal_source_owner = 0xFFu;
-    if (lb_setting_fix_hotwired_healing() && spell) {
+    if (lb_fix_healing_live() && spell) {
         // Resolve the source through the SAME function the tick itself uses on
         // this field, so the handle interpretation cannot drift from the game's.
         // SAVE EVERY REGISTER THE SYNTHESISED CALL CAN CLOBBER, not just r0.
@@ -3888,15 +3896,20 @@ void roster_build_override(void) {
         unsigned char r[20];
         for (uint32_t i = 0; i < 20u; ++i) r[i] = (unsigned char)bus_read_u8(rec + i);
         char why[192];
-        const bool banned_swap = lb_teams_enforce_bans(r, why, (int)sizeof why) != 0;
+        const int player_no = (int)bus_read_u8(g_cpu.R[0] + 0x30u) - 0x84;
+        const int swap = lb_teams_enforce_bans(r, why, (int)sizeof why, player_no);
+        const bool banned_swap = swap != 0;
         // docs/428: what this player fields, for the match picture (after the
         // bans, so a King swap is what it shows). Observer only.
         lb_matchpic_note_player((int)bus_read_u8(g_cpu.R[0] + 0x30u) - 0x84, r);
         if (banned_swap) {
             for (uint32_t i = 0; i < 20u; ++i) bus_write_u8(rec + i, r[i]);
-            std::fprintf(stderr, "[lb_bans] player %d switched to King at the "
-                         "start: banned %s\n",
-                         (int)bus_read_u8(g_cpu.R[0] + 0x30u) - 0x84, why);
+            if (swap == 2)
+                std::fprintf(stderr, "[lb_bans] player %d fields a Random team "
+                             "(tourney), %s\n", player_no, why);
+            else
+                std::fprintf(stderr, "[lb_bans] player %d switched to King at the "
+                             "start: banned %s\n", player_no, why);
             std::fflush(stderr);
         }
     }
@@ -4135,9 +4148,36 @@ extern "C" int lb_keyboard_screen_active(void) {
     return g_kb_vblanks - g_kb_seen.load() < 10u ? 1 : 0;
 }
 
+// ---- SG-0016: SKIP THE INTRO SCREENS ----------------------------------------
+//
+// The boot logos (SplashScreen, vtable 0x0214DC5C) run on the game's own timers
+// and ignore taps (measured: tapping from the first second still reached the
+// title at 13.5 s). So the option runs the boot at full speed -- the frontend's
+// own turbo, which also drops the logos' audio -- until the first update of the
+// title screen (StartScreen, vtable 0x0214DDF4), then lets go. Guest state is
+// untouched; only the wall-clock pacing changes. After a game reset it arms
+// again. A hard cap bounds it if the title is never seen.
+static bool g_title_seen = false;
+static unsigned g_skip_from = 0u;      // g_kb_vblanks when this boot began
+static bool g_skip_logged = false;
+
+extern "C" int lb_boot_skip_wanted(void) {
+    if (g_title_seen || !lb_setting_skip_intro() || lb_demo_playing()) return 0;
+    return (g_kb_vblanks - g_skip_from) < 6000u ? 1 : 0;
+}
+
 void screen_update_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kScreenUpdate);
     ++g_kb_vblanks;   // (counts updates; only the difference matters)
+    if (!g_title_seen && guest_ptr(g_cpu.R[0]) && bus_read_u32(g_cpu.R[0]) == 0x0214DDF4u) {
+        g_title_seen = true;
+        if (lb_setting_skip_intro() && !g_skip_logged) {
+            g_skip_logged = true;
+            std::fprintf(stderr, "[lb_intro] title screen reached after %u screen updates "
+                         "(skip the intro screens on)\n", g_kb_vblanks - g_skip_from);
+            std::fflush(stderr);
+        }
+    }
     if (g_kc.active) {
         if (g_cpu.R[13] == g_kc.sp_call) {   // the key's callback returned
             g_kc.active = false;
@@ -4242,15 +4282,25 @@ void screen_update_override(void) {
 // genitives (Gemmas, Broadsides) keep their "s".
 constexpr uint32_t kRenManager = 0x0215378Cu;
 constexpr uint32_t kRenIds = 0xBF8u;
-struct RenRule { const char* needle; const char* name; };
+// id >= 0 limits the rule to that one LOC string id (the Earth and Alien
+// "Transport Ship" share their words with other factions' ships).
+struct RenRule { const char* needle; const char* name; int id; };
 // Rule 3 is a test aid only (LB_RENAME_PROBE=1): the title screen's line, which
 // every harness route shows, so the supply path can be seen working.
-constexpr int kRenCount = 4;
-constexpr RenRule kRenRules[kRenCount] = {{"Claw Tank", "Crystal Reaper"},
-                                          {"Gemma", "Doctor Kelvin"},
-                                          {"Broadside", "Governor Tyranny"},
-                                          {"Touch the Screen", "Tap the Screen"}};
-uint8_t g_ren_hit[kRenIds];        // per id: bit r set if rule r changes it
+// Rules 4..9 (SG-0003/SG-0014): ships. The two "Transport Ship" rules are by id
+// (489 Earth, 509 Alien, the ids beside those factions' ships in every .lng).
+constexpr int kRenCount = 10;
+constexpr RenRule kRenRules[kRenCount] = {{"Claw Tank", "Crystal Reaper", -1},
+                                          {"Gemma", "Doctor Kelvin", -1},
+                                          {"Broadside", "Governor Tyranny", -1},
+                                          {"Touch the Screen", "Tap the Screen", -1},
+                                          {"Alien Assault Ship", "Dragon Cruiser", -1},
+                                          {"Alien Attack Ship", "Crystal Extractor", -1},
+                                          {"Transport Ship", "Recon Dropship", 489},
+                                          {"Transport Ship", "Hyper Carrier", 509},
+                                          {"Starfighter", "Switch Fighter", -1},
+                                          {"Starship 1", "Rocket", -1}};
+uint16_t g_ren_hit[kRenIds];       // per id: bit r set if rule r changes it
 uint32_t g_ren_file = 0u, g_ren_lang = 0u;
 unsigned g_ren_logged = 0u;        // active mask last logged for this table
 unsigned g_ren_skips = 0u;
@@ -4260,7 +4310,7 @@ bool ren_alnum(char c) {
 }
 
 // src -> out with the rules in `mask` applied. True if anything changed.
-bool ren_rewrite(const char* src, uint32_t lang, unsigned mask, char* out, size_t cap) {
+bool ren_rewrite(const char* src, uint32_t lang, unsigned mask, int id, char* out, size_t cap) {
     size_t o = 0, i = 0;
     bool changed = false;
     const size_t n = std::strlen(src);
@@ -4269,6 +4319,7 @@ bool ren_rewrite(const char* src, uint32_t lang, unsigned mask, char* out, size_
         if (!i || !ren_alnum(src[i - 1])) {
             for (int r = 0; r < kRenCount && hit < 0; ++r) {
                 if (!(mask & (1u << r))) continue;
+                if (kRenRules[r].id >= 0 && kRenRules[r].id != id) continue;
                 const size_t len = std::strlen(kRenRules[r].needle);
                 if (std::strncmp(src + i, kRenRules[r].needle, len) != 0) continue;
                 const char nx = src[i + len];
@@ -4303,8 +4354,10 @@ bool ren_rewrite(const char* src, uint32_t lang, unsigned mask, char* out, size_
 
 unsigned ren_active_mask() {
     static const bool probe = std::getenv("LB_RENAME_PROBE") != nullptr;   // test aid
-    return (lb_setting_rename(0) ? 1u : 0u) | (lb_setting_rename(1) ? 2u : 0u) |
-           (lb_setting_rename(2) ? 4u : 0u) | (probe ? 8u : 0u);
+    unsigned m = probe ? 8u : 0u;
+    for (int r = 0; r < kRenCount; ++r)
+        if (r != 3 && lb_setting_rename(r < 3 ? r : r - 1)) m |= 1u << r;
+    return m;
 }
 
 // Rescan the loaded table when it (or the language) is new. False while no
@@ -4331,8 +4384,8 @@ bool ren_scan(unsigned active) {
             if (src[k]) continue;
             for (int r = 0; r < kRenCount; ++r)
                 if (std::strstr(src, kRenRules[r].needle) &&
-                    ren_rewrite(src, lang, 1u << r, dst, sizeof dst))
-                    g_ren_hit[id] |= (uint8_t)(1u << r);
+                    ren_rewrite(src, lang, 1u << r, (int)id, dst, sizeof dst))
+                    g_ren_hit[id] |= (uint16_t)(1u << r);
         }
         g_ren_file = file;
         g_ren_lang = lang;
@@ -4356,14 +4409,14 @@ bool ren_scan(unsigned active) {
 
 // The rewritten copy of the string at `src`, in a scratch below the live stack
 // (the copy FUN_020F1C88 makes is immediate), or 0 to leave the text alone.
-uint32_t ren_supply(uint32_t src, unsigned mask) {
+uint32_t ren_supply(uint32_t src, unsigned mask, int id) {
     char in[512], out[768];
     size_t k = 0;
     for (; k < sizeof in - 1; ++k) {
         in[k] = (char)bus_read_u8(src + (uint32_t)k);
         if (!in[k]) break;
     }
-    if (in[k] || !ren_rewrite(in, g_ren_lang, mask, out, sizeof out)) return 0u;
+    if (in[k] || !ren_rewrite(in, g_ren_lang, mask, id, out, sizeof out)) return 0u;
     const uint32_t sp = g_cpu.R[13];
     const uint32_t at = (sp - 0x800u) & ~3u;
     const bool dtcm = (at >> 14) == (0x027E0000u >> 14) && (at & 0x3FFFu) >= 0x1000u;
@@ -4383,8 +4436,213 @@ uint32_t ren_supply(uint32_t src, unsigned mask) {
     return at;
 }
 
+// ---- docs/429: THE MAP LIST -- BANS AND RANDOM -------------------------------
+//
+// The map list is SkirmishFactionSelect's, for Free Play (byte +0xA7 = 0) and
+// for a multiplayer host (1). FUN_020C48B0 fills it (thumb): FUN_0204AFF8 makes
+// an array of the missions to list -- FUN_02045F04 appends every unlocked one
+// to a temporary array (a `blx` to FUN_020EEEB0 at 02045F32, lr 02045F37), then
+// FUN_0204AFF8 appends those with +0x10 < 3 and more than 2 players (04B034, lr
+// 0204B039) -- and the fill adds one list item per mission: payload = the
+// mission at item+0x34, label = FUN_0203E1D4(mission+0xF0) (020C4980, lr
+// 020C4985). The selected item's payload is what the screen starts the map
+// with (FUN_020C53E4) and previews (FUN_020C5444, on a change of selection).
+//
+// FUN_020EEEB0 is the game's array append (ARM; r0 the array, r1 the item).
+// Called from the filter's site it
+//   * leaves out a banned map (the append simply does not happen), and
+//   * on the first call puts the Random entries ahead of the first map: an
+//     entry is an append of a drawn mission, so its payload is a real mission
+//     and the screen, the preview and the lobby need nothing else. Several
+//     appends in a row: each but the last returns into this override (lr set
+//     to the function, matched by sp), the last is the call's own tail call.
+// Their label is "Random" (written below the stack, which FUN_020F1C88 copies
+// at once, as the renames do), and landing on one draws it again, so the
+// preview shows what will be played. A pure tail call with no map bans and
+// the Random setting off.
+constexpr uint32_t kMapListFill = 0x020C48B0u;    // thumb
+constexpr uint32_t kMapConfirm = 0x020C53E4u;     // thumb
+constexpr uint32_t kMapPreview = 0x020C5444u;     // thumb
+constexpr uint32_t kPtrAppend = 0x020EEEB0u;      // arm
+constexpr uint32_t kMissionKey = 0x020455A8u;     // thumb: mission -> [+0xF0]
+constexpr uint32_t kSavedKeyLr = 0x020C4931u;     // the fill's lookup of the selection
+constexpr uint32_t kPoolSiteLr = 0x02045F37u, kFilterSiteLr = 0x0204B039u,
+                   kLabelSiteLr = 0x020C4985u;
+namespace {
+struct MapList {
+    int phase = 0;                   // 1: an extra's append is outstanding
+    uint32_t sp = 0, real_lr = 0, arr = 0;
+    uint32_t q[3] = {0, 0, 0};
+    int qn = 0, qi = 0;
+    bool extras_done = false;
+    int label_idx = 0;
+    bool keep_random = false;        // the list being rebuilt sits on a Random entry
+} g_ml;
+
+// `text` below the live stack for a copy FUN_020F1C88 makes at once; 0 if
+// there is no room (ren_supply's test).
+uint32_t scratch_text(const char* text) {
+    const uint32_t sp = g_cpu.R[13];
+    const uint32_t at = (sp - 0x800u) & ~3u;
+    const bool dtcm = (at >> 14) == (0x027E0000u >> 14) && (at & 0x3FFFu) >= 0x1000u;
+    const bool ram = at >= 0x02010000u && sp < 0x02400000u;
+    if (!dtcm && !ram) return 0u;
+    const size_t len = std::strlen(text);
+    for (size_t i = 0; i <= len; ++i) bus_write_u8(at + (uint32_t)i, (uint8_t)text[i]);
+    return at;
+}
+
+void map_list_step(void (*original)(void)) {
+    g_cpu.R[0] = g_ml.arr;
+    g_cpu.R[1] = g_ml.q[g_ml.qi];
+    if (g_ml.qi == g_ml.qn - 1) {
+        g_cpu.R[14] = g_ml.real_lr;
+        g_ml.phase = 0;
+    } else {
+        g_cpu.R[14] = kPtrAppend;
+    }
+    ++g_ml.qi;
+    if (original) original();
+}
+
+// The selected item's payload (the mission), or 0.
+uint32_t map_list_selected(uint32_t screen, int* index) {
+    const uint32_t list = bus_read_u32(screen + 0x84u);
+    if (!guest_ptr(list)) return 0u;
+    const uint32_t idx = bus_read_u8(list + 0x50u);
+    if (index) *index = (int)idx;
+    if (idx == 0xFFu || idx >= (bus_read_u32(list + 0x24u) & 0xFFu)) return 0u;
+    const uint32_t item = bus_read_u32(bus_read_u32(list + 0x20u) + 4u * idx);
+    return guest_ptr(item) ? bus_read_u32(item + 0x34u) : 0u;
+}
+}  // namespace
+
+void map_list_fill_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kMapListFill);
+    // The screen rebuilds its list (FUN_020C47EC) and keeps the selection by
+    // finding the selected mission again; a Random entry's mission is also a
+    // real entry's, which would take the selection. So a rebuild over a
+    // selected Random entry looks up nothing, and Random stays selected.
+    bool keep = false;
+    if (lb_maps_extra_count() > 0) {
+        const uint32_t list = bus_read_u32(g_cpu.R[0] + 0x84u);
+        if (guest_ptr(list))
+            keep = (int)bus_read_u8(list + 0x50u) < lb_maps_extra_count();
+    }
+    g_ml = MapList();
+    g_ml.keep_random = keep;
+    lb_maps_fill_begin();
+    if (original) original();
+}
+
+void mission_key_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kMissionKey);
+    if (g_cpu.R[14] == kSavedKeyLr && g_ml.keep_random) {
+        g_cpu.R[0] = 0u;
+        lb_override_return();
+        return;
+    }
+    if (original) original();
+}
+
+void ptr_append_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kPtrAppend);
+    const uint32_t lr = g_cpu.R[14];
+    if (g_ml.phase == 1 && g_cpu.R[13] == g_ml.sp && lr != kFilterSiteLr) {
+        map_list_step(original);   // an extra went in: the next one
+        return;
+    }
+    if (lr == kPoolSiteLr) {
+        lb_maps_pool_add(g_cpu.R[1]);
+    } else if (lr == kFilterSiteLr) {
+        const uint32_t m = g_cpu.R[1];
+        g_ml.qn = 0;
+        g_ml.qi = 0;
+        if (!g_ml.extras_done) {
+            g_ml.extras_done = true;
+            unsigned ex[2] = {0, 0};
+            const int n = lb_maps_fill_extras(ex);
+            for (int i = 0; i < n && g_ml.qn < 2; ++i) g_ml.q[g_ml.qn++] = ex[i];
+        }
+        if (lb_maps_mission_banned(m)) {
+            static unsigned said = 0;
+            if (said++ < 40) {
+                std::fprintf(stderr, "[lb_maps] the map list leaves out the banned "
+                             "map with name id %u\n", (unsigned)bus_read_u32(m + 0xF0u));
+                std::fflush(stderr);
+            }
+        } else {
+            g_ml.q[g_ml.qn++] = m;
+        }
+        if (g_ml.qn == 0) {   // nothing to append: the banned map is not listed
+            lb_override_return();
+            return;
+        }
+        if (g_ml.qn > 1) {
+            g_ml.phase = 1;
+            g_ml.sp = g_cpu.R[13];
+            g_ml.real_lr = lr;
+            g_ml.arr = g_cpu.R[0];
+            map_list_step(original);
+            return;
+        }
+        g_cpu.R[1] = g_ml.q[0];
+    }
+    if (original) original();
+}
+
+void map_preview_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kMapPreview);
+    const int nx = lb_maps_extra_count();
+    if (nx > 0) {
+        const uint32_t screen = g_cpu.R[0];
+        const uint32_t list = bus_read_u32(screen + 0x84u);
+        if (guest_ptr(list)) {
+            const int idx = (int)bus_read_u8(list + 0x50u);
+            const int last = (int)(int16_t)bus_read_u16(screen + 0xA8u);
+            if (idx != last && idx < nx &&
+                idx < (int)(bus_read_u32(list + 0x24u) & 0xFFu)) {
+                const uint32_t item =
+                    bus_read_u32(bus_read_u32(list + 0x20u) + 4u * (uint32_t)idx);
+                if (guest_ptr(item))
+                    if (const uint32_t m = lb_maps_extra_redraw(idx))
+                        bus_write_u32(item + 0x34u, m);
+            }
+        }
+    }
+    if (original) original();
+}
+
+void map_confirm_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kMapConfirm);
+    const uint32_t screen = g_cpu.R[0];
+    int idx = -1;
+    const uint32_t m = map_list_selected(screen, &idx);
+    if (m) {
+        const int mp = bus_read_u8(screen + 0xA7u) != 0 ? 1 : 0;
+        std::fprintf(stderr, "[lb_maps] %s map chosen%s: name id %u\n",
+                     mp ? "multiplayer" : "Free Play",
+                     idx >= 0 && idx < lb_maps_extra_count() ? " by a Random entry" : "",
+                     (unsigned)bus_read_u32(m + 0xF0u));
+        std::fflush(stderr);
+        lb_maps_note_pick_id(bus_read_u32(m + 0xF0u), mp);
+    }
+    if (original) original();
+}
+
 void string_from_id_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kStringFromId);
+    // docs/429: the map list's Random entries are labelled here.
+    if (g_cpu.R[14] == kLabelSiteLr) {
+        const int idx = g_ml.label_idx++;
+        if (const char* label = lb_maps_extra_label(idx))
+            if (const uint32_t at = scratch_text(label)) {
+                g_cpu.R[1] = at;
+                g_cpu.R[15] = kStringAssign;
+                runtime_dispatch_with_exchange(kStringAssign);
+                return;
+            }
+    }
     const int played = lb_demo_play_oppname();
     const int mode = played >= 0 ? played : 2;   // 0 base, 1 full, 2 short
     if (g_cpu.R[14] == kNameFromEnemy && mode != 0) {
@@ -4421,7 +4679,7 @@ void string_from_id_override(void) {
             if (text) {
                 if (const unsigned am = ren_active_mask())
                     if (ren_scan(am))
-                        if (const uint32_t r = ren_supply(text, am)) text = r;
+                        if (const uint32_t r = ren_supply(text, am, -1)) text = r;
                 // FUN_020F1C88(dest, text), returning to FUN_0203E1D4's caller.
                 g_cpu.R[1] = text;
                 g_cpu.R[15] = kStringAssign;
@@ -4435,7 +4693,7 @@ void string_from_id_override(void) {
         const uint32_t id = g_cpu.R[1];
         if (id < kRenIds && ren_scan(am) && (g_ren_hit[id] & am)) {
             const uint32_t at = loc_text_addr(id);
-            if (const uint32_t r = at ? ren_supply(at, am) : 0u) {
+            if (const uint32_t r = at ? ren_supply(at, am, (int)id) : 0u) {
                 g_cpu.R[1] = r;
                 g_cpu.R[15] = kStringAssign;
                 runtime_dispatch_with_exchange(kStringAssign);
@@ -4731,6 +4989,35 @@ bool patch_forced_tables(uint32_t map) {
                 want_cls[(size_t)k] = best;
             }
         }
+        // BR-0006: EDGE PIECES MUST NOT BE COPIED INTO AN INTERIOR. A small
+        // island or mound drawn as a detail composition has no interior
+        // neighbours of its own, so its vote came from the rim pieces around
+        // it and the rim piece was drawn in the middle (a crater with a lid).
+        // A table-A index is an "edge piece" on this map when, among the cells
+        // using it, fewer than half are interior (all 8 neighbours the same
+        // class). An index whose own cells are mostly interior skips edge
+        // candidates in every tier; if nothing is left it takes the plain fill
+        // of its class (116 grass, 96 ground, 64 water, 89 plateau -- the same
+        // role in all three worlds).
+        std::vector<uint8_t> edge_piece(5120u, 0u), mostly_inner((size_t)max_k + 1u, 0u);
+        if (!cls.empty()) {
+            std::vector<int> use(5120u, 0), inner_use(5120u, 0);
+            std::vector<int> kcells((size_t)max_k + 1u, 0), kinner((size_t)max_k + 1u, 0);
+            for (size_t i = 0; i < e.size(); ++i) {
+                if (e[i] < split) {
+                    ++use[e[i]];
+                    if (inner[i]) ++inner_use[e[i]];
+                } else {
+                    ++kcells[e[i] - split];
+                    if (inner[i]) ++kinner[e[i] - split];
+                }
+            }
+            for (size_t n = 0; n < 5120u; ++n)
+                edge_piece[n] = (use[n] >= 2 && inner_use[n] * 2 < use[n]) ? 1u : 0u;
+            for (int k = 0; k <= max_k; ++k)
+                mostly_inner[(size_t)k] =
+                    (kcells[(size_t)k] > 0 && kinner[(size_t)k] * 2 > kcells[(size_t)k]) ? 1u : 0u;
+        }
         std::vector<int> choice((size_t)max_k + 1u, -1);
         for (int pass = 0; pass < 30; ++pass) {
             // Passes 0-9 count only interior table-A neighbours of the
@@ -4753,8 +5040,10 @@ bool patch_forced_tables(uint32_t map) {
                                 continue;
                             const uint16_t n = e[ni];
                             if (by_inner && (n >= split || !inner[ni])) continue;
-                            if (n < split)
+                            if (n < split) {
+                                if (mostly_inner[v - split] && edge_piece[n]) continue;
                                 votes[v - split].push_back((uint16_t)stand_in(n));
+                            }
                             else if (choice[n - split] >= 0)
                                 votes[v - split].push_back((uint16_t)choice[n - split]);
                         }
@@ -4780,7 +5069,21 @@ bool patch_forced_tables(uint32_t map) {
                 break;
             }
         }
+        static const bool tlog = std::getenv("LB_TILESET_LOG") != nullptr;
+        int plain = 0;
         for (int k = 0; k <= max_k; ++k) {
+            if (choice[k] >= 0 || !mostly_inner[(size_t)k]) continue;
+            const int wc = want_cls[(size_t)k];
+            const int fill = wc == 0 ? 116 : wc == 2 ? 96 : wc == 3 ? 64 : wc == 5 ? 89 : -1;
+            if (fill >= 0) { choice[k] = fill; ++plain; }
+        }
+        if (plain)
+            std::fprintf(stderr, "[lb_tileset] %d detail index(es) took the plain "
+                         "fill (edge pieces rejected)\n", plain);
+        for (int k = 0; k <= max_k; ++k) {
+            if (tlog)
+                std::fprintf(stderr, "[lb_tileset] k=%d class=%d inner=%d choice=%d\n",
+                             k, want_cls[(size_t)k], (int)mostly_inner[(size_t)k], choice[k]);
             if (choice[k] < 0) continue;
             copy_entry(metatile_entry(B, (uint32_t)k),
                        metatile_entry(A, (uint32_t)choice[k]));
@@ -4843,9 +5146,44 @@ void fill_window_override(void) {
 // function's first call (func_02087580) only reads that pointer.
 constexpr uint32_t kCastSpell = 0x0207B9C0u;       // arm
 constexpr uint32_t kNullHandleLit = 0x0208745Cu;   // func_02087454's literal
+// SG-0017 test aid: LB_CAST_LOG=1 names every cast (kind 0 ground, kind 1
+// entity) with the spell id and the caster's owner.
+constexpr uint32_t kCastGround = 0x0207B90Cu;      // arm
+static void cast_log(const char* kind) {
+    static const bool clog = std::getenv("LB_CAST_LOG") != nullptr;
+    static int said = 0;
+    const uint32_t order = g_cpu.R[3];
+    {
+        if (clog && order && said < 400) {
+            ++said;
+            const uint32_t ch = g_cpu.R[2];
+            uint32_t idx, gen;
+            if (check_in_ram(ch)) { idx = bus_read_u8(ch); gen = bus_read_u8(ch + 1u); }
+            else { idx = ch & 0xFFu; gen = (ch >> 8) & 0xFFu; }
+            const uint32_t pool = bus_read_u32(kEntityPoolPtr);
+            int owner = -1;
+            if (pool >= 0x02000000u && pool < 0x02400000u &&
+                idx < bus_read_u32(pool + 0xCu)) {
+                const uint32_t e = bus_read_u32(bus_read_u32(pool + 8u) + 4u * idx);
+                if (e && bus_read_u8(e + 0xDDu) == gen) owner = (int)bus_read_u8(e + 0xE4u);
+            }
+            std::fprintf(stderr, "[lb_cast] %s cast: spell %u by owner %d (caster %08X)\n",
+                         kind, (unsigned)bus_read_u8(order), owner, ch);
+            std::fflush(stderr);
+        }
+    }
+}
+
+void cast_ground_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kCastGround);
+    cast_log("ground");
+    if (original) original();
+}
+
 void cast_spell_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kCastSpell);
     const uint32_t out = g_cpu.R[0], order = g_cpu.R[3];
+    cast_log("entity");
     if (lb_setting_patch_hotwire_glitch() && out && order &&
         bus_read_u8(order) == 0x20u) {
         const uint32_t target = bus_read_u32(g_cpu.R[13]);   // the 5th argument
@@ -5093,6 +5431,14 @@ extern "C" int lb_net_local_hero(void) {
     return -1;
 }
 
+// BR-0004: leaving a lobby forgets the last lobby's map translation, so the
+// next host's lobby is read afresh (also called on a game Reset).
+extern "C" void lb_patches_lobby_forget(void) {
+    g_lobby_key = 0;
+    g_lobby_want = 0xFFFFFFFFu;
+    g_lobby_withheld = false;
+}
+
 void ready_toggle_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kReadyToggle);
     // docs/418: nor before the host's balance is wholly in force here.
@@ -5177,20 +5523,40 @@ void lobby_packet_override(void) {
             }
         }
     }
-    if (!lobby_joined()) g_lobby_withheld = false;
+    if (!lobby_joined()) lb_patches_lobby_forget();
     else if (guest_ptr(pkt) && bus_read_u8(pkt) == 2u) {
         const uint32_t key = bus_read_u32(pkt + 0xCu);
         if (key != 0u && (key < kModNameBase || key >= kModNameBase + 2u * 256u))
             g_lobby_withheld = false;   // a stock map
+        if (key != 0u && (key < kModNameBase || key >= kModNameBase + 2u * 256u))
+            lb_maps_note_pick_id(key, 1);   // docs/429
         if (key >= kModNameBase && key < kModNameBase + 2u * 256u) {
             unsigned long long hash = 0;
             char name[40] = "";
             const int r = lb_rules_host_map(key, &hash, name, (int)sizeof name);
             uint32_t want = key;                     // -1: an older host
             int local = -1;
+            bool unregistered = false;
             if (r == 1) {
                 local = lb_mods_find_hash(hash);
                 want = local >= 0 ? lb_mods_name_id(local) : 0u;
+                // BR-0014: a translated id is only written when that mission
+                // is in the game's registry; else FUN_020F5168 writes through
+                // a null pointer. (A Reset leaves the registry short.)
+                if (local >= 0 && !(g_mreg.phase == 3 && local < g_mreg.n &&
+                                    g_mreg.mission[local] != 0u &&
+                                    bus_read_u32(kMissionRegistry + 8u) >=
+                                        30u + (uint32_t)g_mreg.n)) {
+                    static unsigned said = 0;
+                    if (said++ < 8)
+                        std::fprintf(stderr, "[lb_mods] lobby: the host's map is "
+                                     "z/%02d, which is not registered in the game "
+                                     "(phase %d, registry %u); withheld\n", local + 1,
+                                     g_mreg.phase,
+                                     (unsigned)bus_read_u32(kMissionRegistry + 8u));
+                    unregistered = true;
+                    want = 0u;
+                }
             } else if (r == -2 && key == g_lobby_key && g_lobby_want != 0u &&
                        g_lobby_want != 0xFFFFFFFFu) {
                 want = g_lobby_want;   // rules late for a moment: as last time
@@ -5205,6 +5571,7 @@ void lobby_packet_override(void) {
                 const uint8_t b = bus_read_u8(kLocalLobbyByte);
                 if (b & 1u) bus_write_u8(kLocalLobbyByte, (uint8_t)(b & ~1u));
             }
+            if (want != 0u) lb_maps_note_pick_id(want, 1);   // docs/429
             if (key != g_lobby_key || want != g_lobby_want) {
                 g_lobby_key = key;
                 g_lobby_want = want;
@@ -5225,7 +5592,7 @@ void lobby_packet_override(void) {
                                  "withheld\n", name[0] ? " \"" : "", name,
                                  name[0] ? "\"" : "", (unsigned)key);
                 std::fflush(stderr);
-                if (r >= 0 && local < 0) {
+                if (r >= 0 && (local < 0 || unregistered)) {
                     char text[192];
                     std::snprintf(text, sizeof text,
                                   "The host chose the mod map \"%s\", which is not "
@@ -5340,6 +5707,7 @@ const NdsDispatchEntry kOverrideTable[] = {
     /* Thumb. The mission list's registration: the mod maps after the stock
        30, through the game's own loop (docs/391). A pure tail call with no
        mods folder. */
+    {kMissionKey, 1u, mission_key_override, nullptr},       /* 0x020455A8 */
     {kRegisterMissions, 1u, register_missions_override, nullptr}, /* 0x02045E50 */
     /* Generic VRAM transfer. Passes everything through untouched except the
        one source that is the guest's selection box, which it blanks first. */
@@ -5365,6 +5733,8 @@ const NdsDispatchEntry kOverrideTable[] = {
        hotwire on a non-transport, non-special the way a 0 from the validator
        does (docs/392). Otherwise a pure tail call. Not on func_0207B73C: the
        Hotwire Anything NOPs are inside it. */
+    /* Observer only (LB_CAST_LOG=1): ground casts, SG-0017. */
+    {kCastGround, 0u, cast_ground_override, nullptr},      /* 0x0207B90C */
     {kCastSpell, 0u, cast_spell_override, nullptr},        /* 0x0207B9C0 */
     /* Observer only, and only speaks with LB_GATHERLOG=1. docs/357. */
     {kTileGather, 0u, tile_gather_observer, nullptr},      /* 0x0207E9B4 */
@@ -5407,6 +5777,11 @@ const NdsDispatchEntry kOverrideTable[] = {
        that say enemy8=1; otherwise a pure tail call. docs/384. */
     {kOppSetupLabel, 1u, opponent_setup_override, nullptr}, /* 0x020C03B4 */
     {kEnemyCycle, 1u, enemy_cycle_override, nullptr},      /* 0x020C0E7C */
+    /* Thumb. The map list: banned maps left out, Random entries put in
+       first; the pool is collected as the game builds it. docs/429. */
+    {kMapListFill, 1u, map_list_fill_override, nullptr},   /* 0x020C48B0 */
+    {kMapConfirm, 1u, map_confirm_override, nullptr},      /* 0x020C53E4 */
+    {kMapPreview, 1u, map_preview_override, nullptr},      /* 0x020C5444 */
     /* Thumb. The map list's fill: a multiplayer list does not offer the mod
        maps (docs/391). */
     {kMarkerPlace, 1u, marker_place_observer, nullptr},    /* 0x020DAAE4 */
@@ -5429,6 +5804,9 @@ const NdsDispatchEntry kOverrideTable[] = {
        gives it; every other call is a pure tail call. */
     {kWidgetSetPos, 1u, widget_setpos_observer, nullptr},  /* 0x020EA4D8 */
     /* GRADED, NOT PATCHED. docs/333. */
+    /* ARM. The game's array append: pure tail call except from the map
+       list's two sites. docs/429. */
+    {kPtrAppend, 0u, ptr_append_override, nullptr},        /* 0x020EEEB0 */
     {kSplitArray, 0u, split_array_shadow, nullptr},        /* 0x020EF1E0 */
     /* ARM. Steady pacing: NitroMain's two clock reads count VBlanks; every
        other call runs the cartridge's clock. docs/351. */
@@ -5473,19 +5851,23 @@ static_assert(kRosterBuild < kRegistryFind &&
               kSelRect < kMainMenuUpdate && kMainMenuUpdate < kEnemyMap &&
               kEnemyMap < kOppSetupLabel &&
               kOppSetupLabel < kEnemyCycle &&
-              kEnemyCycle < kMarkerPlace && kMarkerPlace < kHeroHud &&
+              kEnemyCycle < kMapListFill && kMapListFill < kMapConfirm &&
+              kMapConfirm < kMapPreview && kMapPreview < kMarkerPlace &&
+              kWidgetSetPos < kPtrAppend && kPtrAppend < kSplitArray &&
+              kMarkerPlace < kHeroHud &&
               kHeroHud < kViewUpdate && kViewUpdate < kScreenUpdate &&
               kScreenUpdate < kWidgetRect &&
               kRegistryFind < kMapLoad && kMapLoad < kFpPost &&
               kFpPost < kFpPaint && kFpPaint < kCommitBGs &&
               kCommitBGs < kMarquee &&
               kMarquee < kFpCell && kFpCell < kStringFromId &&
-              kStringFromId < kRegisterMissions &&
+              kStringFromId < kMissionKey && kMissionKey < kRegisterMissions &&
               kRegisterMissions < kGfxTransfer &&
               kGfxTransfer < kImageXfer && kImageXfer < kSetOwner &&
               kSetOwner < kSetHp && kSetHp < kApplyDamage &&
               kApplyDamage < kHealTick && kHealTick < kHotWireTick &&
-              kHotWireTick < kCastSpell && kCastSpell < kTileGather &&
+              kHotWireTick < kCastGround && kCastGround < kCastSpell &&
+              kCastSpell < kTileGather &&
               kTileGather < kTeamAddBricks && kTeamAddBricks < kSetMusicSide &&
               kSetMusicSide < kFillWindow && kFillWindow < kMapParse &&
               kMapParse < kFloatNumber && kFloatNumber < kTouchRect &&
@@ -5763,11 +6145,14 @@ constexpr uint8_t kShippedAllowance[kAllowanceClasses] = {
     1, 20, 4, 7, 14, 29, 20, 8, 0, 5,
 };
 
+int16_t g_caps_written[kAllowanceClasses] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
 bool allowance_table_valid() {
     for (int i = 0; i < kAllowanceClasses; ++i) {
         const uint8_t live = bus_read_u8(kAllowanceTable + (uint32_t)i);
-        // Accept either the shipped byte or a value this patch already wrote.
-        if (live != kShippedAllowance[i] && lb_setting_cap(i) == 0) return false;
+        // Accept either the shipped byte or a value this patch already wrote
+        // (BR-0015: also one a host's limit wrote, to be put back on leaving).
+        if (live != kShippedAllowance[i] && lb_setting_cap(i) == 0 &&
+            live != g_caps_written[i]) return false;
     }
     return true;
 }
@@ -5776,6 +6161,25 @@ bool g_caps_announced = false;
 
 void apply_caps() {
     if (!allowance_table_valid()) return;
+    {   // BR-0015: say which limits are in the game whenever they change
+        static int last[kAllowanceClasses] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
+        int now[kAllowanceClasses];
+        bool changed = false;
+        for (int i = 0; i < kAllowanceClasses; ++i) {
+            int w = lb_setting_cap(i);
+            if (w <= 0) w = kShippedAllowance[i];
+            now[i] = w > 255 ? 255 : w;
+            if (now[i] != last[i]) changed = true;
+        }
+        if (changed) {
+            for (int i = 0; i < kAllowanceClasses; ++i) last[i] = now[i];
+            std::fprintf(stderr, "[lb_patch] build limits now %d,%d,%d,%d,%d,%d,%d,%d,%d,%d "
+                         "(%s)\n", now[0], now[1], now[2], now[3], now[4], now[5],
+                         now[6], now[7], now[8], now[9],
+                         lb_rules_host_settings(nullptr) >= 0 ? "the host's" : "this machine's");
+            std::fflush(stderr);
+        }
+    }
     for (int i = 0; i < kAllowanceClasses; ++i) {
         int want = lb_setting_cap(i);
         if (want <= 0) want = kShippedAllowance[i];      // restore vanilla
@@ -5783,6 +6187,7 @@ void apply_caps() {
         const uint32_t at = kAllowanceTable + (uint32_t)i;
         if (bus_read_u8(at) != (uint8_t)want) {
             bus_write_u8(at, (uint8_t)want);
+            g_caps_written[i] = (int16_t)want;
             if (!g_caps_announced) {
                 g_caps_announced = true;
                 std::fprintf(stderr,
@@ -6475,7 +6880,30 @@ static void apply_camera_view_size(void) {
         const int min_ty = (int)bus_read_u8(lo + 5u);
         const int max_tx = (int)bus_read_u8(hi + 4u);
         const int max_ty = (int)bus_read_u8(hi + 5u);
-        if (max_tx >= min_tx && max_ty >= min_ty) {
+        // BR-0007: validate the rect against the map object. After a reset
+        // (or between levels) the cached camera object reads zeroes, which
+        // used to publish a 24x16 world and blow the zoom up to its maximum.
+        const uint32_t map_obj = bus_read_u32(0x02156CB0u);
+        int map_tw = 0, map_th = 0;
+        if (map_obj >= 0x02000000u && map_obj < 0x02400000u) {
+            map_tw = (int)bus_read_u8(map_obj + 0x14u);
+            map_th = (int)bus_read_u8(map_obj + 0x15u);
+        }
+        const bool rect_ok = max_tx >= min_tx && max_ty >= min_ty &&
+                             max_tx < map_tw && max_ty < map_th &&
+                             (max_tx - min_tx + 1) >= 12 &&
+                             (max_ty - min_ty + 1) >= 12;
+        if (!rect_ok) {
+            if (g_world_w || g_world_h) {
+                std::fprintf(stderr, "[lb_world] extent cleared (camera object "
+                             "%08X rect %d,%d..%d,%d invalid for map %dx%d)\n",
+                             cam_obj, min_tx, min_ty, max_tx, max_ty,
+                             map_tw, map_th);
+                std::fflush(stderr);
+            }
+            g_world_w = g_world_h = 0;
+        }
+        if (rect_ok) {
             world_w = (max_tx - min_tx + 1) * 24;
             world_h = (max_ty - min_ty + 1) * 16;
             if (world_w != g_world_w || world_h != g_world_h) {
@@ -6488,6 +6916,11 @@ static void apply_camera_view_size(void) {
             if (gw > world_w) gw = world_w;
             if (gh > world_h) gh = world_h;
         }
+    } else if (g_world_w || g_world_h) {
+        // No camera object: no level is up. Do not keep the last map's extent.
+        std::fprintf(stderr, "[lb_world] extent cleared (no camera object)\n");
+        std::fflush(stderr);
+        g_world_w = g_world_h = 0;
     }
     const int want_gw = gw, want_gh = gh;
 
@@ -8797,7 +9230,10 @@ static void apply_cheats(void) {
                                  "cheat %d on\n", flags, i);
                 }
             }
-        } else if (last_want[i] == 1) {
+        } else if (last_want[i] == 1 ||
+                   (lb_setting_cheats_locked() && bus_read_u8(flags + (uint32_t)i))) {
+            // BR-0011: joined, the host's cheats are the only ones; one set
+            // through the cartridge's own screen is held off too.
             bus_write_u8(flags + (uint32_t)i, 0u);
         }
         last_want[i] = want;
@@ -10761,8 +11197,9 @@ static void apply_order_fix(void) {
     std::fflush(stderr);
 }
 
+static int g_hw_anything_applied = 0;   // 0 = stock, 1 = patched (BR-0011: read by the Ready gate)
 static void apply_hotwire_anything(void) {
-    static int applied = 0;           // 0 = stock, 1 = patched
+    int& applied = g_hw_anything_applied;
     static unsigned gen = 0;          // docs/396: a reset restores stock
     if (gen != g_boot_gen) { gen = g_boot_gen; applied = 0; }
     const int want = lb_setting_hotwire_anything();
@@ -11016,6 +11453,97 @@ static void apply_ai_hero_rebuild(void) {
     applied = want;
     std::fprintf(stderr, "[lb_aihero] the AI rebuilds its hero every time: %s "
                  "(%08X)\n", want ? "ON" : "off", p.addr);
+    std::fflush(stderr);
+}
+
+// SG-0017 step 1: THE AI'S ENTITY-CAST BRANCH IS DEAD CODE. FUN_02097A08 tests
+// `flags & 1` (ground spell), and at 0x02097A60 `cmp r1,#0` -- r1 is always 0
+// there -- so the kind-1 (entity target) cast is unreachable: the chooser finds
+// a target for tap spells and the caster drops the cast. `lsls r1,r2,#26`
+// (r2 still holds the flags) leaves Z set exactly when no bit 1..5 is set, so
+// the existing beq skips only the self-cast spells. Offline only.
+static void apply_ai_tap_spells(void) {
+    static int applied = 0;
+    static unsigned gen = 0;
+    if (gen != g_boot_gen) { gen = g_boot_gen; applied = 0; }
+    const int want = (lb_net_guest_state() <= 0 && lb_setting_ai_tap_spells()) ? 1 : 0;
+    if (want == applied) return;
+    const uint32_t got = bus_read_u16(0x02097A60u);
+    if (got != 0x2900u && got != 0x0691u) return;   // not loaded, or not this build
+    bus_write_u16(0x02097A60u, want ? 0x0691u : 0x2900u);
+    applied = want;
+    std::fprintf(stderr, "[lb_aispell] the AI uses targeted spells: %s\n",
+                 want ? "ON" : "off");
+    std::fflush(stderr);
+}
+
+// BR-0012a: MORE THAN ONE AI HERO WHEN THE HERO CAP IS RAISED. The AI's queue
+// (FUN_02094A9C) never reads the cap table: it queues a hero only when it has
+// NO live hero (0x02094AC2 `cmp r0,#1`) and no hero item (0x02094AD0..AD4), and
+// then empties its item list (BL at 0x02094AF4). With the cap N > 1 and the
+// rebuild option on, those three sites become: alive < N, used hero items
+// < N-1 (the map-placed hero has no item), and no wipe (the wipe would erase
+// the first hero's item). Offline only, like the rebuild option; stock bytes
+// whenever either is off.
+struct AiHeroSite { uint32_t addr; uint16_t stock; };
+constexpr AiHeroSite kAiHeroSites[] = {
+    {0x02094AC2u, 0x2801u}, {0x02094AD0u, 0x0600u}, {0x02094AD2u, 0x0E00u},
+    {0x02094AD4u, 0xD13Au}, {0x02094AF4u, 0xF7F8u}, {0x02094AF6u, 0xF832u},
+};
+
+static void apply_ai_hero_multi(void) {
+    static int applied = 1;            // the hero count the code is patched for
+    static unsigned gen = 0;
+    if (gen != g_boot_gen) { gen = g_boot_gen; applied = 1; }
+    int want = 1;
+    const int rebuild = lb_demo_play_ai_hero_rebuild() >= 0
+                            ? lb_demo_play_ai_hero_rebuild() : lb_ai_hero_rebuild_live();
+    if (rebuild && lb_net_guest_state() <= 0) {
+        want = lb_setting_cap(0);
+        if (want < 1) want = 1;
+        if (want > 255) want = 255;
+    }
+    if (want == applied) return;
+    for (const AiHeroSite& s : kAiHeroSites) {
+        const uint32_t got = bus_read_u16(s.addr);
+        if (got == s.stock) continue;
+        // Already ours? (a patched value; anything else is another build)
+        bool ours = false;
+        switch (s.addr) {
+            case 0x02094AC2u: ours = (got & 0xFF00u) == 0x2800u; break;
+            case 0x02094AD0u: ours = (got & 0xFF00u) == 0x2800u; break;
+            case 0x02094AD2u: ours = got == 0xD23Bu; break;
+            case 0x02094AD4u: ours = got == 0x46C0u; break;
+            default:          ours = got == 0x46C0u; break;
+        }
+        if (!ours) return;             // not loaded yet, or not this build
+    }
+    auto wr = [](uint32_t a, uint16_t v) { bus_write_u16(a, v); };
+    if (want <= 1) {
+        for (const AiHeroSite& s : kAiHeroSites) wr(s.addr, s.stock);
+    } else {
+        // LB_AIHERO_SITES=<mask> (test aid): 1 alive gate, 2 item gate, 4 wipe.
+        static const int mask = [] {
+            const char* v = std::getenv("LB_AIHERO_SITES");
+            return v ? std::atoi(v) : 7;
+        }();
+        if (mask & 1) wr(0x02094AC2u, (uint16_t)(0x2800u | (uint32_t)want));
+        if (mask & 2) {
+            // The callee returns a small clean count, so the caller's
+            // lsls/lsrs mask goes: cmp r0,#N-1 ; bhs <skip> ; nop. (No UXTB:
+            // the ARM9 is ARMv5.)
+            wr(0x02094AD0u, (uint16_t)(0x2800u | (uint32_t)(want - 1)));
+            wr(0x02094AD2u, 0xD23Bu);
+            wr(0x02094AD4u, 0x46C0u);
+        }
+        if (mask & 4) {
+            wr(0x02094AF4u, 0x46C0u);
+            wr(0x02094AF6u, 0x46C0u);
+        }
+    }
+    applied = want;
+    std::fprintf(stderr, "[lb_aihero] the AI may field %d heroes (%s)\n", want,
+                 want > 1 ? "patched" : "stock");
     std::fflush(stderr);
 }
 
@@ -11298,7 +11826,8 @@ static void apply_aihero_kill(void) {
         if (owner != 0u && !victim) victim = e;
     }
     std::fprintf(stderr, "%s\n", line);
-    if (victim && !g_hp_victim) {
+    static const bool nokill = std::getenv("LB_AIHERO_NOKILL") != nullptr;
+    if (victim && !g_hp_victim && !nokill) {
         g_hp_victim = victim;   // commit_bgs_override calls SetHealth(e, 0)
         std::fprintf(stderr, "[lb_aihero] round %d: killing %08X (owner %u)\n",
                      round, victim, (unsigned)bus_read_u8(victim + 0xE4u));
@@ -11308,6 +11837,70 @@ static void apply_aihero_kill(void) {
 
 // docs/410: LB_BPCENSUS=<seconds> logs, that often in a battle, the live
 // Wolves (169), Robots (138) and Sharks (155) of each owner. Test aid only.
+// BR (mount picture bug): LB_SPRITE_DUMP=<seconds> logs how the sprite pages
+// are seated. The renderer (FUN_0203116C) reads a unit's page byte from
+// [[entity+0xE0]+4]+0x2E+4k, and FUN_0202E014 writes those bytes when the
+// roster is loaded; the 33 page slots have a hash (0x02151E04), an in-use flag
+// (0x02151DE0) and a fixed type (0x02127B28). Dumps the session's per-player
+// flag, the slot tables and, per unit, owner / blueprint / record / the 11
+// page bytes -- once per change. Test aid only.
+static void sprite_dump(void) {
+    static const int secs = [] {
+        const char* v = std::getenv("LB_SPRITE_DUMP");
+        return v ? std::atoi(v) : 0;
+    }();
+    if (secs <= 0) return;
+    int cx = 0, cy = 0;
+    if (!lb_field_camera(&cx, &cy)) return;
+    static int tick = 0;
+    if (++tick < secs * 60) return;
+    tick = 0;
+    const uint32_t pool = bus_read_u32(kEntityPoolPtr);
+    if (!guest_ptr(pool)) return;
+    const uint32_t array = bus_read_u32(pool + 8u);
+    const int32_t count = (int32_t)bus_read_u32(pool + 0xCu);
+    if (!guest_ptr(array) || count <= 0) return;
+    std::string out;
+    char b[200];
+    std::snprintf(b, sizeof b, "[lb_sprites] session+0x74=%u slots (type/flag/hash):",
+                  bus_read_u32(0x02156A24u + 0x74u));
+    out += b;
+    for (uint32_t i = 0; i < 33; ++i) {
+        const uint32_t h = bus_read_u32(0x02151E04u + 4u * i);
+        const uint32_t ty = bus_read_u32(0x02127B28u + 4u * i);
+        if (!h) continue;
+        std::snprintf(b, sizeof b, " [%u:t%u f%u %08X]", i, ty,
+                      bus_read_u8(0x02151DE0u + i), h);
+        out += b;
+    }
+    out += "\n";
+    for (int32_t i = 0; i < count && i < 4096; ++i) {
+        const uint32_t e = bus_read_u32(array + (uint32_t)i * 4u);
+        if (!guest_ptr(e)) continue;
+        const uint32_t kobj = bus_read_u32(e + 0xE0u);
+        const uint32_t rec = guest_ptr(kobj) ? bus_read_u32(kobj + 4u) : 0u;
+        if (!guest_ptr(rec)) continue;
+        const uint8_t cat = entity_category(e);
+        if (cat > 6u && cat != 7u) continue;      // units and the base only
+        const uint32_t bp = unit_blueprint(e);
+        std::snprintf(b, sizeof b,
+                      "[lb_sprites] e%08X owner %u bp %u cat %u rec %08X pages:",
+                      e, (unsigned)bus_read_u8(e + 0xE4u),
+                      bp ? (unsigned)bus_read_u16(bp + 4u) : 0u, (unsigned)cat, rec);
+        out += b;
+        for (uint32_t k = 0; k < 11; ++k) {
+            std::snprintf(b, sizeof b, " %u", bus_read_u8(rec + 0x2Eu + 4u * k));
+            out += b;
+        }
+        out += "\n";
+    }
+    static std::string last;
+    if (out == last) return;
+    last = out;
+    std::fputs(out.c_str(), stderr);
+    std::fflush(stderr);
+}
+
 static void bp_census(void) {
     static const int secs = [] {
         const char* v = std::getenv("LB_BPCENSUS");
@@ -12182,7 +12775,10 @@ static void apply_player_name(void) {
 // overrides live in the dispatch table, not in guest memory, and stay.
 extern "C" void lb_balance_on_reset(void);   /* lb_balance.cpp */
 extern "C" void lb_demo_on_reset(void);      /* lb_demo.cpp */
+extern "C" void lb_field_reset(void);        /* lb_field.cpp */
 extern "C" void lb_port_on_guest_reset(void) {
+    lb_field_reset();                // BR-0007: the cached camera object is gone
+    g_world_w = g_world_h = 0;       // and so is the last level's extent
     ++g_boot_gen;
     g_blueprint_base = 0u;
     g_bp_settled = false;
@@ -12191,9 +12787,20 @@ extern "C" void lb_port_on_guest_reset(void) {
     g_detail_done = false;
     g_leader_done = false;
     g_plant_done = false;
+    // BR-0014: the cartridge rebuilds its mission registry on a Reset, so the
+    // mod maps must be registered again, and a cached lobby translation points
+    // at a mission that is gone.
+    g_mreg.phase = 0;
+    g_mreg.sp = g_mreg.lr = 0;
+    g_lobby_key = 0;
+    g_lobby_want = 0xFFFFFFFFu;
+    g_lobby_withheld = false;
     g_fp_applied = 0;
     g_fp_applied_y = 0;
     g_rename_pending = false;
+    g_title_seen = false;            // SG-0016: the logos run again
+    g_skip_from = g_kb_vblanks;
+    g_skip_logged = false;
     g_profile_save_pending = false;
     g_save_call.active = false;
     g_kc.active = false;
@@ -12233,6 +12840,8 @@ extern "C" void lb_patches_on_vblank(void) {
     apply_emp_transports();           // docs/406
     apply_ai_cheats();
     apply_ai_hero_rebuild();
+    apply_ai_hero_multi();
+    apply_ai_tap_spells();
     brick_log();
     cam_rest_log();                   // docs/408 test aid
     // Move the order path off the cartridge's byte touch
@@ -12243,6 +12852,7 @@ extern "C" void lb_patches_on_vblank(void) {
     apply_kill_test();
     apply_aihero_kill();              // docs/406 test aid
     bp_census();                      // docs/410 test aid
+    sprite_dump();                    // mount picture bug test aid
     apply_insn_hook_policy();
     // Fill the tilemap columns the guest leaves empty, so the widened field
     // shows terrain rather than black. Off unless LB_WIDEMAP is set.
@@ -12509,6 +13119,7 @@ extern "C" const char* lb_balance_host_set_why(void) {
     if (lb_balance_applied_slot() != lb_balance_host_slot()) return "the pack is not in";
     if (g_builders_patched != b) return "Same Builders is not in";
     if (g_creatures_patched != (lb_creatures_live() ? 1 : 0)) return "the creatures rule is not in";
+    if (!lb_host_rules_current()) return lb_host_rules_why();
     if (lb_balance_custom_dirty()) {
         const char* why = host_layer_blocked();
         return why ? why : "the values are not written yet";
@@ -12516,8 +13127,35 @@ extern "C" const char* lb_balance_host_set_why(void) {
     return "in force";
 }
 
+// BR-0011 / BR-0015: whether the host's 'S' settings (hotwire targets, the build
+// limits, the cheats) are in the game here. The rest take effect through their
+// accessors at once. Not joined (or not in a lobby): nothing to wait for.
+extern "C" const char* lb_host_rules_why(void) {
+    if (lb_rules_host_settings(nullptr) < 0) return "in force";
+    if (g_hw_anything_applied != lb_setting_hotwire_anything())
+        return "the hotwire rule is not in";
+    if (allowance_table_valid())
+        for (int i = 0; i < kAllowanceClasses; ++i) {
+            int want = lb_setting_cap(i);
+            if (want <= 0) want = kShippedAllowance[i];
+            if (want > 255) want = 255;
+            if (bus_read_u8(kAllowanceTable + (uint32_t)i) != (uint8_t)want)
+                return "the build limits are not in";
+        }
+    const uint32_t flags = bus_read_u32(kCheatFlagsPtr);
+    if (flags >= 0x02000000u && flags < 0x02400000u)
+        for (int i = 0; i < lb_setting_cheat_count() && i < 32; ++i)
+            if ((bus_read_u8(flags + (uint32_t)i) != 0u) != (lb_setting_cheat(i) != 0))
+                return "the cheats are not in";
+    return "in force";
+}
+extern "C" int lb_host_rules_current(void) {
+    return std::strcmp(lb_host_rules_why(), "in force") == 0;
+}
+
 extern "C" int lb_balance_host_set_current(void) {
     if (!lb_balance_host_on() || !g_blueprint_base || !g_bp_settled) return 0;
+    if (!lb_host_rules_current()) return 0;
     int b = lb_balance_host_builders();
     if (b < 0 || b > 6) b = 0;
     return lb_balance_applied_slot() == lb_balance_host_slot() &&

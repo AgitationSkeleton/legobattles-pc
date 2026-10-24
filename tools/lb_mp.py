@@ -53,9 +53,10 @@ import lb_exp  # noqa: E402
 #
 # --instances picks how many actually launch; the default stays 2 so every
 # existing invocation behaves exactly as before.
-PORTS = (19861, 19862, 19863)
+_OFF = int(os.environ.get("LB_HARNESS_OFFSET", "0") or 0)   # see lb_exp.py
+PORTS = tuple(p + _OFF for p in (19861, 19862, 19863))
 # The local-wireless base port. Instance N binds base + N.
-WIRELESS_BASE = 28900
+WIRELESS_BASE = 28900 + 100 * _OFF
 
 
 def launch(out, index, port, extra_env, base_port=None):

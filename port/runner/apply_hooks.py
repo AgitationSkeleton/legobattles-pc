@@ -1019,9 +1019,11 @@ def apply(runner_dir, imgui_dir):
             "   to the bottom screen, so the guest flipping POWCNT1 bit 15 cannot\n"
             "   swap what the single window is showing. Vanilla follows the bit. */\n"
             "extern \"C\" int lb_setting_enhanced(void);\n"
+            "extern \"C\" int lb_screens_swapped(void);   /* SG-0012 */\n"
             "static bool lb_engine_a_on_top(void) {\n"
-            "    if (lb_setting_enhanced()) return false;\n"
-            "    return (nds_powercontrol9() & 0x8000u) != 0;\n"
+            "    const bool swapped = lb_screens_swapped() != 0;\n"
+            "    if (lb_setting_enhanced()) return swapped;\n"
+            "    return ((nds_powercontrol9() & 0x8000u) != 0) != swapped;\n"
             "}")
 
     # Both routing sites, through the one helper. See 0e2.
@@ -7026,6 +7028,18 @@ def apply(runner_dir, imgui_dir):
             "                const float lb_fith = (float)win_h / 192.0f;\n"
             "                const float lb_capscale =\n"
             "                    lb_fitw < lb_fith ? lb_fitw : lb_fith;\n"
+            "                // BR-0007: never let the surface hit the renderer's\n"
+            "                // 1728x768 ceiling. A capped axis made cover scale\n"
+            "                // the other one up, the surface overflowed the\n"
+            "                // window, and the camera could not reach the\n"
+            "                // cropped edge columns. Flooring the scale keeps\n"
+            "                // the surface exactly the window.\n"
+            "                {\n"
+            "                    const float lb_fw = (float)win_w / 1728.0f;\n"
+            "                    const float lb_fh = (float)win_h / 768.0f;\n"
+            "                    const float lb_fl = lb_fw > lb_fh ? lb_fw : lb_fh;\n"
+            "                    if (lb_pscale < lb_fl) lb_pscale = lb_fl;\n"
+            "                }\n"
             "                if (lb_pscale > lb_capscale) lb_pscale = lb_capscale;\n"
             "                if (lb_pscale < 1.0f) lb_pscale = 1.0f;\n"
             "            }\n"
@@ -7208,6 +7222,76 @@ def apply(runner_dir, imgui_dir):
             "        lb_overlay_draw(presentation.windows[0], renderer);")
     done.append("frontend.cpp: single-window enhanced layout")
 
+    # 3b2. BR-0010 / SG-0011: DS VANILLA IN WINDOW PIXELS, like Enhanced.
+    #
+    #      Vanilla used SDL_RenderSetLogicalSize(canvas_width, 384), which
+    #      scales mouse events as well as drawing. The mouse gate and the
+    #      original tail of set_touch_from_mouse both assumed logical
+    #      coordinates, and the tail released at (0,0) -- the same defect
+    #      docs/224 fixed for Enhanced (the cartridge acts on the release
+    #      edge, at the position it reads then). Vanilla now draws into two
+    #      rects computed in window pixels (lb_overlay_vanilla_layout, which
+    #      also follows the Display tab's two size sliders and the screen
+    #      swap), publishes the touch screen's rect, and maps the mouse
+    #      through it, releasing where the pen last was.
+    replace(front,
+            "        } else {\n"
+            "            SDL_RenderSetLogicalSize(renderer,\n"
+            "                                     presentation.canvas_width,\n"
+            "                                     kScreenHeight * 2);\n"
+            "            render_screen(presentation, 0, top_rect);\n"
+            "            render_screen(presentation, 1, bottom_rect);\n"
+            "        }\n",
+            "        } else {\n"
+            "            /* legobattles-decomp BR-0010 / SG-0011: window pixels. */\n"
+            "            SDL_RenderSetLogicalSize(renderer, 0, 0);\n"
+            "            int lb_ww = 0, lb_wh = 0;\n"
+            "            SDL_GetRendererOutputSize(renderer, &lb_ww, &lb_wh);\n"
+            "            int lb_t[4], lb_b[4];\n"
+            "            lb_overlay_vanilla_layout(lb_ww, lb_wh, lb_w0, lb_w1,\n"
+            "                                      lb_t, lb_b);\n"
+            "            const SDL_Rect lb_top_dst{lb_t[0], lb_t[1], lb_t[2], lb_t[3]};\n"
+            "            const SDL_Rect lb_bot_dst{lb_b[0], lb_b[1], lb_b[2], lb_b[3]};\n"
+            "            render_screen(presentation, 0, lb_top_dst);\n"
+            "            render_screen(presentation, 1, lb_bot_dst);\n"
+            "            (void)top_rect;\n"
+            "            (void)bottom_rect;\n"
+            "        }\n")
+    replace(front,
+            "    if (!down || x < left || x >= left + kScreenWidth ||\n"
+            "        y < bottom_origin || y >= bottom_origin + kScreenHeight) {\n"
+            "        nds_set_touch(0, 0, false);\n"
+            "        return;\n"
+            "    }\n",
+            "    {   /* legobattles-decomp BR-0010: the published touch rect, in\n"
+            "           window pixels; a release stays where the pen was. */\n"
+            "        int lb_tx = 0, lb_ty = 0, lb_tw = 0, lb_th = 0;\n"
+            "        if (!lb_setting_enhanced() &&\n"
+            "            lb_overlay_touch_rect(&lb_tx, &lb_ty, &lb_tw, &lb_th)) {\n"
+            "            if (!down || window_x < lb_tx || window_x >= lb_tx + lb_tw ||\n"
+            "                window_y < lb_ty || window_y >= lb_ty + lb_th) {\n"
+            "                nds_set_touch((uint16_t)lb_last_touch_x,\n"
+            "                              (uint16_t)lb_last_touch_y, false);\n"
+            "                return;\n"
+            "            }\n"
+            "            lb_last_touch_x = std::clamp<int>(\n"
+            "                (window_x - lb_tx) * kScreenWidth / lb_tw, 0,\n"
+            "                kScreenWidth - 1);\n"
+            "            lb_last_touch_y = std::clamp<int>(\n"
+            "                (window_y - lb_ty) * kScreenHeight / lb_th, 0,\n"
+            "                kScreenHeight - 1);\n"
+            "            nds_set_touch((uint16_t)lb_last_touch_x,\n"
+            "                          (uint16_t)lb_last_touch_y, true);\n"
+            "            return;\n"
+            "        }\n"
+            "    }\n"
+            "    if (!down || x < left || x >= left + kScreenWidth ||\n"
+            "        y < bottom_origin || y >= bottom_origin + kScreenHeight) {\n"
+            "        nds_set_touch(lb_last_touch_x, lb_last_touch_y, false);\n"
+            "        return;\n"
+            "    }\n")
+    done.append("frontend.cpp: vanilla in window pixels, published touch rect")
+
     # 3c. Vanilla / Enhanced, switchable while the game runs.
     #
     #     Enhanced lets the window take any size and widens the
@@ -7301,6 +7385,34 @@ def apply(runner_dir, imgui_dir):
           "  /* legobattles-decomp: item 4 */"],
          indent="    ")
     done.append("frontend.cpp: rebindable controller input")
+
+    #     BR-0001: Tab is the runner's hold-to-turbo key, tested BEFORE
+    #     key_bit(), so a DS button bound to Tab never saw the key. Turbo now
+    #     takes Tab only while the player has not bound it to a button.
+    replace(front,
+            "} else if (event.key.keysym.scancode == SDL_SCANCODE_TAB) {\n"
+            "                    turbo_pressed = true;",
+            "} else if (event.key.keysym.scancode == SDL_SCANCODE_TAB &&\n"
+            "                           !lb_binding_key_bit((int)SDL_SCANCODE_TAB)) {\n"
+            "                    turbo_pressed = true;  /* legobattles-decomp: BR-0001 */")
+    replace(front,
+            "if (event.key.keysym.scancode == SDL_SCANCODE_TAB) {\n"
+            "                    turbo_pressed = false;",
+            "if (event.key.keysym.scancode == SDL_SCANCODE_TAB &&\n"
+            "                    !lb_binding_key_bit((int)SDL_SCANCODE_TAB)) {\n"
+            "                    turbo_pressed = false;  /* legobattles-decomp: BR-0001 */")
+    done.append("frontend.cpp: Tab turbo yields to a Tab binding (BR-0001)")
+
+    #     SG-0016: "Skip the intro screens" runs the boot at turbo speed until
+    #     the title shows (lb_boot_skip_wanted, lb_patches.cpp).
+    replace(front,
+            "        if (turbo_pressed != turbo_active) {\n"
+            "            turbo_active = turbo_pressed;",
+            "        const bool lb_turbo_want =\n"
+            "            turbo_pressed || lb_boot_skip_wanted();  /* SG-0016 */\n"
+            "        if (lb_turbo_want != turbo_active) {\n"
+            "            turbo_active = lb_turbo_want;")
+    done.append("frontend.cpp: turbo can be requested by the intro skip (SG-0016)")
 
     # 4. Draw, on the BOTTOM screen only. The ImGui SDL_Renderer backend binds
     #    to a single renderer, so the overlay must be drawn for exactly one of
@@ -7489,6 +7601,10 @@ def apply(runner_dir, imgui_dir):
           "src/lb_sfx.cpp",
           # The picture of a match for the Discord log (docs/428).
           "src/lb_matchpic.cpp",
+          # Map bans, Random maps, ban presets (docs/429).
+          "src/lb_mapbans.cpp",
+          # Discord Rich Presence (docs/430), for <windows.h>.
+          "src/lb_discord.cpp",
           # The first-run setup (docs/394).
           "src/lb_setup.cpp",
           "%s/imgui.cpp" % imgui,

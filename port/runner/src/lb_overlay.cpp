@@ -78,6 +78,12 @@ int lb_widemap_cam_px(int* x, int* y);     /* src/lb_widemap.cpp */
 #include <ctime>    /* docs/388: the save cache's timestamps */
 #include <atomic>   /* docs/396: the Reset request */
 #include <mutex>    /* docs/413: the notice, set from the emulation thread */
+#include <thread>   /* docs/430: the update check's own thread */
+
+// lb_https.cpp (WinHTTP); defined outside any namespace.
+bool lb_https_request(const std::string& host, int port, const std::string& method,
+                      const std::string& path, const std::string& body,
+                      std::string* reply, std::string* error);
 extern "C" int lb_demo_playing(void);   /* lb_demo.cpp */
 
 namespace {
@@ -134,6 +140,9 @@ struct Settings {
     // Optional HUD magnification. The in-field buttons are sized for a
     // 256-px screen and look tiny on a wide one.
     float hud_scale = 1.0f;
+    // SG-0011: DS Vanilla's two screens, each as a share of the stacked
+    // layout (1.0 each is the DS's own, equal sizes).
+    float top_scale = 1.0f, bottom_scale = 1.0f;
     // Guest pixels per window pixel. The surface is sized window/scale, so
     // a bigger window spends the extra on FIELD OF VIEW at a constant
     // magnification instead of enlarging the same picture.
@@ -170,6 +179,7 @@ struct Settings {
     bool chat_toasts = true;
     bool swear_filter = true;
     int chat_key = SDL_SCANCODE_T;
+    int swap_key = 0;             // SG-0012: swap the two screens; 0 = unbound
     int force_tileset = 0;
     // docs/383: Space and right-click deselect,
     // Mouse 5 opens the blue brick menu and Mouse 4 the red/yellow/white one.
@@ -188,6 +198,15 @@ struct Settings {
     int enemy_team[LB_TEAM_SLOTS] = {0, 2, 3, 4, 5, 6, 7, 8, 9};
     char team_presets[2048] = "";
     char banned_units[512] = "";
+    // docs/429: map bans ("s5,h<hash>" tokens), the units banned on some maps
+    // only ("bp:tok+tok;..."), the ban preset in force and its banned maps,
+    // the Random map entries and Random team (tourney). All off/empty = vanilla.
+    char banned_maps[512] = "";
+    char unit_map_bans[768] = "";
+    char ban_preset[96] = "";
+    char ban_preset_maps[512] = "";
+    bool random_maps = false;
+    bool tourney_team = false;
     // docs/388: the last five armies read from the save, newest first, as
     // "YYYY-MM-DD HH:MM=p0,...,p8;...". Kept by save_cache_tick, never by a
     // control: a way back after Set Team (or the game) replaces the army.
@@ -289,6 +308,9 @@ struct Settings {
     // docs/406: the cheats' owner tests pass for every owner, so the AI
     // gets them too (lb_patches.cpp, kAiCheats). Offline only.
     bool ai_cheats = false;
+    // SG-0017: the computer's heroes cast targeted ("tap") spells too
+    // (lb_patches.cpp, apply_ai_tap_spells). Offline only.
+    bool ai_tap_spells = false;
 
     bool unlock_units = false;
     bool unlock_extras = false;   // the cheat codes (red bricks)
@@ -316,6 +338,12 @@ struct Settings {
     int  rename_claw_tank = 0;    // Crystal Reaper
     int  rename_gemma = 0;        // Doctor Kelvin
     int  rename_broadside = 0;    // Governor Tyranny
+    int  rename_assault_ship = 0; // Dragon Cruiser
+    int  rename_attack_ship = 0; // Crystal Extractor
+    int  rename_earth_transport = 0; // Recon Dropship
+    int  rename_alien_transport = 0; // Hyper Carrier
+    int  rename_starfighter = 0; // Switch Fighter
+    int  rename_starship1 = 0;  // Rocket
     // docs/392: the choice Free Play's opponent screen opens on -- 0..5 the
     // six factions in the game's order (King, Wizard, Pirate, Imperial,
     // Earth, Alien), 6 Custom, 7 Random. 1, Wizard, is the cartridge's own.
@@ -334,6 +362,9 @@ struct Settings {
     bool master_choice = false;
     bool master_https = true;
     bool match_picture = true;     // docs/428
+    bool discord_status = true;    // docs/430: Discord Rich Presence
+    bool discord_hero = true;      // docs/430: ... with the hero as the small image
+    bool update_check = true;      // docs/430: look for a newer release at startup
     // docs/420: a lobby's mod map this machine lacks is fetched from the archive.
     bool fetch_maps = true;
     bool fast_link = true;      // docs/423: the host-level WH
@@ -347,6 +378,7 @@ struct Settings {
     // game's lobby. player_name above is only used when this is off, or
     // before any profile is loaded.
     bool name_from_save = true;
+    bool skip_intro = false;      // SG-0016: fast-forward the boot logos to the title
     // The game's own Host screen advertises the lobby,
     // and its own Join screen reaches the master server's lobbies, with no
     // button in this panel. lb_net_auto_tick does both.
@@ -524,6 +556,8 @@ extern "C" void lb_settings_save(void) {
                   g_set.pixel_scale); o += buf;
     std::snprintf(buf, sizeof buf, "  \"hud_scale\": %.4f,\n",
                   g_set.hud_scale); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"top_scale\": %.4f,\n  \"bottom_scale\": %.4f,\n",
+                  g_set.top_scale, g_set.bottom_scale); o += buf;
     std::snprintf(buf, sizeof buf, "  \"steady_cadence\": %s,\n",
                   g_set.steady_cadence ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"level_palette\": %d,\n",
@@ -538,6 +572,8 @@ extern "C" void lb_settings_save(void) {
                   g_set.swear_filter ? "true" : "false"); o += buf;   // docs/415
     std::snprintf(buf, sizeof buf, "  \"chat_key\": %d,\n",
                   g_set.chat_key); o += buf;   // docs/415
+    std::snprintf(buf, sizeof buf, "  \"swap_key\": %d,\n",
+                  g_set.swap_key); o += buf;   // SG-0012
     std::snprintf(buf, sizeof buf, "  \"force_tileset\": %d,\n",
                   g_set.force_tileset); o += buf;
     std::snprintf(buf, sizeof buf, "  \"quick_keys\": %s,\n",
@@ -557,6 +593,14 @@ extern "C" void lb_settings_save(void) {
     json_put_str(o, "team_presets", g_set.team_presets, true);
     json_put_str(o, "team_save_cache", g_set.team_save_cache, true);
     json_put_str(o, "banned_units", g_set.banned_units, true);
+    json_put_str(o, "banned_maps", g_set.banned_maps, true);          // docs/429
+    json_put_str(o, "unit_map_bans", g_set.unit_map_bans, true);
+    json_put_str(o, "ban_preset", g_set.ban_preset, true);
+    json_put_str(o, "ban_preset_maps", g_set.ban_preset_maps, true);
+    std::snprintf(buf, sizeof buf, "  \"random_maps\": %s,\n",
+                  g_set.random_maps ? "true" : "false"); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"tourney_team\": %s,\n",
+                  g_set.tourney_team ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"balance_patch\": %d,\n",
                   g_set.balance_patch); o += buf;
     std::snprintf(buf, sizeof buf, "  \"hotwire_mode\": %d,\n",
@@ -594,6 +638,8 @@ extern "C" void lb_settings_save(void) {
     o += "],\n";
     std::snprintf(buf, sizeof buf, "  \"ai_cheats\": %s,\n",
                   g_set.ai_cheats ? "true" : "false"); o += buf;   // docs/406
+    std::snprintf(buf, sizeof buf, "  \"ai_tap_spells\": %s,\n",
+                  g_set.ai_tap_spells ? "true" : "false"); o += buf;   // SG-0017
     std::snprintf(buf, sizeof buf, "  \"unlock_units\": %s,\n",
                   g_set.unlock_units ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"unlock_extras\": %s,\n",
@@ -620,8 +666,22 @@ extern "C" void lb_settings_save(void) {
                   g_set.rename_gemma); o += buf;
     std::snprintf(buf, sizeof buf, "  \"rename_broadside\": %d,\n",
                   g_set.rename_broadside); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"rename_assault_ship\": %d,\n",
+                  g_set.rename_assault_ship); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"rename_attack_ship\": %d,\n",
+                  g_set.rename_attack_ship); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"rename_earth_transport\": %d,\n",
+                  g_set.rename_earth_transport); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"rename_alien_transport\": %d,\n",
+                  g_set.rename_alien_transport); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"rename_starfighter\": %d,\n",
+                  g_set.rename_starfighter); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"rename_starship1\": %d,\n",
+                  g_set.rename_starship1); o += buf;
     std::snprintf(buf, sizeof buf, "  \"default_opponent\": %d,\n",
                   g_set.default_opponent); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"skip_intro\": %s,\n",
+                  g_set.skip_intro ? "true" : "false"); o += buf;   // SG-0016
     std::snprintf(buf, sizeof buf, "  \"name_from_save\": %s,\n",
                   g_set.name_from_save ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"auto_advertise\": %s,\n",
@@ -639,6 +699,12 @@ extern "C" void lb_settings_save(void) {
                   g_set.master_https ? "true" : "false"); o += buf;   // docs/419
     std::snprintf(buf, sizeof buf, "  \"match_picture\": %s,\n",
                   g_set.match_picture ? "true" : "false"); o += buf;   // docs/428
+    std::snprintf(buf, sizeof buf, "  \"discord_status\": %s,\n",
+                  g_set.discord_status ? "true" : "false"); o += buf;   // docs/430
+    std::snprintf(buf, sizeof buf, "  \"discord_hero\": %s,\n",
+                  g_set.discord_hero ? "true" : "false"); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"update_check\": %s,\n",
+                  g_set.update_check ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"fetch_maps\": %s,\n",
                   g_set.fetch_maps ? "true" : "false"); o += buf;   // docs/420
     std::snprintf(buf, sizeof buf, "  \"fast_link\": %s,\n",
@@ -684,6 +750,8 @@ extern "C" void lb_settings_load(void) {
     // loads and simply keeps 2.0 and 1.0.
     json_get_float(s, "pixel_scale", &g_set.pixel_scale);
     json_get_float(s, "hud_scale", &g_set.hud_scale);
+    json_get_float(s, "top_scale", &g_set.top_scale);          // SG-0011
+    json_get_float(s, "bottom_scale", &g_set.bottom_scale);
     // A file written before this key existed keeps the default (steady).
     json_get_bool(s, "steady_cadence", &g_set.steady_cadence);
     json_get_int(s, "level_palette", &g_set.level_palette);   // docs/387
@@ -696,6 +764,8 @@ extern "C" void lb_settings_load(void) {
     json_get_int(s, "chat_key", &g_set.chat_key);              // docs/415
     if (g_set.chat_key <= 0 || g_set.chat_key >= SDL_NUM_SCANCODES)
         g_set.chat_key = SDL_SCANCODE_T;
+    json_get_int(s, "swap_key", &g_set.swap_key);              // SG-0012
+    if (g_set.swap_key < 0 || g_set.swap_key >= SDL_NUM_SCANCODES) g_set.swap_key = 0;
     if (g_set.mod_palette < 0 || g_set.mod_palette > 4) g_set.mod_palette = 0;
     if (g_set.force_tileset < 0 || g_set.force_tileset > 4) g_set.force_tileset = 0;
     json_get_bool(s, "quick_keys", &g_set.quick_keys);   // docs/383, default on
@@ -707,6 +777,12 @@ extern "C" void lb_settings_load(void) {
     json_get_str(s, "team_save_cache", g_set.team_save_cache,
                  sizeof g_set.team_save_cache);   // docs/388
     json_get_str(s, "banned_units", g_set.banned_units, sizeof g_set.banned_units);
+    json_get_str(s, "banned_maps", g_set.banned_maps, sizeof g_set.banned_maps);   // docs/429
+    json_get_str(s, "unit_map_bans", g_set.unit_map_bans, sizeof g_set.unit_map_bans);
+    json_get_str(s, "ban_preset", g_set.ban_preset, sizeof g_set.ban_preset);
+    json_get_str(s, "ban_preset_maps", g_set.ban_preset_maps, sizeof g_set.ban_preset_maps);
+    json_get_bool(s, "random_maps", &g_set.random_maps);
+    json_get_bool(s, "tourney_team", &g_set.tourney_team);
     json_get_int(s, "balance_patch", &g_set.balance_patch);
     json_get_int(s, "hotwire_mode", &g_set.hotwire_mode);
     json_get_int(s, "hotwire_transport", &g_set.hotwire_transport);
@@ -728,6 +804,7 @@ extern "C" void lb_settings_load(void) {
     json_get_ints(s, "cap", g_set.cap, 10);
     json_get_bools(s, "cheat", g_set.cheat, 18);
     json_get_bool(s, "ai_cheats", &g_set.ai_cheats);   // docs/406
+    json_get_bool(s, "ai_tap_spells", &g_set.ai_tap_spells);   // SG-0017
     json_get_bool(s, "unlock_units", &g_set.unlock_units);
     json_get_bool(s, "unlock_extras", &g_set.unlock_extras);
     json_get_bool(s, "unlock_maps", &g_set.unlock_maps);           // docs/407
@@ -744,12 +821,21 @@ extern "C" void lb_settings_load(void) {
     json_get_int(s, "rename_claw_tank", &g_set.rename_claw_tank);   // docs/425
     json_get_int(s, "rename_gemma", &g_set.rename_gemma);
     json_get_int(s, "rename_broadside", &g_set.rename_broadside);
+    json_get_int(s, "rename_assault_ship", &g_set.rename_assault_ship);
+    json_get_int(s, "rename_attack_ship", &g_set.rename_attack_ship);
+    json_get_int(s, "rename_earth_transport", &g_set.rename_earth_transport);
+    json_get_int(s, "rename_alien_transport", &g_set.rename_alien_transport);
+    json_get_int(s, "rename_starfighter", &g_set.rename_starfighter);
+    json_get_int(s, "rename_starship1", &g_set.rename_starship1);
     json_get_int(s, "default_opponent", &g_set.default_opponent);   // docs/392
     json_get_str(s, "master_host", g_set.master_host, sizeof g_set.master_host);
     json_get_bool(s, "master_both", &g_set.master_both);     // docs/419
     json_get_bool(s, "master_choice", &g_set.master_choice); // docs/424
     json_get_bool(s, "master_https", &g_set.master_https);   // docs/419
     json_get_bool(s, "match_picture", &g_set.match_picture);   // docs/428
+    json_get_bool(s, "discord_status", &g_set.discord_status);   // docs/430
+    json_get_bool(s, "discord_hero", &g_set.discord_hero);
+    json_get_bool(s, "update_check", &g_set.update_check);
     json_get_bool(s, "fetch_maps", &g_set.fetch_maps);       // docs/420
     json_get_bool(s, "fast_link", &g_set.fast_link);         // docs/423
     json_get_int(s, "master_port", &g_set.master_port);
@@ -780,6 +866,7 @@ extern "C" void lb_settings_load(void) {
     }
     // A file written before these keys existed keeps the defaults (all on).
     json_get_bool(s, "name_from_save", &g_set.name_from_save);
+    json_get_bool(s, "skip_intro", &g_set.skip_intro);   // SG-0016
     json_get_bool(s, "auto_advertise", &g_set.auto_advertise);
     json_get_bool(s, "auto_browse", &g_set.auto_browse);
     json_get_bool(s, "upnp", &g_set.upnp);   // docs/405, default on
@@ -797,6 +884,12 @@ extern "C" void lb_settings_load(void) {
     if (g_set.rename_gemma < 0 || g_set.rename_gemma > 1) g_set.rename_gemma = 0;
     if (g_set.rename_broadside < 0 || g_set.rename_broadside > 1)
         g_set.rename_broadside = 0;
+    if (g_set.rename_assault_ship < 0 || g_set.rename_assault_ship > 1) g_set.rename_assault_ship = 0;
+    if (g_set.rename_attack_ship < 0 || g_set.rename_attack_ship > 1) g_set.rename_attack_ship = 0;
+    if (g_set.rename_earth_transport < 0 || g_set.rename_earth_transport > 1) g_set.rename_earth_transport = 0;
+    if (g_set.rename_alien_transport < 0 || g_set.rename_alien_transport > 1) g_set.rename_alien_transport = 0;
+    if (g_set.rename_starfighter < 0 || g_set.rename_starfighter > 1) g_set.rename_starfighter = 0;
+    if (g_set.rename_starship1 < 0 || g_set.rename_starship1 > 1) g_set.rename_starship1 = 0;
     if (g_set.default_opponent < 0 || g_set.default_opponent > 7)
         g_set.default_opponent = 1;
     std::fprintf(stderr, "[lb_settings] loaded %s\n", path.c_str());
@@ -940,6 +1033,8 @@ bool g_bindings_ready = false;
 int g_rebinding = -1;        // action waiting for a KEY, or -1
 int g_rebinding_pad = -1;    // action waiting for a PAD BUTTON, or -1
 bool g_rebinding_chat = false;   // docs/415: the chat key waits for a key
+bool g_rebinding_swap = false;   // SG-0012: the swap key waits for a key
+std::atomic<int> g_screens_swapped{0};   // SG-0012: this session's swap state
 bool g_chat_eat_text = false;    // docs/415: swallow the opening key's text
 
 void settings_load();
@@ -1047,6 +1142,20 @@ void settings_load() {
     std::fclose(fh);
     std::fprintf(stderr, "[lb_overlay] bindings loaded from %s\n",
                  kSettingsFile);
+}
+
+// BR-0011 / BR-0015: while joined, the host's hotwire, build-limit, cheat and
+// attack/healing settings are in force; the widgets show them and are locked.
+LbHostSettings g_hs;
+bool host_locked() { return lb_rules_host_settings(&g_hs) >= 0; }
+void host_lock_begin(bool l) { if (l) ImGui::BeginDisabled(); }
+void host_lock_end(bool l) { if (l) ImGui::EndDisabled(); }
+void host_lock_note(bool l) {
+    if (l) {
+        ImGui::PushTextWrapPos(0.0f);
+        ImGui::TextDisabled("This is the host's setting, in force while you are in its lobby or match. Yours returns when you leave.");
+        ImGui::PopTextWrapPos();
+    }
 }
 
 void host_note() {
@@ -1204,6 +1313,41 @@ void tab_display() {
          "Scaling pins the anchored corner and grows inward.");
     badge(WIRED);
 
+    if (!g_set.enhanced) {   // SG-0011: DS Vanilla's two screens
+        ImGui::Spacing();
+        struct Row { const char* label; const char* id; float* v; };
+        const Row rows[2] = {{"Top screen size", "##top_scale", &g_set.top_scale},
+                             {"Bottom screen size", "##bottom_scale", &g_set.bottom_scale}};
+        for (const Row& r : rows) {
+            float pct = *r.v * 100.0f;
+            ImGui::PushID(r.id);
+            {   // a slider, then a box to type a value, then the label
+                const float avail = ImGui::GetContentRegionAvail().x;
+                float w = avail - 230.0f;
+                if (w < 120.0f) w = 120.0f;
+                ImGui::SetNextItemWidth(w);
+                if (ImGui::SliderFloat("##sl", &pct, 25.0f, 200.0f, "%.0f%%"))
+                    *r.v = pct / 100.0f;
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(60.0f);
+                if (ImGui::InputFloat("##typed", &pct, 0.0f, 0.0f, "%.0f"))
+                    *r.v = pct / 100.0f;
+                ImGui::SameLine();
+                ImGui::TextUnformatted(r.label);
+            }
+            ImGui::PopID();
+            if (*r.v < 0.25f) *r.v = 0.25f;
+            if (*r.v > 2.0f) *r.v = 2.0f;
+            help("How big this screen is next to the other, in DS Vanilla. 100%\n"
+                 "each is the DS's own equal screens; the pair always fits the\n"
+                 "window, and clicks follow the bottom screen. Ctrl+click a\n"
+                 "slider, or use the box beside it, to type a value.\n"
+                 "This machine only; no effect online.");
+        }
+        if (ImGui::Button("Reset screen sizes")) g_set.top_scale = g_set.bottom_scale = 1.0f;
+        badge(WIRED);
+    }
+
     ImGui::Spacing();
     ImGui::Checkbox("Steady game pacing (30 Hz)", &g_set.steady_cadence);
     // docs/351. The cartridge's loop re-waits for a VBlank only when a pass
@@ -1266,6 +1410,14 @@ void tab_display() {
          "the game starts. Not offered when hosting a multiplayer game yet:\n"
          "every player would need the same maps.");
     badge(WIRED);
+    ImGui::Separator();
+    // SG-0016: the logos run on the game's own clock and cannot be tapped
+    // through, so the boot is simply run at full speed until the title shows.
+    ImGui::Checkbox("Skip the intro screens", &g_set.skip_intro);
+    help("Runs the opening logos at full speed so the game reaches its title\n"
+         "screen at once. Applies at start-up and after Reset. Local to this\n"
+         "machine; online play is unaffected.");
+    badge(WIRED);
     tab_end();
 }
 
@@ -1293,63 +1445,6 @@ void tab_enhancements() {
     badge(WIRED);
     ImGui::Separator();
 
-    ImGui::Text("Hotwire targets");
-    const char* hotwire_modes[] = {
-        "Vanilla",
-        "Specials only",
-        "Anything (cheat)"};
-    ImGui::Combo("##hotwire_mode", &g_set.hotwire_mode, hotwire_modes,
-                 IM_ARRAYSIZE(hotwire_modes));
-    // docs/392: the targeting rule is in the stylus tap (func_020A9350's
-    // filter, tags 0x2B enemy + 0x3B transport-or-special), not only in the
-    // validator func_0207B73C (docs/236's farm cap). Anything requires 0x2B
-    // twice, so a tap takes any enemy, and also drops the farm cap; Specials
-    // only refuses, as the validator's 0 would, a hotwire whose target is not
-    // category 5 or 6, which is exactly the glitch (cast_spell_override).
-    help("Vanilla aims Hotwire at enemy transports and specials; the glitch\n"
-         "steals whatever is under a special's corner. Specials only refuses\n"
-         "that glitch. Anything (cheat) lets Hotwire target any enemy unit,\n"
-         "hero or building directly, and drops the farm limit.");
-    badge(WIRED);
-
-    ImGui::Spacing();
-    ImGui::Text("Transport Occupants");
-    const char* transport_modes[] = {
-        "Off (vanilla)",
-        "Destroy them",
-        "Hotwire them"};
-    // docs/392: both live. When a transport is hotwired its occupants are
-    // destroyed with the game's own immediate kill (FUN_0205E78C, the call a
-    // dying transport makes on its occupants) or handed to the new owner by
-    // its own SetOwner, one guest call at a time (set_owner_override). The
-    // greyed-out "Destroy them" waited on a resumable call chain; the hop
-    // pattern of docs/383 is that.
-    if (g_set.hotwire_transport < 0 || g_set.hotwire_transport > 2)
-        g_set.hotwire_transport = 0;
-    ImGui::Combo("##hotwire_transport", &g_set.hotwire_transport,
-                 transport_modes, IM_ARRAYSIZE(transport_modes));
-    help("What happens to the units inside a transport when it is hotwired.\n"
-         "Off leaves them the old owner's, as the game does.");
-    badge(WIRED);
-    // docs/408: the computer player that owned it kept ordering it about.
-    ImGui::Checkbox("Hotwired Transports Leave Their Old Owner",
-                    &g_set.transport_release);
-    help("In the game, a transport stolen from the computer still sails\n"
-         "where its old owner sends it, and is let go when that order\n"
-         "ends. On, the old owner forgets it the moment it is hotwired.");
-    badge(WIRED);
-    ImGui::Spacing();
-    // docs/406: FUN_020775F0 collects the EMP's victims by category 6 only;
-    // the patch lets category 5 (transports) in as well.
-    ImGui::Checkbox("EMP Disables Transports", &g_set.emp_transports);
-    help("The EMP spell disables special units only.\n"
-         "On, it disables transports caught in it too. Online, the host's\n"
-         "setting applies to everyone.");
-    badge(WIRED);
-    if (lb_rules_host_flags() >= 0)
-        ImGui::TextDisabled("In this lobby, the host's: %s",
-                            lb_emp_transports_live() ? "On" : "Off");
-    ImGui::Spacing();
     // docs/406: FUN_0208A5C0 freed a dead hero's build record from the army
     // list instead of the hero's, so the AI's second hero was its last.
     ImGui::Checkbox("The AI Rebuilds Its Hero Every Time", &g_set.ai_hero_rebuild);
@@ -1360,10 +1455,18 @@ void tab_enhancements() {
     ImGui::Spacing();
     ImGui::Text("Attack Boost Reaches Ranged Units");
     const char* atk_modes[] = {"Off (vanilla)", "On"};
-    ImGui::Combo("##attack_boost_ranged", &g_set.attack_boost_ranged,
-                 atk_modes, IM_ARRAYSIZE(atk_modes));
+    {
+        const bool lk = host_locked();
+        host_lock_begin(lk);
+        int atk = lk ? g_hs.attack_boost : g_set.attack_boost_ranged;
+        ImGui::Combo("##attack_boost_ranged", &atk, atk_modes, IM_ARRAYSIZE(atk_modes));
+        if (!lk) g_set.attack_boost_ranged = atk;
+        host_lock_end(lk);
+        host_lock_note(lk);
+    }
     help("Vanilla buffs melee damage only; ranged keeps the projectile's own.\n"
-         "On adds the same delta to projectiles.");
+         "On adds the same delta to projectiles. Online, the host's\n"
+         "setting applies to everyone.");
     badge(UNSEEN);
     // The reasoning behind this setting lived in TEN TextDisabled lines, which
     // the panel then followed with a two-line summary of the same thing.
@@ -1398,9 +1501,6 @@ void tab_enhancements() {
     //     with a boosted ranged unit shooting. Badged UNSEEN, not READ.
     ImGui::Spacing();
 
-    ImGui::Checkbox("Fix Hotwired Healing", &g_set.fix_hotwired_healing);
-    help("HealSpell skips hotwired units; On removes that filter.");
-    badge(WIRED);
     {   // docs/396: a choice of builder, not only the Imperial one
         static const char* const kFrom[7] = {"Off", "King", "Wizard", "Pirate",
                                              "Imperial", "Earth", "Alien"};
@@ -1424,7 +1524,117 @@ void tab_enhancements() {
         ImGui::PopTextWrapPos();
     }
 
+
     ImGui::Separator();
+    // docs/404: the packs moved to the Balance menu, beside the player's own
+    // values (draw_balance_pack).
+    ImGui::Text("Balance Patch: %s", lb_balance_name(g_set.balance_patch));
+    ImGui::SameLine();
+    ImGui::TextDisabled("(set it, and every unit's values, in the Balance menu)");
+
+    // COSMETIC AND THIS MACHINE'S ONLY -- see below.
+    draw_after_balance_pack();
+}
+
+// SG-0001: the hotwire, EMP and healing options, in Balance > Spells.
+void tab_balance_spells() {
+    if (!tab_begin("Balance Spells")) return;
+    guide("Rules for the Hotwire, EMP and Heal spells. Online, the host's choices apply to everyone.");
+    ImGui::Text("Hotwire targets");
+    const char* hotwire_modes[] = {
+        "Vanilla",
+        "Specials only",
+        "Anything (cheat)"};
+    const bool hw_lock = host_locked();   // BR-0011
+    host_lock_begin(hw_lock);
+    {
+        int hm = hw_lock ? g_hs.hotwire_mode : g_set.hotwire_mode;
+        ImGui::Combo("##hotwire_mode", &hm, hotwire_modes, IM_ARRAYSIZE(hotwire_modes));
+        if (!hw_lock) g_set.hotwire_mode = hm;
+    }
+    // docs/392: the targeting rule is in the stylus tap (func_020A9350's
+    // filter, tags 0x2B enemy + 0x3B transport-or-special), not only in the
+    // validator func_0207B73C (docs/236's farm cap). Anything requires 0x2B
+    // twice, so a tap takes any enemy, and also drops the farm cap; Specials
+    // only refuses, as the validator's 0 would, a hotwire whose target is not
+    // category 5 or 6, which is exactly the glitch (cast_spell_override).
+    help("Vanilla aims Hotwire at enemy transports and specials; the glitch\n"
+         "steals whatever is under a special's corner. Specials only refuses\n"
+         "that glitch. Anything (cheat) lets Hotwire target any enemy unit,\n"
+         "hero or building directly, and drops the farm limit.");
+    badge(WIRED);
+
+    ImGui::Spacing();
+    ImGui::Text("Transport Occupants");
+    const char* transport_modes[] = {
+        "Off (vanilla)",
+        "Destroy them",
+        "Hotwire them"};
+    // docs/392: both live. When a transport is hotwired its occupants are
+    // destroyed with the game's own immediate kill (FUN_0205E78C, the call a
+    // dying transport makes on its occupants) or handed to the new owner by
+    // its own SetOwner, one guest call at a time (set_owner_override). The
+    // greyed-out "Destroy them" waited on a resumable call chain; the hop
+    // pattern of docs/383 is that.
+    if (g_set.hotwire_transport < 0 || g_set.hotwire_transport > 2)
+        g_set.hotwire_transport = 0;
+    {
+        int ht = hw_lock ? g_hs.hotwire_transport : g_set.hotwire_transport;
+        ImGui::Combo("##hotwire_transport", &ht, transport_modes,
+                     IM_ARRAYSIZE(transport_modes));
+        if (!hw_lock) g_set.hotwire_transport = ht;
+    }
+    help("What happens to the units inside a transport when it is hotwired.\n"
+         "Off leaves them the old owner's, as the game does.");
+    badge(WIRED);
+    // docs/408: the computer player that owned it kept ordering it about.
+    {
+        bool tr = hw_lock ? g_hs.transport_release != 0 : g_set.transport_release;
+        ImGui::Checkbox("Hotwired Transports Leave Their Old Owner", &tr);
+        if (!hw_lock) g_set.transport_release = tr;
+    }
+    help("In the game, a transport stolen from the computer still sails\n"
+         "where its old owner sends it, and is let go when that order\n"
+         "ends. On, the old owner forgets it the moment it is hotwired.");
+    badge(WIRED);
+    ImGui::Spacing();
+    // docs/406: FUN_020775F0 collects the EMP's victims by category 6 only;
+    // the patch lets category 5 (transports) in as well.
+    ImGui::Checkbox("EMP Disables Transports", &g_set.emp_transports);
+    help("The EMP spell disables special units only.\n"
+         "On, it disables transports caught in it too. Online, the host's\n"
+         "setting applies to everyone.");
+    badge(WIRED);
+    if (lb_rules_host_flags() >= 0)
+        ImGui::TextDisabled("In this lobby, the host's: %s",
+                            lb_emp_transports_live() ? "On" : "Off");
+    ImGui::Spacing();
+
+    {
+        bool fh = hw_lock ? g_hs.fix_healing != 0 : g_set.fix_hotwired_healing;
+        ImGui::Checkbox("Fix Hotwired Healing", &fh);
+        if (!hw_lock) g_set.fix_hotwired_healing = fh;
+    }
+    help("HealSpell skips hotwired units; On removes that filter.\n"
+         "Online, the host's setting applies to everyone.");
+    badge(WIRED);
+    host_lock_end(hw_lock);
+    host_lock_note(hw_lock);
+
+    // SG-0017 step 1: the AI's single-target spells.
+    ImGui::Spacing();
+    ImGui::Checkbox("AI Uses Targeted Spells", &g_set.ai_tap_spells);
+    help("The computer's heroes also cast the spells you aim at one unit\n"
+         "(damage spells, unit boosts). In the game they only cast spells\n"
+         "that hit the ground or themselves. Not online.");
+    badge(WIRED);
+    tab_end();
+}
+
+// SG-0001: the build limits, in Balance > Unit Caps.
+void tab_balance_caps() {
+    if (!tab_begin("Balance Caps")) return;
+    guide("How many heroes, units, towers and buildings each player may have. Online, the host's limits apply to everyone.");
     ImGui::Text("Build limits");
     // The allowance table at 0x02126D94 is one byte per build-limit CLASS,
     // not per unit type, which is why the names below are classes.
@@ -1476,13 +1686,22 @@ void tab_enhancements() {
     static const char* kCapName[10] = {
         "Heroes", "Minifigures", "Specials", "Towers", "Buildings",
         nullptr, "Walls", "Bridges", nullptr, nullptr};
+    const bool cap_lock = host_locked();
+    host_lock_note(cap_lock);
     for (int i = 0; i < 10; ++i) {
         if (!kCapName[i]) continue;          // 5, 8 and 9: see above
         ImGui::PushID(i);
         ImGui::SetNextItemWidth(120.0f);
-        ImGui::InputInt(kCapName[i], &g_set.cap[i]);
-        if (g_set.cap[i] < 0) g_set.cap[i] = 0;
-        if (g_set.cap[i] > 255) g_set.cap[i] = 255;
+        if (cap_lock) {
+            int hv = g_hs.caps[i];   // BR-0015: the host's, locked
+            ImGui::BeginDisabled();
+            ImGui::InputInt(kCapName[i], &hv);
+            ImGui::EndDisabled();
+        } else {
+            ImGui::InputInt(kCapName[i], &g_set.cap[i]);
+            if (g_set.cap[i] < 0) g_set.cap[i] = 0;
+            if (g_set.cap[i] > 255) g_set.cap[i] = 255;
+        }
         if (i == 4)
             help("Mill, Mine, Farm, Barracks, Vehicle Center and Shipyard.\n"
                  "Towers, Walls and Bridges have their own limits below;\n"
@@ -1492,16 +1711,7 @@ void tab_enhancements() {
         ImGui::PopID();
     }
     badge(WIRED);
-
-    ImGui::Separator();
-    // docs/404: the packs moved to the Balance menu, beside the player's own
-    // values (draw_balance_pack).
-    ImGui::Text("Balance Patch: %s", lb_balance_name(g_set.balance_patch));
-    ImGui::SameLine();
-    ImGui::TextDisabled("(set it, and every unit's values, in the Balance menu)");
-
-    // COSMETIC AND THIS MACHINE'S ONLY -- see below.
-    draw_after_balance_pack();
+    tab_end();
 }
 
 // docs/404: the balance packs, in Balance > Presets.
@@ -1678,6 +1888,73 @@ void tab_renames() {
          "Tyranny\"; the ship Lady Broadside is unchanged). Gameplay and other\n"
          "players are unaffected. A screen already open shows it once reopened.");
     badge(WIRED);
+
+    ImGui::Separator();
+    ImGui::Text("Rename Alien Assault Ship");
+    ImGui::SameLine();
+    ImGui::TextDisabled("(this machine only)");
+    const char* rename_assault_ship_names[] = {"Off", "Dragon Cruiser"};
+    ImGui::Combo("##rename_assault_ship", &g_set.rename_assault_ship,
+                 rename_assault_ship_names, IM_ARRAYSIZE(rename_assault_ship_names));
+    help("Cosmetic and local: Alien Assault Ship reads \"Dragon Cruiser\" in this\n"
+         "game's text only. Gameplay and other players are unaffected.\n"
+         "A screen already open shows it once reopened.");
+    badge(WIRED);
+
+    ImGui::Text("Rename Alien Attack Ship");
+    ImGui::SameLine();
+    ImGui::TextDisabled("(this machine only)");
+    const char* rename_attack_ship_names[] = {"Off", "Crystal Extractor"};
+    ImGui::Combo("##rename_attack_ship", &g_set.rename_attack_ship,
+                 rename_attack_ship_names, IM_ARRAYSIZE(rename_attack_ship_names));
+    help("Cosmetic and local: Alien Attack Ship reads \"Crystal Extractor\" in this\n"
+         "game's text only. Gameplay and other players are unaffected.\n"
+         "A screen already open shows it once reopened.");
+    badge(WIRED);
+
+    ImGui::Text("Rename Earth Transport Ship");
+    ImGui::SameLine();
+    ImGui::TextDisabled("(this machine only)");
+    const char* rename_earth_transport_names[] = {"Off", "Recon Dropship"};
+    ImGui::Combo("##rename_earth_transport", &g_set.rename_earth_transport,
+                 rename_earth_transport_names, IM_ARRAYSIZE(rename_earth_transport_names));
+    help("Cosmetic and local: the Earth Transport Ship reads \"Recon Dropship\" in this\n"
+         "game's text only. Gameplay and other players are unaffected.\n"
+         "A screen already open shows it once reopened.");
+    badge(WIRED);
+
+    ImGui::Text("Rename Alien Transport Ship");
+    ImGui::SameLine();
+    ImGui::TextDisabled("(this machine only)");
+    const char* rename_alien_transport_names[] = {"Off", "Hyper Carrier"};
+    ImGui::Combo("##rename_alien_transport", &g_set.rename_alien_transport,
+                 rename_alien_transport_names, IM_ARRAYSIZE(rename_alien_transport_names));
+    help("Cosmetic and local: the Alien Transport Ship reads \"Hyper Carrier\" in this\n"
+         "game's text only. Gameplay and other players are unaffected.\n"
+         "A screen already open shows it once reopened.");
+    badge(WIRED);
+
+    ImGui::Text("Rename Starfighter");
+    ImGui::SameLine();
+    ImGui::TextDisabled("(this machine only)");
+    const char* rename_starfighter_names[] = {"Off", "Switch Fighter"};
+    ImGui::Combo("##rename_starfighter", &g_set.rename_starfighter,
+                 rename_starfighter_names, IM_ARRAYSIZE(rename_starfighter_names));
+    help("Cosmetic and local: Starfighter reads \"Switch Fighter\" in this\n"
+         "game's text only. Gameplay and other players are unaffected.\n"
+         "A screen already open shows it once reopened.");
+    badge(WIRED);
+
+    ImGui::Text("Rename Starship 1");
+    ImGui::SameLine();
+    ImGui::TextDisabled("(this machine only)");
+    const char* rename_starship1_names[] = {"Off", "Rocket"};
+    ImGui::Combo("##rename_starship1", &g_set.rename_starship1,
+                 rename_starship1_names, IM_ARRAYSIZE(rename_starship1_names));
+    help("Cosmetic and local: Starship 1 reads \"Rocket\" in this\n"
+         "game's text only. Gameplay and other players are unaffected.\n"
+         "A screen already open shows it once reopened.");
+    badge(WIRED);
     tab_end();
 }
 
@@ -1728,10 +2005,12 @@ void tab_cheats() {
     // 0x02125FF4 names cheat i, and func_020088D4's jump table reads
     // flags[i] for every case 0..17 -- so the mapping is the game's, not a
     // guess. Verified live: setting flags[0] revealed the whole minimap.
-    // docs/406: nothing carries them; the rules datagram has the bans and the
-    // LB_RULE_* flags only.
-    ImGui::TextDisabled("Online, every player must tick the same cheats.");
+    // BR-0011: the host's cheats ride in the rules datagram's S page, and a
+    // joiner plays with those, not its own.
+    ImGui::TextDisabled("Online, the host's cheats apply to everyone.");
     ImGui::Spacing();
+    const bool cheat_lock = host_locked();
+    host_lock_note(cheat_lock);
     if (ImGui::BeginTable("cheats", 3,
                           ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                           ImGuiTableFlags_SizingStretchProp)) {
@@ -1743,7 +2022,14 @@ void tab_cheats() {
             ImGui::TableNextRow();
             ImGui::TableSetColumnIndex(0);
             ImGui::PushID(i);
-            ImGui::Checkbox(kCheats[i].name, &g_set.cheat[i]);
+            if (cheat_lock) {
+                bool hv = (g_hs.cheats >> i) & 1u;   // BR-0011: the host's, locked
+                ImGui::BeginDisabled();
+                ImGui::Checkbox(kCheats[i].name, &hv);
+                ImGui::EndDisabled();
+            } else {
+                ImGui::Checkbox(kCheats[i].name, &g_set.cheat[i]);
+            }
             ImGui::PopID();
             ImGui::TableSetColumnIndex(1);
             ImGui::TextDisabled("%s", kCheats[i].code);
@@ -1754,6 +2040,7 @@ void tab_cheats() {
     }
     badge(WIRED);
     ImGui::Spacing();
+    host_lock_begin(cheat_lock);
     if (ImGui::Button("Enable every cheat")) {
         for (int i = 0; i < kCheatCount; ++i) g_set.cheat[i] = true;
     }
@@ -1761,6 +2048,7 @@ void tab_cheats() {
     if (ImGui::Button("Disable every cheat")) {
         for (int i = 0; i < kCheatCount; ++i) g_set.cheat[i] = false;
     }
+    host_lock_end(cheat_lock);
     ImGui::Spacing();
     // docs/406: each gameplay cheat tests that the unit is the local
     // player's (owner byte against FUN_020A2230's); kAiCheats passes that
@@ -1841,6 +2129,33 @@ void tab_input() {
     help("While the blue brick's menu is the open one, 1-9 pick from it\n"
          "instead of the red, yellow or white brick's. Off: 1-9 always\n"
          "pick from the red, yellow or white brick's menu.");
+    ImGui::Separator();
+    {   // SG-0012: swap the two screens, from a key or this button.
+        const char* key = g_rebinding_swap
+                              ? "press a key..."
+                              : (g_set.swap_key ? SDL_GetScancodeName((SDL_Scancode)g_set.swap_key)
+                                                : "(none)");
+        char label[64];
+        std::snprintf(label, sizeof label, "Swap screens key: %s###swapkey",
+                      (key && *key) ? key : "(none)");
+        if (ImGui::Button(label)) g_rebinding_swap = !g_rebinding_swap;
+        ImGui::SameLine();
+        {   // SG-0012: the DS layouts only; Enhanced has one field, not two screens
+            const bool enh = g_set.enhanced;
+            if (enh) ImGui::BeginDisabled();
+            if (ImGui::Button("Swap screens")) lb_request_swap_screens();
+            if (enh) ImGui::EndDisabled();
+            if (enh && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("Swapping the screens works in DS Vanilla only.\n"
+                                  "Enhanced shows one field, which does not swap.");
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Clear key")) g_set.swap_key = 0;
+        help("DS Vanilla only: the two screens change places, and the touch\n"
+             "follows the one that is the touch screen. Press again to swap\n"
+             "back. Local to this machine; the key is unbound until you set it.");
+        badge(WIRED);
+    }
     ImGui::Separator();
 
     if (ImGui::BeginTable("binds", 4,
@@ -1978,8 +2293,7 @@ void tab_multiplayer() {
         help("Talks to the master server over an encrypted connection when\n"
              "it offers one (port 443 for a server on port 80), and over\n"
              "plain HTTP when it does not.");
-        ImGui::Checkbox("Post a picture of my matches to the lobby log",
-                        &g_set.match_picture);
+        ImGui::Checkbox("Share Match Telemetry", &g_set.match_picture);
         help("When you host, a picture of the match (teams, units, map and\n"
              "banned units) is sent to the master server for its Discord log.");
         ImGui::Checkbox("Fetch a host's mod map I don't have", &g_set.fetch_maps);
@@ -2940,14 +3254,316 @@ void bans_roundtrip_if_asked() {
     std::snprintf(g_set.banned_units, sizeof g_set.banned_units, "%s", mine.c_str());
 }
 
+// ---- docs/429: map bans, per-map unit bans, ban presets ---------------------
+
+bool ban_preset_apply(int i, std::string* msg);
+bool ban_preset_export(const char* path);
+bool ban_preset_import(const char* path);
+
+// Once per frame: this machine's map settings to lb_mapbans.cpp (parsed only
+// when they changed). Test aids, all off by default: LB_RANDOM_MAPS=1 adds the
+// Random entries, LB_TOURNEY_TEAM=1 turns Random team (tourney) on, and
+// LB_TEST_BAN_PRESET=<index> applies that bundled preset once the game can
+// name its units.
+void maps_sync_local() {
+    static std::string last;
+    static bool preset_done = false;
+    if (!preset_done) {
+        if (const char* p = std::getenv("LB_TEST_BAN_PRESET")) {
+            std::string m;
+            if (ban_preset_apply(std::atoi(p), &m)) {
+                preset_done = true;
+                std::fprintf(stderr, "[lb_maps] test preset %s: %s\n", p, m.c_str());
+                std::fflush(stderr);
+            } else if (m.find("not ") == std::string::npos) {
+                preset_done = true;   // a real failure: do not retry forever
+            }
+        } else {
+            preset_done = true;
+        }
+    }
+    // LB_BANPRESET_ROUNDTRIP=<path>: once a preset is in force, export it, clear
+    // the lists, import the file and log whether they came back the same.
+    if (const char* path = std::getenv("LB_BANPRESET_ROUNDTRIP")) {
+        static bool rt_done = false;
+        if (!rt_done && g_set.ban_preset[0]) {
+            rt_done = true;
+            {   // the stored order is by blueprint: compare like with like
+                unsigned char nb[24];
+                bans_bits(nb);
+                bans_store(nb);
+            }
+            const std::string a = std::string(g_set.banned_units) + "|" + g_set.banned_maps +
+                                  "|" + g_set.unit_map_bans + "|" + g_set.ban_preset + "|" +
+                                  g_set.ban_preset_maps;
+            const bool wrote = ban_preset_export(path);
+            g_set.banned_units[0] = g_set.banned_maps[0] = g_set.unit_map_bans[0] = '\0';
+            g_set.ban_preset[0] = g_set.ban_preset_maps[0] = '\0';
+            const bool read = ban_preset_import(path);
+            const std::string b = std::string(g_set.banned_units) + "|" + g_set.banned_maps +
+                                  "|" + g_set.unit_map_bans + "|" + g_set.ban_preset + "|" +
+                                  g_set.ban_preset_maps;
+            std::fprintf(stderr, "[lb_maps] ban preset round trip through %s: wrote %s, "
+                         "read %s, lists %s (\"%s\")\n", path, wrote ? "yes" : "NO",
+                         read ? "yes" : "NO", a == b ? "IDENTICAL" : "DIFFER", b.c_str());
+            std::fflush(stderr);
+        }
+    }
+    // LB_PANEL_OPEN_AT=<seconds>: opens the settings panel once, that long after
+    // launch (a held two-instance test photographs a joiner's pages this way).
+    if (const char* v = std::getenv("LB_PANEL_OPEN_AT")) {
+        static const auto t0 = std::chrono::steady_clock::now();
+        static bool opened = false;
+        if (!opened && std::chrono::duration<double>(std::chrono::steady_clock::now() - t0)
+                               .count() >= std::atof(v)) {
+            opened = true;
+            g_visible = true;
+        }
+    }
+    // LB_BANNED_MAPS=<tokens> sets the map bans (for example every stock map,
+    // "s1,s2,...,s30", to list only mod maps); LB_UNIT_MAP_BANS the per-map
+    // unit bans.
+    if (const char* v = std::getenv("LB_BANNED_MAPS"))
+        std::snprintf(g_set.banned_maps, sizeof g_set.banned_maps, "%s", v);
+    if (const char* v = std::getenv("LB_UNIT_MAP_BANS"))
+        std::snprintf(g_set.unit_map_bans, sizeof g_set.unit_map_bans, "%s", v);
+    if (const char* v = std::getenv("LB_BANNED_UNITS"))
+        std::snprintf(g_set.banned_units, sizeof g_set.banned_units, "%s", v);
+    if (const char* v = std::getenv("LB_RANDOM_MAPS")) g_set.random_maps = std::atoi(v) != 0;
+    if (const char* v = std::getenv("LB_TOURNEY_TEAM")) g_set.tourney_team = std::atoi(v) != 0;
+    std::string key = std::string(g_set.banned_maps) + "|" + g_set.unit_map_bans + "|" +
+                      g_set.ban_preset_maps + "|" + (g_set.ban_preset[0] ? "1" : "0") +
+                      (g_set.tourney_team ? "t" : "-") + (g_set.random_maps ? "r" : "-") +
+                      std::to_string(lb_mods_count());
+    if (key == last) return;
+    last = key;
+    lb_maps_set_local(g_set.banned_maps, g_set.unit_map_bans, g_set.ban_preset_maps,
+                      g_set.ban_preset[0] ? 1 : 0, g_set.tourney_team ? 1 : 0,
+                      g_set.random_maps ? 1 : 0);
+}
+
+
+std::string g_bp_msg;          // the presets section's last result
+bool g_bp_msg_bad = false;
+int g_bp_choice = 1;           // the preset picker
+char g_bp_path[512] = "ban-preset.json";
+
+// The tokens of a '+' list, one by one.
+void tok_split(const std::string& s, char sep, std::vector<std::string>* out) {
+    size_t a = 0;
+    while (a <= s.size()) {
+        size_t b = s.find(sep, a);
+        if (b == std::string::npos) b = s.size();
+        if (b > a) out->push_back(s.substr(a, b - a));
+        a = b + 1;
+    }
+}
+
+// A ban preset as a file: the three lists (language-independent numbers and
+// hashes) with the names beside them for a reader, ignored on import.
+bool ban_preset_export(const char* path) {
+    char units[512], maps_names[1024], umb_names[1024];
+    units[0] = '\0';
+    for (int bp = 0, first = 1; bp < 192; ++bp) {
+        unsigned char b[24];
+        bans_bits(b);
+        if (!((b[bp >> 3] >> (bp & 7)) & 1)) continue;
+        std::snprintf(units + std::strlen(units), sizeof units - std::strlen(units),
+                      "%s%s", first ? "" : ", ", lb_teams_unit_name(bp));
+        first = 0;
+    }
+    lb_maps_names_of(g_set.banned_maps, maps_names, sizeof maps_names);
+    std::string um;
+    std::vector<std::string> es;
+    tok_split(g_set.unit_map_bans, ';', &es);
+    for (const std::string& e : es) {
+        const size_t c = e.find(':');
+        if (c == std::string::npos) continue;
+        lb_maps_names_of(e.c_str() + c + 1, umb_names, sizeof umb_names);
+        if (!um.empty()) um += "; ";
+        um += std::string(lb_teams_unit_name(std::atoi(e.c_str()))) + " on " + umb_names;
+    }
+    std::string names = std::string("Units: ") + units + ". Maps: " + maps_names +
+                        ". On some maps only: " + um + ".";
+    std::string o = "{\n  \"lb_ban_preset\": 1,\n";
+    json_put_str(o, "name", g_set.ban_preset[0] ? g_set.ban_preset : "My bans", true);
+    json_put_str(o, "banned_units", g_set.banned_units, true);
+    json_put_str(o, "banned_maps", g_set.banned_maps, true);
+    json_put_str(o, "unit_map_bans", g_set.unit_map_bans, true);
+    json_put_str(o, "names", names.c_str(), false);
+    o += "}\n";
+    FILE* f = std::fopen(path, "wb");
+    const bool ok = f && std::fwrite(o.data(), 1, o.size(), f) == o.size();
+    if (f) std::fclose(f);
+    return ok;
+}
+
+bool ban_preset_import(const char* path) {
+    std::string s;
+    if (FILE* f = std::fopen(path, "rb")) {
+        char chunk[4096];
+        size_t got;
+        while ((got = std::fread(chunk, 1, sizeof chunk, f)) > 0 && s.size() < (1u << 16))
+            s.append(chunk, got);
+        std::fclose(f);
+    }
+    if (s.find("\"lb_ban_preset\"") == std::string::npos) return false;
+    char name[96] = "Imported";
+    json_get_str(s, "name", name, sizeof name);
+    g_set.banned_units[0] = g_set.banned_maps[0] = g_set.unit_map_bans[0] = '\0';
+    json_get_str(s, "banned_units", g_set.banned_units, sizeof g_set.banned_units);
+    json_get_str(s, "banned_maps", g_set.banned_maps, sizeof g_set.banned_maps);
+    json_get_str(s, "unit_map_bans", g_set.unit_map_bans, sizeof g_set.unit_map_bans);
+    unsigned char bits[24];
+    bans_bits(bits);    // drops anything out of range, and the King team
+    bans_store(bits);
+    std::snprintf(g_set.ban_preset, sizeof g_set.ban_preset, "%s", name);
+    std::snprintf(g_set.ban_preset_maps, sizeof g_set.ban_preset_maps, "%s",
+                  g_set.banned_maps);
+    return true;
+}
+
+// Preset `i` applied to the lists. Bundled "None" clears every ban and leaves no
+// preset active.
+bool ban_preset_apply(int i, std::string* msg) {
+    char units[512], maps[512], umb[768], note[160];
+    if (!lb_maps_preset_resolve(i, units, sizeof units, maps, sizeof maps, umb,
+                                sizeof umb, note, sizeof note)) {
+        *msg = note;
+        return false;
+    }
+    std::snprintf(g_set.banned_units, sizeof g_set.banned_units, "%s", units);
+    std::snprintf(g_set.banned_maps, sizeof g_set.banned_maps, "%s", maps);
+    std::snprintf(g_set.unit_map_bans, sizeof g_set.unit_map_bans, "%s", umb);
+    if (i == 0) {
+        g_set.ban_preset[0] = '\0';
+        g_set.ban_preset_maps[0] = '\0';
+    } else {
+        std::snprintf(g_set.ban_preset, sizeof g_set.ban_preset, "%s",
+                      lb_maps_preset_name(i));
+        std::snprintf(g_set.ban_preset_maps, sizeof g_set.ban_preset_maps, "%s", maps);
+    }
+    *msg = i == 0 ? std::string("Cleared: no bans.")
+                  : std::string("Applied \"") + lb_maps_preset_name(i) + "\". " + note;
+    return true;
+}
+
+// The Presets section at the foot of Ban Units and Ban Maps.
+void draw_ban_presets(bool idle) {
+    ImGui::Separator();
+    ImGui::TextUnformatted("Presets");
+    guide("A preset fills the unit bans, the map bans and the unit bans on some maps in "
+          "one go; you can change them after. Export and Import keep a set as a file. "
+          "Online, the host's bans apply to everyone, so the host's preset is the "
+          "players'.");
+    ImGui::BeginDisabled(!idle);
+    const int n = lb_maps_preset_count();
+    ImGui::SetNextItemWidth(360.0f * g_ui_scale);
+    if (ImGui::BeginCombo("Preset", lb_maps_preset_name(g_bp_choice))) {
+        for (int i = 0; i < n; ++i)
+            if (ImGui::Selectable(lb_maps_preset_name(i), i == g_bp_choice))
+                g_bp_choice = i;
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Apply")) g_bp_msg_bad = !ban_preset_apply(g_bp_choice, &g_bp_msg);
+    ImGui::SetItemTooltip("Replaces your unit and map bans with the preset's.");
+    ImGui::TextDisabled("In force: %s", g_set.ban_preset[0] ? g_set.ban_preset
+                                                            : "None (your own bans)");
+    ImGui::InputText("File", g_bp_path, sizeof g_bp_path);
+    if (ImGui::Button("Export bans (.json)...") &&
+        lb_pick_json_file(g_bp_path, (int)sizeof g_bp_path, 1)) {
+        g_bp_msg_bad = !ban_preset_export(g_bp_path);
+        g_bp_msg = g_bp_msg_bad ? "Could not write that file." : "Exported the bans.";
+    }
+    ImGui::SetItemTooltip("Saves the unit bans, the map bans and the bans on some maps.");
+    ImGui::SameLine();
+    if (ImGui::Button("Import bans (.json)...") &&
+        lb_pick_json_file(g_bp_path, (int)sizeof g_bp_path, 0)) {
+        g_bp_msg_bad = !ban_preset_import(g_bp_path);
+        g_bp_msg = g_bp_msg_bad ? "That is not a ban preset file."
+                                : std::string("Imported \"") + g_set.ban_preset + "\".";
+    }
+    ImGui::SetItemTooltip("Loads a file made by Export. It replaces your bans.");
+    ImGui::Spacing();
+    ImGui::Checkbox("Random team (tourney)", &g_set.tourney_team);
+    help("Every player in a game you host, and the Random opponent in Free Play, fields\n"
+         "a random army drawn from a seed, skipping every banned unit (on this match's\n"
+         "map too). Players are not limited to what their save has bought.\n"
+         "Online, the host sends the seed and every machine builds the same teams.");
+    if (g_set.tourney_team) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("Seed: %u", lb_maps_current_seed());
+    }
+    ImGui::EndDisabled();
+    if (!g_bp_msg.empty())
+        ImGui::TextColored(g_bp_msg_bad ? ImVec4(1.0f, 0.5f, 0.4f, 1.0f)
+                                        : ImVec4(0.6f, 0.9f, 0.6f, 1.0f),
+                           "%s", g_bp_msg.c_str());
+}
+
+// One unit's maps, for the right-click popup and the table's Edit.
+int g_umb_unit = -1;
+bool g_umb_request = false;   // OpenPopup must run at the page's own ID level
+
+void draw_umb_popup(bool idle) {
+    if (g_umb_request) {
+        g_umb_request = false;
+        ImGui::OpenPopup("Ban on maps");
+    }
+    if (!ImGui::BeginPopup("Ban on maps")) return;
+    const int bp = g_umb_unit;
+    ImGui::Text("%s", lb_teams_unit_name(bp));
+    guide("Tick the maps this unit is banned on. It stays allowed on the others.");
+    ImGui::BeginDisabled(!idle);
+    char toks[256];
+    lb_maps_umb_get(g_set.unit_map_bans, bp, toks, sizeof toks);
+    std::string cur = toks;
+    bool changed = false;
+    ImGui::BeginChild("##umbmaps", ImVec2(340.0f * g_ui_scale, 280.0f * g_ui_scale), true);
+    const int count = lb_maps_count();
+    for (int i = 0; i < count; ++i) {
+        char tok[32], name[64];
+        int players = 0;
+        if (!lb_maps_entry(i, tok, sizeof tok, name, sizeof name, &players)) continue;
+        std::vector<std::string> v;
+        tok_split(cur, '+', &v);
+        bool on = std::find(v.begin(), v.end(), std::string(tok)) != v.end();
+        std::string label = name;
+        if (i >= 30) label += " (mod)";
+        if (ImGui::Checkbox(label.c_str(), &on)) {
+            auto it = std::find(v.begin(), v.end(), std::string(tok));
+            if (on && it == v.end()) v.push_back(tok);
+            if (!on && it != v.end()) v.erase(it);
+            cur.clear();
+            for (const std::string& t : v) {
+                if (!cur.empty()) cur += '+';
+                cur += t;
+            }
+            changed = true;
+        }
+    }
+    ImGui::EndChild();
+    if (changed) lb_maps_umb_set(g_set.unit_map_bans, sizeof g_set.unit_map_bans, bp,
+                                 cur.c_str());
+    if (ImGui::Button("Clear")) {
+        lb_maps_umb_set(g_set.unit_map_bans, sizeof g_set.unit_map_bans, bp, "");
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Done")) ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+}
+
 void tab_ban_units() {
     if (!tab_begin("Ban Units")) return;
     const int net = lb_net_guest_state();
     const bool idle = (net == 0 || net == -1);
     const bool joined = net == 9 || net == 6 || net == 7 || net == 5 || net == 12;
-    ImGui::TextWrapped("Units greyed out here are not allowed in online games "
-                       "you host. A player who brings one is switched to King "
-                       "as the match starts.");
+    guide("Units greyed out here are not allowed in online games you host: a player who "
+          "brings one is switched to King as the match starts. Click a unit to ban it "
+          "everywhere; right-click it to ban it only on the maps you pick. Online, the "
+          "host's bans apply to everyone.");
     ImGui::TextDisabled("The King team cannot be banned, as it is the default.");
     unsigned char bits[24];
     bans_bits(bits);
@@ -2955,6 +3571,9 @@ void tab_ban_units() {
     std::memcpy(shown, bits, sizeof shown);
     unsigned from = 0;
     const bool got = joined && lb_teams_received_bans(shown, 24, &from);
+    char rmaps[512] = "", rumb[768] = "";
+    const bool got_maps = joined && lb_maps_received(rmaps, sizeof rmaps, rumb, sizeof rumb);
+    const char* umb_shown = joined ? (got_maps ? rumb : "") : g_set.unit_map_bans;
     if (joined)
         ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.4f, 1.0f),
                            got ? "Showing the host's bans for this game."
@@ -2979,28 +3598,41 @@ void tab_ban_units() {
             if (k % per_row) ImGui::SameLine();
             const bool king = lb_teams_is_king_default(bp) != 0;
             const bool banned = !king && ((shown[bp >> 3] >> (bp & 7)) & 1);
+            char toks[256];
+            const bool on_maps = !king && lb_maps_umb_get(umb_shown, bp, toks, sizeof toks);
             char id[16];
             std::snprintf(id, sizeof id, "##ban%d", bp);
             ImGui::BeginDisabled(king);
-            if (unit_button(id, bp, size, banned, banned ? 10.0f / 31.0f : 1.0f,
+            if (unit_button(id, bp, size, banned,
+                            banned ? 10.0f / 31.0f : on_maps ? 0.55f : 1.0f,
                             false) && !king) {
                 bits[bp >> 3] ^= (unsigned char)(1u << (bp & 7));
                 changed = true;
             }
             ImGui::EndDisabled();
-            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                ImGui::SetTooltip("%s (%s)%s", lb_teams_unit_name(bp),
+            if (!king && ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+                g_umb_unit = bp;
+                g_umb_request = true;
+            }
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                char where[512] = "";
+                if (on_maps) lb_maps_names_of(toks, where, sizeof where);
+                ImGui::SetTooltip("%s (%s)%s%s%s", lb_teams_unit_name(bp),
                                   faction_name(lb_teams_unit_faction(bp)),
                                   king ? "\nThe King team cannot be banned, as "
                                          "it is the default."
-                                       : banned ? "\nBanned" : "");
+                                       : banned ? "\nBanned everywhere" : "",
+                                  on_maps ? "\nBanned on: " : "", where);
+            }
         }
     }
     ImGui::PopStyleVar();
     if (ImGui::Button("Allow all")) {
         std::memset(bits, 0, sizeof bits);
+        g_set.unit_map_bans[0] = '\0';
         changed = true;
     }
+    ImGui::SetItemTooltip("Clears the unit bans, on every map and on some maps only.");
     // docs/410: the list as a file, like the Balance values: the blueprint
     // numbers, with the names beside them for a reader (ignored on import).
     static char path[512] = "bans.json";
@@ -3032,6 +3664,101 @@ void tab_ban_units() {
                                    : ImVec4(0.6f, 0.9f, 0.6f, 1.0f),
                            "%s", msg.c_str());
     if (changed) bans_store(bits);
+    // docs/429: the units banned on some maps only, with the maps beside them.
+    {
+        std::vector<std::string> es;
+        tok_split(umb_shown, ';', &es);
+        if (!es.empty()) {
+            ImGui::Spacing();
+            ImGui::TextDisabled("Banned on some maps only (right-click a unit to change):");
+            if (ImGui::BeginTable("##umbtab", 3, ImGuiTableFlags_RowBg |
+                                  ImGuiTableFlags_SizingStretchProp)) {
+                ImGui::TableSetupColumn("Unit", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+                ImGui::TableSetupColumn("Banned on", ImGuiTableColumnFlags_WidthStretch, 3.0f);
+                ImGui::TableSetupColumn("##edit", ImGuiTableColumnFlags_WidthFixed, 70.0f * g_ui_scale);
+                ImGui::TableHeadersRow();
+                for (const std::string& e : es) {
+                    const size_t c = e.find(':');
+                    if (c == std::string::npos) continue;
+                    const int bp = std::atoi(e.c_str());
+                    char where[1024];
+                    lb_maps_names_of(e.c_str() + c + 1, where, sizeof where);
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::TextUnformatted(lb_teams_unit_name(bp));
+                    ImGui::TableNextColumn();
+                    ImGui::TextWrapped("%s", where);
+                    ImGui::TableNextColumn();
+                    ImGui::PushID(bp);
+                    ImGui::BeginDisabled(!idle);
+                    if (ImGui::SmallButton("Edit")) {
+                        g_umb_unit = bp;
+                        g_umb_request = true;
+                    }
+                    ImGui::EndDisabled();
+                    ImGui::PopID();
+                }
+                ImGui::EndTable();
+            }
+        }
+    }
+    draw_umb_popup(idle);
+    draw_ban_presets(idle);
+    tab_end();
+}
+
+// docs/429: Balance > Ban Maps.
+void tab_ban_maps() {
+    if (!tab_begin("Ban Maps")) return;
+    const int net = lb_net_guest_state();
+    const bool idle = (net == 0 || net == -1);
+    const bool joined = net == 9 || net == 6 || net == 7 || net == 5 || net == 12;
+    guide("Maps ticked here are left out of the map list in Free Play and in games you "
+          "host. Online, the host's list applies to everyone. The box under this text adds "
+          "a Random entry to the map lists, which picks one of the maps left.");
+    char rmaps[512] = "", rumb[768] = "";
+    const bool got = joined && lb_maps_received(rmaps, sizeof rmaps, rumb, sizeof rumb);
+    const char* list = joined ? (got ? rmaps : "") : g_set.banned_maps;
+    if (joined)
+        ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.4f, 1.0f),
+                           got ? "Showing the host's map bans for this game."
+                               : "Waiting for the host's map bans.");
+    else if (!idle)
+        ImGui::TextColored(ImVec4(0.9f, 0.8f, 0.4f, 1.0f),
+                           "Hosting: these bans are sent to players who join. "
+                           "They are fixed until you leave.");
+    ImGui::BeginDisabled(!idle);
+    ImGui::Checkbox("Add Random to the map lists", &g_set.random_maps);
+    help("Puts \"Random\" first in the Free Play and multiplayer map lists. It picks one\n"
+         "of the maps that are not banned. With a ban preset in force there is also\n"
+         "\"Random (tourney)\", which picks only from that preset's allowed maps.\n"
+         "In a game you host, you draw it and the lobby shows the result.");
+    ImGui::EndDisabled();
+    ImGui::Separator();
+    const int count = lb_maps_count();
+    int banned_n = 0;
+    ImGui::BeginDisabled(!idle);
+    const float col_x0 = ImGui::GetCursorPosX();
+    const float col_w = ImGui::GetContentRegionAvail().x * 0.5f;
+    for (int i = 0; i < count; ++i) {
+        char tok[32], name[64];
+        int players = 0;
+        if (!lb_maps_entry(i, tok, sizeof tok, name, sizeof name, &players)) continue;
+        if (i == 30) ImGui::TextDisabled("Mod maps (from your mods folder)");
+        if (i < 30 && (i & 1)) ImGui::SameLine(col_x0 + col_w);   // two columns
+        bool on = lb_maps_list_has(list, tok) != 0;
+        banned_n += on;
+        char label[160];
+        std::snprintf(label, sizeof label, "%s  (%d players)##map%d", name, players, i);
+        if (ImGui::Checkbox(label, &on) && idle)
+            lb_maps_list_toggle(g_set.banned_maps, sizeof g_set.banned_maps, tok);
+    }
+    if (ImGui::Button("Allow all")) g_set.banned_maps[0] = '\0';
+    ImGui::SetItemTooltip("Clears the map bans.");
+    ImGui::EndDisabled();
+    ImGui::TextDisabled("%d map(s) banned. At most 16 mod maps can be banned.", banned_n);
+    badge(WIRED);
+    draw_ban_presets(idle);
     tab_end();
 }
 
@@ -5545,20 +6272,200 @@ void tab_balance_presets() {
     tab_end();
 }
 
+// ---- docs/430, SG-0013: UPDATE CHECK ---------------------------------------------
+//
+// GitHub's releases/latest of the public repository, over WinHTTP
+// (lb_https_request), on a thread of its own. The result is only ever shown;
+// nothing is downloaded or installed. At startup (when allowed) the check is
+// quiet unless a different, newer-looking release exists.
+struct UpdateInfo {
+    int state = 0;   // 0 not checked, 1 checking, 2 done, 3 failed
+    std::string tag, name, notes, url, error;
+    bool newer = false;   // a release that differs from this build and is not older
+};
+std::mutex g_upd_mu;
+UpdateInfo g_upd;
+std::atomic<bool> g_upd_busy{false};
+constexpr const char* kReleasesUrl = "https://github.com/AgitationSkeleton/legobattles-pc/releases";
+
+// The string value of the first "key": in a JSON text, unescaped.
+std::string upd_json_str(const std::string& s, const char* key) {
+    const std::string pat = std::string("\"") + key + "\"";
+    size_t p = s.find(pat);
+    while (p != std::string::npos) {
+        size_t q = p + pat.size();
+        while (q < s.size() && (s[q] == ' ' || s[q] == ':')) ++q;
+        if (q < s.size() && s[q] == '"') {
+            std::string out;
+            for (++q; q < s.size() && s[q] != '"'; ++q) {
+                if (s[q] == '\\' && q + 1 < s.size()) {
+                    const char c = s[++q];
+                    if (c == 'n') out += '\n';
+                    else if (c == 'r') {}
+                    else if (c == 't') out += ' ';
+                    else if (c == 'u' && q + 4 < s.size()) {
+                        const unsigned cp = (unsigned)std::strtoul(s.substr(q + 1, 4).c_str(), nullptr, 16);
+                        out += cp < 0x80 ? std::string(1, (char)cp) : std::string("?");
+                        q += 4;
+                    } else out += c;
+                } else out += s[q];
+            }
+            return out;
+        }
+        p = s.find(pat, p + 1);
+    }
+    return std::string();
+}
+
+// "playtest-2026-10-23 (abc123)" -> 20261023; 0 when there is no date.
+unsigned upd_date_of(const std::string& v) {
+    for (size_t i = 0; i + 10 <= v.size(); ++i)
+        if (std::isdigit((unsigned char)v[i]) && v.compare(i + 4, 1, "-") == 0 &&
+            v.compare(i + 7, 1, "-") == 0 && std::isdigit((unsigned char)v[i + 9]))
+            return (unsigned)(std::atoi(v.substr(i, 4).c_str()) * 10000 +
+                              std::atoi(v.substr(i + 5, 2).c_str()) * 100 +
+                              std::atoi(v.substr(i + 8, 2).c_str()));
+    return 0;
+}
+
+void upd_run(bool quiet) {
+    std::string reply, error;
+    const bool ok = lb_https_request("api.github.com", 443, "GET",
+                                     // The list, newest first: releases/latest
+                                     // skips pre-releases, and every early
+                                     // build was one.
+                                     "/repos/AgitationSkeleton/legobattles-pc/releases?per_page=1",
+                                     "", &reply, &error);
+    UpdateInfo r;
+    if (!ok) {
+        r.state = 3;
+        r.error = "Could not reach GitHub (" + error + ").";
+    } else if (reply.find("\"tag_name\"") == std::string::npos) {
+        r.state = 2;   // a 404: no release has been published yet
+        r.error = "No release has been published yet.";
+    } else {
+        r.state = 2;
+        r.tag = upd_json_str(reply, "tag_name");
+        r.name = upd_json_str(reply, "name");
+        r.notes = upd_json_str(reply, "body");
+        r.url = upd_json_str(reply, "html_url");
+        if (r.url.compare(0, 8, "https://") != 0) r.url = kReleasesUrl;
+        if (r.notes.size() > 1500) r.notes = r.notes.substr(0, 1500) + "...";
+        const std::string mine = lb_port_version();
+        const unsigned dm = upd_date_of(mine), dr = upd_date_of(r.tag + " " + r.name);
+        // Dates when both builds have one; otherwise any difference counts.
+        // A tag is "v0.1.0-beta.8"; version.txt holds "0.1.0-beta.8".
+        const std::string bare = (!r.tag.empty() && (r.tag[0] == 'v' || r.tag[0] == 'V'))
+                                     ? r.tag.substr(1) : r.tag;
+        r.newer = (dm && dr) ? dr > dm : (!bare.empty() && mine.find(bare) == std::string::npos);
+    }
+    std::fprintf(stderr, "[lb_update] %s: %s tag \"%s\" newer=%d (this build \"%s\")%s%s\n",
+                 quiet ? "startup check" : "check", r.state == 3 ? "failed" : "ok",
+                 r.tag.c_str(), r.newer ? 1 : 0, lb_port_version(),
+                 r.error.empty() ? "" : " - ", r.error.c_str());
+    std::fflush(stderr);
+    {
+        std::lock_guard<std::mutex> lk(g_upd_mu);
+        g_upd = r;
+    }
+    if (quiet && r.newer) {
+        const std::string msg = "A newer version is available: " + r.tag +
+                                " (you run " + lb_port_version() +
+                                "). Settings > General has the download page.";
+        lb_overlay_notice(msg.c_str());
+    }
+    g_upd_busy = false;
+}
+
+void upd_start(bool quiet) {
+    if (g_upd_busy.exchange(true)) return;
+    {
+        std::lock_guard<std::mutex> lk(g_upd_mu);
+        g_upd.state = 1;
+    }
+    std::thread([quiet]() { upd_run(quiet); }).detach();
+}
+
+// Once, a few seconds in, when the setting is on (LB_UPDATE_CHECK=0 skips it).
+void upd_startup_tick() {
+    static unsigned long long at = 0;
+    static bool done = false;
+    if (done || !g_ready) return;
+    if (!at) at = SDL_GetTicks64() + 6000ull;
+    if (SDL_GetTicks64() < at) return;
+    done = true;
+    const char* e = std::getenv("LB_UPDATE_CHECK");
+    if (g_set.update_check && !(e && e[0] == '0')) upd_start(true);
+}
+
+void tab_general() {
+    if (!tab_begin("General")) return;
+    guide("Version, updates and the Discord status. These stay on this machine and do "
+          "not affect online play.");
+    ImGui::Text("Version: %s", lb_port_version());
+    ImGui::Spacing();
+    UpdateInfo u;
+    {
+        std::lock_guard<std::mutex> lk(g_upd_mu);
+        u = g_upd;
+    }
+    ImGui::BeginDisabled(u.state == 1);
+    if (ImGui::Button("Check for updates")) upd_start(false);
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip("Asks GitHub for the newest release. Nothing is downloaded or "
+                          "installed.");
+    if (u.state == 1) ImGui::TextUnformatted("Checking...");
+    else if (u.state == 3) ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.4f, 1.0f), "%s", u.error.c_str());
+    else if (u.state == 2 && u.tag.empty()) ImGui::TextUnformatted(u.error.c_str());
+    else if (u.state == 2) {
+        ImGui::Text("Newest release: %s%s%s", u.tag.c_str(), u.name.empty() ? "" : "  -  ",
+                    u.name.c_str());
+        ImGui::TextColored(u.newer ? ImVec4(0.5f, 1.0f, 0.5f, 1.0f) : ImVec4(0.8f, 0.8f, 0.8f, 1.0f),
+                           "%s", u.newer ? "A newer version is available." :
+                                           "You have the newest version (or newer).");
+        if (!u.notes.empty()) {
+            ImGui::BeginChild("lb_upd_notes", ImVec2(0, 150), ImGuiChildFlags_Borders);
+            ImGui::PushTextWrapPos(0.0f);
+            ImGui::TextUnformatted(u.notes.c_str());
+            ImGui::PopTextWrapPos();
+            ImGui::EndChild();
+        }
+        if (ImGui::Button("Open download page")) SDL_OpenURL(u.url.c_str());
+    }
+    ImGui::Checkbox("Check for updates at startup", &g_set.update_check);
+    help("Looks for a newer release a few seconds after the game starts, and says so\n"
+         "only when there is one.");
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::TextDisabled("Discord");
+    ImGui::Checkbox("Discord status", &g_set.discord_status);
+    help("Shows what you are doing (menus, a mission, a lobby, a match) in the Discord\n"
+         "desktop app, if it is running. Nothing happens when it is not.");
+    ImGui::BeginDisabled(!g_set.discord_status);
+    ImGui::Checkbox("Show my hero in Discord status", &g_set.discord_hero);
+    help("Adds the hero you play as a small picture on your Discord status.");
+    ImGui::EndDisabled();
+    tab_end();
+}
+
 const std::vector<MenuHeader>& menu_headers() {
     static const std::vector<MenuHeader> k = {
-        {"Settings", {{"Display", "Display", tab_display},
+        {"Settings", {{"General", "General", tab_general},
+                      {"Display", "Display", tab_display},
                       {"Controls", "Input", tab_input},
                       {"Music", "Music", tab_music},
                       {"Saves", "Saves", tab_saves}}},
         {"Enhancements", {{"Gameplay", "Enhancements", tab_enhancements},
                           {"Renames", "Renames", tab_renames},
-                          {"Team Builder", "Team Builder", tab_team_builder},
-                          {"Ban Units", "Ban Units", tab_ban_units}}},
+                          {"Team Builder", "Team Builder", tab_team_builder}}},
         {"Balance", {{"Units", "Balance Units", tab_balance_units},
                      {"Heroes", "Balance Heroes", tab_balance_heroes},
                      {"Traits", "Balance Traits", tab_balance_traits},
                      {"Attacks", "Balance Attacks", tab_balance_attacks},
+                     {"Spells", "Balance Spells", tab_balance_spells},
+                     {"Unit Caps", "Balance Caps", tab_balance_caps},
+                     {"Ban Units", "Ban Units", tab_ban_units},
+                     {"Ban Maps", "Ban Maps", tab_ban_maps},
                      {"Presets", "Balance Presets", tab_balance_presets}}},
         {"Cheats", {{"Cheats", "Cheats", tab_cheats}}},
         {"Network", {{"Multiplayer", "Multiplayer", tab_multiplayer}}},
@@ -5807,6 +6714,8 @@ extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
     lb_map_dump_tick();
     lb_sfx_tick();   // docs/427: decode the chosen notification sound
     lb_matchpic_tick();   // docs/428: LB_MATCHPIC_TEST only
+    upd_startup_tick();   // docs/430: the quiet update check
+    lb_discord_tick();    // docs/430: Discord Rich Presence
 
     if (g_ready) save_cache_tick();   // docs/388: the save's recent armies
 
@@ -5992,6 +6901,7 @@ extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
         unsigned char bits[24];
         bans_bits(bits);
         lb_teams_set_bans(bits, 24);
+        maps_sync_local();   // docs/429
     }
     if (g_visible) draw_panels();
     ImGui::Render();
@@ -6123,6 +7033,24 @@ extern "C" bool lb_overlay_event(const SDL_Event* event) {
                 g_binding[g_rebinding] = sc;
             }
             g_rebinding = -1;
+            return true;
+        }
+        // SG-0012: the swap key's rebind, the same way.
+        if (g_rebinding_swap) {
+            if (k != SDLK_ESCAPE) {
+                const int sc = (int)event->key.keysym.scancode;
+                for (int i = 0; i < kActionCount; ++i)
+                    if (g_binding[i] == sc) g_binding[i] = 0;   // one key, one job
+                g_set.swap_key = sc;
+            }
+            g_rebinding_swap = false;
+            return true;
+        }
+        // SG-0012: the swap key calls the port's own swap, unless a text field
+        // has the keyboard.
+        if (g_set.swap_key && (int)event->key.keysym.scancode == g_set.swap_key &&
+            !ImGui::GetIO().WantTextInput) {
+            lb_request_swap_screens();
             return true;
         }
         // docs/415: the chat key's rebind, the same way.
@@ -6358,6 +7286,56 @@ extern "C" int lb_overlay_field_rect(int* x, int* y, int* w, int* h,
     return 1;
 }
 
+namespace {
+int g_tr_x = 0, g_tr_y = 0, g_tr_w = 0, g_tr_h = 0;   // DS Vanilla's touch screen
+}  // namespace
+
+extern "C" void lb_overlay_vanilla_layout(int win_w, int win_h, int w0, int w1,
+                                          int* top, int* bot) {
+    auto clampf = [](float v) { return v < 0.25f ? 0.25f : v > 2.0f ? 2.0f : v; };
+    const float ts = clampf(g_set.top_scale), bs = clampf(g_set.bottom_scale);
+    if (w0 < 1) w0 = 256;
+    if (w1 < 1) w1 = 256;
+    if (win_w < 1) win_w = 1;
+    if (win_h < 1) win_h = 1;
+    const float tw = (float)w0 * ts, bw = (float)w1 * bs;
+    const float th = 192.0f * ts, bh = 192.0f * bs;
+    float f = std::min((float)win_w / std::max(tw, bw), (float)win_h / (th + bh));
+    const bool equal = std::fabs(ts - 1.0f) < 0.001f && std::fabs(bs - 1.0f) < 0.001f;
+    if (equal && f >= 1.0f) f = std::floor(f);   // the DS's own pixels, crisp
+    const int tW = std::max(1, (int)(tw * f + 0.5f)), tH = std::max(1, (int)(th * f + 0.5f));
+    const int bW = std::max(1, (int)(bw * f + 0.5f)), bH = std::max(1, (int)(bh * f + 0.5f));
+    const int y0 = (win_h - (tH + bH)) / 2;
+    top[0] = (win_w - tW) / 2; top[1] = y0;      top[2] = tW; top[3] = tH;
+    bot[0] = (win_w - bW) / 2; bot[1] = y0 + tH; bot[2] = bW; bot[3] = bH;
+    // The touch panel is the screen showing the cartridge's bottom engine: the
+    // physical top one while swapped.
+    const int* t = lb_screens_swapped() ? top : bot;
+    g_tr_x = t[0]; g_tr_y = t[1]; g_tr_w = t[2]; g_tr_h = t[3];
+    {   // say it when the layout changes, so a run can be graded by numbers
+        static int last[10] = {};
+        const int now[10] = {win_w, win_h, top[0], top[1], top[2], top[3], bot[0],
+                             bot[1], bot[2], bot[3]};
+        if (std::memcmp(last, now, sizeof now) != 0) {
+            std::memcpy(last, now, sizeof now);
+            std::fprintf(stderr, "[lb_vanilla] window %dx%d: top %d,%d %dx%d, bottom %d,%d "
+                         "%dx%d, touch on the %s\n", win_w, win_h, top[0], top[1], top[2],
+                         top[3], bot[0], bot[1], bot[2], bot[3],
+                         lb_screens_swapped() ? "top" : "bottom");
+            std::fflush(stderr);
+        }
+    }
+}
+
+extern "C" int lb_overlay_touch_rect(int* x, int* y, int* w, int* h) {
+    if (g_tr_w <= 0 || g_tr_h <= 0) return 0;
+    if (x) *x = g_tr_x;
+    if (y) *y = g_tr_y;
+    if (w) *w = g_tr_w;
+    if (h) *h = g_tr_h;
+    return 1;
+}
+
 extern "C" int lb_overlay_mouse_in_touch_area(int x, int y, int band_left,
                                               int separate) {
     // 256x192 is the DS panel; named here rather than including the frontend's
@@ -6367,6 +7345,8 @@ extern "C" int lb_overlay_mouse_in_touch_area(int x, int y, int band_left,
         return x >= g_field_x && x < g_field_x + g_field_w &&
                y >= g_field_y && y < g_field_y + g_field_h;
     }
+    if (!lb_setting_enhanced() && !separate && g_tr_w > 0 && g_tr_h > 0)   // BR-0010
+        return x >= g_tr_x && x < g_tr_x + g_tr_w && y >= g_tr_y && y < g_tr_y + g_tr_h;
     return x >= band_left && x < band_left + kW && (separate || y >= kH);
 }
 
@@ -6386,6 +7366,41 @@ extern "C" int lb_binding_key_bit(int scancode) {
     }
 }
 
+// SG-0012: the port's own screen swap. It only flips a flag that the engine/
+// screen routing (gpu2d.cpp, apply_hooks 0e2) reads when it files a scanline
+// and when the compositor maps a screen back to its engine.
+extern "C" void lb_request_swap_screens(void) {
+    if (g_set.enhanced) {   // SG-0012: Enhanced has no second screen to swap with
+        std::fprintf(stderr, "[lb_swap] not in Enhanced; use DS Vanilla\n");
+        std::fflush(stderr);
+        return;
+    }
+    const int now = g_screens_swapped.load() ? 0 : 1;
+    g_screens_swapped.store(now);
+    std::fprintf(stderr, "[lb_swap] screens %s\n", now ? "swapped" : "back to normal");
+    std::fflush(stderr);
+}
+extern "C" int lb_screens_swapped(void) {
+    static const bool env_once = [] {   // LB_SWAP=1: start swapped (a test aid)
+        const char* v = std::getenv("LB_SWAP");
+        if (v && std::atoi(v)) g_screens_swapped.store(1);
+        return true;
+    }();
+    (void)env_once;
+    return (!g_set.enhanced && g_screens_swapped.load()) ? 1 : 0;
+}
+
+// SG-0016: this machine's "Skip the intro screens" (LB_SKIP_INTRO=0|1 forces it).
+extern "C" int lb_setting_skip_intro(void) {
+    static int forced = -1;
+    static bool read_env = false;
+    if (!read_env) {
+        read_env = true;
+        if (const char* v = std::getenv("LB_SKIP_INTRO")) forced = std::atoi(v) ? 1 : 0;
+    }
+    return forced >= 0 ? forced : (g_set.skip_intro ? 1 : 0);
+}
+
 // docs/396: the menu's Reset. A demo being replayed owns the game, so it is
 // refused then, as the battle shortcuts are.
 static std::atomic<int> g_reset_req{0};
@@ -6402,6 +7417,35 @@ extern "C" int lb_take_game_reset(void) {
         fired = true;
         std::fprintf(stderr, "[lb_reset] test aid: Reset pressed\n");
         lb_request_game_reset();
+    }
+    // LB_TEST_RESET_JOINED=<seconds>: the same Reset, that long after this
+    // machine has joined a lobby (BR-0014's repro: a joiner that resets and
+    // joins again). Test aid only.
+    static const char* rj = std::getenv("LB_TEST_RESET_JOINED");
+    static unsigned long long joined_at = 0;
+    static bool rj_fired = false;
+    if (rj && !rj_fired) {
+        const int ns = lb_net_guest_state();
+        const bool joined = ns == 5;   // a client in the host's lobby
+        if (!joined) {
+            joined_at = 0;
+        } else {
+            if (!joined_at) joined_at = SDL_GetTicks64();
+            if (SDL_GetTicks64() - joined_at >= (unsigned long long)std::atoi(rj) * 1000ull) {
+                rj_fired = true;
+                std::fprintf(stderr, "[lb_reset] test aid: Reset pressed in the lobby\n");
+                std::fflush(stderr);
+                lb_request_game_reset();
+            }
+        }
+    }
+    // LB_TEST_QUIT_AT=<seconds>: this process ends then (a host that goes
+    // away, for a joiner's leave path). Test aid only.
+    static const char* quit_at = std::getenv("LB_TEST_QUIT_AT");
+    if (quit_at && SDL_GetTicks64() >= (unsigned long long)std::atoi(quit_at) * 1000ull) {
+        std::fprintf(stderr, "[lb_test] quitting now (LB_TEST_QUIT_AT)\n");
+        std::fflush(stderr);
+        std::_Exit(0);
     }
     return g_reset_req.exchange(0);
 }
@@ -6473,6 +7517,8 @@ extern "C" int lb_setting_chat_toasts(void) { return g_set.chat_toasts ? 1 : 0; 
 extern "C" int lb_setting_fetch_maps(void) { return g_set.fetch_maps ? 1 : 0; }   // docs/420
 extern "C" int lb_setting_fast_link(void) { return g_set.fast_link ? 1 : 0; }     // docs/423
 extern "C" int lb_setting_match_picture(void) { return g_set.match_picture ? 1 : 0; }   // docs/428
+extern "C" int lb_setting_discord_status(void) { return g_set.discord_status ? 1 : 0; }   // docs/430
+extern "C" int lb_setting_discord_hero(void) { return g_set.discord_hero ? 1 : 0; }
 // docs/419. LB_MASTER_HTTPS=0|1 forces it (a test aid).
 extern "C" int lb_setting_master_https(void) {
     static int forced = -2;
@@ -6530,7 +7576,9 @@ extern "C" int lb_setting_patch_hotwire_glitch(void) {
     return hotwire_mode_effective() == 1 ? 1 : 0;
 }
 
+// BR-0011: while joined these follow the host's 'S' page (lb_teams.cpp).
 extern "C" int lb_setting_attack_boost_ranged(void) {
+    { LbHostSettings h; if (lb_rules_host_settings(&h) >= 0) return h.attack_boost; }   // BR-0011
     // LB_ATTACKBOOST=1 forces this on without the UI, the same test aid
     // LB_CHEATS, LB_BALANCE and LB_UNLOCKS have. It was the only enhancement
     // without one, which is why it is also the only one whose badge could not
@@ -6547,6 +7595,7 @@ extern "C" int lb_setting_attack_boost_ranged(void) {
 // which is newly implemented and issues guest calls -- can be exercised
 // headlessly. Same idiom as LB_HOTWIRE_MODE, LB_FORCE_CAP and LB_MUSIC_MODE.
 extern "C" int lb_setting_hotwire_transport(void) {
+    { LbHostSettings h; if (lb_rules_host_settings(&h) >= 0) return h.hotwire_transport; }   // BR-0011
     static int forced = -1;
     static bool read_env = false;
     if (!read_env) {
@@ -6573,6 +7622,7 @@ extern "C" int lb_setting_emp_transports(void) {
 
 // docs/408: LB_TRANSPORT_RELEASE=0|1 forces it.
 extern "C" int lb_setting_transport_release(void) {
+    { LbHostSettings h; if (lb_rules_host_settings(&h) >= 0) return h.transport_release; }   // BR-0011
     static int forced = -2;
     if (forced == -2) {
         const char* v = std::getenv("LB_TRANSPORT_RELEASE");
@@ -6620,6 +7670,7 @@ extern "C" int lb_setting_own_hero_spells(void) {   // docs/385
 }
 
 extern "C" int lb_setting_fix_hotwired_healing(void) {
+    { LbHostSettings h; if (lb_rules_host_settings(&h) >= 0) return h.fix_healing; }   // BR-0011
     return g_set.fix_hotwired_healing ? 1 : 0;
 }
 
@@ -6628,6 +7679,7 @@ extern "C" int lb_setting_fix_hotwired_healing(void) {
 // idiom as LB_FORCE_CAP, LB_PIXEL_SCALE and LB_HUDSCALE.
 // This machine's Hotwire targets (LB_HOTWIRE_MODE forces it), as recorded.
 extern "C" int lb_setting_hotwire_mode(void) {
+    { LbHostSettings h; if (lb_rules_host_settings(&h) >= 0) return h.hotwire_mode; }   // BR-0011
     static int forced = -1;
     static bool read_env = false;
     if (!read_env) {
@@ -6654,6 +7706,7 @@ extern "C" int lb_setting_hotwire_anything(void) {
 
 extern "C" int lb_setting_cap(int build_limit_class) {
     if (build_limit_class < 0 || build_limit_class >= 10) return 0;
+    { LbHostSettings h; if (lb_rules_host_settings(&h) >= 0) return h.caps[build_limit_class]; }   // BR-0011
 
     // LB_FORCE_CAP=<class>:<value> sets one class without the UI, so a headless
     // run can verify the patch. Test aid only, like LB_AUTOPLAY.
@@ -6698,11 +7751,16 @@ extern "C" int lb_setting_cheat(int index) {
     // docs/406: a replay runs on the recording's cheats (from sets=3).
     const int played = lb_demo_play_cheats();
     if (played >= 0) return (played >> index) & 1;
+    { LbHostSettings h; if (lb_rules_host_settings(&h) >= 0) return (int)((h.cheats >> index) & 1u); }   // BR-0011
     if (forced & (1u << index)) return 1;
     return g_set.cheat[index] ? 1 : 0;
 }
 
 extern "C" int lb_setting_cheat_count(void) { return kCheatCount; }
+// BR-0011: joined, the host's cheats apply and the cartridge's own are held off.
+extern "C" int lb_setting_cheats_locked(void) {
+    return lb_rules_host_settings(nullptr) >= 0 ? 1 : 0;
+}
 
 // docs/406: the cheats as a mask, bit i = flags[i], as recordings carry them.
 extern "C" int lb_cheat_mask_live(void) {
@@ -6721,6 +7779,18 @@ extern "C" int lb_setting_ai_cheats(void) {
         forced = v ? (std::atoi(v) ? 1 : 0) : -1;
     }
     return forced >= 0 ? forced : (g_set.ai_cheats ? 1 : 0);
+}
+
+// SG-0017: the AI casts single-target spells. LB_AI_TAP_SPELLS=0|1 forces it.
+// Offline only (lb_patches.cpp applies it only with no network). The single
+// accessor for the host-rules page to carry.
+extern "C" int lb_setting_ai_tap_spells(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_AI_TAP_SPELLS");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.ai_tap_spells ? 1 : 0);
 }
 
 // Which faction's music a match plays. 0 vanilla (the game untouched),
@@ -6777,21 +7847,31 @@ extern "C" int lb_setting_plantation_name(void) {
 // 0 the cartridge's word, 1 the new one. LB_RENAME_CLAW_TANK / LB_RENAME_GEMMA
 // / LB_RENAME_BROADSIDE=<0|1> force them, like LB_LEADER_NAME.
 extern "C" int lb_setting_rename(int which) {
-    static const char* const kEnv[3] = {"LB_RENAME_CLAW_TANK", "LB_RENAME_GEMMA",
-                                        "LB_RENAME_BROADSIDE"};
-    static int forced[3] = {-1, -1, -1};
+    // LB_RENAME_ALL=1 forces every rename on (test aid, SG-0003/SG-0014).
+    static const char* const kEnv[9] = {"LB_RENAME_CLAW_TANK", "LB_RENAME_GEMMA",
+                                        "LB_RENAME_BROADSIDE", "LB_RENAME_ASSAULT_SHIP",
+                                        "LB_RENAME_ATTACK_SHIP", "LB_RENAME_EARTH_TRANSPORT",
+                                        "LB_RENAME_ALIEN_TRANSPORT", "LB_RENAME_STARFIGHTER",
+                                        "LB_RENAME_STARSHIP1"};
+    static int forced[9] = {-1, -1, -1, -1, -1, -1, -1, -1, -1};
     static bool read_env = false;
     if (!read_env) {
         read_env = true;
-        for (int i = 0; i < 3; ++i)
+        const char* all = std::getenv("LB_RENAME_ALL");
+        for (int i = 0; i < 9; ++i) {
+            if (all && std::atoi(all) == 1) forced[i] = 1;
             if (const char* v = std::getenv(kEnv[i])) {
                 const int n = std::atoi(v);
                 if (n >= 0 && n <= 1) forced[i] = n;
             }
+        }
     }
-    if (which < 0 || which > 2) return 0;
-    const int own[3] = {g_set.rename_claw_tank, g_set.rename_gemma,
-                        g_set.rename_broadside};
+    if (which < 0 || which > 8) return 0;
+    const int own[9] = {g_set.rename_claw_tank, g_set.rename_gemma,
+                        g_set.rename_broadside, g_set.rename_assault_ship,
+                        g_set.rename_attack_ship, g_set.rename_earth_transport,
+                        g_set.rename_alien_transport, g_set.rename_starfighter,
+                        g_set.rename_starship1};
     const int m = forced[which] >= 0 ? forced[which] : own[which];
     return (m < 0 || m > 1) ? 0 : m;
 }
@@ -7056,6 +8136,10 @@ extern "C" const char* lb_port_version(void) {
                 std::fclose(f);
             }
         }
+        // Test aid (docs/430): LB_VERSION_TEST=<text> stands in for the build, to
+        // exercise the lobby's version warning with two copies of one build.
+        if (const char* t = std::getenv("LB_VERSION_TEST"))
+            if (*t) version = std::string(t).substr(0, 60);
     }
     return version.c_str();
 }
@@ -7116,6 +8200,11 @@ extern "C" const char* lb_net_lobby_options_json(void) {
     if (g_set.unlock_units) kv.push_back({"Unlock all units", "On"});
     if (g_set.unlock_maps) kv.push_back({"Unlock all maps", "On"});   // docs/407
     if (g_set.banned_units[0]) kv.push_back({"Banned units", g_set.banned_units});
+    if (g_set.banned_maps[0]) kv.push_back({"Banned maps", g_set.banned_maps});   // docs/429
+    if (g_set.unit_map_bans[0]) kv.push_back({"Units banned on some maps", g_set.unit_map_bans});
+    if (g_set.ban_preset[0]) kv.push_back({"Ban preset", g_set.ban_preset});
+    if (g_set.random_maps) kv.push_back({"Random map entries", "On"});
+    if (g_set.tourney_team) kv.push_back({"Random team (tourney)", "On"});
     out = "{";
     for (size_t i = 0; i < kv.size(); ++i) {
         if (i) out += ",";

@@ -132,7 +132,8 @@ def render_band_top(gh):
 # measurement tool that can silently attach to the wrong process is worse than
 # no measurement, so this run gets a private port and proves the server it
 # talks to is the child it started.
-PORT = 19857
+# LB_HARNESS_OFFSET shifts every harness port, so two checkouts can test at once.
+PORT = 19857 + int(os.environ.get("LB_HARNESS_OFFSET", "0") or 0)
 
 # 2560x1440 AND 3440x1440 ARE IN HERE ON PURPOSE.
 #

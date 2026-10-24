@@ -3,7 +3,7 @@
 Reconnects once on a dropped socket: a long warp issues thousands of commands
 and losing one of them should not throw away the run.
 """
-import json, socket, sys, time
+import json, os, socket, sys, time
 
 class Dbg:
     def __init__(self, host="127.0.0.1", port=19842, timeout=120.0):
@@ -79,6 +79,28 @@ def assert_single_runner(port=19842):
         return                                     # cannot check; do not block
     live = [ln.split()[1] for ln in out.splitlines()
             if any(ln.lower().startswith(n.lower()) for n in names)]
+    # Parallel checkouts (LB_HARNESS_OFFSET) each run their own: only the
+    # instances started from THIS checkout can split a measurement here.
+    try:
+        import os
+        root = os.path.normcase(os.path.abspath(
+            os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")))
+        wm = subprocess.run(
+            ["wmic", "process", "where",
+             "name='nds_runner.exe' or name='LegoBattles.exe'",
+             "get", "ProcessId,ExecutablePath", "/format:csv"],
+            capture_output=True, text=True, timeout=30).stdout
+        mine = []
+        for ln in wm.splitlines():
+            parts = ln.strip().split(",")
+            if len(parts) >= 3 and parts[-1].strip().isdigit():
+                exe = os.path.normcase(os.path.abspath(",".join(parts[1:-1])))
+                if exe.startswith(root + os.sep):
+                    mine.append(parts[-1].strip())
+        if wm.strip():
+            live = [p for p in live if p in mine]
+    except Exception:                              # noqa: BLE001
+        pass
     if len(live) > 1:
         raise RuntimeError(
             "%d emulator instances are running (PIDs %s). Measurements split "
