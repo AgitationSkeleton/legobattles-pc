@@ -22,7 +22,8 @@
 //
 //  * Give each one a stem "z/NN" and add it to the cartridge's file system as
 //    Maps/z/NN.map, z/NNmini.NCGR ..., BP/DetailTiles_z/NN.tbp: three NEW
-//    directories, whose files take new file ids after the last one. Every
+//    directories (docs/439: the 100th map onwards is "y/01", with three more
+//    directories; at most 198 maps), whose files take new file ids after the last one. Every
 //    stock file keeps its id; only the FNT (a directory is added to three
 //    parents) and the FAT (entries appended) are rewritten, into the padding
 //    after the last file, and the header points at them.
@@ -392,6 +393,18 @@ struct ModMap {
 const char* const kMiniExt[4] = {"mini.NCGR", "mini.NCBR", "miniNT.NCGR",
                                  "miniNT.NCBR"};
 std::vector<ModMap> g_maps;
+// docs/439: the stem of mod map k is "<letter>/NN": 99 maps to a letter, 'z'
+// first, then 'y'. (The game copies the stem from a 5-byte "mpNN" string, so
+// it is four characters.) Two letters are two groups of three directories.
+constexpr int kStemGroup = 99;
+constexpr int kStemGroups = 2;
+// The Free Play list draws no name for its 129th and later items (measured,
+// docs/439), so 30 stock + 96 mod maps + 2 Random entries is the most that
+// shows names. Stems, ids and registration take kStemGroup * kStemGroups.
+constexpr int kMaxMods = 96;
+void stem_of(int k, char out[8]) {
+    std::snprintf(out, 8, "%c/%02d", 'z' - k / kStemGroup, k % kStemGroup + 1);
+}
 std::string g_status = "no mods folder";
 
 std::string exe_dir() {
@@ -431,7 +444,11 @@ bool loose_folder_map(const std::filesystem::path& f,
             for (const auto& e : fs::directory_iterator(f, ec)) {
                 if (!e.is_regular_file(ec)) continue;
                 files.push_back(e.path());
-                if (lower(e.path().extension().string()) == ".map") maps.push_back(e.path());
+                // An empty .map is a leftover, not a second map (the archive's
+                // Supply Lines 1 ships a 0-byte spy1.map beside Sup1.map).
+                if (lower(e.path().extension().string()) == ".map" &&
+                    fs::file_size(e.path(), ec) > 0 && !ec)
+                    maps.push_back(e.path());
             }
             if (maps.size() != 1) return false;
             const std::string stem = maps[0].stem().string();
@@ -441,10 +458,38 @@ bool loose_folder_map(const std::filesystem::path& f,
                     if (lower(p.filename().string()) == want) return p;
                 return fs::path();
             };
+            // The stock slot the map stands in for: mpNN.map, else a folder
+            // named for it, "18-Better Outbreak" (docs/419). 0 for none.
+            int slot = 0;
+            if (lower(stem).rfind("mp", 0) == 0) slot = std::atoi(stem.c_str() + 2);
+            {
+                const std::string fn = f.filename().string();
+                if ((slot < 1 || slot > 30) && !fn.empty() && std::isdigit((unsigned char)fn[0])) {
+                    size_t d = 0;
+                    while (d < fn.size() && std::isdigit((unsigned char)fn[d])) ++d;
+                    if (d < fn.size() && (fn[d] == '-' || fn[d] == ' '))
+                        slot = std::atoi(fn.c_str());
+                }
+            }
+            if (slot < 1 || slot > 30) slot = 0;
             bool ok = slurp(maps[0], &m.map);
+            int own_minis = 0;
             for (int k = 0; ok && k < 4; ++k) {
                 const fs::path p = find(stem + kMiniExt[k]);
-                ok = !p.empty() && slurp(p, &m.mini[k]);
+                if (!p.empty() && slurp(p, &m.mini[k])) ++own_minis;
+            }
+            if (ok && own_minis != 4) {
+                // No minimap of its own (the Better Free Play pack's 29-Better
+                // Dead Marsh, a shipyard-only edit of mp29): a slot map takes
+                // its stock slot's, as it takes the slot's detail tiles below.
+                char nm[40];
+                for (int k = 0; ok && k < 4; ++k) {
+                    std::snprintf(nm, sizeof nm, "mp%02d%s", slot, kMiniExt[k]);
+                    ok = slot && stock_read(nm, &m.mini[k]) && !m.mini[k].empty();
+                }
+                if (ok)
+                    std::fprintf(stderr, "[lb_mods] %s: no minimap of its own; slot mp%02d's\n",
+                                 f.filename().string().c_str(), slot);
             }
             if (!ok) return false;
             if (!map_facts(m.map, &m.world, &m.players) || m.players < 2) {
@@ -455,17 +500,7 @@ bool loose_folder_map(const std::filesystem::path& f,
             }
             const fs::path dt = find("DetailTiles_" + stem + ".tbp");
             if (dt.empty() || !slurp(dt, &m.detail)) {
-                int s = 0;
-                if (lower(stem).rfind("mp", 0) == 0) s = std::atoi(stem.c_str() + 2);
-                // docs/419: else a folder named for its slot, "18-Better
-                // Outbreak" (the Better Free Play maps pack's own convention).
-                const std::string fn = f.filename().string();
-                if ((s < 1 || s > 30) && !fn.empty() && std::isdigit((unsigned char)fn[0])) {
-                    size_t d = 0;
-                    while (d < fn.size() && std::isdigit((unsigned char)fn[d])) ++d;
-                    if (d < fn.size() && (fn[d] == '-' || fn[d] == ' '))
-                        s = std::atoi(fn.c_str());
-                }
+                const int s = slot;   // docs/419: the slot found above
                 char stock[40];
                 std::snprintf(stock, sizeof stock, "BP/DetailTiles_mp%02d.tbp",
                               s >= 1 && s <= 30 ? s : 1);
@@ -622,12 +657,12 @@ void scan(const std::vector<uint8_t>& rom, const Nitro& own) {
         return a.slot != b.slot ? a.slot < b.slot : a.hash < b.hash;
     });
     size_t dropped = 0;
-    if (g_maps.size() > 30) {   // one pass of the game's loop
-        dropped = g_maps.size() - 30;
-        for (size_t k = 30; k < g_maps.size(); ++k)
-            std::fprintf(stderr, "[lb_mods] over the 30-map limit, not loaded: %s\n",
-                         g_maps[k].source.c_str());
-        g_maps.resize(30);
+    if (g_maps.size() > (size_t)kMaxMods) {   // docs/439: see kMaxMods
+        dropped = g_maps.size() - (size_t)kMaxMods;
+        for (size_t k = (size_t)kMaxMods; k < g_maps.size(); ++k)
+            std::fprintf(stderr, "[lb_mods] over the %d-map limit, not loaded: %s\n",
+                         kMaxMods, g_maps[k].source.c_str());
+        g_maps.resize((size_t)kMaxMods);
     }
     for (ModMap& m : g_maps)
         m.desc = "A map from " + m.source + ".";
@@ -756,27 +791,35 @@ extern "C" int lb_mods_build(std::vector<uint8_t>* rom_p) {
         fs.dirs[(size_t)parent].entries.push_back(Entry{true, name, idx});
         return idx;
     };
-    const int zroot = add_dir(root, "z");
-    for (size_t k = 0; k < n; ++k)
-        for (int j = 0; j < 4; ++j) {
-            char nm[24];
-            std::snprintf(nm, sizeof nm, "%02u%s", (unsigned)(k + 1), kMiniExt[j]);
-            fs.dirs[(size_t)zroot].entries.push_back(Entry{false, nm, -1});
-            fs.fat.push_back(place(g_maps[k].mini[j]));
+    // docs/439: one group of three directories per letter ('z' for maps 1..99,
+    // then 'y'); a stock directory's files are the ones named for the stem.
+    const int groups = ((int)n + kStemGroup - 1) / kStemGroup;
+    for (int g = 0; g < groups; ++g) {
+        const size_t lo = (size_t)g * kStemGroup, hi = std::min(n, lo + kStemGroup);
+        const char letter[2] = {(char)('z' - g), 0};
+        const std::string dname = std::string("DetailTiles_") + letter;
+        const int zroot = add_dir(root, letter);
+        for (size_t k = lo; k < hi; ++k)
+            for (int j = 0; j < 4; ++j) {
+                char nm[24];
+                std::snprintf(nm, sizeof nm, "%02u%s", (unsigned)(k - lo + 1), kMiniExt[j]);
+                fs.dirs[(size_t)zroot].entries.push_back(Entry{false, nm, -1});
+                fs.fat.push_back(place(g_maps[k].mini[j]));
+            }
+        const int zmaps = add_dir(maps, letter);
+        for (size_t k = lo; k < hi; ++k) {
+            char nm[16];
+            std::snprintf(nm, sizeof nm, "%02u.map", (unsigned)(k - lo + 1));
+            fs.dirs[(size_t)zmaps].entries.push_back(Entry{false, nm, -1});
+            fs.fat.push_back(place(g_maps[k].map));
         }
-    const int zmaps = add_dir(maps, "z");
-    for (size_t k = 0; k < n; ++k) {
-        char nm[16];
-        std::snprintf(nm, sizeof nm, "%02u.map", (unsigned)(k + 1));
-        fs.dirs[(size_t)zmaps].entries.push_back(Entry{false, nm, -1});
-        fs.fat.push_back(place(g_maps[k].map));
-    }
-    const int zdetail = add_dir(bp, "DetailTiles_z");
-    for (size_t k = 0; k < n; ++k) {
-        char nm[16];
-        std::snprintf(nm, sizeof nm, "%02u.tbp", (unsigned)(k + 1));
-        fs.dirs[(size_t)zdetail].entries.push_back(Entry{false, nm, -1});
-        fs.fat.push_back(place(g_maps[k].detail));
+        const int zdetail = add_dir(bp, dname.c_str());
+        for (size_t k = lo; k < hi; ++k) {
+            char nm[16];
+            std::snprintf(nm, sizeof nm, "%02u.tbp", (unsigned)(k - lo + 1));
+            fs.dirs[(size_t)zdetail].entries.push_back(Entry{false, nm, -1});
+            fs.fat.push_back(place(g_maps[k].detail));
+        }
     }
     // Every language file gets the maps' names and descriptions appended; the
     // same ids in each (they all hold 3,064 in the retail ROM).
@@ -835,14 +878,16 @@ extern "C" int lb_mods_build(std::vector<uint8_t>* rom_p) {
     if (rd32(&rom[0x80]) < need) wr32(&rom[0x80], (uint32_t)need);
     wr16(&rom[0x15E], header_crc(rom.data()));
     std::fprintf(stderr, "[lb_mods] %s: %zu bytes added after 0x%08X; files "
-                 "%zu -> %zu, directories +3\n", g_status.c_str(), blob.size(),
-                 end, (size_t)(as_n / 8u), fs.fat.size());
+                 "%zu -> %zu, directories +%d\n", g_status.c_str(), blob.size(),
+                 end, (size_t)(as_n / 8u), fs.fat.size(), 3 * groups);
     for (size_t k = 0; k < n; ++k) {
         char slot[24] = "";   // docs/413: a loose folder has no slot
         if (g_maps[k].slot < 1000)
             std::snprintf(slot, sizeof slot, "slot mp%02d of ", g_maps[k].slot);
-        std::fprintf(stderr, "[lb_mods]   z/%02u  %-24s %d players, %s, from "
-                     "%s%s\n", (unsigned)(k + 1),
+        char stem[8];
+        stem_of((int)k, stem);
+        std::fprintf(stderr, "[lb_mods]   %s  %-24s %d players, %s, from "
+                     "%s%s\n", stem,
                      g_maps[k].name.c_str(), g_maps[k].players,
                      g_maps[k].world == 1 ? "Pirate" : g_maps[k].world == 2 ? "Mars"
                                                                            : "King",
@@ -853,6 +898,21 @@ extern "C" int lb_mods_build(std::vector<uint8_t>* rom_p) {
 }
 
 extern "C" int lb_mods_count(void) { return (int)g_maps.size(); }
+// docs/439: the most mod maps the game takes, the stem of map k ("z/01" ..
+// "y/99"), and the map a stem names (-1 when it is not a mod map's).
+extern "C" int lb_mods_limit(void) { return kMaxMods; }
+extern "C" void lb_mods_stem(int k, char* out, int cap) {
+    char s[8];
+    stem_of(k < 0 ? 0 : k, s);
+    std::snprintf(out, (size_t)cap, "%s", s);
+}
+extern "C" int lb_mods_stem_index(const char* stem) {
+    if (!stem || stem[1] != '/') return -1;
+    const int g = 'z' - stem[0];
+    if (g < 0 || g >= kStemGroups || !std::isdigit((unsigned char)stem[2])) return -1;
+    const int n = std::atoi(stem + 2);
+    return n >= 1 && n <= kStemGroup ? g * kStemGroup + n - 1 : -1;
+}
 extern "C" int lb_mods_players(int k) {
     return (k >= 0 && k < (int)g_maps.size()) ? g_maps[(size_t)k].players : 0;
 }
@@ -940,6 +1000,50 @@ extern "C" int lb_mods_map_stats(const unsigned char* data, size_t n, int out[10
         }
     }
     return 1;
+}
+
+// docs/414: a map's REAL start count. The EVNT players that lb_mods_map_stats
+// counts include players that only appear in other events (The Pond lists 4
+// but places 3 bases, and a team with no base stalls the load). A start is an
+// EVNT record of exactly six conditions (the base and its builders: the
+// layouts build_map.py copies from mp05/mp18/mp20/mp24), its player the byte
+// at +2 of a condition. Returns the distinct players of such records, or -1
+// when the file is not a map.
+extern "C" int lb_mods_map_starts(const unsigned char* data, size_t n) {
+    std::vector<uint8_t> m(data, data + n);
+    if (!comp_unwrap(&m) || m.size() < 0x40 || std::memcmp(m.data(), "MAP", 3) != 0 ||
+        std::memcmp(m.data() + 3, "TERR", 4) != 0)
+        return -1;
+    const size_t cells = (size_t)m[7] * m[8];
+    size_t q = 3 + 0x28 + 3 * cells;
+    if (q + 2 > m.size()) return -1;
+    q += 2 + rd16(m.data() + q);
+    q += 2 * cells;
+    if (q + 8 > m.size() || std::memcmp(m.data() + q, "RRET", 4) != 0 ||
+        std::memcmp(m.data() + q + 4, "EVNT", 4) != 0)
+        return -1;
+    size_t p = q + 8;
+    bool seen[256] = {false};
+    while (p < m.size() && m[p] == 0x4C) {
+        p += 2;
+        if (p >= m.size()) return -1;
+        p += 1 + 2u * m[p];
+        if (p >= m.size()) return -1;
+        const uint8_t area = m[p++];
+        if (area) p += 4;
+        static const int sizes[3] = {9, 8, 3};
+        for (int k = 0; k < 3; ++k) {
+            if (p >= m.size()) return -1;
+            const unsigned c = m[p++];
+            if (p + (size_t)c * sizes[k] > m.size()) return -1;
+            if (k == 0 && c == 6)
+                for (unsigned i = 0; i < c; ++i) seen[m[p + 9u * i + 2u]] = true;
+            p += (size_t)c * sizes[k];
+        }
+    }
+    int cnt = 0;
+    for (bool s : seen) cnt += s ? 1 : 0;
+    return cnt;
 }
 
 // docs/431: the game's COMP wrapper removed (a buffer without it is kept).

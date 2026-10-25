@@ -332,6 +332,14 @@ struct Settings {
     // SG-0002: the computer plays the player's side in Free Play, so two
     // computer players fight (lb_patches.cpp, apply_ai_spectate). Offline only.
     bool ai_spectate = false;
+    // docs/414: more than one computer opponent in Free Play (1 = the game's
+    // own), the army of the second and third (0..5 a faction, 6 Custom,
+    // 7 Randomizer) and whether the computers team up against the player
+    // (lb_patches.cpp, the Start handler's carrier). Offline only.
+    int  ai_opponents = 1;
+    int  ai_opp_army[2] = {2, 3};
+    int  ai_opp_colour[2] = {0, 0};   // 0 automatic, else 1 + the colour list's index
+    bool ai_opp_teams = false;
 
     bool unlock_units = false;
     bool unlock_extras = false;   // the cheat codes (red bricks)
@@ -683,6 +691,14 @@ extern "C" void lb_settings_save(void) {
                   g_set.ai_tap_spells ? "true" : "false"); o += buf;   // SG-0017
     std::snprintf(buf, sizeof buf, "  \"ai_spectate\": %s,\n",
                   g_set.ai_spectate ? "true" : "false"); o += buf;   // SG-0002
+    std::snprintf(buf, sizeof buf, "  \"ai_opponents\": %d,\n",
+                  g_set.ai_opponents); o += buf;                     // docs/414
+    std::snprintf(buf, sizeof buf, "  \"ai_opp_army\": [%d, %d],\n",
+                  g_set.ai_opp_army[0], g_set.ai_opp_army[1]); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"ai_opp_colour\": [%d, %d],\n",
+                  g_set.ai_opp_colour[0], g_set.ai_opp_colour[1]); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"ai_opp_teams\": %s,\n",
+                  g_set.ai_opp_teams ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"unlock_units\": %s,\n",
                   g_set.unlock_units ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"unlock_extras\": %s,\n",
@@ -884,6 +900,14 @@ extern "C" void lb_settings_load(void) {
     json_get_bool(s, "ai_cheats_only", &g_set.ai_cheats_only);   // docs/433
     json_get_bool(s, "ai_tap_spells", &g_set.ai_tap_spells);   // SG-0017
     json_get_bool(s, "ai_spectate", &g_set.ai_spectate);       // SG-0002
+    json_get_int(s, "ai_opponents", &g_set.ai_opponents);      // docs/414
+    json_get_ints(s, "ai_opp_army", g_set.ai_opp_army, 2);
+    json_get_bool(s, "ai_opp_teams", &g_set.ai_opp_teams);
+    json_get_ints(s, "ai_opp_colour", g_set.ai_opp_colour, 2);
+    for (int& c : g_set.ai_opp_colour) if (c < 0 || c > 6) c = 0;
+    if (g_set.ai_opponents < 1) g_set.ai_opponents = 1;
+    if (g_set.ai_opponents > 2) g_set.ai_opponents = 2;
+    for (int& a : g_set.ai_opp_army) if (a < 0 || a > 7) a = 2;
     json_get_bool(s, "unlock_units", &g_set.unlock_units);
     json_get_bool(s, "unlock_extras", &g_set.unlock_extras);
     json_get_bool(s, "unlock_maps", &g_set.unlock_maps);           // docs/407
@@ -3203,6 +3227,40 @@ void tab_team_builder() {
     static bool msg_bad = false;
     LbTeam team = team_of(g_set.team_working);
 
+    // docs/414: the extra computer players of Free Play. They are set here,
+    // beside the armies, because the game's opponent screen has room for one
+    // opponent only (a third row of faction and colour widgets would be new UI
+    // records, as the Custom portraits were in docs/390).
+    guide("A third army for Free Play: a second computer opponent. Offline only; read when the battle starts.");
+    {
+        static const char* const kArmies[] = {"King", "Wizard", "Pirate", "Imperial",
+                                              "Earth", "Alien", "Custom (Enemy Team)",
+                                              "Randomizer"};
+        static const char* const kColours[] = {"Automatic", "Blue", "Red", "Green",
+                                               "Yellow", "Purple", "Grey"};
+        ImGui::Text("Computer Player 3");
+        bool on3 = g_set.ai_opponents >= 2;
+        if (ImGui::Checkbox("On##ai3", &on3)) g_set.ai_opponents = on3 ? 2 : 1;
+        help("Adds a second computer opponent to Free Play, on its own start,\n"
+             "with its own base and builders. The first is still the opponent\n"
+             "screen's pick. The map needs a start for it. Offline only.");
+        badge(WIRED);
+        ImGui::BeginDisabled(!on3);
+        ImGui::SetNextItemWidth(180.0f * g_ui_scale);
+        ImGui::Combo("Army##ai3", &g_set.ai_opp_army[0], kArmies, IM_ARRAYSIZE(kArmies));
+        help("A faction's army, the Enemy Team below (Custom), or a new\n"
+             "random army each match.");
+        ImGui::SetNextItemWidth(180.0f * g_ui_scale);
+        ImGui::Combo("Colour##ai3", &g_set.ai_opp_colour[0], kColours, IM_ARRAYSIZE(kColours));
+        help("Its team colour. If you or the first opponent already use it,\n"
+             "or it is Automatic, the first colour nobody uses is taken.");
+        ImGui::Checkbox("Allied with the other computers##ai3", &g_set.ai_opp_teams);
+        help("Off, it fights everyone, the other computers included. On, the\n"
+             "computers are allied and only attack you.");
+        ImGui::EndDisabled();
+    }
+    ImGui::Separator();
+
     // docs/410: the neutral creatures as army units, at real prices.
     ImGui::Checkbox("Neutral Creatures in Armies", &g_set.creatures);
     help("Offers the Wolf, the Robot and the Monkey as Close Combat units and the\n"
@@ -3230,7 +3288,7 @@ void tab_team_builder() {
     {
         static const char* const kWho[4] = {"Wolf", "Robot", "Shark", "Monkey"};
         static const int kDef[4] = {2, 2, 6, 2};   // where docs/410 put them
-        static const int kSlotsOffered[] = {2, 3, 5, 6, 7};   // Hero: docs/436; Mounted and, for three of them, the Specials: docs/437, not loadable
+        static const int kSlotsOffered[] = {2, 3, 4, 5, 6, 7};   // Hero: docs/436, not offered; Mounted: docs/438; the Specials for the three, docs/437: not loadable
         const bool joined = lb_rules_host_flags() >= 0;
         const int shown = joined ? lb_creature_slots_live() : lb_setting_creature_slots();
         ImGui::BeginDisabled(joined || !g_set.creatures);
@@ -3258,10 +3316,10 @@ void tab_team_builder() {
         ImGui::EndDisabled();
         help("Which army slot each creature takes, in the Team Builder and\n"
              "the game's army screen. The Wolf, Robot and Monkey can be Close\n"
-             "Combat or Ranged (trained at the Barracks); the Shark can only be\n"
-             "a Special (the Shipyard). Mounted, Hero and the Specials for the\n"
-             "others are not offered: the game cannot load them (they have no\n"
-             "sprites or model for that kind). Needs the option above. Online,\n"
+             "Combat, Ranged or Mounted (trained at the Barracks); the Shark\n"
+             "can only be a Special (the Shipyard). Hero and the Specials for\n"
+             "the others are not offered: the game cannot load them (they have\n"
+             "no model for that kind). Needs the option above. Online,\n"
              "the host's setting applies.");
         badge(WIRED);
     }
@@ -5956,7 +6014,8 @@ const char* const kBalUnitTips[10] = {
     "Melee damage spread: the high end is damage + spread.",
     "Ticks between attacks (30 a second).",
     "Attack range.",
-    "Resources a mine, quarry or well cap yields."};
+    "Mine: the bricks it pays out. Builder: the bricks per tree chop (0 = the game's 75; "
+    "a Mill's bonus and Double LEGO Bricks still apply). Any other unit: does nothing."};
 int g_bal_faction = 0;
 int g_bal_filter = 0;   // 0 all, 1 units, 2 buildings
 bool g_bal_speed_raw = false;   // docs/425 item 3: Speed as the stored value
@@ -6227,7 +6286,9 @@ void tab_balance_traits() {
             "blueprint, so this may do nothing.",
             "No speed: writes 0x0000FFFF, as the Entities Editor's NONE does.",
             "The projectile record a ranged unit fires, or Melee. A unit that "
-            "fires one has Melee damage 0.",
+            "fires one has Melee damage 0. Spare projectile 1-4 are free shots that "
+            "start as a copy of the Arrow: give one its own damage, speed and Sprite "
+            "in Balance Attacks and point a unit at it.",
             "AI priority: accumulated in the combat path (docs/25).",
             "Defogged area: how far the unit clears the fog; FF clears the map. "
             "A unit auto-attacks only within it, so raise it with Range "
@@ -6370,22 +6431,40 @@ void tab_balance_attacks() {
             "Its own side's units stop it.",
             "The first enemy unit it touches stops it.",
             "Walls stop it.",
-            "It explodes where it lands, hitting what is near."};
+            "It explodes where it lands, hitting what is near.",
+            "Shots fly over trees instead of stopping at them.",
+            "What the shot looks like. Ninja star, Flaming cannonball and Large arrow are "
+            "drawings the game ships but no shot uses. Applies at once; the explosion "
+            "drawn where it lands is separate. Several units can share a shot: point a "
+            "unit at a Spare projectile (Balance Traits) to change only its look."};
+        static const char* const kSprites[14] = {
+            "None (invisible)", "Arrow", "Bullet", "Ballista bolt", "Cannonball",
+            "Plasma ball", "Ninja star", "Gift", "Tower fireball", "Flaming cannonball",
+            "Laser cannon shot", "Laser", "Large arrow", "Boulder"};
         const int nf = lb_balance_field_count(LB_BAL_ATTACKS);
         if (ImGui::BeginTable("balattacks", nf + 2,
                               ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                                   ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY |
                                   ImGuiTableFlags_SizingFixedFit)) {
             ImGui::TableSetupScrollFreeze(1, 1);
+            // docs/438: the Sprite column is shown first, so it is on screen
+            // without scrolling the damage and flag columns past.
+            int ord[64], no = 0;
+            for (int f = 0; f < nf && no < 64; ++f)
+                if (std::strcmp(lb_balance_field_name(LB_BAL_ATTACKS, f), "Sprite") == 0)
+                    ord[no++] = f;
+            for (int f = 0; f < nf && no < 64; ++f)
+                if (std::strcmp(lb_balance_field_name(LB_BAL_ATTACKS, f), "Sprite") != 0)
+                    ord[no++] = f;
             ImGui::TableSetupColumn("Attack");
-            for (int f = 0; f < nf; ++f)
-                ImGui::TableSetupColumn(lb_balance_field_name(LB_BAL_ATTACKS, f));
+            for (int k = 0; k < no; ++k)
+                ImGui::TableSetupColumn(lb_balance_field_name(LB_BAL_ATTACKS, ord[k]));
             ImGui::TableSetupColumn("Used by");
             ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
-            for (int c = 0; c < nf + 2; ++c) {
+            for (int c = 0; c < no + 2; ++c) {
                 ImGui::TableSetColumnIndex(c);
                 ImGui::TableHeader(ImGui::TableGetColumnName(c));
-                const int f = c - 1;
+                const int f = (c >= 1 && c <= no) ? ord[c - 1] : -1;
                 if (f >= 0 && f < nf && f < (int)IM_ARRAYSIZE(kTips) &&
                     kTips[f][0] && ImGui::IsItemHovered())
                     ImGui::SetTooltip("%s", kTips[f]);
@@ -6399,15 +6478,44 @@ void tab_balance_attacks() {
                 char name[48] = "";
                 lb_balance_record_name(rec, name, (int)sizeof name);
                 ImGui::TextUnformatted(name);
-                for (int f = 0; f < nf; ++f) {
+                for (int k = 0; k < no; ++k) {
+                    const int f = ord[k];
                     ImGui::TableNextColumn();
-                    if (lb_balance_field_max(LB_BAL_ATTACKS, f) == 1)
+                    if (std::strcmp(lb_balance_field_name(LB_BAL_ATTACKS, f), "Sprite") == 0) {
+                        // docs/438: the animation set, by name
+                        const int live = lb_balance_value(rec, f);
+                        const int custom = lb_balance_custom_get(rec, f);
+                        ImGui::PushID(rec * 32 + f);
+                        if (custom >= 0)
+                            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.82f, 0.25f, 1.0f));
+                        ImGui::SetNextItemWidth(150.0f);
+                        ImGui::BeginDisabled(locked || live < 0);
+                        if (ImGui::BeginCombo("##spr", live >= 0 && live < 14 ? kSprites[live] : "?")) {
+                            for (int s = 0; s < 14; ++s) {
+                                char item[48];
+                                std::snprintf(item, sizeof item, "%s##%d", kSprites[s], s);
+                                if (ImGui::Selectable(item, s == live)) bal_set(rec, f, s);
+                            }
+                            ImGui::EndCombo();
+                        }
+                        ImGui::EndDisabled();
+                        if (custom >= 0) {
+                            ImGui::PopStyleColor();
+                            if (!locked && ImGui::IsItemClicked(ImGuiMouseButton_Right))
+                                bal_set(rec, f, -1);
+                        }
+                        ImGui::PopID();
+                    } else if (lb_balance_field_max(LB_BAL_ATTACKS, f) == 1)
                         bal_flag(rec, f, locked);
                     else
                         bal_cell(LB_BAL_ATTACKS, rec, f, locked);
                 }
                 ImGui::TableNextColumn();
                 int shown = 0;
+                if (rec == 202) {   // docs/438: the spells' own shot, not a spare
+                    ImGui::TextDisabled("the Fireball and Thunder Hammer spells");
+                    shown = 4;
+                }
                 for (int u = 0; u < units && shown < 4; ++u) {
                     if (lb_balance_record_projectile(u) != rec) continue;
                     if (shown++) ImGui::SameLine();
@@ -6495,6 +6603,14 @@ void tab_balance_heroes() {
                                           id == 2 ? " (instant)" : "", id);
                             if (ImGui::Selectable(item, id == live))
                                 lb_balance_custom_set(rec, field, id);
+                            // docs/441: both Unit Heals use the HUD's first
+                            // spell button (spell record +1 = 0), so a hero
+                            // holding both shows only the later slot's.
+                            if ((id == 1 || id == 2) && ImGui::IsItemHovered())
+                                ImGui::SetTooltip("Both Unit Heals share one button: "
+                                                  "a hero shows only the later slot's.\n"
+                                                  "Unit Heal needs a target; the "
+                                                  "instant one heals around the hero.");
                         }
                         ImGui::EndCombo();
                     }
@@ -8567,6 +8683,44 @@ extern "C" int lb_setting_ai_spectate(void) {
         forced = v ? (std::atoi(v) ? 1 : 0) : -1;
     }
     return forced >= 0 ? forced : (g_set.ai_spectate ? 1 : 0);
+}
+
+// docs/414: the extra computer opponents as one number (0 = the game's own
+// single opponent): bits 0-1 the extra opponents (0..2), bits 2-4 the second
+// opponent's army choice, bits 5-7 the third's (0..5 faction, 6 Custom,
+// 7 Randomizer), bit 8 the computers teaming up. LB_AI_OPPONENTS=<1..3>,
+// LB_AI_OPP_ARMY=<a>,<b> and LB_AI_OPP_TEAMS=0|1 force the parts. lb_patches.cpp
+// applies it only offline; recordings carry it as kind 17.
+extern "C" int lb_setting_ai_opp_packed(void) {
+    static int n = -2, a0 = -1, a1 = -1, teams = -1;
+    if (n == -2) {
+        n = -1;
+        if (const char* v = std::getenv("LB_AI_OPPONENTS")) n = std::atoi(v);
+        if (const char* v = std::getenv("LB_AI_OPP_ARMY")) {
+            a0 = std::atoi(v);
+            if (const char* c = std::strchr(v, ',')) a1 = std::atoi(c + 1);
+        }
+        if (const char* v = std::getenv("LB_AI_OPP_TEAMS")) teams = std::atoi(v) ? 1 : 0;
+    }
+    int opp = n >= 1 ? n : g_set.ai_opponents;
+    if (opp < 1) opp = 1;
+    if (opp > 2) opp = 2;   // three armies at most (docs/414)
+    if (opp == 1) return 0;
+    int x0 = a0 >= 0 ? a0 : g_set.ai_opp_army[0];
+    int x1 = a1 >= 0 ? a1 : g_set.ai_opp_army[1];
+    if (x0 < 0 || x0 > 7) x0 = 2;
+    if (x1 < 0 || x1 > 7) x1 = 3;
+    const int t = teams >= 0 ? teams : (g_set.ai_opp_teams ? 1 : 0);
+    static int col0 = -2;
+    if (col0 == -2) {   // LB_AI_OPP_COLOUR=<0..6>: the extra's colour (test aid)
+        col0 = -1;
+        if (const char* v = std::getenv("LB_AI_OPP_COLOUR")) col0 = std::atoi(v);
+    }
+    int c0 = col0 >= 0 ? col0 : g_set.ai_opp_colour[0];
+    if (c0 < 0 || c0 > 6) c0 = 0;
+    // At most one extra whatever the source (file, env, recording): docs/414.
+    return (opp - 1) | (x0 << 2) | (x1 << 5) | (t << 8) | (c0 << 9) |
+           (g_set.ai_opp_colour[1] << 12);
 }
 
 // Which faction's music a match plays. 0 vanilla (the game untouched),

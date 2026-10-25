@@ -42,13 +42,20 @@ export function webhooks(env) {
   return env ? [env.DISCORD_WEBHOOK, env.DISCORD_WEBHOOK_2].filter(Boolean) : [];
 }
 
+// docs/442: the sender's name; a server with SERVER_LABEL (the fallback) says
+// which it is, so the channel can tell the two apart.
+function sender(env) {
+  return env && env.SERVER_LABEL ? 'LEGO Battles server (' + env.SERVER_LABEL + ')'
+                                 : 'LEGO Battles server';
+}
+
 // docs/428: a message with a picture (a PNG's bytes), to every webhook: a
 // multipart post, the file shown by an embed as attachment://match.png.
 export function discordImage(env, ctx, text, png) {
   for (const url of webhooks(env)) {
     const form = new FormData();
     form.append('payload_json', JSON.stringify({
-      username: 'LEGO Battles server',
+      username: sender(env),
       content: String(text).slice(0, 1900),
       embeds: [{ image: { url: 'attachment://match.png' } }],
       allowed_mentions: { parse: [] },
@@ -63,7 +70,7 @@ export function discordImage(env, ctx, text, png) {
 // sent -- its waitUntil.
 export function discord(env, ctx, text) {
   const body = JSON.stringify({
-    username: 'LEGO Battles server',
+    username: sender(env),
     content: String(text).slice(0, 1900),
     // (no one is pinged, whatever a name says)
     allowed_mentions: { parse: [] },

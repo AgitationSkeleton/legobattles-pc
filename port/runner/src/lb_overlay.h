@@ -770,6 +770,10 @@ int          lb_ai_hero_rebuild_live(void);
 // SG-0017: the AI casts single-target spells (Balance > Spells). Offline only.
 int          lb_setting_ai_tap_spells(void);
 int          lb_setting_ai_spectate(void);   /* SG-0002 */
+/* docs/414: extra computer opponents in Free Play, packed (kind 17). */
+int          lb_setting_ai_opp_packed(void);
+int          lb_demo_play_ai_opp(void);
+int          lb_ai_opp_live(void);           /* lb_patches.cpp: 0 online */
 // docs/408: a hotwired transport leaves its old owner's AI (kind 12).
 int          lb_setting_transport_release(void);
 int          lb_demo_play_transport_release(void);

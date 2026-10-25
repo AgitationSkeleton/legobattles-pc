@@ -62,6 +62,7 @@ extern "C" int lb_widemap_map_px(int* w, int* h);/* src/lb_widemap.cpp */
 /* src/lb_overlay.cpp: the map chain captured where 0x02156CB0 was valid. */
 extern "C" int lb_field_map_chain(uint32_t* map, int* w, int* h);
 extern "C" int lb_field_camera_write(int map_x, int map_y);/* src/lb_field.cpp */
+void nds_set_touch(uint16_t x, uint16_t y, bool down);     /* io.cpp, C++ linkage; docs/438 test drive */
 extern "C" uint32_t lb_field_camera_obj(void);   /* src/lb_field.cpp */
 extern "C" int lb_music_wanted_side(void);       /* src/lb_music.cpp */
 extern "C" int lb_widemap_cam_tile(int* tx, int* ty);
@@ -1699,13 +1700,14 @@ void apply_damage_observer() {
             const uint32_t shot = proj ? resolve_handle_kind(proj + 0x164u, 0u) : 0u;
             std::fprintf(stderr,
                          "[lb_dmg] lr=%08X roll=%u..%u boost=+%d explodes=%d "
-                         "shooter_owner=%d shooter_cat=%d target=%08X hp=%d "
+                         "shooter_owner=%d shooter_cat=%d target=%08X hp=%d target_owner=%d "
                          "shooter_melee=%d/%d up=%d down=%d\n",
                          lr, g_cpu.R[2], g_cpu.R[3], (int)applied_delta,
                          pinfo ? (int)bus_read_u8(pinfo + 0x6Bu) : -1,
                          shot ? (int)bus_read_u8(shot + 0xE4u) : -1,
                          shot ? (int)entity_category(shot) : -1,
                          tgt, tgt ? (int)bus_read_u16(tgt + 0x1A0u) : -1,
+                         tgt ? (int)bus_read_u8(tgt + 0xE4u) : -1,
                          shot ? (int)bus_read_u16(shot + 0x170u) : -1,
                          shot ? (int)bus_read_u8(bus_read_u32(bus_read_u32(shot + 0x160u) + 8u) + 0x68u) : -1,
                          shot ? (int)bus_read_u8(shot + 0x180u) : -1,
@@ -3888,8 +3890,10 @@ bool quick_item_step(uint32_t screen) {
 
 static int g_mm_log = 0;   // updates until the minimap tap's result is logged
 
+extern "C" int ai_opp_kill_step(void (*original)(void));   // docs/414 test aid
 void view_update_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kViewUpdate);
+    if (ai_opp_kill_step(original)) return;
     if (g_mm_log > 0 && --g_mm_log == 0 && quick_log()) {
         // Where the tap left the camera and the widened surface (LB_QUICKLOG).
         int cx = 0, cy = 0, mw = 0, mh = 0;
@@ -4261,6 +4265,12 @@ uint32_t enemy_button_rec(uint32_t self) {
 
 void enemy_set_choice(uint32_t rec, int next);   // docs/392, below
 void opponent_open_watch(uint32_t rec, int choice);   // docs/393, below
+
+// docs/414: MORE THAN ONE COMPUTER OPPONENT (the code is with apply_ai_spectate).
+constexpr uint32_t kSetupName = 0x02045858u;        // thumb: setup.name[i] = string
+constexpr uint32_t kMissionV06 = 0x02045BC8u;       // thumb: MultiplayerMissionBase::v06
+extern "C" void ai_opp_setname_override(void);   // defined with apply_ai_spectate
+extern "C" void ai_opp_v06_override(void);
 
 void enemy_cycle_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kEnemyCycle);
@@ -6014,6 +6024,13 @@ void cast_spell_override(void) {
 // with the LOC helpers it needs, after the Plantation rename.
 constexpr uint32_t kMapLoad = 0x02035FACu;
 void map_load_observer(void);
+// docs/438: a creature in the Mounted slot (category 4) draws as a Close Combat
+// unit. FUN_02035F7C is the level load's sprite step (ARM) and FUN_0203116C the
+// billboard builder's sprite/frame lookup (ARM); see creature_sprite_*_override.
+constexpr uint32_t kCreatureSprAnim = 0x0203ABC8u;   // Unit_BuildBillboard (it calls FUN_0203116C)
+constexpr uint32_t kCreatureSprLoad = 0x02035F7Cu;
+void creature_sprite_anim_override(void);
+void creature_sprite_load_override(void);
 constexpr uint32_t kRegisterMissions = 0x02045E50u;   // thumb
 constexpr uint32_t kRegisterLoop = 0x02045E58u;
 constexpr uint32_t kMissionTable = 0x02147DDCu;
@@ -6024,21 +6041,64 @@ extern "C" int lb_mods_world(int k);
 extern "C" unsigned lb_mods_name_id(int k);
 extern "C" unsigned lb_mods_desc_id(int k);
 extern "C" const char* lb_mods_name(int k);
+extern "C" int lb_mods_limit(void);                   /* docs/439 */
+extern "C" void lb_mods_stem(int k, char* out, int cap);
+extern "C" int lb_mods_stem_index(const char* stem);
 namespace {
+constexpr int kMaxModMissions = 198;   // lb_mods.cpp kMaxMods (checked at run time)
 struct MissionReg {
     int phase = 0;                 // 0 idle, 1 stock pass, 2 mod pass, 3 done
     uint32_t sp = 0, lr = 0;
-    int n = 0;
+    int n = 0;                     // mod maps in all
+    int done = 0, chunk = 0;       // docs/439: registered so far, in this pass
     uint8_t table[30 * 28];
     uint8_t stems[30][5];
     uint32_t stem_at[30];
-    uint32_t mission[30];          // the registered mod missions
+    uint32_t mission[kMaxModMissions];   // the registered mod missions
 } g_mreg;
 }  // namespace
 
+// docs/439: one pass of the game's loop for the next (up to 30) mod maps:
+// the table's first entries and their stems are overwritten with them, a frame
+// like the function's own is laid on the stack with this override as its
+// return address, and the loop is entered at 0x02045E58 with r7 = 30 - count.
+static void mreg_run_chunk() {
+    const int c = std::min(g_mreg.n - g_mreg.done, 30);
+    g_mreg.chunk = c;
+    for (int i = 0; i < c; ++i) {
+        const int k = g_mreg.done + i;
+        const uint32_t e = kMissionTable + 28u * (uint32_t)i;
+        char stem[8];
+        lb_mods_stem(k, stem, (int)sizeof stem);
+        for (uint32_t b = 0; b < 5u; ++b)
+            bus_write_u8(g_mreg.stem_at[i] + b, (uint8_t)stem[b]);
+        bus_write_u32(e + 0x04u, (uint32_t)lb_mods_players(k));
+        bus_write_u32(e + 0x08u, lb_mods_name_id(k));
+        bus_write_u32(e + 0x0Cu, lb_mods_desc_id(k));
+        bus_write_u32(e + 0x10u, 3u);
+        bus_write_u32(e + 0x14u, 239u);   // Map_01's collectable: The Pond's
+        bus_write_u32(e + 0x18u, (uint32_t)lb_mods_world(k));
+    }
+    // The frame `add sp,#0x14; pop {r4-r7,pc}` unwinds, returning here.
+    const uint32_t frame = g_mreg.sp - 20u;
+    bus_write_u32(frame + 0u, g_cpu.R[4]);
+    bus_write_u32(frame + 4u, g_cpu.R[5]);
+    bus_write_u32(frame + 8u, g_cpu.R[6]);
+    bus_write_u32(frame + 12u, g_cpu.R[7]);
+    bus_write_u32(frame + 16u, kRegisterMissions | 1u);
+    g_cpu.R[13] = frame - 0x14u;
+    g_cpu.R[5] = kMissionTable;
+    g_cpu.R[6] = 0u;
+    g_cpu.R[7] = 30u - (uint32_t)c;
+    g_mreg.phase = 2;
+    g_cpu.R[15] = kRegisterLoop;
+    runtime_dispatch_with_exchange(kRegisterLoop | 1u);
+}
+
 void register_missions_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kRegisterMissions);
-    const int n = std::min(lb_mods_count(), 30);
+    const int n = std::min(std::min(lb_mods_count(), lb_mods_limit()),
+                           (int)kMaxModMissions);
     if (n <= 0 || g_mreg.phase == 3) {
         if (original) original();
         return;
@@ -6047,6 +6107,7 @@ void register_missions_override(void) {
         g_mreg.sp = g_cpu.R[13];
         g_mreg.lr = g_cpu.R[14];
         g_mreg.n = n;
+        g_mreg.done = 0;
         g_mreg.phase = 1;
         g_cpu.R[14] = kRegisterMissions | 1u;   // the stock pass returns here
         if (original) original();
@@ -6057,54 +6118,39 @@ void register_missions_override(void) {
         return;
     }
     if (g_mreg.phase == 1) {
-        for (int i = 0; i < n * 28; ++i)
+        const int m = std::min(n, 30);   // the table's entries the passes use
+        for (int i = 0; i < m * 28; ++i)
             g_mreg.table[i] = bus_read_u8(kMissionTable + (uint32_t)i);
-        for (int k = 0; k < n; ++k) {
-            const uint32_t e = kMissionTable + 28u * (uint32_t)k;
-            const uint32_t s = bus_read_u32(e);
-            g_mreg.stem_at[k] = s;
-            char stem[6];
-            std::snprintf(stem, sizeof stem, "z/%02d", k + 1);
-            for (uint32_t i = 0; i < 5u; ++i) {
-                g_mreg.stems[k][i] = bus_read_u8(s + i);
-                bus_write_u8(s + i, (uint8_t)stem[i]);
-            }
-            bus_write_u32(e + 0x04u, (uint32_t)lb_mods_players(k));
-            bus_write_u32(e + 0x08u, lb_mods_name_id(k));
-            bus_write_u32(e + 0x0Cu, lb_mods_desc_id(k));
-            bus_write_u32(e + 0x10u, 3u);
-            bus_write_u32(e + 0x14u, 239u);   // Map_01's collectable: The Pond's
-            bus_write_u32(e + 0x18u, (uint32_t)lb_mods_world(k));
+        for (int i = 0; i < m; ++i) {
+            const uint32_t s = bus_read_u32(kMissionTable + 28u * (uint32_t)i);
+            g_mreg.stem_at[i] = s;
+            for (uint32_t b = 0; b < 5u; ++b)
+                g_mreg.stems[i][b] = bus_read_u8(s + b);
         }
-        // The frame `add sp,#0x14; pop {r4-r7,pc}` unwinds, returning here.
-        const uint32_t frame = g_mreg.sp - 20u;
-        bus_write_u32(frame + 0u, g_cpu.R[4]);
-        bus_write_u32(frame + 4u, g_cpu.R[5]);
-        bus_write_u32(frame + 8u, g_cpu.R[6]);
-        bus_write_u32(frame + 12u, g_cpu.R[7]);
-        bus_write_u32(frame + 16u, kRegisterMissions | 1u);
-        g_cpu.R[13] = frame - 0x14u;
-        g_cpu.R[5] = kMissionTable;
-        g_cpu.R[6] = 0u;
-        g_cpu.R[7] = 30u - (uint32_t)n;
-        g_mreg.phase = 2;
-        g_cpu.R[15] = kRegisterLoop;
-        runtime_dispatch_with_exchange(kRegisterLoop | 1u);
+        mreg_run_chunk();
         return;
     }
-    // The mod pass returned: put the table back, note the missions, return.
-    for (int i = 0; i < g_mreg.n * 28; ++i)
+    // A mod pass returned: note its missions (the registry's last `chunk`).
+    const uint32_t data = bus_read_u32(kMissionRegistry + 4u);
+    uint32_t count = bus_read_u32(kMissionRegistry + 8u);
+    for (int i = 0; i < g_mreg.chunk; ++i)
+        g_mreg.mission[g_mreg.done + i] =
+            count >= (uint32_t)g_mreg.chunk
+                ? bus_read_u32(data + 4u * (count - (uint32_t)g_mreg.chunk + (uint32_t)i))
+                : 0u;
+    g_mreg.done += g_mreg.chunk;
+    if (g_mreg.done < g_mreg.n) {   // docs/439: the next thirty
+        mreg_run_chunk();
+        return;
+    }
+    // All passes done: put the table back, return.
+    const int m = std::min(g_mreg.n, 30);
+    for (int i = 0; i < m * 28; ++i)
         bus_write_u8(kMissionTable + (uint32_t)i, g_mreg.table[i]);
-    for (int k = 0; k < g_mreg.n; ++k)
+    for (int k = 0; k < m; ++k)
         for (uint32_t i = 0; i < 5u; ++i)
             bus_write_u8(g_mreg.stem_at[k] + i, g_mreg.stems[k][i]);
-    const uint32_t data = bus_read_u32(kMissionRegistry + 4u);
-    const uint32_t count = bus_read_u32(kMissionRegistry + 8u);
-    for (int k = 0; k < g_mreg.n; ++k)
-        g_mreg.mission[k] =
-            count >= (uint32_t)g_mreg.n
-                ? bus_read_u32(data + 4u * (count - (uint32_t)g_mreg.n + (uint32_t)k))
-                : 0u;
+    count = bus_read_u32(kMissionRegistry + 8u);
     g_mreg.phase = 3;
     std::fprintf(stderr, "[lb_mods] %d mod map(s) registered after the stock "
                  "30 (registry now %u missions); first \"%s\" at %08X\n",
@@ -6329,7 +6375,7 @@ void lobby_packet_override(void) {
                     static unsigned said = 0;
                     if (said++ < 8)
                         std::fprintf(stderr, "[lb_mods] lobby: the host's map is "
-                                     "z/%02d, which is not registered in the game "
+                                     "mod map %d, which is not registered in the game "
                                      "(phase %d, registry %u); withheld\n", local + 1,
                                      g_mreg.phase,
                                      (unsigned)bus_read_u32(kMissionRegistry + 8u));
@@ -6363,7 +6409,7 @@ void lobby_packet_override(void) {
                                  "it is\n", (unsigned)key);
                 else if (local >= 0)
                     std::fprintf(stderr, "[lb_mods] lobby: the host's \"%s\" "
-                                 "(id %u) is this machine's z/%02d (id %u)\n",
+                                 "(id %u) is this machine's mod map %d (id %u)\n",
                                  name, (unsigned)key, local + 1, (unsigned)want);
                 else
                     std::fprintf(stderr, "[lb_mods] lobby: the host's map%s%s%s "
@@ -6408,9 +6454,38 @@ uint32_t gold_brick_value(uint32_t stock) {
     if (v < 0 || (stock != 1000u && stock != 150u)) return stock;
     return stock == 1000u ? (uint32_t)v : (uint32_t)(((uint64_t)v * 150u + 500u) / 1000u);
 }
+// docs/438 (SG-0023): BRICKS PER CHOP. FUN_0206D0E0, the harvest action's
+// completion, pays `(75 + 25 with a Mill) * count multiplier`, doubled by
+// Double LEGO Bricks, with `bl FUN_020866E0` at 0x0206D204 (return 0x0206D208)
+// and the floating number `blx FUN_020A6680` at 0x0206D214 (return 0x0206D218).
+// The builder is r8 throughout (callee-saved) and its blueprint is
+// [[r8+0xE0]+4]. A builder's Resource yield (+0x6C, 0 in the stock game) is
+// the bricks per chop, 0 meaning the game's 75: the paid amount is scaled by
+// yield / 75, so the Mill's bonus, the multiplier and Double LEGO Bricks stay.
+constexpr uint32_t kChopAddRet = 0x0206D208u, kChopShowRet = 0x0206D218u;
+uint32_t chop_yield_of(uint32_t builder) {
+    if (builder < 0x02000000u || builder >= 0x02400000u) return 0u;
+    const uint32_t t = bus_read_u32(builder + 0xE0u);
+    if (t < 0x02000000u || t >= 0x02400000u) return 0u;
+    const uint32_t bp = bus_read_u32(t + 4u);
+    if (bp < 0x02000000u || bp >= 0x02400000u) return 0u;
+    return bus_read_u8(bp + 0x6Cu);
+}
+uint32_t chop_scaled(uint32_t amount, uint32_t y) {
+    return y == 0u ? amount : (uint32_t)(((uint64_t)amount * y + 37u) / 75u);
+}
 }  // namespace
 void team_add_bricks_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kTeamAddBricks);
+    if (g_cpu.R[14] == kChopAddRet) {   // docs/438
+        const uint32_t y = chop_yield_of(g_cpu.R[8]);
+        if (y) g_cpu.R[1] = chop_scaled(g_cpu.R[1], y);
+        if (std::getenv("LB_CHOPLOG")) {
+            std::fprintf(stderr, "[lb_chop] a chop: %u bricks (yield %u)\n",
+                         (unsigned)g_cpu.R[1], (unsigned)y);
+            std::fflush(stderr);
+        }
+    }
     if (g_cpu.R[14] == kGoldAddRet) {
         const uint32_t stock = g_cpu.R[1];
         g_cpu.R[1] = gold_brick_value(stock);
@@ -6481,6 +6556,10 @@ void fe_card_override(void) {
 void float_number_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kFloatNumber);
     if ((g_cpu.R[14] & ~1u) == kGoldShowRet) g_cpu.R[1] = gold_brick_value(g_cpu.R[1]);
+    if ((g_cpu.R[14] & ~1u) == kChopShowRet) {   // docs/438: the same amount
+        const uint32_t y = chop_yield_of(g_cpu.R[8]);
+        if (y) g_cpu.R[1] = chop_scaled(g_cpu.R[1], y);
+    }
     if (original) original();
 }
 
@@ -6527,6 +6606,9 @@ uint32_t g_tint_vpal = 0;
 uint8_t g_tint_shadow[0x600];
 bool g_tint_shadow_valid = false, g_tint_dead = false;
 void creature_test_cam();
+extern "C" void lb_creature_test_flip(void);   // docs/438 test aids, defined with the cloak
+extern "C" void lb_creature_watch(void);
+extern "C" void lb_test_drive(void);
 
 // The texture-palette VRAM as one array indexed by texture-palette address:
 // the physical bank the game mapped there (this port's game maps G, 16 KiB).
@@ -6593,6 +6675,9 @@ void creature_tint_prepare() {
     static const bool log = std::getenv("LB_TINT_LOG") != nullptr;
     g_tint_vpal = 0;
     creature_test_cam();
+    lb_creature_test_flip();
+    lb_creature_watch();
+    lb_test_drive();
     if (!lb_creatures_live() || !lb_setting_creature_tint()) return;
     {   // Only in a battle: in the menus nothing is read or written.
         int cx = 0, cy = 0;
@@ -6917,6 +7002,9 @@ const NdsDispatchEntry kOverrideTable[] = {
        Otherwise a pure tail call. */
     {kBillboardDraw, 0u, billboard_draw_override, nullptr}, /* 0x0202DA80 */
     {kFeCard, 0u, fe_card_override, nullptr},              /* 0x02030A70 */
+    /* ARM. The level load's sprite step: a Mounted (or Hero) creature loads
+       as a Close Combat unit (docs/438). */
+    {kCreatureSprLoad, 0u, creature_sprite_load_override, nullptr}, /* 0x02035F7C */
     /* ARM. The level loader ("Maps/" + name + ".map"): an observer that notes
        the map's name for the master server's log (docs/394). */
     {kMapLoad, 0u, map_load_observer, nullptr},            /* 0x02035FAC */
@@ -6937,6 +7025,9 @@ const NdsDispatchEntry kOverrideTable[] = {
     /* ARM. The scroll-start BG3 blank, skipped from the camera manager's two
        calls while a placement is live in the adaptive view; otherwise a pure
        tail call. */
+    /* ARM. Unit_BuildBillboard: a Mounted (or Hero) creature is drawn and
+       looked up as a Close Combat unit (docs/438). Otherwise a tail call. */
+    {kCreatureSprAnim, 0u, creature_sprite_anim_override, nullptr}, /* 0x0203ABC8 */
     {kBg3Blank, 0u, bg3_blank_override, nullptr},          /* 0x0203B78C */
     {kMarquee, 0u, marquee_observer, nullptr},             /* 0x0203B7FC */
     /* ARM. The placement cell painter: an observer that notes each piece the
@@ -6951,6 +7042,13 @@ const NdsDispatchEntry kOverrideTable[] = {
        30, through the game's own loop (docs/391). A pure tail call with no
        mods folder. */
     {kMissionKey, 1u, mission_key_override, nullptr},       /* 0x020455A8 */
+    /* Thumb. The setup object's name setter, from the Start handler's opponent
+       name only: seats the extra computer opponents (docs/414). Otherwise a
+       pure tail call. */
+    {kSetupName, 1u, ai_opp_setname_override, nullptr},     /* 0x02045858 */
+    /* Thumb. MultiplayerMissionBase::v06: allies the computers when asked
+       (docs/414); otherwise a pure tail call. */
+    {kMissionV06, 1u, ai_opp_v06_override, nullptr},        /* 0x02045BC8 */
     {kRegisterMissions, 1u, register_missions_override, nullptr}, /* 0x02045E50 */
     /* Generic VRAM transfer. Passes everything through untouched except the
        one source that is the guest's selection box, which it blanks first. */
@@ -7117,7 +7215,8 @@ static_assert(kRosterBuild < kRegistryFind &&
               kFpPost < kFpPaint && kFpPaint < kCommitBGs &&
               kCommitBGs < kBg3Blank && kBg3Blank < kMarquee &&
               kMarquee < kFpCell && kFpCell < kStringFromId &&
-              kStringFromId < kMissionKey && kMissionKey < kRegisterMissions &&
+              kStringFromId < kMissionKey && kMissionKey < kSetupName &&
+              kSetupName < kMissionV06 && kMissionV06 < kRegisterMissions &&
               kRegisterMissions < kGfxTransfer &&
               kGfxTransfer < kImageXfer && kImageXfer < kSetOwner &&
               kSetOwner < kSetHp && kSetHp < kApplyDamage &&
@@ -7145,7 +7244,9 @@ static_assert(kRosterBuild < kRegistryFind &&
               kWmSetGameInfo < kWmSetEntry && kWmSetEntry < kFAdd &&
               kFAdd < kFMul && kFMul < kFSub && kFSub < kDivMod &&
               kSetOwner < kU16IsSet && kU16IsSet < kSetHp &&
-              kSetHp < kListFind && kListFind < kApplyDamage,
+              kSetHp < kListFind && kListFind < kApplyDamage &&
+              kFeCard < kCreatureSprLoad && kCreatureSprLoad < kMapLoad &&
+              kCommitBGs < kCreatureSprAnim && kCreatureSprAnim < kBg3Blank,
               "kOverrideTable must be sorted ascending by address: "
               "runtime_arm.cpp lookup_in() binary-searches it, and an "
               "out-of-order entry silently hides other entries.");
@@ -7251,6 +7352,7 @@ const CreaturePrice kCreaturePrices[] = {
     {169, 200, 420}, {138, 80, 270}, {155, 400, 660}, {153, 70, 240}};
 struct CreatureByte { uint32_t addr; uint16_t loaded; };
 std::vector<CreatureByte> g_creatures_loaded;
+std::vector<uint32_t> g_flip_sticky;   // docs/438 test aid: records held in category 4
 int g_creatures_patched = 0;
 
 // THE WOLF CAN STAND NOWHERE. FUN_02001510 gives a blueprint's passability
@@ -7332,7 +7434,8 @@ void apply_creatures() {
     for (int i = 0; i < 4; ++i) {
         const uint32_t r = record_addr(g_blueprint_base, (uint32_t)kCreatureRecs[i]);
         const int slot = lb_creature_slot(kCreatureRecs[i]);
-        const int cat = creature_category_of_slot(slot);
+        int cat = creature_category_of_slot(slot);
+        for (uint32_t f : g_flip_sticky) if (f == r) cat = 4;   // LB_TEST_FLIP_CAT4 holds
         bus_write_u8(r + 0x5Cu, (uint8_t)cat);
         if (kCreatureRecs[i] == 155 && cat != 6)   // the Shark leaves the water
             for (uint32_t off : {0x16u, 0x17u, 0x1Au}) bus_write_u8(r + off, 1);
@@ -7388,11 +7491,15 @@ extern "C" int lb_creature_slots_live(void) {
 // "<name>_0".."_2", which the Wolf, Robot and Monkey have (x_dog, x_rob, x_mon);
 // Mounted takes "_a0".."_w4" and the heroes "_a"/"_w", which they do not, and
 // Special is a 3D model, which they do not have either. The load never
-// finishes (a black screen). The Shark is the other way round: a model, so only
-// the Specials.
+// finishes (a black screen). docs/438: Mounted now loads and draws the Close
+// Combat way (creature_sprite_*_override), so it is offered; the Hero slot
+// loads and draws too but is not offered (spell casts and the respawn are not
+// verified; LB_CREATURE_HERO=1 allows it). The Shark is the other way round: a
+// model, so only the Specials.
 extern "C" int lb_creature_slot_allowed(int creature_index, int slot) {   // 0 Wolf, 1 Robot, 2 Shark, 3 Monkey
     if (creature_index == 2) return slot >= 5 && slot <= 7;
-    return slot == 2 || slot == 3;
+    if (slot == 0) return std::getenv("LB_CREATURE_HERO") != nullptr;   // docs/438: study only
+    return slot == 2 || slot == 3 || slot == 4;   // docs/438: Mounted, via creature_sprite_*_override
 }
 extern "C" int lb_creature_slot(int unit) {
     const int i = unit == 169 ? 0 : unit == 138 ? 1 : unit == 155 ? 2 : unit == 153 ? 3 : -1;
@@ -7563,6 +7670,398 @@ void apply_caps() {
     }
 }
 
+}  // namespace
+
+// docs/438: A CREATURE IN THE MOUNTED SLOT DRAWS AS A CLOSE COMBAT UNIT.
+// The sprite code is keyed by the blueprint's category byte (+0x5C), and a
+// Mounted unit (4) is loaded from the "_a0".."_w4" sheet set and animated from
+// the Mounted frame table; the Wolf, Robot and Monkey have only "_0".."_2"
+// (the Close Combat / Ranged shape), so the load never finished. Everything
+// else that reads the category (build menu, AI, army screen, limits) must keep
+// seeing 4, so the byte is 2 only while the two sprite steps run:
+//  - FUN_02035F7C, the level load's sprite step (FUN_020353B4 loads the sheets
+//    and FUN_0202E014 fills the frame tables from category 2's; FUN_02035028
+//    loads only category 4's, so it skips them);
+//  - FUN_0203116C, the per-frame sprite lookup (FUN_0200CDA4 picks the frame
+//    table by category; FUN_0202DC3C says whether direction group 0 uses the
+//    first sheet).
+// Each is a wrapper that calls the cartridge's function with LR pointing back
+// at itself (docs/383), so the byte is put back when it returns, with no nested
+// guest call; the return is recognised by the stack pointer it was given.
+namespace {
+struct CatCloak {
+    bool active = false, calling = false;
+    uint32_t sp_call = 0, sp = 0, lr = 0, r12 = 0, r[4] = {0, 0, 0, 0}, arg5 = 0;
+    uint32_t bp[3] = {0, 0, 0};
+    uint8_t cat[3] = {0, 0, 0};   // what each had
+    int n = 0;
+};
+CatCloak g_cloak_load, g_cloak_anim;
+
+// The blueprints of the Wolf, Robot and Monkey that are in category 4 now.
+int cloak_mounted_blueprints(uint32_t* out) {
+    if (!g_blueprint_base || !lb_creatures_live()) return 0;
+    int n = 0;
+    for (int rec : {169, 138, 153}) {
+        const uint32_t a = record_addr(g_blueprint_base, (uint32_t)rec);
+        const uint8_t cat = bus_read_u8(a + 0x5Cu);
+        if (cat == 4u || cat == 0u) out[n++] = a;   // Mounted, or Hero
+    }
+    return n;
+}
+void cloak_set(CatCloak& c, bool on) {
+    for (int i = 0; i < c.n; ++i) {
+        if (on) c.cat[i] = bus_read_u8(c.bp[i] + 0x5Cu);
+        bus_write_u8(c.bp[i] + 0x5Cu, on ? 2u : c.cat[i]);
+    }
+}
+// The three-way state machine shared by both wrappers. `target` is the
+// overridden function; `args` is how many stack words to carry (0 or 1).
+// Returns true when it handled the entry (the caller must return).
+bool cloak_enter(CatCloak& c, uint32_t target, void (*original)(void), bool per_entity) {
+    if (c.active) {
+        if (g_cpu.R[13] != c.sp_call) {   // another entry: not ours
+            if (original) original();
+            return true;
+        }
+        if (c.calling) {                  // the hop's own entry: run the original
+            c.calling = false;
+            if (original) original();
+            return true;
+        }
+        // The original has returned: put the category back and return to the caller.
+        cloak_set(c, false);
+        g_cpu.R[14] = c.lr;
+        g_cpu.R[13] = c.sp;
+        c.active = false;
+        lb_override_return();
+        return true;
+    }
+    uint32_t bps[3];
+    int n = 0;
+    if (per_entity) {   // Unit_BuildBillboard: r1 is the entity
+        const uint32_t ent = g_cpu.R[1];
+        const uint32_t bp = guest_ptr(ent) ? unit_blueprint(ent) : 0u;
+        const uint8_t cat = bp ? bus_read_u8(bp + 0x5Cu) : 0xFFu;
+        if (cat == 4u || cat == 0u) {
+            const unsigned idx = bus_read_u16(bp + 4u);
+            if ((idx == 169 || idx == 138 || idx == 153) && g_blueprint_base && lb_creatures_live())
+                bps[n++] = bp;
+        }
+    } else {
+        n = cloak_mounted_blueprints(bps);
+    }
+    if (n == 0) {
+        if (original) original();
+        return true;
+    }
+    c.n = n;
+    for (int i = 0; i < n; ++i) c.bp[i] = bps[i];
+    for (int i = 0; i < 4; ++i) c.r[i] = g_cpu.R[i];
+    c.r12 = g_cpu.R[12];
+    c.lr = g_cpu.R[14];
+    c.sp = g_cpu.R[13];
+    c.sp_call = (g_cpu.R[13] - 8u) & ~7u;
+    cloak_set(c, true);
+    for (int i = 0; i < 4; ++i) g_cpu.R[i] = c.r[i];
+    g_cpu.R[13] = c.sp_call;
+    g_cpu.R[14] = target;                   // ARM: the return lands back here
+    g_cpu.R[15] = target;
+    c.active = true;
+    c.calling = true;
+    runtime_dispatch_with_exchange(target);
+    return true;
+}
+// Test aid: LB_TEST_FLIP_CAT4=<bp> turns that blueprint's category 3 into 4 once
+// a unit of it stands (an AI that builds it as Ranged, then draws it as Mounted).
+// LB_TEST_FLIP_CAT4=<bp>[:<n>],... : a blueprint in category 2 or 3 becomes 4 once
+// n (default 1) units of it stand (an AI builds it as Close Combat or Ranged,
+// then it is drawn and fought as Mounted).
+static int cw_alive_count(uint32_t array, int32_t count, unsigned idx) {
+    int n = 0;
+    for (int32_t i = 0; guest_ptr(array) && i < count && i < 4096; ++i) {
+        const uint32_t e = bus_read_u32(array + (uint32_t)i * 4u);
+        const uint32_t bp = guest_ptr(e) ? unit_blueprint(e) : 0u;
+        if (bp && bus_read_u16(bp + 4u) == idx && bus_read_u8(e + 0x227u)) ++n;
+    }
+    return n;
+}
+extern "C" void lb_creature_test_flip(void) {
+    static const char* v = std::getenv("LB_TEST_FLIP_CAT4");
+    if (!v || !g_blueprint_base) return;
+    const uint32_t pool = bus_read_u32(kEntityPoolPtr);
+    if (!guest_ptr(pool)) return;
+    const uint32_t array = bus_read_u32(pool + 8u);
+    const int32_t count = (int32_t)bus_read_u32(pool + 0xCu);
+    for (const char* q = v; q && *q;) {
+        unsigned idx = 0, need = 1;
+        const int got = std::sscanf(q, "%u:%u", &idx, &need);
+        if (got >= 1) {
+            const uint32_t a = record_addr(g_blueprint_base, idx);
+            const uint8_t cat = bus_read_u8(a + 0x5Cu);
+            if ((cat == 2u || cat == 3u) &&
+                cw_alive_count(array, count, idx) >= (int)need) {
+                bus_write_u8(a + 0x5Cu, 4u);
+                g_flip_sticky.push_back(a);
+                std::fprintf(stderr, "[lb_cloak] test: blueprint %u now category 4 (was %u)\n",
+                             idx, (unsigned)cat);
+            }
+        }
+        q = std::strchr(q, ',');
+        if (q) ++q;
+    }
+}
+
+// docs/438 test aid. LB_CREATURE_WATCH=1 logs, once a second, every Wolf, Robot
+// and Monkey on the field (owner, category, map position, health), and says
+// when one starts to move, loses health or dies. LB_TEST_CAMFOLLOW=1 keeps the
+// camera on the first live one in category 4.
+struct CwState { uint32_t e; uint16_t hp; int x, y; bool moved, hurt, dead; unsigned id; int ox, oy; uint16_t hp0; };
+static std::vector<CwState> g_cw;
+extern "C" void lb_creature_watch(void) {
+    static const bool watch = std::getenv("LB_CREATURE_WATCH") != nullptr;
+    static const bool follow = std::getenv("LB_TEST_CAMFOLLOW") != nullptr;
+    if (!watch && !follow) return;
+    int cx = 0, cy = 0;
+    if (!lb_field_camera(&cx, &cy)) { g_cw.clear(); return; }
+    const uint32_t pool = bus_read_u32(kEntityPoolPtr);
+    if (!guest_ptr(pool)) return;
+    const uint32_t array = bus_read_u32(pool + 8u);
+    const int32_t count = (int32_t)bus_read_u32(pool + 0xCu);
+    static unsigned tick = 0;
+    ++tick;
+    uint32_t focus = 0;
+    int best = 0;
+    unsigned nlive = 0;
+    for (int32_t i = 0; guest_ptr(array) && i < count && i < 4096; ++i) {
+        const uint32_t e = bus_read_u32(array + (uint32_t)i * 4u);
+        if (!guest_ptr(e)) continue;
+        const uint32_t bp = unit_blueprint(e);
+        if (!bp) continue;
+        const unsigned idx = bus_read_u16(bp + 4u);
+        if (idx != 169 && idx != 138 && idx != 153) continue;
+        const bool alive = bus_read_u8(e + 0x227u) != 0;
+        const int x = (int32_t)bus_read_u32(e + 0xECu) >> 12, y = (int32_t)bus_read_u32(e + 0xF0u) >> 12;
+        const uint16_t hp = bus_read_u16(e + 0x1A0u);
+        CwState* s = nullptr;
+        for (CwState& c : g_cw) if (c.e == e && c.id == (unsigned)bus_read_u16(e + 0xDCu)) s = &c;
+        if (!s) {
+            g_cw.push_back({e, hp, x, y, false, false, false, (unsigned)bus_read_u16(e + 0xDCu), x, y, hp});
+            s = &g_cw.back();
+            if (watch) std::fprintf(stderr, "[lb_cw] %08X bp %u owner %u cat %u appears at %d,%d hp %u\n", e, idx,
+                                    (unsigned)bus_read_u8(e + 0xE4u), (unsigned)bus_read_u8(bp + 0x5Cu), x, y, hp);
+        }
+        if (watch) {
+            if (alive && !s->moved && (x != s->x || y != s->y)) {
+                s->moved = true;
+                std::fprintf(stderr, "[lb_cw] %08X bp %u walks: %d,%d -> %d,%d\n", e, idx, s->x, s->y, x, y);
+            }
+            if (alive && hp < s->hp) {
+                std::fprintf(stderr, "[lb_cw] %08X bp %u owner %u hurt: hp %u -> %u\n", e, idx,
+                             (unsigned)bus_read_u8(e + 0xE4u), s->hp, hp);
+                s->hurt = true;
+            }
+            if (!alive && !s->dead) {
+                s->dead = true;
+                std::fprintf(stderr, "[lb_cw] %08X bp %u owner %u cat %u DIED at %d,%d hp %u\n", e, idx,
+                             (unsigned)bus_read_u8(e + 0xE4u), (unsigned)bus_read_u8(bp + 0x5Cu), x, y, hp);
+            }
+            if (alive && (tick % 120u) == 0u)
+                std::fprintf(stderr, "[lb_cw] %08X bp %u owner %u cat %u at %d,%d hp %u\n", e, idx,
+                             (unsigned)bus_read_u8(e + 0xE4u), (unsigned)bus_read_u8(bp + 0x5Cu), x, y, hp);
+        }
+        if (alive) {
+            ++nlive;
+            // LB_TEST_CAMFOLLOW=<bp> follows only that blueprint.
+            const int only = std::atoi(std::getenv("LB_TEST_CAMFOLLOW") ? std::getenv("LB_TEST_CAMFOLLOW") : "0");
+            if (bus_read_u8(bp + 0x5Cu) == 4u && (only <= 1 || (unsigned)only == idx)) {   // the most hurt, else the one that went farthest
+                const int score = (int)(s->hp0 > hp ? s->hp0 - hp : 0) * 50 +
+                                  std::abs(x - s->ox) + std::abs(y - s->oy);
+                if (!focus || score > best) { focus = e; best = score; }
+            }
+        }
+        s->hp = hp;
+        if (alive) { s->x = x; s->y = y; }
+    }
+    if (watch) {   // who hurts whom: a non-creature unit that loses health with a creature of the other side near
+        struct V { uint32_t e; unsigned id; uint16_t hp; };
+        static std::vector<V> vs;
+        static unsigned dealt[3] = {0, 0, 0}, said = 0;
+        for (int32_t i = 0; guest_ptr(array) && i < count && i < 4096; ++i) {
+            const uint32_t e = bus_read_u32(array + (uint32_t)i * 4u);
+            if (!guest_ptr(e) || !bus_read_u8(e + 0x227u)) continue;
+            const uint32_t bp = unit_blueprint(e);
+            if (!bp || bus_read_u8(bp + 0x5Cu) > 6u) continue;
+            const unsigned idx = bus_read_u16(bp + 4u);
+            if (idx == 169 || idx == 138 || idx == 153) continue;
+            const uint16_t hp = bus_read_u16(e + 0x1A0u);
+            V* v = nullptr;
+            for (V& q : vs) if (q.e == e && q.id == (unsigned)bus_read_u16(e + 0xDCu)) v = &q;
+            if (!v) { vs.push_back({e, (unsigned)bus_read_u16(e + 0xDCu), hp}); continue; }
+            if (hp < v->hp) {
+                const int x = (int32_t)bus_read_u32(e + 0xECu) >> 12, y = (int32_t)bus_read_u32(e + 0xF0u) >> 12;
+                for (const CwState& c : g_cw) {
+                    if (c.dead || c.hp == 0 || bus_read_u8(c.e + 0xE4u) == bus_read_u8(e + 0xE4u)) continue;
+                    const int d = std::abs(x - c.x) + std::abs(y - c.y);
+                    if (d <= 48) {
+                        const uint32_t cb = unit_blueprint(c.e);
+                        const unsigned ci = cb ? bus_read_u16(cb + 4u) : 0;
+                        ++dealt[ci == 169 ? 0 : ci == 138 ? 1 : 2];
+                        if (++said <= 60u)
+                            std::fprintf(stderr, "[lb_cw] victim bp %u owner %u hp %u -> %u with creature %u (cat %u) %d px away\n",
+                                         idx, (unsigned)bus_read_u8(e + 0xE4u), v->hp, hp, ci,
+                                         cb ? (unsigned)bus_read_u8(cb + 0x5Cu) : 0u, d);
+                        break;
+                    }
+                }
+            }
+            v->hp = hp;
+        }
+        static unsigned last_n = 0;
+        if (said != last_n && (tick % 300u) == 0u) {
+            last_n = said;
+            std::fprintf(stderr, "[lb_cw] hits near a creature of the other side: wolf %u robot %u monkey %u\n",
+                         dealt[0], dealt[1], dealt[2]);
+        }
+    }
+    if (follow && focus) {
+        static uint32_t last = 0;
+        // Sticky: stay on the same one while it lives.
+        if (last && last != focus && guest_ptr(last) && bus_read_u8(last + 0x227u) &&
+            unit_blueprint(last) && bus_read_u8(unit_blueprint(last) + 0x5Cu) == 4u &&
+            std::getenv("LB_TEST_CAMFOLLOW")[0] != '0')
+            focus = last;
+        if (focus != last) { last = focus; std::fprintf(stderr, "[lb_cw] camera follows %08X\n", focus); }
+        const int x = ((int32_t)bus_read_u32(focus + 0xECu) >> 12) - 29 - 128;
+        const int y = ((int32_t)bus_read_u32(focus + 0xF0u) >> 12) - 1 - 96;
+        lb_field_camera_write(x, y);
+    }
+}
+// docs/438 test aid: LB_TEST_DRIVE_FILE=<path> is polled; its lines run in
+// order, one at a time, then the file is emptied. It stands in for a hand at
+// the touch screen (the DS touch panel, nds_set_touch -- what a debug `touch`
+// or a replay delivers) and at the shortcut keys:
+//   wait F | tap X Y | tapent <builder|hero|bp N|cat N> DX DY | quick N |
+//   ents | sel | say TEXT
+// `tapent` aims at an owner-0 unit's drawn position (+DX,+DY) in the guest's
+// 256x192 coordinates, the camera being wherever it is.
+static int drive_entity_screen(const char* kind, int n, int* sx, int* sy, uint32_t* out) {
+    int cx = 0, cy = 0;
+    if (!lb_field_camera(&cx, &cy)) return 0;
+    const uint32_t pool = bus_read_u32(kEntityPoolPtr);
+    if (!guest_ptr(pool)) return 0;
+    const uint32_t array = bus_read_u32(pool + 8u);
+    const int32_t count = (int32_t)bus_read_u32(pool + 0xCu);
+    for (int32_t i = 0; guest_ptr(array) && i < count && i < 4096; ++i) {
+        const uint32_t e = bus_read_u32(array + (uint32_t)i * 4u);
+        if (!guest_ptr(e) || !bus_read_u8(e + 0x227u) || bus_read_u8(e + 0xE4u) != 0u) continue;
+        const uint32_t bp = unit_blueprint(e);
+        if (!bp) continue;
+        const unsigned cat = bus_read_u8(bp + 0x5Cu), idx = bus_read_u16(bp + 4u);
+        bool hit = false;
+        if (!std::strcmp(kind, "builder")) hit = cat == 1u;
+        else if (!std::strcmp(kind, "hero")) hit = cat == 0u;
+        else if (!std::strcmp(kind, "bp")) hit = idx == (unsigned)n;
+        else if (!std::strcmp(kind, "cat")) hit = cat == (unsigned)n;
+        if (!hit) continue;
+        *sx = ((int32_t)bus_read_u32(e + 0xECu) >> 12) - 29 - cx;
+        *sy = ((int32_t)bus_read_u32(e + 0xF0u) >> 12) - 1 - cy;
+        if (out) *out = e;
+        return 1;
+    }
+    return 0;
+}
+extern "C" void lb_test_drive(void) {
+    static const char* file = std::getenv("LB_TEST_DRIVE_FILE");
+    if (!file) return;
+    static std::vector<std::string> queue;
+    static unsigned tick = 0, waiting = 0, down_left = 0;
+    static int tx = 0, ty = 0;
+    static char hold_kind[32] = "";   // camhold: the camera stays on this unit
+    static int hold_n = 0;
+    ++tick;
+    if (hold_kind[0]) {
+        int sx = 0, sy = 0, cx = 0, cy = 0;
+        if (lb_field_camera(&cx, &cy) && drive_entity_screen(hold_kind, hold_n, &sx, &sy, nullptr))
+            lb_field_camera_write(cx + sx - 128, cy + sy - 96);
+    }
+    if (down_left) {
+        if (--down_left == 0) nds_set_touch((uint16_t)tx, (uint16_t)ty, false);
+        else nds_set_touch((uint16_t)tx, (uint16_t)ty, true);
+        return;
+    }
+    if ((tick % 20u) == 0u) {
+        if (FILE* f = std::fopen(file, "rb")) {
+            char line[256];
+            while (std::fgets(line, sizeof line, f)) {
+                std::string s(line);
+                while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) s.pop_back();
+                if (!s.empty()) queue.push_back(s);
+            }
+            std::fclose(f);
+            std::remove(file);
+        }
+    }
+    if (waiting) { --waiting; return; }
+    if (queue.empty()) return;
+    const std::string cmd = queue.front();
+    queue.erase(queue.begin());
+    char w[32] = "", k[32] = "";
+    int a = 0, b = 0, c = 0;
+    std::fprintf(stderr, "[lb_drive] %s\n", cmd.c_str());
+    if (std::sscanf(cmd.c_str(), "%31s", w) != 1) return;
+    if (!std::strcmp(w, "wait")) {
+        if (std::sscanf(cmd.c_str(), "wait %d", &a) == 1) waiting = (unsigned)a;
+    } else if (!std::strcmp(w, "tap")) {
+        const int n = std::sscanf(cmd.c_str(), "tap %d %d %d", &a, &b, &c);
+        if (n >= 2) { tx = a; ty = b; down_left = n >= 3 ? (unsigned)c : 8u; }
+    } else if (!std::strcmp(w, "tapent")) {
+        int dx = 0, dy = 0, n = 0, got = 0;
+        got = std::sscanf(cmd.c_str(), "tapent %31s %d %d", k, &dx, &dy);
+        if (!std::strcmp(k, "bp") || !std::strcmp(k, "cat"))
+            got = std::sscanf(cmd.c_str(), "tapent %31s %d %d %d", k, &n, &dx, &dy) - 1;
+        int sx = 0, sy = 0;
+        if (got >= 1 && drive_entity_screen(k, n, &sx, &sy, nullptr)) {
+            tx = sx + dx; ty = sy + dy; down_left = 8u;
+            std::fprintf(stderr, "[lb_drive] tapping %s at %d,%d\n", k, tx, ty);
+        } else {
+            std::fprintf(stderr, "[lb_drive] no such unit\n");
+        }
+    } else if (!std::strcmp(w, "camhold")) {
+        hold_n = 0;
+        if (std::sscanf(cmd.c_str(), "camhold %31s %d", k, &hold_n) >= 1) std::strcpy(hold_kind, k);
+        if (!std::strcmp(k, "off")) hold_kind[0] = 0;
+    } else if (!std::strcmp(w, "quick")) {
+        if (std::sscanf(cmd.c_str(), "quick %d", &a) == 1) lb_quick_request(a);
+    } else if (!std::strcmp(w, "sel")) {
+        std::fprintf(stderr, "[lb_drive] selection count %u\n", bus_read_u32(0x0215802Cu));
+    } else if (!std::strcmp(w, "ents")) {
+        int cx = 0, cy = 0;
+        lb_field_camera(&cx, &cy);
+        const uint32_t pool = bus_read_u32(kEntityPoolPtr);
+        const uint32_t array = guest_ptr(pool) ? bus_read_u32(pool + 8u) : 0u;
+        const int32_t count = guest_ptr(pool) ? (int32_t)bus_read_u32(pool + 0xCu) : 0;
+        for (int32_t i = 0; guest_ptr(array) && i < count && i < 4096; ++i) {
+            const uint32_t e = bus_read_u32(array + (uint32_t)i * 4u);
+            if (!guest_ptr(e) || !bus_read_u8(e + 0x227u) || bus_read_u8(e + 0xE4u) != 0u) continue;
+            const uint32_t bp = unit_blueprint(e);
+            if (!bp) continue;
+            std::fprintf(stderr, "[lb_drive]   %08X bp %u cat %u screen %d,%d hp %u\n", e,
+                         (unsigned)bus_read_u16(bp + 4u), (unsigned)bus_read_u8(bp + 0x5Cu),
+                         ((int32_t)bus_read_u32(e + 0xECu) >> 12) - 29 - cx,
+                         ((int32_t)bus_read_u32(e + 0xF0u) >> 12) - 1 - cy,
+                         (unsigned)bus_read_u16(e + 0x1A0u));
+        }
+    }
+}
+void creature_sprite_load_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kCreatureSprLoad);
+    cloak_enter(g_cloak_load, kCreatureSprLoad, original, false);
+}
+void creature_sprite_anim_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kCreatureSprAnim);
+    cloak_enter(g_cloak_anim, kCreatureSprAnim, original, true);
+}
 }  // namespace
 
 // Called once per frame from the VBlank path (see port/runner/apply_hooks.py).
@@ -10425,10 +10924,10 @@ void map_load_observer(void) {
     if (stem[0]) {
         std::snprintf(g_map_name, sizeof g_map_name, "%s", stem);
         std::snprintf(g_map_stem, sizeof g_map_stem, "%s", stem);
-        g_map_is_mod = stem[0] == 'z' && stem[1] == '/';   // docs/410
-        if (stem[0] == 'z' && stem[1] == '/') {
-            const int k = std::atoi(stem + 2) - 1;
-            if (k >= 0 && k < lb_mods_count() && lb_mods_name(k))
+        const int k = lb_mods_stem_index(stem);   // docs/439: "z/NN", "y/NN"
+        g_map_is_mod = k >= 0;   // docs/410
+        if (k >= 0) {
+            if (k < lb_mods_count() && lb_mods_name(k))
                 std::snprintf(g_map_name, sizeof g_map_name, "%s", lb_mods_name(k));
         } else if (const uint32_t file = leader_table()) {
             for (uint32_t e = 0; e < 30u; ++e) {
@@ -12928,6 +13427,28 @@ static bool spell_score_is(const uint16_t (&w)[22]) {
     return true;
 }
 
+// TWO-PLAYER MAPS IN THE FREE PLAY LIST. FUN_0204AFF8 appends a mission to the
+// Free Play / host map list only when its player count (mission+0x158, the
+// map's distinct start players) is at least 3: `ldrb r0,[r1,r7]` (0204B02C),
+// `cmp r0,#3` (0204B02E), `blo` (0204B030). All 30 stock maps have 3 or 4, so
+// stock behaviour is untouched, but a mod or custom map with two starts (the
+// Mars beta 3-3, every converted Ninjago map) was never listed. The compare
+// becomes `cmp r0,#2`; the loader (lb_mods.cpp) already admits two players.
+static void apply_two_player_maps(void) {
+    static unsigned gen = 0;
+    static int done = 0;
+    if (gen != g_boot_gen) { gen = g_boot_gen; done = 0; }
+    if (done) return;
+    if (bus_read_u16(0x0204B02Cu) != 0x5DC8u || bus_read_u16(0x0204B030u) != 0xD302u)
+        return;                                     // not loaded, or not this build
+    if (bus_read_u16(0x0204B02Eu) == 0x2803u) {
+        bus_write_u16(0x0204B02Eu, 0x2802u);
+        std::fprintf(stderr, "[lb_maplist] two-player maps are listed (the game's own list wants 3 starts)\n");
+        std::fflush(stderr);
+    }
+    done = 1;
+}
+
 static void apply_ai_tap_spells(void) {
     static int applied = 0;
     static unsigned gen = 0;
@@ -13155,6 +13676,661 @@ static void apply_ai_spectate(void) {
     }
     g_ai_spectate_on = applied;
     if (applied) ai_spectate_mirror();
+}
+
+// docs/414: MORE THAN ONE COMPUTER OPPONENT IN FREE PLAY.
+//
+// The match pipeline already seats up to four players; Free Play's Start
+// handler (FUN_020C0EB0) adds two. This adds up to two more to the SETUP
+// object (the mission, *(*0x02154078+8)), exactly as the handler adds its
+// opponent, and the game does the rest: stage 2 of the CreateGameEvent builds
+// a team per slot, stage 3 deals a start, stage 4 (FUN_0208AF58) builds a
+// computer player for every id >= 1 (a campaign level with three AIs runs the
+// same code).
+//
+//   * Seating, in the setup (setup = the Start handler's r0 at the name
+//     setter): faction at +0x2C+4i, slot byte at +0x3C+i, player id at
+//     +0x40+4i (i = 2, 3: the first free slots, as FUN_02045728/FUN_02045670
+//     pick them), colour at +0xDC+4i, name at +0xAC+0xC*i. All but the name
+//     are plain stores. The name is a String, so it is assigned by the
+//     game's own FUN_020F1C88, and a Custom/Random army is built into its
+//     faction object by FUN_02000E78. Those are guest calls, made in a chain
+//     that returns into the override (the docs/383 mechanism) in front of the
+//     Start handler's own opponent-name call (FUN_02045858 at lr 0x020C0FEA),
+//     which then runs unchanged.
+//   * Armies: a stock faction (124..129) is the game's shared faction object;
+//     Custom and Randomizer take the spare custom faction 0x86 (the player is
+//     0x84, the first opponent 0x85), so only one extra can field one; the
+//     other falls back to a random faction.
+//   * Scripting: the game scripts only list entry 0 (v06/v07: aim at the
+//     human, personality 0x46/0x1E, a 100-brick gift, a first attack and a
+//     change of mix 95 s in). Every other computer player is given the same
+//     stores here from a VBlank poll (as SG-0002's mirror does), aimed at the
+//     human, or at the next living hostile team when it is the computers'
+//     game; a target that falls is replaced.
+//   * Teams: free for all by default (each team is allied with itself only).
+//     "Teaming up" calls the game's own FUN_02085CC8(team, &other) both ways
+//     for every pair of computer teams, in front of v06.
+//   * Win/lose: FUN_02075DCC ends the match when every surviving pair of
+//     teams is allied, so the player wins when the last computer team falls
+//     and loses when his own does, whatever the count.
+// Offline only: online play has no computer players (setup+8), and the
+// option reads 0 when connected. A recording carries the setting as kind 17.
+extern "C" int lb_mods_map_starts(const unsigned char* data, size_t n);   /* lb_mods.cpp */
+extern "C" int lb_ai_opp_live(void) {
+    if (lb_net_guest_state() > 0) return 0;
+    return lb_setting_ai_opp_packed();
+}
+
+namespace {
+constexpr uint32_t kSetupNameFromStart = 0x020C0FEAu;   // lr & ~1: the opponent's name
+constexpr uint32_t kAddAlly = 0x02085CC8u;              // arm: (team, byte* handle)
+constexpr uint32_t kFactionBase = 0x02150968u;          // FUN_020029DC's table block
+
+struct AiGCall { uint32_t fn, a[4]; };
+struct AiChain {
+    bool active = false;
+    int carrier = 0;                         // 1 the name setter, 2 v06
+    uint32_t r[4] = {0, 0, 0, 0}, r12 = 0, lr = 0, sp = 0, sp_call = 0;
+    AiGCall q[16];
+    int qn = 0, qi = 0;
+} g_aic;
+
+int g_opp_extra = 0;     // extra opponents seated for this match (0..2)
+int g_opp_teams = 0;     // the computers are allied
+
+void aic_issue(uint32_t self_thumb) {
+    const AiGCall& c = g_aic.q[g_aic.qi++];
+    for (int i = 0; i < 4; ++i) g_cpu.R[i] = c.a[i];
+    g_cpu.R[13] = g_aic.sp_call;
+    g_cpu.R[14] = self_thumb | 1u;
+    g_cpu.R[15] = c.fn;
+    runtime_dispatch_with_exchange(c.fn);
+}
+
+void aic_begin(int carrier) {
+    g_aic.active = true;
+    g_aic.carrier = carrier;
+    g_aic.qi = 0;
+    for (int i = 0; i < 4; ++i) g_aic.r[i] = g_cpu.R[i];
+    g_aic.r12 = g_cpu.R[12];
+    g_aic.lr = g_cpu.R[14];
+    g_aic.sp = g_cpu.R[13];
+    g_aic.sp_call = (g_aic.sp - 0x40u) & ~7u;
+}
+
+// The chain's last step: the registers as they were, then the real function.
+void aic_finish(void (*original)(void)) {
+    g_aic.active = false;
+    for (int i = 0; i < 4; ++i) g_cpu.R[i] = g_aic.r[i];
+    g_cpu.R[12] = g_aic.r12;
+    g_cpu.R[14] = g_aic.lr;
+    g_cpu.R[13] = g_aic.sp;
+    if (original) original();
+}
+
+uint32_t aiopp_faction_obj(uint32_t id) {
+    const uint32_t arr = (id >= 0x82u && id <= 0x86u)
+        ? bus_read_u32(kFactionBase + 0x64u) + (id - 0x82u) * 4u
+        : bus_read_u32(kFactionBase + 0x40u) + id * 4u;
+    if (!guest_ptr(arr)) return 0u;
+    const uint32_t o = bus_read_u32(arr);
+    return guest_ptr(o) ? o : 0u;
+}
+
+// The text a faction's (or a hero's) name shows as, as docs/385 names the
+// first opponent: a Custom or Random army by its hero, shortened.
+uint32_t aiopp_hero_text(uint32_t hero) {
+    int id = lb_teams_unit_name_id((int)hero);
+    if (id <= 0) return 0u;
+    uint32_t text = 0u;
+    if (hero == 129u) {
+        id = 553;
+    } else if (hero == 133u) {
+        if (!lb_setting_criminal_leader_name()) id = 557;
+    } else if (hero == 40u || hero == 60u) {
+        const uint32_t at = loc_text_addr((uint32_t)id);
+        for (uint32_t i = 0; at && i < 64u; ++i) {
+            const uint8_t c = bus_read_u8(at + i);
+            if (!c) break;
+            if (c == ' ' && bus_read_u8(at + i + 1u)) text = at + i + 1u;
+        }
+    }
+    return text ? text : loc_text_addr((uint32_t)id);
+}
+
+// A colour list's items (the Start handler's own reads): the record at
+// screen+0x44 (the player's) or +0x50 (the opponent's).
+int aiopp_colours(uint32_t list, uint32_t out[16], int* selected) {
+    *selected = -1;
+    if (!guest_ptr(list)) return 0;
+    const uint32_t arr = bus_read_u32(list + 0x20u);
+    const int n = (int)(bus_read_u32(list + 0x24u) & 0xFFu);
+    const int sel = bus_read_u8(list + 0x50u);
+    if (!guest_ptr(arr)) return 0;
+    int k = 0;
+    for (int i = 0; i < n && k < 16; ++i) {
+        const uint32_t item = bus_read_u32(arr + 4u * (uint32_t)i);
+        out[k++] = guest_ptr(item) ? bus_read_u32(item + 0x34u) : 0u;
+    }
+    if (sel != 0xFF && sel < k) *selected = sel;
+    return k;
+}
+
+int aiopp_packed() {
+    const int played = lb_demo_play_ai_opp();
+    return played >= 0 ? played : lb_ai_opp_live();
+}
+
+// The setup's seats and the chain of guest calls the strings and armies need.
+void aiopp_prepare_setup() {
+    g_aic.qn = 0;
+    g_opp_extra = 0;
+    g_opp_teams = 0;
+    const uint32_t setup = g_cpu.R[0];
+    const int packed = aiopp_packed();
+    if (packed) {
+        std::fprintf(stderr, "[lb_aiopp] the Start handler reached the name setter (packed %d)\n", packed);
+        std::fflush(stderr);
+    }
+    int extra = packed & 3;
+    // THE ENGINE'S LIMIT: a fourth team stalls the load (stray writes, then a
+    // frozen emulator; two maps, The Pond and Omega Quadrant, with computers
+    // or not), where three teams run -- docs/414 "Built". So one extra.
+    if (extra > 1) extra = 1;
+    if (!extra || !guest_ptr(setup)) return;
+    {
+        const uint32_t vt = bus_read_u32(setup);
+        std::fprintf(stderr, "[lb_aiopp] setup %08X, vtable %08X, v06 %08X\n", setup,
+                     vt, guest_ptr(vt) ? bus_read_u32(vt + 24u) : 0u);
+    }
+    int starts = bus_read_u8(setup + 0x158u);
+    {   // The map's real start count, from its file (the game's own count is
+        // not: The Pond says 4 and places 3, and a base-less team stalls the load).
+        char nm[64] = "";
+        const uint32_t sptr = bus_read_u32(setup + 0x1Cu + 8u);
+        for (int i = 0; guest_ptr(sptr) && i < 40; ++i) {
+            nm[i] = (char)bus_read_u8(sptr + (uint32_t)i);
+            if (!nm[i]) break;
+            nm[i + 1] = 0;
+        }
+        std::string path = nm;
+        if (path.find("Maps/") != 0) path = "Maps/" + path;
+        if (path.find(".map") == std::string::npos) path += ".map";
+        int real = -1;
+        const int sz = nm[0] ? lb_rom_read(path.c_str(), nullptr, 0) : 0;
+        if (sz > 0) {
+            std::vector<unsigned char> buf((size_t)sz);
+            if (lb_rom_read(path.c_str(), buf.data(), sz) == sz)
+                real = lb_mods_map_starts(buf.data(), buf.size());
+        }
+        std::fprintf(stderr, "[lb_aiopp] map file '%s': %d real start(s) (the game says %d)\n",
+                     path.c_str(), real, starts);
+        if (real >= 0 && real < starts) starts = real;
+    }
+    std::fprintf(stderr, "[lb_aiopp] Free Play Start: %d extra computer "
+                 "opponent(s) asked, the map has %d starts\n", extra, starts);
+    if (starts - 2 < extra) extra = starts - 2;
+    if (extra <= 0) {
+        std::fprintf(stderr, "[lb_aiopp] not enough starts: one opponent\n");
+        std::fflush(stderr);
+        return;
+    }
+    // The colours: the opponent screen's lists (this = the Start handler's r5).
+    uint32_t screen = g_cpu.R[5];
+    uint32_t pal[16], opal[16];
+    int psel = -1, osel = -1, np = 0, no = 0;
+    if (guest_ptr(screen) && bus_read_u32(screen + 0x70u) == setup) {
+        np = aiopp_colours(bus_read_u32(screen + 0x44u), pal, &psel);
+        no = aiopp_colours(bus_read_u32(screen + 0x50u), opal, &osel);
+    }
+    uint32_t used[4] = {0, 0, 0, 0};
+    int nused = 0;
+    if (psel >= 0) used[nused++] = pal[psel];
+    if (osel >= 0) used[nused++] = opal[osel];
+    auto colour_used = [&](uint32_t c) {
+        for (int i = 0; i < nused; ++i) if (used[i] == c) return true;
+        return false;
+    };
+    uint32_t recs = (g_cpu.R[13] - 0x30u) & ~3u;   // 2 x 20 bytes, above the chain's frames
+    bool took_custom = false;
+    const unsigned seed = lb_demo_pick_seed();
+    for (int k = 0; k < extra; ++k) {
+        const uint32_t idx = 2u + (uint32_t)k;
+        int sel = (packed >> (2 + 3 * k)) & 7;
+        uint32_t fid = 0x7Cu + (uint32_t)(sel < 6 ? sel : 0);
+        bool custom = false;
+        if (sel >= 6) {
+            if (!took_custom && aiopp_faction_obj(0x86u)) {
+                fid = 0x86u;
+                custom = true;
+                took_custom = true;
+            } else {
+                sel = (int)((seed >> (3 * k + 1)) % 6u);
+                fid = 0x7Cu + (uint32_t)sel;
+                std::fprintf(stderr, "[lb_aiopp] opponent %d: the spare custom "
+                             "army is taken, a random faction instead\n", k + 2);
+            }
+        }
+        const uint32_t fo = aiopp_faction_obj(fid);
+        unsigned char rec[20] = {0};
+        uint32_t text = 0u;
+        if (custom) {
+            const int choice = (packed >> (2 + 3 * k)) & 7;
+            if (!(lb_demo_playing() && lb_demo_take_army(rec))) {
+                lb_teams_enemy_army(choice, rec);
+                lb_demo_note_army(rec);
+            }
+            text = aiopp_hero_text((uint32_t)(rec[8] | (rec[9] << 8)));
+            const uint32_t at = recs + 20u * (uint32_t)k;
+            for (uint32_t i = 0; i < 20u; ++i) bus_write_u8(at + i, rec[i]);
+            if (g_aic.qn < 14) {
+                g_aic.q[g_aic.qn++] = {kRosterBuild, {fo, at, 0, 0}};
+            }
+            std::fprintf(stderr, "[lb_aiopp] opponent %d: %s army, hero %u builder %u\n",
+                         k + 2, choice == 6 ? "Custom" : "Random",
+                         (unsigned)(rec[8] | (rec[9] << 8)),
+                         (unsigned)(rec[10] | (rec[11] << 8)));
+        }
+        if (!text && fo) {
+            const uint32_t nm = bus_read_u32(fo + 0x28u);
+            if (guest_ptr(nm)) text = loc_text_addr(bus_read_u16(nm + 6u));
+        }
+        // A colour no one has yet.
+        uint32_t colour = 0u;
+        bool found = false;
+        const int want_c = (packed >> (9 + 3 * k)) & 7;
+        if (want_c > 0 && want_c - 1 < np) {
+            if (!colour_used(pal[want_c - 1])) {
+                colour = pal[want_c - 1];
+                found = true;
+            } else {
+                std::fprintf(stderr, "[lb_aiopp] opponent %d: colour %u is taken, "
+                             "automatic instead\n", k + 2, pal[want_c - 1]);
+            }
+        }
+        for (int i = 0; i < np && !found; ++i)
+            if (!colour_used(pal[i])) { colour = pal[i]; found = true; }
+        for (int i = 0; i < no && !found; ++i)
+            if (!colour_used(opal[i])) { colour = opal[i]; found = true; }
+        if (!found) colour = used[0];
+        if (const char* ce = std::getenv("LB_AIOPP_COLOUR")) colour = (uint32_t)std::atoi(ce);   // test aid
+        if (nused < 4) used[nused++] = colour;
+        // The seat.
+        const uint32_t pid = (std::getenv("LB_AIOPP_IDBASE") ? (uint32_t)std::atoi(std::getenv("LB_AIOPP_IDBASE")) : 2u) + (uint32_t)k;   // test aid
+        bus_write_u32(setup + 0x40u + 4u * idx, pid);
+        bus_write_u32(setup + 0x2Cu + 4u * idx, fid);
+        bus_write_u8(setup + 0x3Cu + idx, (uint8_t)idx);
+        bus_write_u32(setup + 0xDCu + 4u * idx, colour);
+        if (text && g_aic.qn < 14 && !std::getenv("LB_AIOPP_NONAME"))
+            g_aic.q[g_aic.qn++] = {kStringAssign, {setup + 0xACu + 0xCu * idx, text, 0, 0}};
+        std::fprintf(stderr, "[lb_aiopp] seat %u: player id %d, faction 0x%02X "
+                     "(object %08X), colour %u%s\n", idx, 2 + k, fid, fo, colour,
+                     text ? "" : ", no name");
+    }
+    g_opp_extra = extra;
+    g_opp_teams = (packed >> 8) & 1;
+    std::fprintf(stderr, "[lb_aiopp] colour lists: player sel %d of %d, opponent sel %d of %d:", psel, np, osel, no);
+    for (int i = 0; i < np; ++i) std::fprintf(stderr, " %u", pal[i]);
+    std::fprintf(stderr, " |");
+    for (int i = 0; i < no; ++i) std::fprintf(stderr, " %u", opal[i]);
+    std::fprintf(stderr, "\n");
+    std::fprintf(stderr, "[lb_aiopp] %d computer opponents, %s\n", 1 + extra,
+                 g_opp_teams ? "allied against the player" : "free for all");
+    std::fflush(stderr);
+}
+}  // namespace
+
+extern "C" void ai_opp_setname_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kSetupName);
+    if (g_aic.active && g_aic.carrier == 1 && g_cpu.R[13] == g_aic.sp_call) {
+        if (g_aic.qi < g_aic.qn) { aic_issue(kSetupName); return; }
+        aic_finish(original);
+        return;
+    }
+    if (!g_aic.active && (g_cpu.R[14] & ~1u) == kSetupNameFromStart &&
+        g_cpu.R[1] == 1u) {
+        aiopp_prepare_setup();
+        if (g_aic.qn > 0) {
+            aic_begin(1);
+            aic_issue(kSetupName);
+            return;
+        }
+    }
+    if (original) original();
+}
+
+namespace {
+// A team object by handle ([[0x0215540C]+8] + 4*handle), or 0.
+uint32_t aiopp_team(uint32_t handle) {
+    const uint32_t world = bus_read_u32(0x0215540Cu);
+    if (!guest_ptr(world)) return 0u;
+    const uint32_t table = bus_read_u32(world + 8u);
+    if (!guest_ptr(table) || handle > 7u) return 0u;
+    const uint32_t t = bus_read_u32(table + 4u * handle);
+    return guest_ptr(t) ? t : 0u;
+}
+}  // namespace
+
+extern "C" void ai_opp_v06_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kMissionV06);
+    if (g_aic.active && g_aic.carrier == 2 && g_cpu.R[13] == g_aic.sp_call) {
+        if (g_aic.qi < g_aic.qn) { aic_issue(kMissionV06); return; }
+        aic_finish(original);
+        return;
+    }
+    if (!g_aic.active && g_opp_extra > 0 && g_opp_teams &&
+        lb_net_guest_state() <= 0 && free_play_mission()) {
+        // Every pair of computer teams (player ids >= 1), both ways. The
+        // handles sit in bytes below the live frame, where the call reads them.
+        const uint32_t ais = bus_read_u32(0x0215697Cu);
+        const uint32_t ad = guest_ptr(ais) ? bus_read_u32(ais + 4u) : 0u;
+        const int an = guest_ptr(ais) ? (int)bus_read_u32(ais + 8u) : 0;
+        uint32_t hs[4];
+        int nh = 0;
+        for (int i = 0; guest_ptr(ad) && i < an && nh < 4; ++i) {
+            const uint32_t a = bus_read_u32(ad + 4u * (uint32_t)i);
+            if (guest_ptr(a) && bus_read_u32(a) >= 1u)
+                hs[nh++] = bus_read_u8(a + 0x36u);
+        }
+        g_aic.qn = 0;
+        const uint32_t bytes = (g_cpu.R[13] - 8u) & ~3u;
+        for (uint32_t h = 0; h < 8u; ++h) bus_write_u8(bytes + h, (uint8_t)h);
+        for (int x = 0; x < nh; ++x)
+            for (int y = 0; y < nh; ++y) {
+                const uint32_t tx = aiopp_team(hs[x]);
+                if (x == y || !tx || g_aic.qn >= 14) continue;
+                g_aic.q[g_aic.qn++] = {kAddAlly, {tx, bytes + hs[y], 0, 0}};
+            }
+        std::fprintf(stderr, "[lb_aiopp] %d computer teams allied (%d calls)\n",
+                     nh, g_aic.qn);
+        std::fflush(stderr);
+        if (g_aic.qn > 0) {
+            aic_begin(2);
+            aic_issue(kMissionV06);
+            return;
+        }
+    }
+    if (original) original();
+}
+
+namespace {
+// The scripted start of every computer player past list entry 0 (and the
+// retarget when its target falls); a VBlank poll, memory stores only.
+struct AiOppSeen { uint32_t ai; uint8_t target; bool mixed; };
+AiOppSeen g_aiopp_seen[4];
+int g_aiopp_nseen = 0;
+unsigned g_aiopp_gen = 0;
+unsigned g_aiopp_frames = 0;
+bool g_aiopp_mix_done = false;
+
+bool aiopp_ram(uint32_t p) { return p >= 0x02000000u && p < 0x02400000u; }
+
+void aiopp_aim(uint32_t a, uint8_t handle, uint8_t tx, uint8_t ty) {
+    const uint32_t s44 = bus_read_u32(a + 0x44u), s4c = bus_read_u32(a + 0x4Cu);
+    bus_write_u8(a + 0x37u, handle);
+    bus_write_u8(s4c + 0x22u, handle);
+    bus_write_u8(s44 + 0x64u, handle);
+    bus_write_u8(s44 + 0x60u, tx);
+    bus_write_u8(s44 + 0x61u, ty);
+}
+
+void aiopp_start_tile(uint32_t map, uint8_t handle, uint8_t* x, uint8_t* y) {
+    *x = 12; *y = 9;
+    if (!aiopp_ram(map) || handle > 3u) return;
+    if (!bus_read_u8(map + 0x234u + handle)) return;
+    *x = bus_read_u8(map + 0x23Cu + handle * 8u);
+    *y = bus_read_u8(map + 0x23Du + handle * 8u);
+}
+
+void ai_opp_tick(void) {
+    if (g_aiopp_gen != g_boot_gen) {
+        g_aiopp_gen = g_boot_gen;
+        g_aiopp_nseen = 0;
+        g_aiopp_frames = 0;
+        g_aiopp_mix_done = false;
+        g_opp_extra = 0;
+        g_aic.active = false;
+    }
+    if (g_opp_extra <= 0 || (!free_play_mission() && !std::getenv("LB_AIOPP_DUMP")) ||
+        std::getenv("LB_AIOPP_NOTICK")) {
+        g_aiopp_nseen = 0;
+        return;
+    }
+    const uint32_t ais = bus_read_u32(0x0215697Cu);
+    if (!aiopp_ram(ais)) return;
+    const uint32_t ad = bus_read_u32(ais + 4u);
+    const int an = (int)bus_read_u32(ais + 8u);
+    if (std::getenv("LB_AIOPP_DUMP")) {   // test aid
+        static unsigned n = 0;
+        if (++n % 60u == 1u && n < 1200u) {
+            std::fprintf(stderr, "[lb_aiopp] list %08X data %08X count %d:", ais, ad, an);
+            for (int i = 0; aiopp_ram(ad) && i < an && i < 6; ++i) {
+                const uint32_t a = bus_read_u32(ad + 4u * (uint32_t)i);
+                if (aiopp_ram(a))
+                    std::fprintf(stderr, " [%08X id %u team %u mix %02X]", a,
+                                 bus_read_u32(a), bus_read_u8(a + 0x36u), bus_read_u8(a + 0x5Cu));
+                else std::fprintf(stderr, " [%08X]", a);
+            }
+            std::fprintf(stderr, "\n");
+            for (uint32_t w = 0; w < 2; ++w) {
+                const uint32_t o = bus_read_u32(0x02156974u + 8u + 4u * w);
+                std::fprintf(stderr, "[lb_aiopp] array @%08X -> %08X:", 0x02156974u + 8u + 4u * w, o);
+                for (uint32_t k = 0; aiopp_ram(o) && k < 8; ++k)
+                    std::fprintf(stderr, " %08X", bus_read_u32(o + 4u * k));
+                std::fprintf(stderr, "\n");
+            }
+            {
+                const uint32_t map = bus_read_u32(0x02156CB0u);
+                std::fprintf(stderr, "[lb_aiopp] map %08X starts:", map);
+                for (uint32_t s = 0; aiopp_ram(map) && s < 4; ++s)
+                    std::fprintf(stderr, " [%u: flag %u tile %u,%u]", s, bus_read_u8(map + 0x234u + s),
+                                 bus_read_u8(map + 0x23Cu + s * 8u), bus_read_u8(map + 0x23Du + s * 8u));
+                std::fprintf(stderr, " fp=%d\n", free_play_mission() ? 1 : 0);
+            }
+            for (uint32_t s = 0; s < 5; ++s) {
+                std::fprintf(stderr, "[lb_aiopp] name table %u @%08X:", s, 0x021571FCu + s * 0xA4u);
+                for (uint32_t w = 0; w < 6; ++w)
+                    std::fprintf(stderr, " %08X", bus_read_u32(0x021571FCu + s * 0xA4u + 4u * w));
+                std::fprintf(stderr, "\n");
+            }
+            std::fflush(stderr);
+        }
+    }
+    if (!aiopp_ram(ad) || an < 2 || an > 4) return;
+    const uint32_t a0 = bus_read_u32(ad);
+    // v06 has run when entry 0's mix is 0x46, or 0x12 after its change 95 s in.
+    if (!aiopp_ram(a0) ||
+        (bus_read_u8(a0 + 0x5Cu) != 0x46u && bus_read_u8(a0 + 0x5Cu) != 0x12u)) return;
+    ++g_aiopp_frames;
+    const uint8_t human = bus_read_u8(a0 + 0x37u);   // what entry 0 hunts
+    const uint32_t map = bus_read_u32(0x02156CB0u);
+    const bool spectate = lb_ai_spectate_active() != 0;
+    // Everyone present: handle, player id, ai (0 for the human).
+    struct P { uint8_t h; int id; uint32_t ai; } ps[4];
+    int np = 0;
+    for (int i = 0; i < an && np < 4; ++i) {
+        const uint32_t a = bus_read_u32(ad + 4u * (uint32_t)i);
+        if (!aiopp_ram(a)) return;
+        ps[np++] = {bus_read_u8(a + 0x36u), (int)bus_read_u32(a), a};
+    }
+    bool have_human = false;
+    for (int i = 0; i < np; ++i) if (ps[i].h == human) have_human = true;
+    if (!have_human && np < 4) ps[np++] = {human, 0, 0};
+    auto group = [&](const P& p) { return g_opp_teams ? (p.id >= 1 ? 1 : 0) : (int)p.h; };
+    auto alive = [&](uint8_t h) {
+        const uint32_t t = aiopp_team(h);
+        return t && bus_read_u32(t + 0x9Cu) == 0u;
+    };
+    // The target of AI `me`: the human; or, in a game of computers only, the
+    // next living hostile team by player id.
+    auto pick = [&](const P& me) -> int {
+        if (!spectate) {
+            for (int i = 0; i < np; ++i) if (ps[i].h == human && alive(human)) return i;
+        }
+        int best = -1, bestd = 99;
+        for (int i = 0; i < np; ++i) {
+            if (&ps[i] == &me || group(ps[i]) == group(me) || !alive(ps[i].h)) continue;
+            const int d = ((ps[i].id - me.id) + 8) % 4;
+            if (d < bestd) { bestd = d; best = i; }
+        }
+        if (best < 0)
+            for (int i = 0; i < np; ++i) if (ps[i].h == human && alive(human)) return i;
+        return best;
+    };
+    // Production, every 20 s: what each owner has standing, and its bricks.
+    if (g_aiopp_frames % 600u == 300u) {
+        int n[8] = {0}, b[8] = {0};
+        const uint32_t pool = bus_read_u32(kEntityPoolPtr);
+        const uint32_t arr = guest_ptr(pool) ? bus_read_u32(pool + 8u) : 0u;
+        const int32_t cnt = guest_ptr(pool) ? (int32_t)bus_read_u32(pool + 0xCu) : 0;
+        for (int32_t i = 0; guest_ptr(arr) && i < cnt && i < 4096; ++i) {
+            const uint32_t e = bus_read_u32(arr + (uint32_t)i * 4u);
+            if (!guest_ptr(e) || bus_read_u8(e + 0x227u) == 0u) continue;
+            const unsigned o = bus_read_u8(e + 0xE4u);
+            if (o >= 8u) continue;
+            ++n[o];
+            if (entity_category(e) == 1u) ++b[o];
+        }
+        std::fprintf(stderr, "[lb_aiopp] %us in:", g_aiopp_frames / 60u);
+        for (int h = 0; h < np; ++h) {
+            const uint32_t t = aiopp_team(ps[h].h);
+            std::fprintf(stderr, " team %u: %d things (%d builders) %u bricks%s;", ps[h].h,
+                         n[ps[h].h & 7], b[ps[h].h & 7], t ? bus_read_u32(t + 0x90u) : 0u,
+                         t && bus_read_u32(t + 0x9Cu) ? " DEFEATED" : "");
+        }
+        std::fprintf(stderr, "\n");
+        std::fflush(stderr);
+    }
+    uint8_t hx = 12, hy = 9;
+    {
+        const uint32_t s44 = bus_read_u32(a0 + 0x44u);
+        if (aiopp_ram(s44)) { hx = bus_read_u8(s44 + 0x60u); hy = bus_read_u8(s44 + 0x61u); }
+    }
+    for (int i = 1; i < an; ++i) {
+        const uint32_t a = ps[i].ai;
+        const uint32_t s44 = bus_read_u32(a + 0x44u), s4c = bus_read_u32(a + 0x4Cu),
+                       s50 = bus_read_u32(a + 0x50u);
+        if (!aiopp_ram(s44) || !aiopp_ram(s4c) || !aiopp_ram(s50)) continue;
+        int seen = -1;
+        for (int k = 0; k < g_aiopp_nseen; ++k) if (g_aiopp_seen[k].ai == a) seen = k;
+        if (seen < 0) {
+            const int t = pick(ps[i]);
+            if (t < 0) continue;
+            uint8_t tx, ty;
+            if (ps[t].h == human) { tx = hx; ty = hy; }
+            else aiopp_start_tile(map, ps[t].h, &tx, &ty);
+            aiopp_aim(a, ps[t].h, tx, ty);
+            bus_write_u8(s4c + 0x3Bu, 1);
+            bus_write_u8(a + 0x32u, 1);
+            bus_write_u8(s50 + 0x15u, 1);
+            bus_write_u8(a + 0x33u, 1);
+            bus_write_u8(s50 + 0x14u, 1);
+            bus_write_u8(s4c + 0x3Eu, 1);
+            bus_write_u8(s4c + 0x3Au, 1);
+            bus_write_u8(s50 + 0x17u, 1);
+            bus_write_u8(a + 0x5Cu, 0x46);
+            bus_write_u8(a + 0x5Du, 0x1E);
+            bus_write_u32(s50 + 0x38u, 0x1Eu);
+            bus_write_u32(s4c + 0x24u, 5u);
+            bus_write_u8(s4c + 0x3Du, 1);
+            if (g_aiopp_nseen < 4)
+                g_aiopp_seen[g_aiopp_nseen++] = {a, ps[t].h, false};
+            std::fprintf(stderr, "[lb_aiopp] computer player id %d (team %u, %08X) "
+                         "aimed at team %u, start tile (%u,%u)\n", ps[i].id,
+                         ps[i].h, a, ps[t].h, tx, ty);
+            std::fflush(stderr);
+            continue;
+        }
+        // The change of mix, with entry 0's, 95 s in.
+        if (bus_read_u8(a0 + 0x5Cu) == 0x12u && !g_aiopp_seen[seen].mixed) {
+            bus_write_u8(a + 0x5Cu, 0x12);
+            bus_write_u8(a + 0x5Du, 0x3C);
+            bus_write_u32(s50 + 0x38u, 0x3Cu);
+            g_aiopp_seen[seen].mixed = true;
+            std::fprintf(stderr, "[lb_aiopp] computer player id %d: attack mix "
+                         "switched\n", ps[i].id);
+            std::fflush(stderr);
+        }
+        // A target that has fallen is replaced (twice a second).
+        if (g_aiopp_frames % 30u == 0u && !alive(g_aiopp_seen[seen].target)) {
+            const int t = pick(ps[i]);
+            if (t >= 0 && ps[t].h != g_aiopp_seen[seen].target) {
+                uint8_t tx, ty;
+                if (ps[t].h == human) { tx = hx; ty = hy; }
+                else aiopp_start_tile(map, ps[t].h, &tx, &ty);
+                aiopp_aim(a, ps[t].h, tx, ty);
+                g_aiopp_seen[seen].target = ps[t].h;
+                std::fprintf(stderr, "[lb_aiopp] computer player id %d: its "
+                             "target fell, now team %u\n", ps[i].id, ps[t].h);
+                std::fflush(stderr);
+            }
+        }
+    }
+}
+}  // namespace
+
+// TEST AID (docs/414): LB_TEST_KILLTEAM=<team>:<seconds>[,<team>:<seconds>...]
+// destroys every standing entity of a team once the battle has run that many
+// seconds (counted from the computer players' script), 14 a frame, with the
+// game's own kill (FUN_0205E78C), so the win and loss rules can be watched
+// without playing the battle. A chain of guest calls returning into the view
+// update (the carrier of the battle shortcuts), like the other chains here.
+extern "C" int ai_opp_kill_step(void (*original)(void)) {
+    static const char* spec = std::getenv("LB_TEST_KILLTEAM");
+    if (!spec) return 0;
+    struct K { int team; unsigned at; bool done; };
+    static K ks[4];
+    static int nk = -1;
+    static unsigned gen = 0;
+    if (gen != g_boot_gen) { gen = g_boot_gen; nk = -1; g_aic.active = false; }
+    if (nk < 0) {
+        nk = 0;
+        for (const char* p = spec; *p && nk < 4;) {
+            int t = std::atoi(p);
+            const char* c = std::strchr(p, ':');
+            if (!c) break;
+            ks[nk++] = {t, (unsigned)std::atoi(c + 1) * 60u, false};
+            const char* n = std::strchr(c, ',');
+            if (!n) break;
+            p = n + 1;
+        }
+    }
+    if (g_aic.active && g_aic.carrier == 3) {
+        if (g_cpu.R[13] != g_aic.sp_call) return 0;
+        if (g_aic.qi < g_aic.qn) { aic_issue(0x020DD708u); return 1; }
+        aic_finish(original);
+        return 1;
+    }
+    if (g_aic.active || g_opp_extra <= 0 || g_aiopp_frames == 0) return 0;
+    for (int i = 0; i < nk; ++i) {
+        if (ks[i].done || g_aiopp_frames < ks[i].at) continue;
+        const uint32_t pool = bus_read_u32(kEntityPoolPtr);
+        const uint32_t arr = guest_ptr(pool) ? bus_read_u32(pool + 8u) : 0u;
+        const int32_t cnt = guest_ptr(pool) ? (int32_t)bus_read_u32(pool + 0xCu) : 0;
+        g_aic.qn = 0;
+        int left = 0;
+        const uint32_t sp = g_cpu.R[13];
+        for (int32_t k = 0; guest_ptr(arr) && k < cnt && k < 4096; ++k) {
+            const uint32_t e = bus_read_u32(arr + (uint32_t)k * 4u);
+            if (!guest_ptr(e) || bus_read_u8(e + 0x227u) == 0u ||
+                (int)bus_read_u8(e + 0xE4u) != ks[i].team) continue;
+            ++left;
+            if (g_aic.qn < 14) g_aic.q[g_aic.qn++] = {0x0205E78Cu, {e, 0, 0, 0}};
+        }
+        if (!left) {
+            ks[i].done = true;
+            std::fprintf(stderr, "[lb_aiopp] TEST: team %d has nothing left at %us\n",
+                         ks[i].team, g_aiopp_frames / 60u);
+            std::fflush(stderr);
+            continue;
+        }
+        (void)sp;
+        aic_begin(3);
+        aic_issue(0x020DD708u);
+        return 1;
+    }
+    return 0;
 }
 
 // docs/408: LB_CAMREST=1 logs every place the shown camera (the ground's,
@@ -14414,6 +15590,8 @@ extern "C" void lb_port_on_guest_reset(void) {
     g_profile_save_pending = false;
     g_save_call.active = false;
     g_kc.active = false;
+    g_aic.active = false;            // docs/414
+    g_opp_extra = 0;
     lb_demo_on_reset();
     std::fprintf(stderr, "[lb_reset] the game was reset to its title screen "
                          "(generation %u)\n", g_boot_gen);
@@ -14453,7 +15631,9 @@ extern "C" void lb_patches_on_vblank(void) {
     apply_ai_hero_rebuild();
     apply_ai_hero_multi();
     apply_ai_tap_spells();
+    apply_two_player_maps();
     apply_ai_spectate();              // SG-0002
+    ai_opp_tick();                    // docs/414
     brick_log();
     lb_scores_tick();                 // SG-0018: match statistics, read only
     cam_rest_log();                   // docs/408 test aid

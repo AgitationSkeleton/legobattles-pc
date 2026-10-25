@@ -1,0 +1,11 @@
+{
+  "port": 8787,
+  "host": "0.0.0.0",
+  "data_dir": "data",
+  "max_players": 8,
+  "server_label": "fallback",
+  "DISCORD_WEBHOOK": "",
+  "DISCORD_WEBHOOK_2": "",
+  "ADMIN_KEY": "",
+  "debug": false
+}

@@ -113,9 +113,12 @@ bool lb_https_request(const std::string& host, int port, const std::string& meth
                       const std::string& path, const std::string& body,
                       std::string* reply, std::string* error);
 namespace {
-std::string http_request(const std::string& host, int port,
-                         const std::string& method, const std::string& path,
-                         const std::string& body, std::string* error) {
+// One request, as it goes: `*status` gets the reply's HTTP status (0 when
+// there was none to read, or the HTTPS path answered).
+std::string http_request_once(const std::string& host, int port,
+                              const std::string& method, const std::string& path,
+                              const std::string& body, std::string* error, int* status) {
+    *status = 0;
     if (lb_setting_master_https()) {
         std::string reply, herr;
         if (lb_https_request(host, port == 80 ? 443 : port, method, path, body, &reply,
@@ -217,6 +220,10 @@ std::string http_request(const std::string& host, int port,
     // sizes as text.
     std::string head = reply.substr(0, split);
     for (char& c : head) c = (char)std::tolower((unsigned char)c);
+    if (head.compare(0, 5, "http/") == 0) {   // "HTTP/1.1 429 Too Many Requests"
+        const size_t sp = head.find(' ');
+        if (sp != std::string::npos) *status = std::atoi(head.c_str() + sp + 1);
+    }
     std::string payload = reply.substr(split + 4);
     if (head.find("transfer-encoding: chunked") != std::string::npos) {
         std::string out;
@@ -232,6 +239,169 @@ std::string http_request(const std::string& host, int port,
         payload.swap(out);
     }
     return payload;
+}
+
+}  // namespace
+extern "C" int lb_net_is_hosting(void);    /* below */
+extern "C" int lb_net_guest_state(void);   /* below */
+namespace {
+
+// docs/442: THE FALLBACK SERVER. When the Cloudflare Worker (kPrimary) cannot
+// be reached, or answers with a Cloudflare limit or edge error, everything
+// meant for it goes to the fallback (services/master-server-fallback: the
+// same code on the operator's own PC). The fallback's address comes from the
+// Worker's own replies ("fallback": "host:port" in /health and /list), else
+// kFallbackDefault; LB_MASTER_FALLBACK=host:port overrides it, and
+// LB_MASTER_FALLBACK=0 turns the switch off. A test pointed at another server
+// (LB_MASTER) never touches either.
+//   * A Cloudflare limit answer (429, "error code: 1015/1027") switches to it at
+//     once; a connection that fails, twice within a minute. Either way the
+//     failed request is retried there at once.
+//   * Every 5 minutes the Worker is asked again (/health); when it answers, and
+//     this machine is neither hosting nor in a lobby, requests go back to it.
+//     A lobby stays on the server it was made on.
+constexpr const char* kPrimary = "lbserver.viosarcade.xyz";
+constexpr const char* kFallbackDefault = "lbfallback.viosarcade.xyz:8787";
+std::mutex g_fb_mu;
+std::string g_fb_host;          // learned, else the default
+int g_fb_port = 0;
+bool g_fb_on = false;
+int g_fb_fails = 0;
+long long g_fb_first_fail = 0, g_fb_next_probe = 0;
+
+long long fb_now_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+bool fb_is_primary(const std::string& host) {
+    std::string h = host;
+    for (char& c : h) c = (char)std::tolower((unsigned char)c);
+    return h == kPrimary;
+}
+bool fb_parse(const std::string& hp, std::string* host, int* port) {
+    const size_t colon = hp.rfind(':');
+    if (colon == std::string::npos || colon == 0 || colon > 253) return false;
+    for (size_t i = 0; i < colon; ++i) {
+        const char c = hp[i];
+        if (!std::isalnum((unsigned char)c) && c != '.' && c != '-') return false;
+    }
+    const int p = std::atoi(hp.c_str() + colon + 1);
+    if (p <= 0 || p > 65535) return false;
+    *host = hp.substr(0, colon);
+    *port = p;
+    return true;
+}
+// The fallback's address (under g_fb_mu); false when the switch is off.
+bool fb_target(std::string* host, int* port) {
+    static const char* env = std::getenv("LB_MASTER_FALLBACK");
+    if (env && std::strcmp(env, "0") == 0) return false;
+    if (env && *env && fb_parse(env, host, port)) return true;
+    if (!g_fb_host.empty()) { *host = g_fb_host; *port = g_fb_port; return true; }
+    return fb_parse(kFallbackDefault, host, port);
+}
+// A reply that says the Worker is not serving: no reply at all, a limit
+// (429; Cloudflare's "error code: 1015/1027"), a Worker exception (1101/1102)
+// or an edge error (502-504, 520-530).
+bool fb_failed(const std::string& reply, const std::string& error, int status) {
+    if (!error.empty()) return true;
+    if (status == 429 || (status >= 502 && status <= 504) || (status >= 520 && status <= 530))
+        return true;
+    return reply.compare(0, 14, "error code: 10") == 0 ||
+           reply.find("error code: 1027") != std::string::npos;
+}
+
+std::string http_request(const std::string& host, int port,
+                         const std::string& method, const std::string& path,
+                         const std::string& body, std::string* error) {
+    int status = 0;
+    if (!fb_is_primary(host))
+        return http_request_once(host, port, method, path, body, error, &status);
+    std::string fhost;
+    int fport = 0;
+    bool on, have;
+    {
+        std::lock_guard<std::mutex> lk(g_fb_mu);
+        have = fb_target(&fhost, &fport);
+        on = g_fb_on && have;
+        // Time to ask the Worker again? Only when nothing here is tied to the
+        // fallback's lobby list.
+        if (on && fb_now_ms() >= g_fb_next_probe && !lb_net_is_hosting() &&
+            lb_net_guest_state() <= 0) {
+            g_fb_next_probe = fb_now_ms() + 5 * 60 * 1000;
+            on = false;   // this request is the probe
+        }
+    }
+    if (on) return http_request_once(fhost, fport, method, path, body, error, &status);
+    // Test aid: LB_TEST_PRIMARY_DOWN=1 has every request to the Worker fail
+    // before anything is sent, so the switch is tested without the live server.
+    // LB_TEST_PRIMARY_DOWN=429 answers as Cloudflare does at the daily limit.
+    static const char* test_down = std::getenv("LB_TEST_PRIMARY_DOWN");
+    std::string reply;
+    if (test_down && std::strcmp(test_down, "429") == 0) {
+        status = 429;
+        reply = "error code: 1027";
+    } else if (test_down) {
+        *error = "LB_TEST_PRIMARY_DOWN";
+    } else {
+        reply = http_request_once(host, port, method, path, body, error, &status);
+    }
+    const bool failed = fb_failed(reply, *error, status);
+    // A limit answer is the Worker saying it will not serve: switch at once.
+    // A connection that fails may be this machine's own network: two in a row.
+    const bool limit = status == 429 || reply.compare(0, 14, "error code: 10") == 0;
+    {
+        std::lock_guard<std::mutex> lk(g_fb_mu);
+        if (!failed) {
+            // docs/442: the Worker names its fallback.
+            const size_t at = reply.find("\"fallback\":\"");
+            if (at != std::string::npos) {
+                const size_t a = at + 12, b = reply.find('"', a);
+                std::string h;
+                int p = 0;
+                if (b != std::string::npos && fb_parse(reply.substr(a, b - a), &h, &p)) {
+                    g_fb_host = h;
+                    g_fb_port = p;
+                }
+            }
+            if (g_fb_on) {
+                g_fb_on = false;
+                std::fprintf(stderr, "[lb_net] %s answers again: back from the fallback\n", kPrimary);
+                std::fflush(stderr);
+            }
+            g_fb_fails = 0;
+            return reply;
+        }
+        if (!have) return reply;
+        const long long now = fb_now_ms();
+        if (g_fb_on) {
+            g_fb_next_probe = now + 5 * 60 * 1000;   // the probe failed: stay
+        } else {
+            if (g_fb_fails == 0 || now - g_fb_first_fail > 60000) {
+                g_fb_fails = 0;
+                g_fb_first_fail = now;
+            }
+            if (++g_fb_fails < 2 && !limit) return reply;
+            g_fb_on = true;
+            g_fb_next_probe = now + 5 * 60 * 1000;
+            std::fprintf(stderr, "[lb_net] %s is not serving (%s%s, status %d): using the "
+                         "fallback server %s:%d\n", kPrimary, error->c_str(),
+                         error->empty() ? "a Cloudflare error" : "", status, fhost.c_str(), fport);
+            std::fflush(stderr);
+            lb_overlay_notice("The main online server is not answering, so the game uses the "
+                              "fallback server. Lobbies there are its own.");
+        }
+    }
+    error->clear();
+    return http_request_once(fhost, fport, method, path, body, error, &status);
+}
+
+// docs/442: where a connection meant for `host` goes now (the relay's).
+void fb_route(std::string* host, int* port) {
+    if (!fb_is_primary(*host)) return;
+    std::lock_guard<std::mutex> lk(g_fb_mu);
+    std::string h;
+    int p = 0;
+    if (g_fb_on && fb_target(&h, &p)) { *host = h; *port = p; }
 }
 
 // A DELIBERATELY MINIMAL extractor, not a JSON parser. It reads exactly the
@@ -1022,7 +1192,18 @@ std::atomic<bool> g_polling{false};
 // 2 s who wants in, and say hello to each for 15 s. A host that has learned a
 // player stops: the bridge holds one peer.
 void host_poll(long long now_ms) {
-    if (now_ms - g_last_poll.load() < 2000 || g_polling.load()) return;
+    // docs/442: every 2 s for a new lobby's first 2 minutes, then every 6 s. A
+    // lobby left open polled each server 43,000 times a day at 2 s, which is
+    // what took the Worker past its request allowance. A joiner punches for
+    // 15 s, so 6 s still answers it.
+    static long long open_since = 0;
+    static std::string open_code;
+    {
+        std::lock_guard<std::mutex> lock(g_host_mutex);
+        if (g_host_code != open_code) { open_code = g_host_code; open_since = now_ms; }
+    }
+    const long long every = now_ms - open_since < 120000 ? 2000 : 6000;
+    if (now_ms - g_last_poll.load() < every || g_polling.load()) return;
     uint32_t pip = 0u;
     uint16_t pport = 0u;
     int learned = 0;
@@ -1724,6 +1905,7 @@ void relay_tick(int s, const char* server, int port, long long now_ms) {
         }
         if (!code.empty() && code != g_rh_code) {
             g_rh_code = code;
+            fb_route(&srv, &sport);   // docs/442
             lb_relay_host_start(srv.c_str(), sport, code.c_str(), token.c_str());
         }
         return;
@@ -1771,6 +1953,7 @@ void relay_tick(int s, const char* server, int port, long long now_ms) {
                  lb_relay_forced() ? "LB_TEST_FORCE_RELAY" :
                  "no direct traffic from the host in 5 s",
                  code.c_str(), srv.c_str());
+    fb_route(&srv, &sport);   // docs/442
     lb_relay_join_start(srv.c_str(), sport, code.c_str());
 }
 }  // namespace

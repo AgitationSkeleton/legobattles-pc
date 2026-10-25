@@ -42,6 +42,7 @@ extern "C" int lb_setting_fetch_maps(void); /* lb_overlay.cpp */
 // docs/431, the map browser's readers (lb_mods.cpp, lb_matchpic.cpp).
 extern "C" int lb_mods_map_stats(const unsigned char* data, size_t n, int out[10]);
 extern "C" int lb_mods_count(void);
+extern "C" int lb_mods_limit(void);   // docs/439
 extern "C" int lb_mods_register_folder(const char* path);
 extern "C" int lb_mods_folder_hash(const char* path, unsigned long long* hash);
 extern "C" int lb_matchpic_mini_rgba(const unsigned char* ncgr, size_t n, int world,
@@ -51,34 +52,43 @@ namespace {
 namespace fs = std::filesystem;
 
 // docs/431: where maps come from. Each source is a GitHub repo whose maps sit in
-// zips at the repo's top (the browser reads the first `nbrowse` of them; any
-// others, such as campaign fixes, are only searched by name for a lobby's
-// missing map). To add a source, add one entry: its zips are cached in
-// mods/cache/<cache>/ (the first source keeps mods/cache/ itself).
+// zips at the repo's top. To add a source, add one entry: its zips are cached
+// in mods/cache/<cache>/ (the first source keeps mods/cache/ itself).
+// docs/440: which zips a repo holds is asked of GitHub (list_zips), so a pack
+// added to either repo shows without a new build; `zips` is only the fallback
+// when GitHub and the cached index are both out of reach. Every zip is read: a
+// folder that is not a Free Play map (the campaign fixes) is left out by the
+// browser's own rules.
 struct Source {
     const char* name;      // shown in the Maps page
+    const char* repo;      // owner/name on GitHub
     const char* host;      // raw file host
     const char* base;      // path up to the zips, with both slashes
     const char* cache;     // subfolder of mods/cache ("" for none)
-    const char* zips[8];
+    const char* zips[8];   // the fallback list
     int nzips;
-    int nbrowse;
 };
 const Source kSources[] = {
-    {"Community map archive (Ryncat2000)", "raw.githubusercontent.com",
-     "/Ryncat2000/Lego-Battles-Custom-Map-Archive/main/", "",
+    {"Community map archive (Ryncat2000)", "Ryncat2000/Lego-Battles-Custom-Map-Archive",
+     "raw.githubusercontent.com", "/Ryncat2000/Lego-Battles-Custom-Map-Archive/main/", "",
      {"64 sized.zip", "96 sized.zip", "Better Free Play maps pack.zip",
       "DIFFICULTY PATCH-first wave.zip"},
-     4, 3},
+     4},
     // The port's own (github.com/AgitationSkeleton/legobattles-custom-maps):
     // the cut Mars maps rebuilt from their minimaps, the prototypes' Free
-    // Play maps that differ from the final game's; Ninjago's later.
-    {"LEGO Battles PC custom maps", "raw.githubusercontent.com",
-     "/AgitationSkeleton/legobattles-custom-maps/main/", "custom",
-     {"Mars beta maps.zip", "Prototype Free Play maps.zip"},
-     2, 2},
+    // Play maps that differ from the final game's, and Ninjago's Free Play maps
+    // converted to the retail format.
+    {"LEGO Battles PC custom maps", "AgitationSkeleton/legobattles-custom-maps",
+     "raw.githubusercontent.com", "/AgitationSkeleton/legobattles-custom-maps/main/", "custom",
+     {"Mars beta maps.zip", "Prototype Free Play maps.zip", "Ninjago Free Play maps.zip"},
+     3},
 };
 const int kNumSources = (int)(sizeof kSources / sizeof kSources[0]);
+
+// A zip of a source, and its git blob id (empty when unknown).
+struct Listed {
+    std::string name, sha;
+};
 
 std::mutex g_mu;
 std::set<std::string> g_asked;      // names asked for this run (lowercase)
@@ -96,6 +106,85 @@ std::string url_path(const char* name) {
     }
     return out;
 }
+fs::path cache_dir(const Source& src) {
+    return fs::u8path(lb_mods_dir()) / "cache" / fs::u8path(src.cache);
+}
+std::string read_text(const fs::path& p) {
+    std::string s;
+    if (FILE* f = std::fopen(p.string().c_str(), "rb")) {
+        char buf[4096];
+        size_t n;
+        while ((n = std::fread(buf, 1, sizeof buf, f)) > 0 && s.size() < (1u << 20)) s.append(buf, n);
+        std::fclose(f);
+    }
+    return s;
+}
+void write_text(const fs::path& p, const std::string& s) {
+    if (FILE* f = std::fopen(p.string().c_str(), "wb")) {
+        std::fwrite(s.data(), 1, s.size(), f);
+        std::fclose(f);
+    }
+}
+
+// docs/440: the zips at the top of the source's repo, as GitHub's tree API lists
+// them now (`online`), else as last listed (mods/cache/<cache>/index.txt), else
+// the built-in list. Each comes with its blob id, so a zip changed in the repo
+// is downloaded again (load_zip).
+std::vector<Listed> list_zips(const Source& src, bool online) {
+    std::vector<Listed> out;
+    std::error_code ec;
+    const fs::path dir = cache_dir(src);
+    fs::create_directories(dir, ec);
+    const fs::path index = dir / "index.txt";
+    if (online) {
+        std::string body, err;
+        if (lb_https_download("api.github.com", std::string("/repos/") + src.repo + "/git/trees/main",
+                              &body, 4u << 20, &err)) {
+            const std::string key = "\"path\":\"";
+            for (size_t p = body.find(key); p != std::string::npos; p = body.find(key, p + 1)) {
+                const size_t a = p + key.size(), b = body.find('"', a);
+                if (b == std::string::npos) break;
+                const std::string name = body.substr(a, b - a);
+                const size_t end = body.find('}', b);
+                const std::string obj = body.substr(b, end == std::string::npos ? std::string::npos
+                                                                                : end - b);
+                if (name.find('/') != std::string::npos || name.size() < 5 ||
+                    lower(name.substr(name.size() - 4)) != ".zip" ||
+                    obj.find("\"type\":\"blob\"") == std::string::npos)
+                    continue;
+                std::string sha;
+                const size_t s = obj.find("\"sha\":\"");
+                if (s != std::string::npos) sha = obj.substr(s + 7, 40);
+                out.push_back({name, sha});
+            }
+            if (!out.empty()) {
+                std::string t;
+                for (const Listed& l : out) t += l.sha + "\t" + l.name + "\n";
+                write_text(index, t);
+            }
+        } else {
+            std::fprintf(stderr, "[lb_mapfetch] %s: the repo's list could not be read (%s)\n",
+                         src.repo, err.c_str());
+        }
+    }
+    if (out.empty()) {
+        const std::string t = read_text(index);
+        size_t a = 0;
+        while (a < t.size()) {
+            size_t e = t.find('\n', a);
+            if (e == std::string::npos) e = t.size();
+            const std::string line = t.substr(a, e - a);
+            const size_t tab = line.find('\t');
+            if (tab != std::string::npos && tab + 1 < line.size())
+                out.push_back({line.substr(tab + 1), line.substr(0, tab)});
+            a = e + 1;
+        }
+    }
+    if (out.empty())
+        for (int z = 0; z < src.nzips; ++z) out.push_back({src.zips[z], ""});
+    return out;
+}
+
 uint32_t le16(const std::string& d, size_t at) {
     return (uint32_t)(uint8_t)d[at] | ((uint32_t)(uint8_t)d[at + 1] << 8);
 }
@@ -212,15 +301,34 @@ int extract_folder(const std::string& zip, const std::string& folder, const fs::
 }
 
 // One of the archive's zips: the cached copy in mods/cache, else (when
-// `download`) fetched over HTTPS and cached.
-bool load_zip(const Source& src, const char* z, bool download, std::string* zip,
+// `download`) fetched over HTTPS and cached. docs/440: a cached copy whose blob
+// id (<zip>.sha beside it) is not `sha` is out of date: when downloading, it is
+// fetched again (and kept if that fails).
+bool load_zip(const Source& src, const Listed& lz, bool download, std::string* zip,
               std::string* error) {
-    const fs::path mods = fs::u8path(lb_mods_dir());
-    const fs::path cache = mods / "cache" / fs::u8path(src.cache);
+    const char* z = lz.name.c_str();
+    const fs::path cache = cache_dir(src);
     std::error_code ec;
     fs::create_directories(cache, ec);
     const fs::path local = cache / fs::u8path(z);
+    const fs::path sha_file = cache / fs::u8path(lz.name + ".sha");
     zip->clear();
+    const bool stale = download && !lz.sha.empty() && fs::is_regular_file(local, ec) &&
+                       read_text(sha_file) != lz.sha;
+    if (stale) {
+        std::string fresh, err;
+        if (lb_https_download(src.host, std::string(src.base) + url_path(z), &fresh, 64u << 20,
+                              &err)) {
+            write_text(local, fresh);
+            write_text(sha_file, lz.sha);
+            std::fprintf(stderr, "[lb_mapfetch] %s changed in the repo: downloaded again "
+                         "(%zu bytes)\n", z, fresh.size());
+            *zip = std::move(fresh);
+            return true;
+        }
+        std::fprintf(stderr, "[lb_mapfetch] %s changed in the repo but could not be "
+                     "downloaded (%s); the cached copy is used\n", z, err.c_str());
+    }
     if (FILE* f = std::fopen(local.string().c_str(), "rb")) {
         std::fseek(f, 0, SEEK_END);
         const long n = std::ftell(f);
@@ -242,10 +350,8 @@ bool load_zip(const Source& src, const char* z, bool download, std::string* zip,
         std::fprintf(stderr, "[lb_mapfetch] %s: %s\n", z, err.c_str());
         return false;
     }
-    if (FILE* f = std::fopen(local.string().c_str(), "wb")) {
-        std::fwrite(zip->data(), 1, zip->size(), f);
-        std::fclose(f);
-    }
+    write_text(local, *zip);
+    if (!lz.sha.empty()) write_text(sha_file, lz.sha);
     std::fprintf(stderr, "[lb_mapfetch] downloaded %s (%zu bytes)\n", z, zip->size());
     return true;
 }
@@ -256,9 +362,9 @@ void fetch(std::string name) {
     int files = 0;
     std::string last_error;
     for (const Source& src : kSources)
-        for (int zi = 0; zi < src.nzips; ++zi) {
+        for (const Listed& lz : list_zips(src, true)) {
             std::string zip;
-            if (!load_zip(src, src.zips[zi], true, &zip, &last_error)) continue;
+            if (!load_zip(src, lz, true, &zip, &last_error)) continue;
             // The zips hold their own top folder ("64 sized/..."), kept as it is.
             files += extract_named(zip, want, mods / "maps" / "_archive");
         }
@@ -285,16 +391,20 @@ void fetch(std::string name) {
 //
 // Lists the archive's Free Play maps one by one: a thumbnail (the map's own
 // minimap pair, drawn with the map select's palette), what its .map file says
-// (size, world, players, mines, ground types) and its notes. The first three
-// zips are the Free Play ones; the fourth holds campaign difficulty fixes (more
-// than one .map per folder, no minimap) and is left out. A folder is listed
-// when it holds exactly one .map and that map's four minimap files, the same
-// rule lb_mods.cpp loads by. Nothing is downloaded until the player presses the
-// button (or the zips are already cached, which only reads them).
+// (size, world, players, mines, ground types) and its notes. A folder is
+// listed when it holds exactly one .map (an empty one does not count) and that
+// map's four minimap files, or none when it stands in for a stock slot (mpNN,
+// or a folder named "29-..."), whose minimap it then takes: the rules
+// lb_mods.cpp loads by. The campaign fixes' folders (several maps each) are
+// left out by them. Nothing is downloaded until the player presses the button
+// (or the zips are already cached, which only reads them).
+
+extern "C" int lb_rom_read(const char* path, unsigned char* out, int cap);   /* lb_teams.cpp */
 
 struct ArcMap {
     std::string name, folder, pack, notes;
-    int src = 0, zip = 0;       // the source, and its zip
+    int src = 0, zip = 0;       // the source, and its zip's place in the listing
+    Listed lz;                  // that zip
     int st[10] = {0};            // lb_mods_map_stats
     std::vector<uint8_t> ncgr;   // <stem>mini.NCGR as shipped
     uint64_t hash = 0;           // of the .map file
@@ -369,17 +479,18 @@ void arc_mark_installed() {
 void arc_load(bool download) {
     std::vector<ArcMap> maps;
     std::string warn;
-    for (int si = 0; si < kNumSources; ++si)
-      for (int z = 0; z < kSources[si].nbrowse; ++z) {
-        const Source& src = kSources[si];
+    for (int si = 0; si < kNumSources; ++si) {
+      const Source& src = kSources[si];
+      const std::vector<Listed> zl = list_zips(src, download);
+      for (int z = 0; z < (int)zl.size(); ++z) {
         {
             std::lock_guard<std::mutex> lk(g_arc_mu);
-            g_arc_msg = std::string(download ? "Loading " : "Reading ") + src.zips[z] + "...";
+            g_arc_msg = std::string(download ? "Loading " : "Reading ") + zl[z].name + "...";
         }
         std::string zip, err;
         std::vector<ZipEnt> ents;
-        if (!load_zip(src, src.zips[z], download, &zip, &err) || !zip_list(zip, &ents)) {
-            warn += (err.empty() ? std::string(src.zips[z]) + " could not be read" : err) + ". ";
+        if (!load_zip(src, zl[z], download, &zip, &err) || !zip_list(zip, &ents)) {
+            warn += (err.empty() ? zl[z].name + " could not be read" : err) + ". ";
             continue;
         }
         std::map<std::string, std::vector<size_t>> by;
@@ -388,30 +499,57 @@ void arc_load(bool download) {
             const ZipEnt* map_e = nullptr;
             int map_n = 0;
             for (size_t i : kv.second)
-                if (ends_ci(ents[i].file, ".map")) { map_e = &ents[i]; ++map_n; }
+                if (ends_ci(ents[i].file, ".map") && ents[i].usize > 0) {
+                    map_e = &ents[i];
+                    ++map_n;
+                }
             if (map_n != 1) continue;
             static const char* const kMini[4] = {"mini.NCGR", "mini.NCBR", "miniNT.NCGR",
                                                  "miniNT.NCBR"};
             const std::string stem = map_e->file.substr(0, map_e->file.size() - 4);
+            const size_t up = kv.first.rfind('/');
+            const std::string leaf = up == std::string::npos ? kv.first : kv.first.substr(up + 1);
             const ZipEnt* mini[4] = {nullptr, nullptr, nullptr, nullptr};
             for (int k = 0; k < 4; ++k)
                 for (size_t i : kv.second)
                     if (lower(ents[i].file) == lower(stem + kMini[k])) mini[k] = &ents[i];
-            if (!mini[0] || !mini[1] || !mini[2] || !mini[3]) continue;
             std::string mapb, ncgr;
             if (!zip_entry(zip, map_e->local, map_e->method, map_e->csize, map_e->usize,
-                           &mapb, 8u << 20) ||
-                !zip_entry(zip, mini[0]->local, mini[0]->method, mini[0]->csize,
-                           mini[0]->usize, &ncgr, 1u << 20))
+                           &mapb, 8u << 20))
                 continue;
+            if (mini[0] && mini[1] && mini[2] && mini[3]) {
+                if (!zip_entry(zip, mini[0]->local, mini[0]->method, mini[0]->csize,
+                               mini[0]->usize, &ncgr, 1u << 20))
+                    continue;
+            } else {
+                // No minimap of its own: a slot map's is the stock slot's
+                // (lb_mods.cpp loose_folder_map). The slot is mpNN, else the
+                // folder's leading number.
+                int slot = 0;
+                if (lower(stem).rfind("mp", 0) == 0) slot = std::atoi(stem.c_str() + 2);
+                if ((slot < 1 || slot > 30) && !leaf.empty() &&
+                    std::isdigit((unsigned char)leaf[0])) {
+                    size_t d = 0;
+                    while (d < leaf.size() && std::isdigit((unsigned char)leaf[d])) ++d;
+                    if (d < leaf.size() && (leaf[d] == '-' || leaf[d] == ' '))
+                        slot = std::atoi(leaf.c_str());
+                }
+                if (slot < 1 || slot > 30) continue;
+                char nm[32];
+                std::snprintf(nm, sizeof nm, "mp%02dmini.NCGR", slot);
+                const int n = lb_rom_read(nm, nullptr, 0);
+                if (n <= 0 || n > (1 << 20)) continue;
+                ncgr.assign((size_t)n, '\0');
+                if (lb_rom_read(nm, (unsigned char*)&ncgr[0], n) != n) continue;
+            }
             ArcMap m;
             if (!lb_mods_map_stats((const unsigned char*)mapb.data(), mapb.size(), m.st))
                 continue;
             m.src = si;
             m.zip = z;
+            m.lz = zl[z];
             m.folder = kv.first;
-            const size_t up = kv.first.rfind('/');
-            m.name = up == std::string::npos ? kv.first : kv.first.substr(up + 1);
+            m.name = leaf;
             m.pack = (kNumSources > 1 ? std::string(src.name) + " / " : std::string()) +
                      kv.first.substr(0, kv.first.find('/'));
             m.hash = fnv_bytes(mapb);
@@ -429,6 +567,7 @@ void arc_load(bool download) {
             }
             maps.push_back(std::move(m));
         }
+      }
     }
     std::sort(maps.begin(), maps.end(), [](const ArcMap& a, const ArcMap& b) {
         if (a.src != b.src) return a.src < b.src;
@@ -463,9 +602,8 @@ void arc_start(bool download) {
 bool arc_all_cached() {
     std::error_code ec;
     for (const Source& src : kSources)
-        for (int z = 0; z < src.nbrowse; ++z)
-            if (!fs::is_regular_file(fs::u8path(lb_mods_dir()) / "cache" /
-                                         fs::u8path(src.cache) / fs::u8path(src.zips[z]), ec))
+        for (const Listed& lz : list_zips(src, false))
+            if (!fs::is_regular_file(cache_dir(src) / fs::u8path(lz.name), ec))
                 return false;
     return true;
 }
@@ -488,7 +626,7 @@ void arc_texture(ArcMap& m, SDL_Renderer* ren) {
 
 void arc_download(ArcMap& m) {
     std::string zip, err;
-    if (!load_zip(kSources[m.src], kSources[m.src].zips[m.zip], false, &zip, &err)) {
+    if (!load_zip(kSources[m.src], m.lz, false, &zip, &err)) {
         g_dl_msg = "The archive is not cached: " + err;
         return;
     }
@@ -554,8 +692,10 @@ void arc_draw(SDL_Renderer* ren) {
         }
         ImGui::TextWrapped("Nothing is downloaded until you press the button. The two "
                            "map archives (the community's and the port's own) are a few "
-                           "zips of about 30 MB in all, fetched once over HTTPS from "
-                           "GitHub into mods/cache and read from there afterwards.");
+                           "zips of about 50 MB in all, fetched over HTTPS from GitHub "
+                           "into mods/cache and read from there afterwards. A pack that "
+                           "changes in its archive is fetched again the next time you "
+                           "press it.");
         // Test aid: LB_MAPS_LOAD=1 presses Load the archive once.
         static bool aid_load = std::getenv("LB_MAPS_LOAD") != nullptr;
         if (ImGui::Button("Load the archive") || aid_load) {
@@ -592,7 +732,10 @@ void arc_draw(SDL_Renderer* ren) {
                       ImGuiChildFlags_Borders);
     const std::string q = lower(search);
     const float tile = 112.0f, pad = 12.0f;
-    const int cols = std::max(1, (int)((ImGui::GetContentRegionAvail().x + pad) / (tile + pad)));
+    // A tile is the image button with its frame (and the name, cut to it): the
+    // next one goes on this row only while it fits in what is left of it.
+    const float cell = tile + 2.0f * ImGui::GetStyle().FramePadding.x;
+    const float row_end = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
     std::string last_pack;
     int shown = 0, col = 0;
     for (int i = 0; i < (int)g_arc.size(); ++i) {
@@ -607,7 +750,8 @@ void arc_draw(SDL_Renderer* ren) {
             ImGui::TextDisabled("%s", m.pack.c_str());
             ImGui::Separator();
         }
-        if (col) ImGui::SameLine(0.0f, pad);
+        if (col && ImGui::GetItemRectMax().x + pad + cell <= row_end) ImGui::SameLine(0.0f, pad);
+        else col = 0;
         ImGui::BeginGroup();
         ImGui::PushID(i);
         arc_texture(m, ren);
@@ -636,7 +780,7 @@ void arc_draw(SDL_Renderer* ren) {
         else ImGui::TextUnformatted(nm.c_str());
         ImGui::PopID();
         ImGui::EndGroup();
-        col = (col + 1) % cols;
+        ++col;
         ++shown;
     }
     if (!shown) ImGui::TextDisabled("No map matches.");
@@ -702,10 +846,10 @@ void arc_draw(SDL_Renderer* ren) {
             g_dl_msg = "Restart the game to see the new maps.";
         }
     }
-    if (lb_mods_count() >= 30)
+    if (lb_mods_count() >= lb_mods_limit())
         ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f),
-                           "The game loads at most 30 mod maps and %d are already in use.",
-                           lb_mods_count());
+                           "The game loads at most %d mod maps and %d are already in use.",
+                           lb_mods_limit(), lb_mods_count());
     if (!m.notes.empty()) {
         ImGui::Separator();
         ImGui::TextDisabled("Notes from the archive");
@@ -772,12 +916,18 @@ extern "C" int lb_mapfetch_install_by_hash(unsigned long long hash, char* path_o
     const fs::path probe = mods / "cache" / "_probe";
     std::error_code ec;
     int found = 0;
-    for (int si = 0; si < kNumSources && !found; ++si)
-        for (int z = 0; z < kSources[si].nbrowse && !found; ++z) {
+    // Each zip the listing read, once.
+    std::vector<std::pair<int, Listed>> zips;
+    for (const ArcMap& m : g_arc)
+        if (zips.empty() || zips.back().first != m.src || zips.back().second.name != m.lz.name)
+            zips.push_back({m.src, m.lz});
+    for (size_t zi = 0; zi < zips.size() && !found; ++zi) {
+            const int si = zips[zi].first;
+            const Listed& lz = zips[zi].second;
             std::string zip, err;
-            if (!load_zip(kSources[si], kSources[si].zips[z], true, &zip, &err)) continue;
+            if (!load_zip(kSources[si], lz, true, &zip, &err)) continue;
             for (const ArcMap& m : g_arc) {
-                if (m.src != si || m.zip != z) continue;
+                if (m.src != si || m.lz.name != lz.name) continue;
                 fs::remove_all(probe, ec);
                 if (extract_folder(zip, m.folder, probe) <= 0) continue;
                 unsigned long long h = 0;

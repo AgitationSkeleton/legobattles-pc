@@ -26,6 +26,7 @@ extern "C" {
 }
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -37,6 +38,7 @@ extern "C" {
 extern "C" void lb_net_post_match_image(const unsigned char* png, size_t n,
                                         const char* map_name);
 extern "C" int lb_mods_world(int k);   // lb_mods.cpp: 0 King, 1 Pirate, 2 Mars
+extern "C" int lb_mods_stem_index(const char* stem);   // docs/439
 
 namespace {
 
@@ -381,8 +383,8 @@ uint32_t bgr555_to_rgba(unsigned c) {
 // The map's world: a stock "mpNN" stem by the mission table (28-byte entries at
 // 0x02147DDC, the world in the field at +0x18); a mod map ("z/NN") by lb_mods.
 int map_world(const std::string& stem) {
-    if (stem.size() > 2 && stem[0] == 'z' && stem[1] == '/')
-        return lb_mods_world(std::atoi(stem.c_str() + 2) - 1);
+    if (const int k = lb_mods_stem_index(stem.c_str()); k >= 0)   // docs/439
+        return lb_mods_world(k);
     for (uint32_t e = 0; e < 30u; ++e) {
         const uint32_t ent = 0x02147DDCu + 28u * e;
         const uint32_t s = bus_read_u32(ent);
@@ -653,8 +655,6 @@ extern "C" int lb_matchpic_paint_random_preview(uint32_t buf, uint32_t n, const 
 extern "C" int lb_matchpic_paint_random_preview2(uint32_t buf, uint32_t n, const char* name,
                                                  int tiled) {
     if (n != 8192u || buf < 0x02000000u || buf + n > 0x02400000u) return 0;
-    static unsigned int q[56 * 56];
-    if (!lb_teams_question_rgba(q)) return 0;
     uint32_t pal[16];
     bool have_pal = false;
     if (name) {
@@ -693,49 +693,107 @@ extern "C" int lb_matchpic_paint_random_preview2(uint32_t buf, uint32_t n, const
         }
         return best;
     };
-    // THE GLYPH ONLY (no tinted tile, no gold border). The cell is
-    // a dark navy "?" (000828) on a blue tile inside a gold frame: the glyph
-    // is the dark pixels of the tile's interior (the frame and its shadow are
-    // the outer 8 pixels). It is drawn black with a white outline around it,
-    // both of which every world palette has, so it looks the same on any map,
-    // and the rest is clear (index 0) over the preview frame's blue.
-    auto lum = [](unsigned int c) {
-        return (int)((c & 255u) * 3u + ((c >> 8) & 255u) * 6u + ((c >> 16) & 255u)) / 10;
+    // THE "?" IS DRAWN, NOT COPIED. The Random opponent icon's "?" is a
+    // shaded navy-on-blue picture; its dark pixels are an outline and shading,
+    // and scaled up they made a hollow, broken shape. So the glyph is geometry
+    // evaluated at the preview's own pixels: an open ring (the hook) with a
+    // round end, a stem and a dot, white with a dark outline, which every world
+    // palette has, on the frame's blue (index 0, clear). The top screen's tiled
+    // copy has no clear index, so its square is black and the outline is lost
+    // in it, as there.
+    // Styled: tilted 15 degrees to the right, a light-gray bevel along its
+    // lower-right inner edge and a dark-blue drop shadow down and to the right.
+    // The map select's three banks (0x020C4A54) have no gray and no blue, but
+    // entries 12, 13 and 15 are black in all three and no stock minimap uses
+    // them (every mpNNmini.NCGR draws with 0..7 only). So the bevel's light
+    // gray and the shadow's dark blue are written into 12 and 13 of each bank,
+    // which the map select copies to the screen; nothing else reads them. The
+    // tiled copy (no palette: only white 14 and black 11 are known) keeps the
+    // plain white glyph.
+    const int white = nearest(0xFFFFFFFFu);
+    const int dark = have_pal ? nearest(0xFF280800u) : 11;
+    int bevel = white, shadow = -1;
+    if (have_pal) {
+        constexpr uint16_t kGray = 22u | (22u << 5) | (22u << 10);   // RGB 180,180,180
+        constexpr uint16_t kBlue = 0u | (1u << 5) | (8u << 10);      // RGB 0,8,64
+        for (uint32_t w = 0; w < 3; ++w) {
+            const uint32_t bank = bus_read_u32(0x020C4A54u + 4u * w);
+            if (bank < 0x02000000u || bank >= 0x02400000u) continue;
+            bus_write_u16(bank + 2u * 12u, kGray);
+            bus_write_u16(bank + 2u * 13u, kBlue);
+        }
+        bevel = 12;
+        shadow = 13;
+    }
+    // In units of the glyph's height h: the hook's centre (0.5, 0.30), radius
+    // 0.22, stroke 0.13; it runs from the left end (angle 200 degrees, y down)
+    // over the top and round the right to the bottom (90 degrees), the stem
+    // goes on down to 0.63, and the dot is at 0.88.
+    const float h = (float)size * 0.78f;
+    const float cx = (float)size * 0.5f, top = ((float)size - h) * 0.5f;
+    const float R = 0.22f * h, half = 0.065f * h;
+    const float hx = cx, hy = top + 0.30f * h;
+    const float sx = cx, sy0 = hy + R, sy1 = top + 0.63f * h;
+    const float dx_ = cx, dy_ = top + 0.88f * h, dr = 0.085f * h;
+    const float a0 = 200.0f * 3.14159265f / 180.0f;   // the left end
+    const float ex = hx + R * std::cos(a0), ey = hy + R * std::sin(a0);
+    const float outline = std::max(1.0f, (float)size / 48.0f);
+    // The signed distance (pixels; negative inside) to the upright glyph.
+    auto upright = [&](float px, float py) {
+        // The hook: angles from a0 (200) round through 270 (the top), 360 and
+        // on to 450 (= 90, the bottom), clockwise on screen.
+        float ang = std::atan2(py - hy, px - hx);
+        if (ang < 0) ang += 2.0f * 3.14159265f;           // 0 .. 2pi, y down
+        const bool on_arc = ang >= a0 || ang <= 0.5f * 3.14159265f;
+        const float r = std::hypot(px - hx, py - hy);
+        float d = on_arc ? std::fabs(r - R) - half
+                         : std::hypot(px - ex, py - ey) - half;   // the round end
+        // The stem: a segment from the hook's bottom straight down.
+        const float ty = std::min(std::max(py, sy0), sy1);
+        d = std::min(d, std::hypot(px - sx, py - ty) - half);
+        // The dot.
+        d = std::min(d, std::hypot(px - dx_, py - dy_) - dr);
+        return d;
     };
-    static uint8_t glyph[56 * 56];   // 0 clear, 1 white outline, 2 black body
-    for (int y = 0; y < 56; ++y)
-        for (int x = 0; x < 56; ++x) {
-            const unsigned int c = q[(size_t)y * 56u + (size_t)x];
-            glyph[y * 56 + x] = (x >= 8 && x < 50 && y >= 6 && y < 50 && (c >> 24) &&
-                                 lum(c) < 40)
-                                    ? 2
-                                    : 0;
-        }
-    for (int y = 0; y < 56; ++y)
-        for (int x = 0; x < 56; ++x) {
-            if (glyph[y * 56 + x]) continue;
-            bool near = false;
-            for (int dy = -2; dy <= 2 && !near; ++dy)
-                for (int dx = -2; dx <= 2 && !near; ++dx) {
-                    const int xx = x + dx, yy = y + dy;
-                    near = xx >= 0 && yy >= 0 && xx < 56 && yy < 56 && glyph[yy * 56 + xx] == 2;
-                }
-            if (near) glyph[y * 56 + x] = 1;
-        }
-    const int white = nearest(0xFFFFFFFFu), black = nearest(0xFF000000u);
-    // The "?" fills most of the map's square, centred.
-    const int box = size * 7 / 8, off = (size - box) / 2;
+    // Tilted: the picture is the upright glyph turned 15 degrees clockwise
+    // about the square's centre, so each pixel samples the upright one at the
+    // point turned back (y down: R(-t) = [cos sin; -sin cos]).
+    const float tc = std::cos(15.0f * 3.14159265f / 180.0f);
+    const float ts = std::sin(15.0f * 3.14159265f / 180.0f);
+    const float mid = (float)size * 0.5f;
+    auto dist = [&](float px, float py) {
+        const float x = px - mid, y = py - mid;
+        return upright(mid + tc * x + ts * y, mid - ts * x + tc * y);
+    };
+    const float shade_off = std::max(2.0f, (float)size / 24.0f);   // the shadow's offset
+    const float bevel_w = std::max(1.0f, (float)size / 40.0f);     // the bevel's width
     const uint8_t fill = (uint8_t)(clear | (clear << 4));
     for (uint32_t i = 0; i < n; ++i) bus_write_u8(buf + i, fill);
-    for (int y = 0; y < box; ++y)
-        for (int x = 0; x < box; ++x) {
-            const uint8_t gk = glyph[(size_t)(y * 56 / box) * 56u + (size_t)(x * 56 / box)];
-            if (!gk) continue;
-            const int px = off + x, py = off + y;
+    for (int py = 0; py < size; ++py)
+        for (int px = 0; px < size; ++px) {
+            const float fx = (float)px + 0.5f, fy = (float)py + 0.5f;
+            const float d = dist(fx, fy);
+            int v;
+            if (d <= 0.0f) {
+                v = white;
+                // The bevel: the inner band whose outward normal faces down
+                // and to the right (the gradient of the distance).
+                if (d > -bevel_w) {
+                    const float gx = dist(fx + 0.5f, fy) - dist(fx - 0.5f, fy);
+                    const float gy = dist(fx, fy + 0.5f) - dist(fx, fy - 0.5f);
+                    const float gl = std::hypot(gx, gy);
+                    if (gl > 1e-4f && (gx + gy) / (gl * 1.41421356f) > 0.35f) v = bevel;
+                }
+            } else if (d <= outline && !tiled) {
+                v = dark;
+            } else if (shadow >= 0 && !tiled &&
+                       dist(fx - shade_off, fy - shade_off) <= outline) {
+                v = shadow;
+            } else {
+                continue;
+            }
             const uint32_t at = addr(px, py);
             uint8_t b = bus_read_u8(at);
-            // On the tiled copy's black square the body is white, its outline black.
-            const int v = tiled ? (gk == 2 ? white : black) : (gk == 1 ? white : black);
             b = (px & 1) ? (uint8_t)((b & 0x0Fu) | (v << 4)) : (uint8_t)((b & 0xF0u) | v);
             bus_write_u8(at, b);
         }

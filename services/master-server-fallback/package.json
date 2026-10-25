@@ -1,0 +1,16 @@
+{
+  "name": "legobattles-master-fallback",
+  "private": true,
+  "description": "The LEGO Battles PC port's master server fallback: the Cloudflare Worker's own code run by Miniflare, under pm2.",
+  "type": "module",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "miniflare": "5.20261012.1-beta"
+  },
+  "allowScripts": {
+    "workerd@1.20261012.1": true
+  }
+}

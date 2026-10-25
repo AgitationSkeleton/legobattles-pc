@@ -191,6 +191,14 @@ export class Directory extends DurableObject {
     return Math.min(l.max_players, Math.max(l.players, 1 + l.members.length));
   }
 
+  // docs/442: the fallback server (FALLBACK_MASTER, "host:port"), named in
+  // /health and /list so a client learns where to go when this one cannot be
+  // reached. The fallback itself sets none.
+  fallbackField() {
+    const f = String(this.env.FALLBACK_MASTER || '').trim();
+    return /^[A-Za-z0-9.-]{1,253}:[0-9]{1,5}$/.test(f) ? { fallback: f } : {};
+  }
+
   // `viewer` is the asker's address: one behind the host's own router is
   // given the host's LAN address (docs/400).
   publicView(l, viewer) {
@@ -259,7 +267,8 @@ export class Directory extends DurableObject {
     if (request.method === 'GET') {
       if (path === '/' || path === '/health')
         return json(200, { ok: true, service: 'legobattles-master', relay: !!this.env.RELAY,
-                           lobbies: [...this.lobbies.values()].filter((l) => l.state === 'open').length });
+                           lobbies: [...this.lobbies.values()].filter((l) => l.state === 'open').length,
+                           ...this.fallbackField() });
       // docs/424: the relay's check, from the Worker only (it refuses
       // /internal/ from outside). A joiner may join a lobby that is open or
       // starting -- its match may begin while the relay is opening.
@@ -278,7 +287,7 @@ export class Directory extends DurableObject {
         return json(200, { ok: true, lobbies: [...this.lobbies.values()]
           .filter((l) => l.state === 'open')
           .sort((a, b) => a.created - b.created)
-          .map((l) => this.publicView(l, peer)) });
+          .map((l) => this.publicView(l, peer)), ...this.fallbackField() });
       if (path.startsWith('/lobby/')) {
         const l = this.lobbies.get(path.slice(7).toUpperCase());
         if (!l || l.state !== 'open') return json(404, { ok: false, error: 'no such lobby' });

@@ -277,6 +277,11 @@ const BalField kAttackFields[] = {
     // docs/426: appended. Reader FUN_02053F90 (0x02053F90, line ~235) tests it
     // on the blueprint at [shot+0x160]+8: a shot over trees is not stopped.
     {"Over trees", 0x65, 1, 0, 1},
+    // docs/438 (SG-0022): the animation set the shot is drawn with, an index
+    // into the 18-byte-record table at 0x02127398 (FUN_0200CE1C). 0 draws
+    // nothing; the table has 14 live sets (0..13) and the accessor would read
+    // past it above that. Appended last, so stored indices keep their meaning.
+    {"Sprite", 0x5D, 1, 0, 13},
 };
 // docs/416: values that are not in a blueprint but in the code, as one more
 // record after the projectiles. Field 0 is a Gold Brick's worth: FUN_0205F038
@@ -290,6 +295,18 @@ constexpr int kGoldBrickStock = 1000;
 constexpr int kUnitRecords = 182, kAttackRecords = 27;
 constexpr int kGlobalRecord = kUnitRecords + kAttackRecords;   // 209
 constexpr uint32_t kFirstRecord = 4u, kUnitSize = 0x7Cu, kAttackSize = 0x74u;
+// docs/438 (SG-0022): four projectile records no unit fires and no code names
+// (the only literal index lookups are record 202, ProjectileSpell, by the
+// FireBall and ThunderHammer spells, so 202 is NOT spare). They are offered as
+// "Spare projectile 1..4" and start as a copy of the Arrow, since two of them
+// held nothing usable (204 has no sprite, 208 is all zero).
+constexpr int kSpareRecords[4] = {203, 204, 205, 208};
+constexpr int kSpareModel = 182;   // the Arrow
+int spare_number(int rec) {
+    for (int i = 0; i < 4; ++i)
+        if (kSpareRecords[i] == rec) return i + 1;
+    return 0;
+}
 
 struct Edit {
     int rec, field, value;
@@ -418,6 +435,8 @@ extern "C" int lb_balance_record_name(int rec, char* out, int cap) {
     out[0] = 0;
     if (kind_of(rec) == LB_BAL_GLOBALS)   // docs/416
         return std::snprintf(out, (size_t)cap, "%s", "Pickups");
+    if (const int sp = spare_number(rec))   // docs/438
+        return std::snprintf(out, (size_t)cap, "Spare projectile %d", sp);
     const uint32_t base = lb_patches_blueprint_base();
     if (!base || kind_of(rec) < 0) return 0;
     const uint32_t s = bus_read_u32(record_at(base, rec));
@@ -461,8 +480,11 @@ extern "C" int lb_balance_base(int rec, int field) {
     const BalField* f = field_of(rec, field);
     if (!base || !f) return -1;
     const uint32_t a = record_at(base, rec) + f->off;
-    for (const Written& w : g_written)
-        if (w.addr == a) return (int)w.before;
+    // docs/438: newest first -- a spare projectile's starting copy is written
+    // before the player's value, which is what sits beneath it.
+    for (size_t i = g_written.size(); i-- > 0;)
+        if (g_written[i].addr == a && g_written[i].width == f->width)
+            return (int)g_written[i].before;
     return lb_balance_value(rec, field);
 }
 
@@ -629,6 +651,24 @@ extern "C" void lb_balance_custom_revert(unsigned int base) {
 extern "C" int lb_balance_custom_apply(unsigned int base) {
     lb_balance_custom_revert(base);
     if (!base) return 0;
+    // docs/438: the spare projectiles start as the Arrow as the pack leaves
+    // it (written first, kept in g_written, so the revert above takes them
+    // out too). Every machine does this, so the sim agrees online.
+    {
+        const uint32_t model = record_at(base, kSpareModel);
+        for (const int rec : kSpareRecords) {
+            const uint32_t r = record_at(base, rec);
+            // The speed (+0x0C..0x0F) and the sprite, flags and damages
+            // (+0x5C..0x73), byte by byte so a field's "before" stays its own.
+            for (uint32_t o = 0u; o < kAttackSize; ++o) {
+                if (!((o >= 0x0Cu && o < 0x10u) || o >= 0x5Cu)) continue;
+                const uint8_t want = bus_read_u8(model + o);
+                if (bus_read_u8(r + o) == want) continue;
+                g_written.push_back({r + o, 1, bus_read_u8(r + o)});
+                bus_write_u8(r + o, want);
+            }
+        }
+    }
     // docs/426 test aid: LB_BALANCE_IMPORT=<.nds or Entities.ebp> imports once.
     static bool env_done = false;
     if (!env_done) {

@@ -36,6 +36,7 @@ extern "C" {
 #include "runtime_arm.h"   // bus_read_u32: the team pool, to tell a level from the menus
 }
 extern "C" int lb_net_local_hero(void);   // lb_patches.cpp
+extern "C" int lb_mods_stem_index(const char* stem);   // lb_mods.cpp, docs/439
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -301,7 +302,7 @@ extern "C" void lb_discord_tick(void) {
         const char* map = lb_level_map_name();
         const bool level = in_level() && stem[0];
         const int mp = map_number(stem);
-        const bool free_play = mp > 0 || (stem[0] == 'z' && stem[1] == '/');
+        const bool free_play = mp > 0 || lb_mods_stem_index(stem) >= 0;   // docs/439
         const bool hosting = net == 2 || net == 3 || net == 4 || net == 10;
         const bool joined = net == 5;
         const bool match = net == 11 || net == 12;

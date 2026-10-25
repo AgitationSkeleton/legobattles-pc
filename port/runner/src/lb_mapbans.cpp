@@ -301,9 +301,16 @@ bool g_pool_open = false;
 int g_nx = 0;
 int g_xkind[2] = {0, 0};
 unsigned g_draws = 0;
+// Every map the list could hold is banned (set when the pool closes): the bans
+// are left out of that list, so it is never empty (the game's map select has
+// no empty state) and Random still draws.
+bool g_all_banned = false;
 
 bool eligible(uint32_t m) {   // FUN_0204AFF8's own test
-    return bus_read_u32(m + 0x10u) < 3u && bus_read_u8(m + 0x158u) > 2u;
+    // Two starts or more: the port lowered the game's own minimum of three
+    // (apply_two_player_maps in lb_patches.cpp, docs/439 era), so the 2-player
+    // Ninjago maps are drawn too.
+    return bus_read_u32(m + 0x10u) < 3u && bus_read_u8(m + 0x158u) > 1u;
 }
 
 }  // namespace
@@ -564,6 +571,7 @@ extern "C" int lb_maps_mission_banned(unsigned mission) {
     MapKey k;
     if (!key_of_mission(mission, &k)) return 0;
     std::lock_guard<std::mutex> lk(g_mu);
+    if (g_all_banned) return 0;   // nothing would be left: the bans are set aside
     return g_local.map_banned(k) ? 1 : 0;
 }
 
@@ -574,7 +582,7 @@ extern "C" void lb_maps_fill_begin(void) {
 }
 
 extern "C" void lb_maps_pool_add(unsigned mission) {
-    if (g_pool_open && g_pool.size() < 128) g_pool.push_back(mission);
+    if (g_pool_open && g_pool.size() < 256) g_pool.push_back(mission);
 }
 
 namespace {
@@ -603,7 +611,7 @@ uint32_t draw_mission(int kind) {
             if (!eligible(m)) continue;
             MapKey k;
             if (!key_of_mission(m, &k)) continue;
-            if (g_local.map_banned(k)) continue;
+            if (!g_all_banned && g_local.map_banned(k)) continue;
             if (kind == 1 && g_preset_maps.map_banned(k)) continue;
             pool.push_back(m);
         }
@@ -637,6 +645,28 @@ uint32_t draw_mission(int kind) {
 extern "C" int lb_maps_fill_extras(unsigned out[2]) {
     g_pool_open = false;
     g_nx = 0;
+    {
+        // Would the bans leave this list empty? Then they are set aside for it.
+        std::lock_guard<std::mutex> lk(g_mu);
+        bool any_eligible = false, any_left = false;
+        for (uint32_t m : g_pool) {
+            if (!eligible(m)) continue;
+            any_eligible = true;
+            MapKey k;
+            if (!key_of_mission(m, &k) || !g_local.map_banned(k)) {
+                any_left = true;
+                break;
+            }
+        }
+        const bool was = g_all_banned;
+        g_all_banned = any_eligible && !any_left && !demo_playing();
+        if (g_all_banned && !was) {
+            std::fprintf(stderr, "[lb_maps] every map is banned: the list shows them all\n");
+            std::fflush(stderr);
+            lb_overlay_notice("Every map is banned, so the bans are set aside and every map "
+                              "is listed. Unban at least one map (Balance > Ban Maps).");
+        }
+    }
     if (demo_playing()) return 0;
     bool on, tourney;
     {

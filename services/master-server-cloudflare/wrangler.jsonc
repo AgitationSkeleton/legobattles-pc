@@ -50,7 +50,10 @@
 	"vars": {
 		// An operator ceiling on an advertised max_players, not the game's cap
 		// (the Python server's --max-players; see services/master-server).
-		"MAX_PLAYERS": "8"
+		"MAX_PLAYERS": "8",
+		// docs/442: the fallback server clients turn to when this Worker cannot
+		// be reached (services/master-server-fallback, on the operator's PC).
+		"FALLBACK_MASTER": "lbfallback.viosarcade.xyz:8787"
 	},
 	// viosarcade.xyz is a zone on this Cloudflare account; the address and
 	// its certificate are made on the first deploy. Plain HTTP on port 80 is
