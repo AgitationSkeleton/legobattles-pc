@@ -51,7 +51,7 @@ jobs:
     steps:
       - name: Version
         id: v
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         run: |
           if ("${{ github.event_name }}" -eq "push") { $v = "${{ github.ref_name }}".TrimStart("v") }
           else { $v = "${{ inputs.version }}" }
@@ -59,7 +59,7 @@ jobs:
           [IO.File]::AppendAllText($env:GITHUB_OUTPUT, "version=$v`n")
       - uses: actions/checkout@v4
       - name: Build at this commit
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
           LB_GENERATED: ${{ vars.LB_GENERATED }}
           NDSRECOMP_PATH: ${{ vars.NDSRECOMP }}
@@ -80,7 +80,7 @@ jobs:
           & $bash -l (($env:LB_WS -replace '\\', '/') + '/tools/lb_release_build.sh')
           if ($LASTEXITCODE -ne 0) { throw "build failed" }
       - name: Conversion data and package
-        shell: powershell
+        shell: powershell -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         env:
           LB_ROM_EU: ${{ vars.LB_ROM_EU }}
           LB_ROM_US: ${{ vars.LB_ROM_US }}
