@@ -897,11 +897,11 @@ extern "C" void lb_demo_tick(void) {
             else if (e.a == 7 && e.b >= 0 && e.b <= 2) g_demo_hwmode = e.b;
             else if (e.a == 8) g_demo_emp = e.b ? 1 : 0;   // docs/406
             else if (e.a == 9 && e.b >= 0) g_demo_cheats = e.b & 0x3FFFF;
-            else if (e.a == 10) g_demo_aicheats = e.b ? 1 : 0;
+            else if (e.a == 10) g_demo_aicheats = (e.b >= 0 && e.b <= 2) ? e.b : 1;   // docs/433: 2 = AI only
             else if (e.a == 11) g_demo_aihero = e.b ? 1 : 0;
             else if (e.a == 12) g_demo_trel = e.b ? 1 : 0;   // docs/408
             else if (e.a == 13) g_demo_crea = e.b ? 1 : 0;   // docs/410
-            else if (e.a == 14) g_demo_atk = e.b ? 1 : 0;    // BR-0011
+            else if (e.a == 14) g_demo_atk = (e.b >= 0 && e.b <= 2) ? e.b : (e.b ? 1 : 0);   // BR-0011; 2 = docs/433
             else if (e.a == 15) g_demo_heal = e.b ? 1 : 0;
         } else if (e.kind == 'b') {   /* docs/404: a Balance tab value */
             lb_balance_custom_play_set(e.a, e.b, e.c);
@@ -949,7 +949,14 @@ extern "C" void lb_demo_apply_env(void) {
     done = true;
     if (const char* p = std::getenv("LB_DEMO_REC")) lb_demo_start_record(p);
     else if (const char* q = std::getenv("LB_DEMO_PLAY")) lb_demo_start_play(q);
-    else if (!std::getenv("LB_DEMO_NOREC")) {
+    // ONLY WHEN ASKED (the owner's rule): "Record every session" in
+    // Tools > Recordings, off by default. It is read from settings.json
+    // here because this runs at the first vblank, before the settings load.
+    // LB_DEMO_RECORD=1 forces it on (the harness).
+    else if (!std::getenv("LB_DEMO_NOREC") &&
+             (std::getenv("LB_DEMO_RECORD")
+                  ? std::atoi(std::getenv("LB_DEMO_RECORD")) != 0
+                  : lb_settings_file_bool("record_sessions", 0) != 0)) {
         // RECORD BY DEFAULT, because the alternative is re-deriving the
         // player's route with guessed coordinates and fixed sleeps.
         //

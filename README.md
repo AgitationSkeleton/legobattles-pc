@@ -41,8 +41,9 @@ Settings > Saves; the game restarts to load it.
 **Reporting a problem:** open an issue on the
 [issue tracker](../../issues/new/choose) -- there is a form for bugs and one for
 suggestions. Attach the newest file in `logs\` and say what you were doing.
-Every session also records its inputs as `lb-session-*.lbdemo`, which replays
-the session exactly; attaching it usually makes a bug reproducible.
+With **Record every session** on (settings menu > Tools > Recordings; off by
+default), each session also records its inputs as `lb-session-*.lbdemo`, which
+replays it exactly: attaching it usually makes a bug reproducible.
 
 ## How to
 
@@ -81,7 +82,8 @@ the session exactly; attaching it usually makes a bug reproducible.
 
 1. Open the Discord bug channel.
 2. Say what you were doing.
-3. Attach the newest file in `logs\` and the newest `lb-session-*.lbdemo`.
+3. Attach the newest file in `logs\`, and the newest `lb-session-*.lbdemo` if
+   Record every session is on.
 
 The port has been played widely, online and offline. Reports from other
 hardware and networks are still the most useful thing a player can send.

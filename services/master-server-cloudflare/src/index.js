@@ -40,9 +40,19 @@
 // host).
 //
 // All of it is kept by ONE Durable Object, so a list is always consistent.
+//
+// And the score tables (SG-0018, src/scores.js):
+//
+//   POST /score      {code, token, ruleset, cheats, banned, map_name, seconds,
+//                    version, players: [{name, won, hero, units_built, ...}]}
+//                    the host, once per match, before its /remove. A player who
+//                    opted out (no_scores on /announce or /join) or whose name
+//                    the game's swear filter would change is left out.
+//   GET /scores, GET /scores/rulesets   the tables (src/scores.js)
 
 import { DurableObject } from 'cloudflare:workers';
 import { discord, discordImage, plain, lasted, settingsText } from './discord.js';
+import { hasSwear } from './swear.js';
 
 const TTL_MS = 90 * 1000;
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
@@ -87,6 +97,19 @@ function lanPort(v) {
 // ---------------------------------------------------------------- Worker ----
 
 export { RelayRoom } from './relay.js';
+export { Scores } from './scores.js';
+
+// SG-0018: a checked match report needs at least this long a match, and two
+// players who are counted.
+const MIN_SCORE_SECONDS = 60;
+const MAX_SCORE_PLAYERS = 4;
+
+// A balance pack's name as the game shows it ("Vanil+ 1.2.1", "FactionWars
+// 2.0.1", "Custom"); anything else is Vanilla.
+function rulesetName(v) {
+  const s = String(v == null ? '' : v).trim().slice(0, 48);
+  return /^[\w +.\-'()]{1,48}$/u.test(s) ? s : 'Vanilla';
+}
 
 // docs/424: the relay's front door. A host proves it owns the lobby with its
 // token; a joiner only needs the lobby to be open. Then the WebSocket goes to
@@ -116,6 +139,11 @@ export default {
     if (m && request.method === 'GET') return relay(request, env, m[1].toUpperCase());
     // Only the Worker itself asks the Directory these.
     if (path.startsWith('/internal/')) return json(404, { ok: false, error: 'no such endpoint' });
+    // SG-0018: the tables are read straight from the Scores object.
+    if (request.method === 'GET' && /^\/scores(\/rulesets)?\/?$/.test(path)) {
+      if (!env.SCORES) return json(503, { ok: false, error: 'scores not configured' });
+      return env.SCORES.get(env.SCORES.idFromName('scores')).fetch(request);
+    }
     const stub = env.DIRECTORY.get(env.DIRECTORY.idFromName('directory'));
     return stub.fetch(request);
   },
@@ -282,8 +310,63 @@ export class Directory extends DurableObject {
       case '/punch': return this.punch(body, peer, now);
       case '/poll': return this.poll(body, now);
       case '/match_image': return this.matchImage(body, now);
+      case '/score': return this.score(body, now);
       default: return json(404, { ok: false, error: 'no such endpoint' });
     }
+  }
+
+  // SG-0018: the host's report of a match, checked here, kept by Scores. The
+  // server cannot see the match, so it checks what it can: the lobby's token,
+  // that a match started at least a minute ago, one report per match, and
+  // that every name was in the lobby.
+  async score(body, now) {
+    const l = this.lobbies.get(String(body.code || '').toUpperCase());
+    if (!l || l.token !== String(body.token || ''))
+      return json(404, { ok: false, error: 'unknown lobby' });
+    if (!this.env.SCORES) return json(503, { ok: false, error: 'scores not configured' });
+    if (l.state !== 'playing' || !l.started) return json(409, { ok: false, error: 'no match is on' });
+    if (l.score_posted) return json(409, { ok: false, error: 'already reported for this match' });
+    if (toInt(body.cheats, 0) !== 0) return json(422, { ok: false, error: 'a match with cheats does not count' });
+    const seconds = Math.round((now - l.started) / 1000);
+    // (SCORE_MIN_SECONDS: a test's `wrangler dev --var`, never set live.)
+    if (seconds < toInt(this.env.SCORE_MIN_SECONDS, MIN_SCORE_SECONDS)) return json(422, { ok: false, error: 'the match was too short' });
+    const roster = new Map(this.roster(l).map((p) => [p.name.toLowerCase(), p.name]));
+    const out = new Set((l.no_scores || []).map((n) => n.toLowerCase()));
+    const seen = new Set();
+    const players = [];
+    let skipped = 0;
+    for (const p of (Array.isArray(body.players) ? body.players : []).slice(0, MAX_SCORE_PLAYERS)) {
+      if (!p || typeof p !== 'object') continue;
+      // The game's lobby records keep 11 characters of a name, already through
+      // its swear filter; a name that matches no one in the lobby is left out.
+      const said = String(p.name || '').trim().toLowerCase();
+      let key = roster.has(said) ? said : '';
+      if (!key && said.length >= 10)
+        for (const k of roster.keys()) if (k.slice(0, 11) === said) { key = k; break; }
+      if (!key) { ++skipped; continue; }
+      if (seen.has(key)) return json(422, { ok: false, error: 'a player is named twice' });
+      seen.add(key);
+      const name = roster.get(key);
+      if (out.has(key) || hasSwear(name, this.env.SWEAR_TEST_WORDS)) { ++skipped; continue; }
+      const hero = toInt(p.hero, -1);
+      players.push({ ...p, name, won: !!p.won, hero: hero >= 0 && hero < 4096 ? hero : -1 });
+    }
+    if (seen.size < 2) return json(422, { ok: false, error: 'a match needs two players from the lobby' });
+    l.score_posted = true;
+    await this.save();
+    if (!players.length) return json(200, { ok: true, counted: 0, skipped });
+    const banned = (Array.isArray(body.banned) ? body.banned : []).slice(0, 256)
+      .map((b) => toInt(b, -1)).filter((b) => b >= 0 && b < 4096);
+    const report = {
+      ruleset: rulesetName(body.ruleset),
+      banned: [...new Set(banned)].sort((a, b) => a - b),
+      map: l.map_name || cleanName(body.map_name, ''),
+      seconds, version: l.version, players,
+    };
+    const r = await this.env.SCORES.get(this.env.SCORES.idFromName('scores'))
+      .fetch('https://scores/internal/score', { method: 'POST', body: JSON.stringify(report) });
+    if (r.status !== 200) return r;
+    return json(200, { ok: true, counted: players.length, skipped });
   }
 
   // docs/428: the host's picture of its match (rosters, the map's Free Play
@@ -338,6 +421,8 @@ export class Directory extends DurableObject {
       version: String(body.version || '').slice(0, 32),
       options: body.options && typeof body.options === 'object' ? body.options : {},
       created: now, seen: now, state: 'open', started: 0, members: [],
+      // SG-0018: the players who keep out of the score tables.
+      no_scores: body.no_scores ? [cleanName(body.host_name, 'Player')] : [],
     };
     this.lobbies.set(code, l);
     await this.save();
@@ -367,6 +452,7 @@ export class Directory extends DurableObject {
     if (state === 'open' && l.state !== 'open') {   // back to the lobby
       l.state = 'open';
       l.image_posted = false;   // docs/428: the next match gets its own picture
+      l.score_posted = false;   // SG-0018: and its own report
     }
     await this.save();
     return json(200, { ok: true, ttl: TTL_MS / 1000 });
@@ -404,6 +490,9 @@ export class Directory extends DurableObject {
     const l = this.lobbies.get(String(body.code || '').toUpperCase());
     if (!l) return json(404, { ok: false, error: 'unknown lobby' });
     const name = cleanName(body.name, 'Player');
+    // SG-0018: a joiner who keeps out of the score tables says so here.
+    l.no_scores = (l.no_scores || []).filter((n) => n !== name);
+    if (body.no_scores) l.no_scores.push(name);
     if (!l.members.some((m) => m.name === name)) {
       if (l.members.length >= l.max_players - 1) return json(409, { ok: false, error: 'lobby full' });
       l.members.push({ name, joined: now });

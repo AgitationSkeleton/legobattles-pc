@@ -180,11 +180,29 @@ std::string http_request(const std::string& host, int port,
 
     std::string reply;
     char buffer[2048];
+    size_t want = 0;   // the whole reply's size, once Content-Length is known
     for (;;) {
         const int got = recv(sock, buffer, (int)sizeof(buffer), 0);
         if (got <= 0) break;
         reply.append(buffer, (size_t)got);
         if (reply.size() > (1u << 20)) break;   // a lobby list is never 1 MB
+        // SG-0018: STOP AT CONTENT-LENGTH. A server may keep the connection
+        // open after the reply in spite of "Connection: close" (wrangler dev
+        // does, for ~5 s), and waiting for it to close made every read slow.
+        if (!want) {
+            const size_t split = reply.find("\r\n\r\n");
+            if (split != std::string::npos) {
+                std::string head = reply.substr(0, split);
+                for (char& c : head) c = (char)std::tolower((unsigned char)c);
+                const size_t cl = head.find("\r\ncontent-length:");
+                if (cl != std::string::npos &&
+                    head.find("transfer-encoding: chunked") == std::string::npos)
+                    want = split + 4 + (size_t)std::strtoul(head.c_str() + cl + 17, nullptr, 10);
+                else
+                    want = (size_t)-1;   // read to the close, as before
+            }
+        }
+        if (want && want != (size_t)-1 && reply.size() >= want) break;
     }
     closesocket(sock);
 
@@ -894,6 +912,7 @@ extern "C" void lb_net_announce(const char* server, int port, const char* name,
     // what the master server's Discord log shows for the lobby (docs/394).
     body += "\"version\":" + json_str(lb_port_version()) + ",";
     body += "\"options\":" + std::string(lb_net_lobby_options_json());
+    if (lb_setting_scores_opt_out()) body += ",\"no_scores\":true";   // SG-0018
     body += "}";
 
     g_host_players = players > 0 ? players : 1;
@@ -1121,6 +1140,16 @@ namespace {
 // the automatic path does not put the lobby straight back.
 std::atomic<bool> g_user_stopped{false};
 
+// SG-0018: POST /score, on the thread that then sends the /remove. A server
+// without score tables (the Python one) answers 404, which is fine.
+void post_score(const std::string& server, int port, const std::string& body) {
+    std::string error;
+    const std::string reply = http_request(server, port, "POST", "/score", body, &error);
+    std::fprintf(stderr, "[lb_scores] posted the match to %s:%d: %s\n", server.c_str(), port,
+                 error.empty() ? reply.substr(0, 120).c_str() : error.c_str());
+    std::fflush(stderr);
+}
+
 // `reason` (docs/394): "disband", the lobby closed without a match, or "end",
 // a match ended. The Python server ignores it.
 void stop_hosting_impl(const char* reason = "disband") {
@@ -1130,7 +1159,12 @@ void stop_hosting_impl(const char* reason = "disband") {
     // SG-0019: a match that ended carries what the game decided: the names of
     // the winners and of the losers (lb_matchpic.cpp reads the teams' states).
     std::string result;
+    // SG-0018: and its report for the score tables, posted before the /remove
+    // (which ends the lobby the report is checked against).
+    std::string score;
     if (std::strcmp(reason, "end") == 0) {
+        static char sj[4096];
+        if (lb_matchpic_score_json(sj, (int)sizeof sj)) score = sj;
         char w[512], l[512];
         if (lb_matchpic_result(w, (int)sizeof w, l, (int)sizeof l)) {
             auto list = [](const char* text) {
@@ -1164,8 +1198,11 @@ void stop_hosting_impl(const char* reason = "disband") {
                                    g_host2_token + "\",\"reason\":" + json_str(reason) + result + "}";
             const std::string s2 = g_host2_server;
             const int p2 = g_host2_port;
-            std::thread([s2, p2, b2]() {
+            const std::string sc2 = score.empty() ? std::string() :
+                "{\"code\":\"" + g_host2_code + "\",\"token\":\"" + g_host2_token + "\"," + score + "}";
+            std::thread([s2, p2, b2, sc2]() {
                 std::string error;
+                if (!sc2.empty()) post_score(s2, p2, sc2);
                 http_request(s2, p2, "POST", "/remove", b2, &error);
             }).detach();
             g_host2_code.clear();
@@ -1176,8 +1213,11 @@ void stop_hosting_impl(const char* reason = "disband") {
     const std::string body =
         "{\"code\":\"" + code + "\",\"token\":\"" + token + "\",\"reason\":" +
         json_str(reason) + result + "}";
-    std::thread([server, port, body]() {
+    const std::string sc = score.empty() ? std::string() :
+        "{\"code\":\"" + code + "\",\"token\":\"" + token + "\"," + score + "}";
+    std::thread([server, port, body, sc]() {
         std::string error;
+        if (!sc.empty()) post_score(server, port, sc);
         http_request(server, port, "POST", "/remove", body, &error);
         upnp_unmap();   // docs/405: the lobby is gone; so is the open port
     }).detach();
@@ -1502,9 +1542,12 @@ std::string g_auto_joined_code;    // the lobby a joiner reported itself in
 // in a log, and a frame must never wait on it.
 void post_presence(const char* server, int port, const char* path,
                    const std::string& code, const char* name) {
+    // SG-0018: a joiner who keeps out of the score tables says so with /join.
+    const bool out = std::strcmp(path, "/join") == 0 && lb_setting_scores_opt_out();
     const std::string body = "{\"code\":" + json_str(code.c_str()) +
                              ",\"name\":" +
-                             json_str(name && *name ? name : "Player") + "}";
+                             json_str(name && *name ? name : "Player") +
+                             (out ? ",\"no_scores\":true" : "") + "}";
     std::string s = server ? server : "";
     std::string p = path;
     std::thread([s, port, p, body]() {
@@ -2040,4 +2083,20 @@ extern "C" void lb_net_selftest_if_asked(void) {
         std::fprintf(stderr, "[lb_net] self-test: join first lobby -> %s\n",
                      ok ? lb_net_status() : "FAILED");
     }
+}
+
+// SG-0018: a GET to a master server (Network > Scores reads the tables): the
+// reply's length (cut to cap - 1, NUL-ended), or -1 with the error in `out`.
+// Blocking: call it from a worker thread.
+extern "C" int lb_net_http_get(const char* host, int port, const char* path, char* out,
+                               int cap) {
+    std::string error;
+    const std::string r = http_request(host ? host : "", port, "GET", path ? path : "/", "",
+                                       &error);
+    if (cap <= 0) return -1;
+    const std::string& s = error.empty() ? r : error;
+    const int n = (int)std::min<size_t>(s.size(), (size_t)cap - 1);
+    std::memcpy(out, s.data(), (size_t)n);
+    out[n] = '\0';
+    return error.empty() ? n : -1;
 }

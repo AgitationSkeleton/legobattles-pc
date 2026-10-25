@@ -46,6 +46,9 @@ EXCLUDE = [
     r"\.lbdelta$",
     r"(^|/)SESSION[-_]LOG",
     r"(?i)(^|/)(00-)?mandate",
+    # The custom-maps working scripts (local paths; their output is its own
+    # repository, legobattles-custom-maps).
+    r"^tools/custommaps/",
 ]
 # (BIOS and firmware dumps are .rom/.bin files; a document about BIOS banks
 # is not one.)

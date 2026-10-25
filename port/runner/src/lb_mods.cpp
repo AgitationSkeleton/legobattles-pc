@@ -39,12 +39,15 @@
 #include <SDL.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <functional>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -398,6 +401,87 @@ std::string exe_dir() {
     return d;
 }
 
+// docs/413, docs/431: a loose map folder read as the loader reads it. `stock_read`
+// supplies a stock ROM file (the slot's detail tiles when the folder has none).
+// False when the folder is not a map (exactly one .map and its four minimap
+// files, a map the loader accepts).
+bool loose_folder_map(const std::filesystem::path& f,
+                      const std::function<bool(const std::string&, std::vector<uint8_t>*)>& stock_read,
+                      ModMap* out) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    ModMap& m = *out;
+    auto lower = [](std::string s) {
+        for (char& c : s) c = (char)std::tolower((unsigned char)c);
+        return s;
+    };
+    auto slurp = [](const fs::path& p, std::vector<uint8_t>* o) {
+        std::error_code e2;
+        const auto sz = fs::file_size(p, e2);
+        if (e2 || sz == 0 || sz > (8u << 20)) return false;
+        FILE* fp = std::fopen(p.string().c_str(), "rb");
+        if (!fp) return false;
+        o->resize((size_t)sz);
+        const bool ok = std::fread(o->data(), 1, o->size(), fp) == o->size();
+        std::fclose(fp);
+        return ok;
+    };
+            std::vector<fs::path> maps;
+            std::vector<fs::path> files;
+            for (const auto& e : fs::directory_iterator(f, ec)) {
+                if (!e.is_regular_file(ec)) continue;
+                files.push_back(e.path());
+                if (lower(e.path().extension().string()) == ".map") maps.push_back(e.path());
+            }
+            if (maps.size() != 1) return false;
+            const std::string stem = maps[0].stem().string();
+            auto find = [&](const std::string& name) -> fs::path {
+                const std::string want = lower(name);
+                for (const fs::path& p : files)
+                    if (lower(p.filename().string()) == want) return p;
+                return fs::path();
+            };
+            bool ok = slurp(maps[0], &m.map);
+            for (int k = 0; ok && k < 4; ++k) {
+                const fs::path p = find(stem + kMiniExt[k]);
+                ok = !p.empty() && slurp(p, &m.mini[k]);
+            }
+            if (!ok) return false;
+            if (!map_facts(m.map, &m.world, &m.players) || m.players < 2) {
+                std::fprintf(stderr, "[lb_mods] %s: %s.map is not a map the game "
+                             "reads, skipped\n", f.filename().string().c_str(),
+                             stem.c_str());
+                return false;
+            }
+            const fs::path dt = find("DetailTiles_" + stem + ".tbp");
+            if (dt.empty() || !slurp(dt, &m.detail)) {
+                int s = 0;
+                if (lower(stem).rfind("mp", 0) == 0) s = std::atoi(stem.c_str() + 2);
+                // docs/419: else a folder named for its slot, "18-Better
+                // Outbreak" (the Better Free Play maps pack's own convention).
+                const std::string fn = f.filename().string();
+                if ((s < 1 || s > 30) && !fn.empty() && std::isdigit((unsigned char)fn[0])) {
+                    size_t d = 0;
+                    while (d < fn.size() && std::isdigit((unsigned char)fn[d])) ++d;
+                    if (d < fn.size() && (fn[d] == '-' || fn[d] == ' '))
+                        s = std::atoi(fn.c_str());
+                }
+                char stock[40];
+                std::snprintf(stock, sizeof stock, "BP/DetailTiles_mp%02d.tbp",
+                              s >= 1 && s <= 30 ? s : 1);
+                stock_read(stock, &m.detail);
+                std::fprintf(stderr, "[lb_mods] %s: no detail tiles of its own; "
+                             "slot mp%02d's\n", f.filename().string().c_str(),
+                             s >= 1 && s <= 30 ? s : 1);
+            }
+            m.name = f.filename().string();
+            m.hash = fnv64(m.map);
+            m.hash = fnv64(m.detail, m.hash);
+            for (auto& v : m.mini) m.hash = fnv64(v, m.hash);
+    return true;
+}
+
+
 void scan(const std::vector<uint8_t>& rom, const Nitro& own) {
     namespace fs = std::filesystem;
     // docs/413: LB_MODS_DIR=<folder> reads another mods folder, so two
@@ -509,61 +593,13 @@ void scan(const std::vector<uint8_t>& rom, const Nitro& own) {
         std::sort(folders.begin(), folders.end());
         int loose_n = 0;
         for (const fs::path& f : folders) {
-            std::vector<fs::path> maps;
-            std::vector<fs::path> files;
-            for (const auto& e : fs::directory_iterator(f, ec)) {
-                if (!e.is_regular_file(ec)) continue;
-                files.push_back(e.path());
-                if (lower(e.path().extension().string()) == ".map") maps.push_back(e.path());
-            }
-            if (maps.size() != 1) continue;
-            const std::string stem = maps[0].stem().string();
-            auto find = [&](const std::string& name) -> fs::path {
-                const std::string want = lower(name);
-                for (const fs::path& p : files)
-                    if (lower(p.filename().string()) == want) return p;
-                return fs::path();
-            };
             ModMap m;
-            bool ok = slurp(maps[0], &m.map);
-            for (int k = 0; ok && k < 4; ++k) {
-                const fs::path p = find(stem + kMiniExt[k]);
-                ok = !p.empty() && slurp(p, &m.mini[k]);
-            }
-            if (!ok) continue;
-            if (!map_facts(m.map, &m.world, &m.players) || m.players < 2) {
-                std::fprintf(stderr, "[lb_mods] %s: %s.map is not a map the game "
-                             "reads, skipped\n", f.filename().string().c_str(),
-                             stem.c_str());
+            if (!loose_folder_map(f, [&](const std::string& p, std::vector<uint8_t>* o) {
+                    return mem_read(rom, own, p, o);
+                }, &m))
                 continue;
-            }
-            const fs::path dt = find("DetailTiles_" + stem + ".tbp");
-            if (dt.empty() || !slurp(dt, &m.detail)) {
-                int s = 0;
-                if (lower(stem).rfind("mp", 0) == 0) s = std::atoi(stem.c_str() + 2);
-                // docs/419: else a folder named for its slot, "18-Better
-                // Outbreak" (the Better Free Play maps pack's own convention).
-                const std::string fn = f.filename().string();
-                if ((s < 1 || s > 30) && !fn.empty() && std::isdigit((unsigned char)fn[0])) {
-                    size_t d = 0;
-                    while (d < fn.size() && std::isdigit((unsigned char)fn[d])) ++d;
-                    if (d < fn.size() && (fn[d] == '-' || fn[d] == ' '))
-                        s = std::atoi(fn.c_str());
-                }
-                char stock[40];
-                std::snprintf(stock, sizeof stock, "BP/DetailTiles_mp%02d.tbp",
-                              s >= 1 && s <= 30 ? s : 1);
-                mem_read(rom, own, stock, &m.detail);
-                std::fprintf(stderr, "[lb_mods] %s: no detail tiles of its own; "
-                             "slot mp%02d's\n", f.filename().string().c_str(),
-                             s >= 1 && s <= 30 ? s : 1);
-            }
             m.slot = 1000 + loose_n;
             m.source = "mods/maps/" + f.lexically_relative(loose).generic_string();
-            m.name = f.filename().string();
-            m.hash = fnv64(m.map);
-            m.hash = fnv64(m.detail, m.hash);
-            for (auto& v : m.mini) m.hash = fnv64(v, m.hash);
             if (std::any_of(g_maps.begin(), g_maps.end(),
                             [&](const ModMap& o) { return o.hash == m.hash; }))
                 continue;
@@ -840,8 +876,141 @@ extern "C" const char* lb_mods_dir(void) {
 extern "C" unsigned long long lb_mods_hash(int k) {
     return (k >= 0 && k < (int)g_maps.size()) ? g_maps[(size_t)k].hash : 0ull;
 }
+// docs/432: a Reset may rebuild the maps (lb_mods_rebuild_if_asked) while the
+// bridge's thread reads them for a joiner (lb_mods_bundle).
+static std::recursive_mutex g_maps_mu;
 extern "C" int lb_mods_find_hash(unsigned long long hash) {
+    std::lock_guard<std::recursive_mutex> lk(g_maps_mu);
     for (size_t k = 0; k < g_maps.size(); ++k)
         if (g_maps[k].hash == hash) return (int)k;
     return -1;
+}
+// docs/432: the bytes behind a map's hash, in the hash's order, for a host
+// sending the map to a joiner (lb_maptx.cpp). Any thread.
+bool lb_mods_bundle(unsigned long long hash, std::vector<uint8_t>* map,
+                    std::vector<uint8_t>* detail, std::vector<uint8_t> mini[4]) {
+    std::lock_guard<std::recursive_mutex> lk(g_maps_mu);
+    const int k = lb_mods_find_hash(hash);
+    if (k < 0) return false;
+    const ModMap& m = g_maps[(size_t)k];
+    *map = m.map;
+    *detail = m.detail;
+    for (int i = 0; i < 4; ++i) mini[i] = m.mini[i];
+    return true;
+}
+
+// docs/431: the map browser's reading of a .map file (a plain or COMP-wrapped
+// buffer). out[0] width, [1] height, [2] world (0 King, 1 Pirate, 2 Mars),
+// [3] players, [4] mines (the MINE chunk's points, all four groups), [5..8]
+// the ground-type layer's cell counts for types 0, 2, 3 and 5, [9] cells of any
+// other type. Returns 0 when the file is not a map the loader would accept.
+extern "C" int lb_mods_map_stats(const unsigned char* data, size_t n, int out[10]) {
+    std::vector<uint8_t> m(data, data + n);
+    int world = 0, players = 0;
+    if (!map_facts(m, &world, &players) || !comp_unwrap(&m)) return 0;
+    const size_t cells = (size_t)m[7] * m[8];
+    out[0] = m[7];
+    out[1] = m[8];
+    out[2] = world;
+    out[3] = players;
+    for (int k = 4; k < 10; ++k) out[k] = 0;
+    const uint8_t* a = m.data() + 3 + 0x28;          // the ground-type layer
+    for (size_t i = 0; i < cells; ++i) {
+        const uint8_t v = a[i];
+        ++out[v == 0 ? 5 : v == 2 ? 6 : v == 3 ? 7 : v == 5 ? 8 : 9];
+    }
+    // MINE: 'L' count (x,y)*count, four groups, then 0x21 and "PAM".
+    size_t q = m.size();
+    while (q >= 4 && std::memcmp(m.data() + q - 4, "MINE", 4) != 0) --q;
+    if (q >= 4) {
+        size_t p = q;
+        while (p + 2 <= m.size() && m[p] == 0x4C) {
+            const unsigned c = m[p + 1];
+            if (p + 2 + 2u * c > m.size()) break;
+            out[4] += (int)c;
+            p += 2 + 2u * c;
+        }
+    }
+    return 1;
+}
+
+// docs/431: the game's COMP wrapper removed (a buffer without it is kept).
+bool lb_mods_unwrap(std::vector<uint8_t>* b) { return comp_unwrap(b); }
+
+// docs/431: the content hash (docs/413's identity of a mod map: map, detail
+// tiles, the four minimap files) of the map folder `path`, computed as the
+// boot scan does. Returns 1 and the hash, or 0 when the folder is not a map the
+// loader accepts. A folder without detail tiles of its own takes the stock
+// slot's, read from the attached ROM, so call it after the game has started.
+// Reads files only; any thread.
+static bool folder_hash(const char* path, unsigned long long* hash) {
+    if (!path || !*path) return false;
+    ModMap m;
+    if (!loose_folder_map(std::filesystem::u8path(path),
+                          [](const std::string& p, std::vector<uint8_t>* o) {
+                              const int n = lb_rom_read(p.c_str(), nullptr, 0);
+                              if (n <= 0) return false;
+                              o->resize((size_t)n);
+                              return lb_rom_read(p.c_str(), o->data(), n) == n;
+                          },
+                          &m))
+        return false;
+    *hash = m.hash;
+    return true;
+}
+extern "C" int lb_mods_folder_hash(const char* path, unsigned long long* hash) {
+    unsigned long long h = 0;
+    if (!folder_hash(path, &h)) return 0;
+    if (hash) *hash = h;
+    return 1;
+}
+
+// docs/431: a map folder has just appeared in mods/maps. Returns 1 when its
+// map is already in the game's Free Play / host lists (registered when the game
+// started), 0 when it is not, or is not a map: the cartridge image, its file
+// system and the mission registry are built at start-up (main.cpp, docs/391).
+// docs/432: lb_mods_request_rebuild then puts it in with a Reset.
+// Reads only; any thread.
+extern "C" int lb_mods_register_folder(const char* path) {
+    unsigned long long h = 0;
+    return folder_hash(path, &h) && lb_mods_find_hash(h) >= 0 ? 1 : 0;
+}
+
+// ---- docs/432: a new map without a restart -----------------------------------------
+// The emulator boots from main.cpp's `rom`, and its boot() -- which the menu's
+// Reset runs -- loads the cartridge from it again. So the image as the ROM gave
+// it is kept here, and a Reset that was asked to can rebuild `rom` with the
+// mods folder as it is now: a map that arrived since is then in the game.
+std::vector<uint8_t>* g_live_rom = nullptr;
+std::vector<uint8_t> g_pristine_rom;
+std::atomic<bool> g_rebuild_asked{false};
+
+extern "C" void lb_rom_attach(const unsigned char* data, size_t n);   /* lb_teams.cpp */
+extern "C" void lb_request_game_reset(void);                         /* lb_overlay.cpp */
+
+void lb_mods_keep_rom(std::vector<uint8_t>* rom) {
+    g_live_rom = rom;
+    g_pristine_rom = *rom;
+}
+
+// Rebuild the cartridge with the mods folder and Reset the game, at the next
+// frame. Returns 0 when it cannot (no image kept).
+extern "C" int lb_mods_request_rebuild(void) {
+    if (!g_live_rom || g_pristine_rom.empty()) return 0;
+    g_rebuild_asked = true;
+    lb_request_game_reset();
+    return 1;
+}
+
+// The frontend's Reset point (apply_hooks docs/396/432), just before boot().
+extern "C" void lb_mods_rebuild_if_asked(void) {
+    if (!g_rebuild_asked.exchange(false) || !g_live_rom) return;
+    std::lock_guard<std::recursive_mutex> lk(g_maps_mu);
+    const size_t before = g_maps.size();
+    *g_live_rom = g_pristine_rom;
+    lb_mods_build(g_live_rom);
+    lb_rom_attach(g_live_rom->data(), g_live_rom->size());
+    std::fprintf(stderr, "[lb_mods] the cartridge rebuilt for the Reset: %zu mod map(s), "
+                 "was %zu\n", g_maps.size(), before);
+    std::fflush(stderr);
 }

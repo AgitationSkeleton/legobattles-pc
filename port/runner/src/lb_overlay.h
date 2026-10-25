@@ -559,8 +559,31 @@ void lb_matchpic_on_playing(void);     /* host only, once per match */
 void lb_discord_tick(void);
 int  lb_setting_discord_status(void);
 int  lb_setting_discord_hero(void);
+/* SG-0018 (lb_scores.cpp): a match's post-match statistics, observe only. */
+typedef struct LbMatchStats {
+    int valid; int won;
+    int units_built, units_lost, units_killed;
+    int buildings_built, buildings_lost, buildings_killed;
+    int bricks;
+} LbMatchStats;
+int  lb_scores_player_stats(int player, LbMatchStats* out);   /* 1 if valid; -1 = unknown field */
+void lb_scores_tick(void);          /* once per vblank (lb_patches.cpp) */
+void lb_scores_match_begin(void);   /* reset; also automatic when a level comes up */
+int  lb_scores_match_seconds(void); /* game ticks / 60 since the begin, -1 if none */
 /* SG-0019: names (one per line) of the teams the game decided won / lost. */
 int lb_matchpic_result(char* winners, int wcap, char* losers, int lcap);
+/* docs/432: ask the host for a mod map this machine lacks (lb_maptx.cpp). */
+void lb_maptx_want(unsigned long long hash, const char* name);
+void lb_maptx_forget(void);
+/* SG-0018: the /score report's fields (before lb_matchpic_result). */
+int lb_matchpic_score_json(char* out, int cap);
+/* SG-0018 (lb_net.cpp): a blocking GET to a master server; the reply's length, or
+   -1 with the error in `out`. */
+int lb_net_http_get(const char* host, int port, const char* path, char* out, int cap);
+/* One on/off setting straight from settings.json, before the settings load. */
+int lb_settings_file_bool(const char* key, int dflt);
+/* SG-0018: Network > Scores. 1 when this player keeps out of the tables. */
+int lb_setting_scores_opt_out(void);
 void lb_matchpic_tick(void);           /* LB_MATCHPIC_TEST */
 int  lb_setting_match_picture(void);
 const char* lb_level_map_stem(void);   /* "mpNN" / "z/NN" / campaign stem */
@@ -581,6 +604,17 @@ void        lb_chat_draw(SDL_Renderer* r);
 // (applied only while the setting is on; valid until the next call).
 int         lb_swear_filter(const char* in, char* out, int cap);
 const char* lb_swear_shown(const char* in);
+/* docs/431 (lb_mods.cpp): the map folder's content hash (1 = ok); and whether it is
+   already in the game's map lists (1) or needs a restart (0). Read-only, any thread. */
+int lb_mods_folder_hash(const char* path, unsigned long long* hash);
+/* docs/432 (lb_mods.cpp): Reset the game with the cartridge rebuilt from the mods
+   folder as it is now (0 when no image was kept). */
+int lb_mods_request_rebuild(void);
+int lb_mods_register_folder(const char* path);
+/* docs/431 (lb_mapfetch.cpp): extract the archive map with this content hash into
+   mods/maps/_archive (1 + its folder path), BLOCKING: call from a worker thread. */
+int lb_mapfetch_install_by_hash(unsigned long long hash, char* path_out, int cap,
+                                char* err_out, int errcap);
 void        lb_swear_selftest_if_asked(void);
 int         lb_setting_swear_filter(void);
 int         lb_setting_chat_toasts(void);
@@ -729,6 +763,7 @@ int          lb_demo_play_ai_hero_rebuild(void);
 int          lb_ai_hero_rebuild_live(void);
 // SG-0017: the AI casts single-target spells (Balance > Spells). Offline only.
 int          lb_setting_ai_tap_spells(void);
+int          lb_setting_ai_spectate(void);   /* SG-0002 */
 // docs/408: a hotwired transport leaves its old owner's AI (kind 12).
 int          lb_setting_transport_release(void);
 int          lb_demo_play_transport_release(void);

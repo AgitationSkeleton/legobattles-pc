@@ -7599,12 +7599,16 @@ def apply(runner_dir, imgui_dir):
           "src/lb_relay.cpp",
           # The notification sound (docs/427).
           "src/lb_sfx.cpp",
+          # Post-match statistics (SG-0018).
+          "src/lb_scores.cpp",
           # The picture of a match for the Discord log (docs/428).
           "src/lb_matchpic.cpp",
           # Map bans, Random maps, ban presets (docs/429).
           "src/lb_mapbans.cpp",
           # Discord Rich Presence (docs/430), for <windows.h>.
           "src/lb_discord.cpp",
+          # A host sends a joiner its mod map (docs/432).
+          "src/lb_maptx.cpp",
           # The first-run setup (docs/394).
           "src/lb_setup.cpp",
           "%s/imgui.cpp" % imgui,
@@ -9987,7 +9991,9 @@ def apply(runner_dir, imgui_dir):
             'extern "C" void lb_rom_attach(const unsigned char*, size_t);'
             '  /* docs/384 */\n'
             'extern "C" int lb_mods_build(std::vector<uint8_t>* rom);'
-            '  /* docs/391 */\n')
+            '  /* docs/391 */\n'
+            'void lb_mods_keep_rom(std::vector<uint8_t>* rom);'
+            '  /* docs/432 */\n')
     replace(main_391,
             "                         rom_sha1.c_str());\n"
             "            return 1;\n"
@@ -9998,7 +10004,10 @@ def apply(runner_dir, imgui_dir):
             "            return 1;\n"
             "        }\n"
             "    }\n"
-            "    /* legobattles-decomp docs/391: the mods folder's maps. */\n"
+            "    /* legobattles-decomp docs/391: the mods folder's maps. docs/432:\n"
+            "       the image as the ROM gave it is kept, so a Reset can rebuild\n"
+            "       it with a map that arrived since (boot() loads `rom`). */\n"
+            "    if (!rom.empty()) lb_mods_keep_rom(&rom);\n"
             "    if (!rom.empty() && lb_mods_build(&rom) > 0)\n"
             "        lb_rom_attach(rom.data(), rom.size());\n"
             "    std::string save_path;\n")
@@ -10108,10 +10117,14 @@ def apply(runner_dir, imgui_dir):
     edit(front_396, "#include \"debug_server.h\"",
          ["extern \"C\" int lb_take_game_reset(void);      /* legobattles-decomp docs/396 */",
           "extern \"C\" int lb_debug_reset(void);",
-          "extern \"C\" void lb_port_on_guest_reset(void);"])
+          "extern \"C\" void lb_port_on_guest_reset(void);",
+          "extern \"C\" void lb_mods_rebuild_if_asked(void);   /* docs/432 */"])
     edit(front_396, "        debug_pump();",
          ["/* legobattles-decomp docs/396: the menu's Reset, at the same point. */",
-          "if (lb_take_game_reset() && lb_debug_reset()) lb_port_on_guest_reset();"])
+          "if (lb_take_game_reset()) {",
+          "    lb_mods_rebuild_if_asked();   /* docs/432: a map that arrived */",
+          "    if (lb_debug_reset()) lb_port_on_guest_reset();",
+          "}"])
     done.append("debug_server.cpp/frontend.cpp: the menu's Reset reboots the game (docs/396)")
 
     # docs/396: THE MULTIPLAYER STALL. Two instances in a match ran at 31 fps,
@@ -10426,6 +10439,453 @@ def apply(runner_dir, imgui_dir):
             "        if (!enabled_ || socket_ == INVALID_SOCKET) return;\n"
             "        if (lb_relay_direct_off()) return;   /* docs/424 */\n")
     done.append("wifi_net.cpp: the master server's relay carries the datagrams (docs/424)")
+
+    # 0zzzzzzzzzzzzz-432. A HOST SENDS A JOINER ITS MOD MAP. Its own datagram
+    # type, like chat: lb_maptx queues requests (a joiner) and chunks (the
+    # host) and the drain sends them; a received one goes to lb_maptx, never
+    # to the guest. The relay carries it like every other (docs/424).
+    wifi_432 = os.path.join(runner_dir, "src", "wifi_net.cpp")
+    replace(wifi_432,
+            "/* legobattles-decomp (docs/423): the host-level WH. */\n",
+            "/* legobattles-decomp (docs/432): a host's mod map for a joiner. */\n"
+            "extern \"C\" int lb_maptx_outgoing(unsigned char* buf, int cap);\n"
+            "extern \"C\" void lb_maptx_incoming(const unsigned char* buf, int len,\n"
+            "                                  unsigned int sender);\n"
+            "/* legobattles-decomp (docs/423): the host-level WH. */\n")
+    replace(wifi_432,
+            "    static constexpr uint32_t kLbVwh = 0x4C425657u;    /* LBVW */\n",
+            "    static constexpr uint32_t kLbVwh = 0x4C425657u;    /* LBVW */\n"
+            "    /* docs/432: a mod map's request and chunks. */\n"
+            "    static constexpr uint32_t kLbMapx = 0x4C424D58u;   /* LBMX */\n"
+            "    void LbSendMapx() {\n"
+            "        uint8_t buf[1100];\n"
+            "        for (int k = 0; k < 24; ++k) {\n"
+            "            const int n = lb_maptx_outgoing(buf, (int)sizeof buf);\n"
+            "            if (n <= 0) break;\n"
+            "            SendGeneric(kLbMapx, buf, n, 0u);\n"
+            "        }\n"
+            "    }\n")
+    replace(wifi_432,
+            "        LbSendVwh();      /* docs/423 */\n",
+            "        LbSendVwh();      /* docs/423 */\n"
+            "        LbSendMapx();     /* docs/432 */\n")
+    replace(wifi_432,
+            "            if (ReadLe32(datagram + 8u) == kLbVwh) {\n",
+            "            /* docs/432: a mod map in transit, never the guest's. */\n"
+            "            if (ReadLe32(datagram + 8u) == kLbMapx) {\n"
+            "                const uint32_t mlen = ReadLe32(datagram + 12u);\n"
+            "                if (kHeaderBytes + mlen == static_cast<uint32_t>(got))\n"
+            "                    lb_maptx_incoming(datagram + kHeaderBytes,\n"
+            "                                      static_cast<int>(mlen),\n"
+            "                                      ReadLe32(datagram + 4u));\n"
+            "                continue;\n"
+            "            }\n"
+            "            if (ReadLe32(datagram + 8u) == kLbVwh) {\n")
+    done.append("wifi_net.cpp: a host sends a joiner its mod map (docs/432)")
+
+    # 0zzzzzzzzzzzzz-433. 3D RESOLUTION: the 3D layer drawn N times as wide and
+    # tall (BR-0003). The native renderer is left exactly as it is, so the
+    # picture the simulation, the HUD moves and the field locator read does not
+    # change. A second SoftRenderer, owned by the native one, draws the same
+    # polygon list into buffers N times the size from vertex positions the
+    # geometry stage computes at N times the resolution; the compositor then
+    # inserts those samples into the 2D stack at their own priority (it already
+    # keeps the stack without the 3D layer for the GPU presenter) and the
+    # frontend shows that picture instead of the surface. The code is in
+    # src/lb_hires_soft.inc, lb_hires_comp.inc and lb_hires_front.inc; here are
+    # only the hooks. Default Native: lb_HiN stays 1, nothing below runs.
+    soft_h_433 = os.path.join(runner_dir, "vendor", "melonds", "GPU3D_Soft.h")
+    soft_c_433 = os.path.join(runner_dir, "vendor", "melonds", "GPU3D_Soft.cpp")
+    g3h_433 = os.path.join(runner_dir, "vendor", "melonds", "GPU3D.h")
+    g3c_433 = os.path.join(runner_dir, "vendor", "melonds", "GPU3D.cpp")
+    # -- the renderer's buffers become per-instance, sized when allocated.
+    # Pointers keep every use of them (ColorStore[s][i], lb_HudColor[s], ...)
+    # compiling unchanged; the native instance allocates what it always held.
+    replace(soft_h_433,
+            "#include <thread>\n#include <atomic>\n",
+            "#include <thread>\n#include <atomic>\n#include <vector>\n"
+            "#include <memory>\n#include <cstdlib>\n")
+    replace(soft_h_433,
+            "    void SetRenderHeight(u32 height) override;\n",
+            "    void SetRenderHeight(u32 height) override;\n"
+            "    /* docs/434: the hi-res partner. */\n"
+            "    explicit SoftRenderer(bool lb_hi) noexcept;\n"
+            "    void lb_HiSetScale(int n, GPU& gpu);\n"
+            "    int lb_HiScale() const noexcept { return lb_Hi ? lb_HiN : 1; }\n"
+            "    void lb_HiWaitDone(GPU& gpu);\n"
+            "    const u32* lb_HiRows(const u32* line, int* stride, int* width,\n"
+            "                         int* n, const u8** mask) const noexcept;\n")
+    replace(soft_h_433,
+            "    static constexpr int MaxRenderWidth = 1728;"
+            "   /* legobattles-decomp: was 448, then 512 */\n"
+            "    static constexpr int ScanlineWidth = MaxRenderWidth + 2;\n"
+            "    static constexpr int MaxRenderHeight = 768;"
+            "  /* legobattles-decomp: was 256 */\n"
+            "    static constexpr int NumScanlines = MaxRenderHeight + 2;\n"
+            "    static constexpr int BufferSize = ScanlineWidth * NumScanlines;\n"
+            "    static constexpr int FirstPixelOffset = ScanlineWidth + 1;\n",
+            "    /* docs/434: per instance now (lb_Alloc); the native one is\n"
+            "       1728 x 768 as it was. */\n"
+            "    int MaxRenderWidth = 1728;\n"
+            "    int ScanlineWidth = 1730;\n"
+            "    int MaxRenderHeight = 768;\n"
+            "    int NumScanlines = 770;\n"
+            "    int BufferSize = 1730 * 770;\n"
+            "    int FirstPixelOffset = 1731;\n")
+    replace(soft_h_433,
+            "    u32 ColorStore[2][BufferSize * 2];\n"
+            "    u32* ColorBuffer = ColorStore[0];\n"
+            "    u32* DisplayedBuffer = ColorStore[0];\n"
+            "    std::atomic<u32*> ShownColor {ColorStore[0]};\n",
+            "    u32* ColorStore[2] = {nullptr, nullptr};   /* 2 x BufferSize each */\n"
+            "    u32* ColorBuffer = nullptr;\n"
+            "    u32* DisplayedBuffer = nullptr;\n"
+            "    std::atomic<u32*> ShownColor {nullptr};\n")
+    replace(soft_h_433,
+            "    u32 lb_DepthStore[BufferSize * 2];\n"
+            "    u32 lb_AttrStore[BufferSize * 2];\n"
+            "    u32* DepthBuffer = lb_DepthStore;\n"
+            "    u32* AttrBuffer = lb_AttrStore;\n"
+            "    u32 lb_HudColor[2][BufferSize * 2];\n"
+            "    u32 lb_HudDepth[BufferSize * 2];\n"
+            "    u32 lb_HudAttr[BufferSize * 2];\n"
+            "    u32 lb_WorldOut[2][BufferSize];\n"
+            "    u8 lb_RowSplit[2][NumScanlines];\n",
+            "    u32* lb_DepthStore = nullptr;\n"
+            "    u32* lb_AttrStore = nullptr;\n"
+            "    u32* DepthBuffer = nullptr;\n"
+            "    u32* AttrBuffer = nullptr;\n"
+            "    u32* lb_HudColor[2] = {nullptr, nullptr};\n"
+            "    u32* lb_HudDepth = nullptr;\n"
+            "    u32* lb_HudAttr = nullptr;\n"
+            "    u32* lb_WorldOut[2] = {nullptr, nullptr};\n"
+            "    u8* lb_RowSplit[2] = {nullptr, nullptr};\n")
+    replace(soft_h_433,
+            "    u32 lb_EdgeLine[ScanlineWidth];\n",
+            "    u32* lb_EdgeLine = nullptr;\n"
+            "    /* docs/434 */\n"
+            "    struct LbFree {\n"
+            "        void operator()(u32* p) const noexcept { std::free(p); }\n"
+            "    };\n"
+            "    struct LbFree8 {\n"
+            "        void operator()(u8* p) const noexcept { std::free(p); }\n"
+            "    };\n"
+            "    std::unique_ptr<u32[], LbFree> lb_Mem;\n"
+            "    std::unique_ptr<u8[], LbFree8> lb_Mem8;\n"
+            "    bool lb_Alloc(int maxW, int maxH, bool hud);\n"
+            "    bool lb_IsHi = false;\n"
+            "    int lb_HiN = 1;\n"
+            "    std::unique_ptr<SoftRenderer> lb_Hi;\n"
+            "    int lb_PendingSlot = 0;\n"
+            "    bool lb_HiOk[2] = {false, false};\n"
+            "    bool lb_WantOk = false;\n"
+            "    bool lb_HiStarted = false;\n"
+            "    bool lb_HiReady = false;\n"
+            "    std::vector<Polygon> lb_HiPoly;\n"
+            "    std::vector<Vertex> lb_HiVert;\n"
+            "    std::vector<Polygon*> lb_HiPolyPtr;\n"
+            "    int lb_HiNumPolys = 0;\n"
+            "    void lb_HiFrame(GPU& gpu, int slot);\n"
+            "    bool lb_BuildPolys(GPU& gpu);\n"
+            "    void lb_PolyLog(const GPU& gpu, Polygon** polys, int n);\n"
+            "    u8* lb_Spec[2] = {nullptr, nullptr};   /* the specials' masks */\n"
+            "    void lb_SpecRow(s32 y);\n"
+            "    bool lb_SpecAny[2] = {false, false};   /* a special in the slot */\n"
+            "public:\n"
+            "    /* The scale to composite at: lb_HiN when a hi frame holds a\n"
+            "       special, else 1 (nothing to sharpen: Native, exactly). */\n"
+            "    int lb_HiActive() const noexcept {\n"
+            "        const SoftRenderer* h = lb_Hi.get();\n"
+            "        if (!h) return 1;\n"
+            "        for (int s = 0; s < 2; s++)\n"
+            "            if (h->lb_HiOk[s] && h->lb_SpecAny[s]) return lb_HiN;\n"
+            "        return 1;\n"
+            "    }\n"
+            "private:\n")
+    replace(soft_c_433,
+            "    const bool lb_in = lb_SplitFrame && y >= 0 && y < NumScanlines;\n",
+            "    if (lb_IsHi) lb_SpecRow(y);   /* docs/434 */\n"
+            "    const bool lb_in = lb_SplitFrame && y >= 0 && y < NumScanlines;\n")
+    replace(soft_h_433,
+            "    u8 StencilBuffer[MaxRenderWidth*2];\n",
+            "    u8* StencilBuffer = nullptr;\n")
+    # -- the renderer's own code
+    replace(soft_c_433,
+            "    RenderThreadRunning = false;\n"
+            "    RenderThreadRendering = false;\n"
+            "    RenderThread = nullptr;\n"
+            "}\n"
+            "\n"
+            "SoftRenderer::~SoftRenderer()\n",
+            "    RenderThreadRunning = false;\n"
+            "    RenderThreadRendering = false;\n"
+            "    RenderThread = nullptr;\n"
+            "    lb_Alloc(1728, 768, true);   /* docs/434 */\n"
+            "}\n"
+            "\n"
+            "SoftRenderer::~SoftRenderer()\n")
+    replace(soft_c_433,
+            "                lb_note_render_thread();   /* docs/358 */\n",
+            "                if (!lb_IsHi) lb_note_render_thread();   /* docs/358 */\n")
+    replace(soft_c_433,
+            "void SoftRenderer::lb_NextColorBuffer() noexcept\n"
+            "{\n",
+            "void SoftRenderer::lb_NextColorBuffer() noexcept\n"
+            "{\n"
+            "    if (lb_IsHi)   /* docs/434: the slot the native frame took */\n"
+            "    {\n"
+            "        lb_Slot = lb_PendingSlot;\n"
+            "        ColorBuffer = ColorStore[lb_Slot];\n"
+            "        ShownColor.store(ColorBuffer, std::memory_order_release);\n"
+            "        return;\n"
+            "    }\n")
+    replace(soft_c_433,
+            "    memset(lb_RowSplit, 0, sizeof(lb_RowSplit));\n"
+            "    memset(ColorStore, 0, sizeof(ColorStore));   /* docs/359 */\n",
+            "    memset(lb_RowSplit[0], 0, NumScanlines);\n"
+            "    memset(lb_RowSplit[1], 0, NumScanlines);\n"
+            "    memset(ColorStore[0], 0, (size_t)BufferSize * 2 * sizeof(u32));   /* docs/359 */\n"
+            "    memset(ColorStore[1], 0, (size_t)BufferSize * 2 * sizeof(u32));\n"
+            "    lb_Hi.reset();   /* docs/434: drawn again when asked for */\n"
+            "    lb_HiN = 1;\n")
+    replace(soft_c_433,
+            "    int j = 0;\n"
+            "    for (int i = 0; i < npolys; i++)\n"
+            "    {\n"
+            "        if (polygons[i]->Degenerate) continue;\n",
+            "    if (!lb_IsHi) lb_PolyLog(gpu, polygons, npolys);   /* docs/434 */\n"
+            "    int j = 0;\n"
+            "    for (int i = 0; i < npolys; i++)\n"
+            "    {\n"
+            "        if (polygons[i]->Degenerate) continue;\n")
+    replace(soft_c_433,
+            "    memset(lb_RowSplit[lb_Slot], 0, sizeof(lb_RowSplit[lb_Slot]));\n",
+            "    memset(lb_RowSplit[lb_Slot], 0, NumScanlines);\n")
+    replace(soft_c_433,
+            "            ClearBuffers(gpu);\n"
+            "            RenderPolygons(gpu, true, &gpu.GPU3D.RenderPolygonRAM[0], gpu.GPU3D.RenderNumPolygons);\n"
+            "            lb_CheckAfter();\n",
+            "            ClearBuffers(gpu);\n"
+            "            if (lb_IsHi)   /* docs/434 */\n"
+            "                RenderPolygons(gpu, true, lb_HiPolyPtr.data(), lb_HiNumPolys);\n"
+            "            else\n"
+            "                RenderPolygons(gpu, true, &gpu.GPU3D.RenderPolygonRAM[0], gpu.GPU3D.RenderNumPolygons);\n"
+            "            if (lb_IsHi && lb_WantOk) lb_HiOk[lb_Slot] = true;\n"
+            "            lb_CheckAfter();\n")
+    replace(soft_c_433,
+            "    FrameIdentical = !(textureChanged || texPalChanged) && gpu.GPU3D.RenderFrameIdentical;\n",
+            "    FrameIdentical = !(textureChanged || texPalChanged) && gpu.GPU3D.RenderFrameIdentical;\n"
+            "    /* docs/434: the hi-res partner draws this frame too, into the\n"
+            "       colour slot this one is about to take. */\n"
+            "    if (lb_Hi)\n"
+            "        lb_HiFrame(gpu, (DisplayedBuffer == ColorStore[0]) ? 1 : 0);\n")
+    replace(soft_c_433,
+            "void SoftRenderer::RestartFrame(GPU& gpu)\n"
+            "{\n"
+            "    SetupRenderThread(gpu);\n"
+            "    EnableRenderThread();\n"
+            "}\n",
+            "void SoftRenderer::RestartFrame(GPU& gpu)\n"
+            "{\n"
+            "    SetupRenderThread(gpu);\n"
+            "    EnableRenderThread();\n"
+            "    if (lb_Hi)   /* docs/434 */\n"
+            "    {\n"
+            "        lb_Hi->SetupRenderThread(gpu);\n"
+            "        if (lb_Hi->lb_HiReady)\n"
+            "        {\n"
+            "            lb_Hi->lb_HiStarted = true;\n"
+            "            lb_Hi->EnableRenderThread();\n"
+            "        }\n"
+            "    }\n"
+            "}\n")
+    replace(soft_c_433,
+            "    if (lb_3dwait_on()) lb_3dwait_frame(lb_t0, RenderWidth, RenderHeight);\n",
+            "    if (lb_3dwait_on()) lb_3dwait_frame(lb_t0, RenderWidth, RenderHeight);\n"
+            "    lb_HiWaitDone(gpu);   /* docs/434 */\n")
+    replace(soft_c_433,
+            "    if (Threaded != threaded)\n"
+            "    {\n"
+            "        Threaded = threaded;\n",
+            "    if (Threaded != threaded)\n"
+            "    {\n"
+            "        Threaded = threaded;\n"
+            "        lb_Hi.reset();   /* docs/434 */\n")
+    with open(soft_c_433, "a", encoding="utf-8", newline="") as fh:
+        fh.write("\n/* docs/434: the hi-res partner. */\n"
+                 "namespace melonDS\n{\n"
+                 "#include \"lb_hires_soft.inc\"\n"
+                 "}\n")
+    _written.add(os.path.abspath(soft_c_433))
+    # -- the geometry stage: each vertex's position at N times the surface
+    replace(g3h_433,
+            "    s32 HiresPosition[2];\n",
+            "    s32 HiresPosition[2];\n"
+            "\n"
+            "    // legobattles-decomp docs/434: the position at lb_HiN times the\n"
+            "    // surface, in those pixels; lb_HiScale is the N it was made for\n"
+            "    // (0: none).\n"
+            "    s32 lb_HiPos[2];\n"
+            "    s32 lb_HiScale;\n")
+    replace(g3h_433,
+            "    u32 ScrolledAttrLine[1728]; // host presentation metadata\n",
+            "    u32 ScrolledAttrLine[1728]; // host presentation metadata\n"
+            "    int lb_HiN = 1;   // docs/434: the 3D resolution multiple; 1 is off\n")
+    replace(g3c_433,
+            "        vtx->FinalPosition[1] = posY & 0x3FF;"
+            "  /* legobattles-decomp: was 0xFF, then 0x1FF */\n",
+            "        vtx->FinalPosition[1] = posY & 0x3FF;"
+            "  /* legobattles-decomp: was 0xFF, then 0x1FF */\n"
+            "\n"
+            "        /* docs/434: the same vertex at lb_HiN times the surface. It\n"
+            "           keeps the native pixel (FinalPosition, whatever tweaks\n"
+            "           went into it) and adds the sub-pixel the continuous\n"
+            "           position has, so the two pictures agree to a pixel. */\n"
+            "        vtx->lb_HiScale = 0;\n"
+            "        if (lb_HiN > 1 && w != 0)\n"
+            "        {\n"
+            "            const s64 lb_n = lb_HiN;\n"
+            "            const s64 lb_den = (s64)w << 1;\n"
+            "            const s64 lb_sx = (s64)(u32)(vtx->Position[0] + w);\n"
+            "            const s64 lb_sy = (s64)(u32)(-vtx->Position[1] + w);\n"
+            "            const s64 lb_fx = (lb_sx * (s64)viewport_width) / lb_den;\n"
+            "            const s64 lb_fy = (lb_sy * (s64)viewport_height) / lb_den;\n"
+            "            s64 lb_hx = (s64)(posX & 0x7FF) * lb_n +\n"
+            "                ((lb_sx * (s64)viewport_width * lb_n) / lb_den - lb_fx * lb_n);\n"
+            "            s64 lb_hy = (s64)(posY & 0x3FF) * lb_n +\n"
+            "                ((lb_sy * (s64)viewport_height * lb_n) / lb_den - lb_fy * lb_n);\n"
+            "            if (lb_hx < 0) lb_hx = 0;\n"
+            "            if (lb_hy < 0) lb_hy = 0;\n"
+            "            if (lb_hx > (s64)RenderWidth * lb_n) lb_hx = (s64)RenderWidth * lb_n;\n"
+            "            if (lb_hy > (s64)RenderHeight * lb_n) lb_hy = (s64)RenderHeight * lb_n;\n"
+            "            vtx->lb_HiPos[0] = (s32)lb_hx;\n"
+            "            vtx->lb_HiPos[1] = (s32)lb_hy;\n"
+            "            vtx->lb_HiScale = lb_HiN;\n"
+            "        }\n")
+    # -- the runner's bridge
+    replace(gpu3d,
+            "const uint32_t* nds_gpu3d_wide_attr_line(int line) {\n",
+            "/* legobattles-decomp docs/434: 3D resolution. */\n"
+            "static melonDS::SoftRenderer* lb_hi_soft() {\n"
+            "    if (g_nds.GPU.GPU3D.IsRendererAccelerated()) return nullptr;\n"
+            "    return dynamic_cast<melonDS::SoftRenderer*>(\n"
+            "        &g_nds.GPU.GPU3D.GetCurrentRenderer());\n"
+            "}\n"
+            "extern \"C\" void nds_gpu3d_set_hi_scale(int n) {\n"
+            "    if (n < 1) n = 1;\n"
+            "    if (n > 4) n = 4;\n"
+            "    melonDS::SoftRenderer* r = lb_hi_soft();\n"
+            "    if (!r) { g_nds.GPU.GPU3D.lb_HiN = 1; return; }\n"
+            "    r->lb_HiSetScale(n, g_nds.GPU);\n"
+            "    g_nds.GPU.GPU3D.lb_HiN = r->lb_HiScale();\n"
+            "}\n"
+            "extern \"C\" int nds_gpu3d_hi_active(void) {\n"
+            "    melonDS::SoftRenderer* r = lb_hi_soft();\n"
+            "    return r ? r->lb_HiActive() : 1;\n"
+            "}\n"
+            "extern \"C\" int nds_gpu3d_hi_scale(void) {\n"
+            "    melonDS::SoftRenderer* r = lb_hi_soft();\n"
+            "    return r ? r->lb_HiScale() : 1;\n"
+            "}\n"
+            "extern \"C\" void nds_gpu3d_hi_wait(void) {\n"
+            "    melonDS::SoftRenderer* r = lb_hi_soft();\n"
+            "    if (r) r->lb_HiWaitDone(g_nds.GPU);\n"
+            "}\n"
+            "extern \"C\" const uint32_t* nds_gpu3d_hi_rows(const uint32_t* line,\n"
+            "                                             int* stride, int* width,\n"
+            "                                             int* n,\n"
+            "                                             const uint8_t** mask) {\n"
+            "    melonDS::SoftRenderer* r = lb_hi_soft();\n"
+            "    return r ? r->lb_HiRows(line, stride, width, n, mask) : nullptr;\n"
+            "}\n"
+            "\n"
+            "const uint32_t* nds_gpu3d_wide_attr_line(int line) {\n")
+    # -- the compositor
+    edit(gpu,
+         "// Composite one scanline into the internal 6-bit format (channels at bits",
+         ["#include \"lb_hires_comp.inc\"  /* legobattles-decomp docs/434 */",
+          ""], after=False)
+    replace(gpu,
+            "    if (engine == 0) g_hd_frame_valid = false;\n",
+            "    if (engine == 0) g_hd_frame_valid = false;\n"
+            "    if (engine == 0) g_hi_valid = false;   /* docs/434 */\n")
+    replace(gpu,
+            "    if (!snapshot_matches && output_height > 0)\n"
+            "        (void)nds_gpu3d_wide_line(output_height - 1);\n",
+            "    if (!snapshot_matches && output_height > 0)\n"
+            "        (void)nds_gpu3d_wide_line(output_height - 1);\n"
+            "    /* docs/434: the hi-res partner's frame is the live raster's twin. */\n"
+            "    if (!snapshot_matches) nds_gpu3d_hi_wait();\n")
+    replace(gpu,
+            "    const bool emit_hd =\n"
+            "        g_hd_emit_enabled && !g_adaptive_skybox_fill && screen == 0;\n",
+            "    /* docs/434: 3D resolution wants the stack without the 3D layer too,\n"
+            "       whichever screen the field is on. */\n"
+            "    const int lb_hi_want =\n"
+            "        g_adaptive_skybox_fill ? 1 : nds_gpu3d_hi_active();\n"
+            "    const bool emit_hd =\n"
+            "        (g_hd_emit_enabled && !g_adaptive_skybox_fill && screen == 0) ||\n"
+            "        lb_hi_want > 1;\n")
+    replace(gpu,
+            "    const bool lb_obj_on = (u.dispcnt & 0x1000u) != 0;\n",
+            "    const int lb_hi_n =\n"
+            "        lb_hi_want > 1 ? lb_hi_alloc(output_width, output_height, lb_hi_want)\n"
+            "                       : 1;   /* docs/434 */\n"
+            "    const bool lb_obj_on = (u.dispcnt & 0x1000u) != 0;\n")
+    replace(gpu,
+            "        if (lb_fast_timed)\n"
+            "            lb_fast_check_row(y, dst, lb_fast_dst, output_width,\n"
+            "                              lb_fast_t0, lb_fast_t1,\n"
+            "                              std::chrono::steady_clock::now());\n",
+            "        if (lb_fast_timed)\n"
+            "            lb_fast_check_row(y, dst, lb_fast_dst, output_width,\n"
+            "                              lb_fast_t0, lb_fast_t1,\n"
+            "                              std::chrono::steady_clock::now());\n"
+            "        if (lb_hi_n > 1)   /* docs/434 */\n"
+            "            lb_hi_row(u, y, output_width, lb_hi_n, dst, line3d,\n"
+            "                      line3d_raw, prio3d, mbmode, mb,\n"
+            "                      g_hd_top_pixels.data() +\n"
+            "                          static_cast<size_t>(y) * output_width * 2u,\n"
+            "                      g_hd_below_pixels.data() +\n"
+            "                          static_cast<size_t>(y) * output_width * 2u,\n"
+            "                      g_hi_out.data());\n")
+    replace(gpu,
+            "    if (emit_hd) {\n"
+            "        g_hd_frame.top_pixels = g_hd_top_pixels.data();\n",
+            "    if (lb_hi_n > 1)   /* docs/434 */\n"
+            "        lb_hi_frame_done(adaptive.data(), output_width, output_height,\n"
+            "                         lb_hi_n);\n"
+            "    if (emit_hd) {\n"
+            "        g_hd_frame.top_pixels = g_hd_top_pixels.data();\n")
+    replace(gpu,
+            "void nds_gpu2d_invalidate_hd_frame() {\n",
+            "/* docs/434: the compositor's N-times picture for this frame, if it\n"
+            "   made one. */\n"
+            "extern \"C\" bool nds_gpu2d_hi_frame(const uint32_t** px, int* w,\n"
+            "                                    int* h, int* n) {\n"
+            "    if (!g_hi_valid || g_hi_out.empty()) return false;\n"
+            "    if (px) *px = g_hi_out.data();\n"
+            "    if (w) *w = g_hi_w;\n"
+            "    if (h) *h = g_hi_h;\n"
+            "    if (n) *n = g_hi_n;\n"
+            "    return true;\n"
+            "}\n"
+            "\n"
+            "void nds_gpu2d_invalidate_hd_frame() {\n")
+    # -- the frontend
+    replace(front,
+            "int lb_present_src_w[2] = {0, 0};   /* legobattles-decomp */\n",
+            "#include \"lb_hires_front.inc\"  /* legobattles-decomp docs/434 */\n"
+            "int lb_present_src_w[2] = {0, 0};   /* legobattles-decomp */\n")
+    replace(front,
+            "            lb_render_field(presentation, lb_only, lb_s, lb_gw, lb_ghh);   /* docs/382 */\n",
+            "            if (!lb_hires_present_field(presentation, lb_only, lb_s))   /* docs/434 */\n"
+            "                lb_render_field(presentation, lb_only, lb_s, lb_gw, lb_ghh);   /* docs/382 */\n")
+    replace(front,
+            "        nds_gpu2d_invalidate_hd_frame();\n",
+            "        nds_gpu2d_invalidate_hd_frame();\n"
+            "        lb_hires_prepare();   /* docs/434 */\n")
+    done.append("3D resolution: a hi-res partner renderer, composited and presented (docs/434)")
 
     # Last, once every patch has been written: hold the mtime of any file whose
     # patched CONTENT is unchanged since the previous build, so make does not

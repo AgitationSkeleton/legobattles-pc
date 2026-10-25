@@ -79,12 +79,15 @@ int lb_widemap_cam_px(int* x, int* y);     /* src/lb_widemap.cpp */
 #include <atomic>   /* docs/396: the Reset request */
 #include <mutex>    /* docs/413: the notice, set from the emulation thread */
 #include <thread>   /* docs/430: the update check's own thread */
+void lb_mapbrowser_draw(SDL_Renderer* renderer);   /* docs/431: lb_mapfetch.cpp */
 
 // lb_https.cpp (WinHTTP); defined outside any namespace.
 bool lb_https_request(const std::string& host, int port, const std::string& method,
                       const std::string& path, const std::string& body,
                       std::string* reply, std::string* error);
 extern "C" int lb_demo_playing(void);   /* lb_demo.cpp */
+extern "C" void lb_quick_request(int action);   /* lb_patches.cpp */
+extern "C" unsigned lb_cancel_slots(void);      /* lb_patches.cpp, SG-0006 */
 
 namespace {
 
@@ -174,6 +177,7 @@ struct Settings {
     int level_palette = 0;
     int mod_palette = 0;   // docs/410: 0 the same, else Level Palettes' mode + 1
     bool smooth_models = false;   // docs/411: 3D models without edge marking, AA on
+    int res3d = 0;                // docs/434: 3D resolution, 0 Native, 1 2x, 2 3x, 3 4x
     // docs/415: online chat. Toasts for received messages, the swear filter
     // (chat and players' names), and the key that opens the chat box.
     bool chat_toasts = true;
@@ -190,6 +194,10 @@ struct Settings {
     // docs/398: while the blue brick's list is the open one, 1-9 pick from it
     // instead of the second brick's list. On by default.
     bool quick_keys_blue = true;
+    // SG-0006: click a unit in a building's queue, on the Top Screen panel, to
+    // cancel it. The game's own cancel command; safe online. On by default:
+    // it only reaches a button the game already has.
+    bool cancel_queue_click = true;
     // docs/384, the Team Builder and Ban Units tabs. A team is the army
     // screen's nine slots as blueprint indices (lb_overlay.h, LbTeam); both
     // start as Free Play's default, King's. Presets are "Name=p0,...,p8;..."
@@ -308,9 +316,14 @@ struct Settings {
     // docs/406: the cheats' owner tests pass for every owner, so the AI
     // gets them too (lb_patches.cpp, kAiCheats). Offline only.
     bool ai_cheats = false;
+    // docs/433: with ai_cheats, the cheats go to the AI only (not the player).
+    bool ai_cheats_only = false;
     // SG-0017: the computer's heroes cast targeted ("tap") spells too
     // (lb_patches.cpp, apply_ai_tap_spells). Offline only.
     bool ai_tap_spells = false;
+    // SG-0002: the computer plays the player's side in Free Play, so two
+    // computer players fight (lb_patches.cpp, apply_ai_spectate). Offline only.
+    bool ai_spectate = false;
 
     bool unlock_units = false;
     bool unlock_extras = false;   // the cheat codes (red bricks)
@@ -344,6 +357,9 @@ struct Settings {
     int  rename_alien_transport = 0; // Hyper Carrier
     int  rename_starfighter = 0; // Switch Fighter
     int  rename_starship1 = 0;  // Rocket
+    // SG-0021: the Pirate prototypes' names.
+    int  rename_pirate_buildings = 0; // Shanty Shack -> Tavern, Plantation -> Shanty Shack
+    int  rename_bounty = 0;           // Brickbeard's Bounty -> Flying Dutchman
     // docs/392: the choice Free Play's opponent screen opens on -- 0..5 the
     // six factions in the game's order (King, Wizard, Pirate, Imperial,
     // Earth, Alien), 6 Custom, 7 Random. 1, Wizard, is the cartridge's own.
@@ -362,6 +378,11 @@ struct Settings {
     bool master_choice = false;
     bool master_https = true;
     bool match_picture = true;     // docs/428
+    bool scores_opt_out = false;   // SG-0018: keep out of the score tables
+    // Record every session to lb-session-*.lbdemo. Off by default (the owner's
+    // rule); lb_demo reads it from the file at the first vblank, before the
+    // settings load (lb_settings_file_bool).
+    bool record_sessions = false;
     bool discord_status = true;    // docs/430: Discord Rich Presence
     bool discord_hero = true;      // docs/430: ... with the hero as the small image
     bool update_check = true;      // docs/430: look for a newer release at startup
@@ -566,6 +587,8 @@ extern "C" void lb_settings_save(void) {
                   g_set.mod_palette); o += buf;   // docs/410
     std::snprintf(buf, sizeof buf, "  \"smooth_models\": %s,\n",
                   g_set.smooth_models ? "true" : "false"); o += buf;   // docs/411
+    std::snprintf(buf, sizeof buf, "  \"res3d\": %d,\n",
+                  g_set.res3d); o += buf;   // docs/434
     std::snprintf(buf, sizeof buf, "  \"chat_toasts\": %s,\n",
                   g_set.chat_toasts ? "true" : "false"); o += buf;   // docs/415
     std::snprintf(buf, sizeof buf, "  \"swear_filter\": %s,\n",
@@ -580,6 +603,8 @@ extern "C" void lb_settings_save(void) {
                   g_set.quick_keys ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"quick_keys_blue\": %s,\n",
                   g_set.quick_keys_blue ? "true" : "false"); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"cancel_queue_click\": %s,\n",
+                  g_set.cancel_queue_click ? "true" : "false"); o += buf;   // SG-0006
     // docs/384
     for (int which = 0; which < 2; ++which) {
         const int* t = which ? g_set.enemy_team : g_set.team_working;
@@ -638,8 +663,12 @@ extern "C" void lb_settings_save(void) {
     o += "],\n";
     std::snprintf(buf, sizeof buf, "  \"ai_cheats\": %s,\n",
                   g_set.ai_cheats ? "true" : "false"); o += buf;   // docs/406
+    std::snprintf(buf, sizeof buf, "  \"ai_cheats_only\": %s,\n",
+                  g_set.ai_cheats_only ? "true" : "false"); o += buf;   // docs/433
     std::snprintf(buf, sizeof buf, "  \"ai_tap_spells\": %s,\n",
                   g_set.ai_tap_spells ? "true" : "false"); o += buf;   // SG-0017
+    std::snprintf(buf, sizeof buf, "  \"ai_spectate\": %s,\n",
+                  g_set.ai_spectate ? "true" : "false"); o += buf;   // SG-0002
     std::snprintf(buf, sizeof buf, "  \"unlock_units\": %s,\n",
                   g_set.unlock_units ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"unlock_extras\": %s,\n",
@@ -678,6 +707,10 @@ extern "C" void lb_settings_save(void) {
                   g_set.rename_starfighter); o += buf;
     std::snprintf(buf, sizeof buf, "  \"rename_starship1\": %d,\n",
                   g_set.rename_starship1); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"rename_pirate_buildings\": %d,\n",
+                  g_set.rename_pirate_buildings); o += buf;   // SG-0021
+    std::snprintf(buf, sizeof buf, "  \"rename_bounty\": %d,\n",
+                  g_set.rename_bounty); o += buf;
     std::snprintf(buf, sizeof buf, "  \"default_opponent\": %d,\n",
                   g_set.default_opponent); o += buf;
     std::snprintf(buf, sizeof buf, "  \"skip_intro\": %s,\n",
@@ -699,6 +732,10 @@ extern "C" void lb_settings_save(void) {
                   g_set.master_https ? "true" : "false"); o += buf;   // docs/419
     std::snprintf(buf, sizeof buf, "  \"match_picture\": %s,\n",
                   g_set.match_picture ? "true" : "false"); o += buf;   // docs/428
+    std::snprintf(buf, sizeof buf, "  \"scores_opt_out\": %s,\n",
+                  g_set.scores_opt_out ? "true" : "false"); o += buf;   // SG-0018
+    std::snprintf(buf, sizeof buf, "  \"record_sessions\": %s,\n",
+                  g_set.record_sessions ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"discord_status\": %s,\n",
                   g_set.discord_status ? "true" : "false"); o += buf;   // docs/430
     std::snprintf(buf, sizeof buf, "  \"discord_hero\": %s,\n",
@@ -732,6 +769,22 @@ extern "C" void lb_settings_save(void) {
     }
 }
 
+// One on/off setting read straight from settings.json, for a caller that runs
+// before lb_settings_load (the session recorder starts at the first vblank).
+// `dflt` when the file or the key is missing.
+extern "C" int lb_settings_file_bool(const char* key, int dflt) {
+    FILE* f = std::fopen(settings_path("settings.json").c_str(), "rb");
+    if (!f) return dflt;
+    std::string s;
+    char chunk[4096];
+    size_t n;
+    while ((n = std::fread(chunk, 1, sizeof chunk, f)) > 0) s.append(chunk, n);
+    std::fclose(f);
+    bool v = dflt != 0;
+    json_get_bool(s, key, &v);
+    return v ? 1 : 0;
+}
+
 extern "C" void lb_settings_load(void) {
     const std::string path = settings_path("settings.json");
     FILE* f = std::fopen(path.c_str(), "rb");
@@ -759,6 +812,8 @@ extern "C" void lb_settings_load(void) {
     if (g_set.level_palette < 0 || g_set.level_palette > 3) g_set.level_palette = 0;
     json_get_int(s, "mod_palette", &g_set.mod_palette);   // docs/410
     json_get_bool(s, "smooth_models", &g_set.smooth_models);   // docs/411
+    json_get_int(s, "res3d", &g_set.res3d);   // docs/434
+    if (g_set.res3d < 0 || g_set.res3d > 3) g_set.res3d = 0;
     json_get_bool(s, "chat_toasts", &g_set.chat_toasts);       // docs/415
     json_get_bool(s, "swear_filter", &g_set.swear_filter);     // docs/415
     json_get_int(s, "chat_key", &g_set.chat_key);              // docs/415
@@ -770,6 +825,7 @@ extern "C" void lb_settings_load(void) {
     if (g_set.force_tileset < 0 || g_set.force_tileset > 4) g_set.force_tileset = 0;
     json_get_bool(s, "quick_keys", &g_set.quick_keys);   // docs/383, default on
     json_get_bool(s, "quick_keys_blue", &g_set.quick_keys_blue);   // docs/398
+    json_get_bool(s, "cancel_queue_click", &g_set.cancel_queue_click);   // SG-0006
     // docs/384; a file without them keeps King's team and no presets or bans.
     json_get_ints(s, "team_working", g_set.team_working, LB_TEAM_SLOTS);
     json_get_ints(s, "enemy_team", g_set.enemy_team, LB_TEAM_SLOTS);
@@ -804,7 +860,9 @@ extern "C" void lb_settings_load(void) {
     json_get_ints(s, "cap", g_set.cap, 10);
     json_get_bools(s, "cheat", g_set.cheat, 18);
     json_get_bool(s, "ai_cheats", &g_set.ai_cheats);   // docs/406
+    json_get_bool(s, "ai_cheats_only", &g_set.ai_cheats_only);   // docs/433
     json_get_bool(s, "ai_tap_spells", &g_set.ai_tap_spells);   // SG-0017
+    json_get_bool(s, "ai_spectate", &g_set.ai_spectate);       // SG-0002
     json_get_bool(s, "unlock_units", &g_set.unlock_units);
     json_get_bool(s, "unlock_extras", &g_set.unlock_extras);
     json_get_bool(s, "unlock_maps", &g_set.unlock_maps);           // docs/407
@@ -827,12 +885,16 @@ extern "C" void lb_settings_load(void) {
     json_get_int(s, "rename_alien_transport", &g_set.rename_alien_transport);
     json_get_int(s, "rename_starfighter", &g_set.rename_starfighter);
     json_get_int(s, "rename_starship1", &g_set.rename_starship1);
+    json_get_int(s, "rename_pirate_buildings", &g_set.rename_pirate_buildings);   // SG-0021
+    json_get_int(s, "rename_bounty", &g_set.rename_bounty);
     json_get_int(s, "default_opponent", &g_set.default_opponent);   // docs/392
     json_get_str(s, "master_host", g_set.master_host, sizeof g_set.master_host);
     json_get_bool(s, "master_both", &g_set.master_both);     // docs/419
     json_get_bool(s, "master_choice", &g_set.master_choice); // docs/424
     json_get_bool(s, "master_https", &g_set.master_https);   // docs/419
     json_get_bool(s, "match_picture", &g_set.match_picture);   // docs/428
+    json_get_bool(s, "scores_opt_out", &g_set.scores_opt_out);   // SG-0018
+    json_get_bool(s, "record_sessions", &g_set.record_sessions);
     json_get_bool(s, "discord_status", &g_set.discord_status);   // docs/430
     json_get_bool(s, "discord_hero", &g_set.discord_hero);
     json_get_bool(s, "update_check", &g_set.update_check);
@@ -890,6 +952,9 @@ extern "C" void lb_settings_load(void) {
     if (g_set.rename_alien_transport < 0 || g_set.rename_alien_transport > 1) g_set.rename_alien_transport = 0;
     if (g_set.rename_starfighter < 0 || g_set.rename_starfighter > 1) g_set.rename_starfighter = 0;
     if (g_set.rename_starship1 < 0 || g_set.rename_starship1 > 1) g_set.rename_starship1 = 0;
+    if (g_set.rename_pirate_buildings < 0 || g_set.rename_pirate_buildings > 1)
+        g_set.rename_pirate_buildings = 0;
+    if (g_set.rename_bounty < 0 || g_set.rename_bounty > 1) g_set.rename_bounty = 0;
     if (g_set.default_opponent < 0 || g_set.default_opponent > 7)
         g_set.default_opponent = 1;
     std::fprintf(stderr, "[lb_settings] loaded %s\n", path.c_str());
@@ -1239,6 +1304,22 @@ void tab_display() {
          "lose the outline. Only this machine sees it.");
     badge(WIRED);
 
+    // docs/434 (BR-0003): the 3D layer drawn at a higher resolution, so the
+    // models are sharp when the picture is shown larger than the game draws it.
+    {
+        const char* res[] = {"Native", "2x", "3x", "4x"};
+        slider_width();
+        ImGui::Combo("3D resolution", &g_set.res3d, res, IM_ARRAYSIZE(res));
+        help("Draws the special units' 3D models (ships, siege, the\n"
+             "other specials) at 2, 3 or 4 times the game's own\n"
+             "resolution, so their outlines and shapes are sharp in a\n"
+             "large window. Everything else is drawn exactly as the game\n"
+             "does, and the models' textures stay as the game stores them.\n"
+             "2x is free; higher costs speed. Needs Enhanced mode. Only\n"
+             "this machine sees it; it does not affect online play.");
+        badge(WIRED);
+    }
+
     ImGui::Spacing();
     // LEAVE ROOM FOR THE LABEL. imgui puts a slider's label to its RIGHT and
     // does not shrink the slider to fit it, so at the panel's default width
@@ -1454,7 +1535,8 @@ void tab_enhancements() {
     badge(WIRED);
     ImGui::Spacing();
     ImGui::Text("Attack Boost Reaches Ranged Units");
-    const char* atk_modes[] = {"Off (vanilla)", "On"};
+    const char* atk_modes[] = {"Off (vanilla)", "On",
+                               "On, shots only (no blast)"};
     {
         const bool lk = host_locked();
         host_lock_begin(lk);
@@ -1465,8 +1547,10 @@ void tab_enhancements() {
         host_lock_note(lk);
     }
     help("Vanilla buffs melee damage only; ranged keeps the projectile's own.\n"
-         "On adds the same delta to projectiles. Online, the host's\n"
-         "setting applies to everyone.");
+         "On adds the same delta to a projectile's hit in flight.\n"
+         "Shots only adds it to every shot that lands on its target too,\n"
+         "but never to the splash of a boulder, fireball or cannonball.\n"
+         "Online, the host's setting applies to everyone.");
     badge(UNSEEN);
     // The reasoning behind this setting lived in TEN TextDisabled lines, which
     // the panel then followed with a two-line summary of the same thing.
@@ -1627,6 +1711,15 @@ void tab_balance_spells() {
     help("The computer's heroes also cast the spells you aim at one unit\n"
          "(damage spells, unit boosts). In the game they only cast spells\n"
          "that hit the ground or themselves. Not online.");
+    badge(WIRED);
+
+    // SG-0002: AI vs AI.
+    ImGui::Spacing();
+    ImGui::Checkbox("AI Plays My Side (Spectate)", &g_set.ai_spectate);
+    help("Free Play only: the computer plays your side as well, so two\n"
+         "computer players fight and you watch. The map is revealed.\n"
+         "You can still give orders to your units. Takes effect when a\n"
+         "battle starts. Not online.");
     badge(WIRED);
     tab_end();
 }
@@ -1955,6 +2048,32 @@ void tab_renames() {
          "game's text only. Gameplay and other players are unaffected.\n"
          "A screen already open shows it once reopened.");
     badge(WIRED);
+
+    // SG-0021: the names the Pirate buildings had in the game's prototypes,
+    // where they were the other way round. The two go together, or two
+    // buildings would share a name.
+    ImGui::Text("Pirate buildings: prototype names");
+    ImGui::SameLine();
+    ImGui::TextDisabled("(this machine only)");
+    const char* rename_pirate_buildings_names[] = {"Off", "Tavern and Shanty Shack"};
+    ImGui::Combo("##rename_pirate_buildings", &g_set.rename_pirate_buildings,
+                 rename_pirate_buildings_names, IM_ARRAYSIZE(rename_pirate_buildings_names));
+    help("Cosmetic and local, from the Pirate prototypes: the barracks (Shanty\n"
+         "Shack) reads \"Tavern\" and the Plantation reads \"Shanty Shack\". The\n"
+         "Plantation name option above, when set, wins over this one.\n"
+         "A screen already open shows it once reopened.");
+    badge(WIRED);
+
+    ImGui::Text("Rename Brickbeard's Bounty");
+    ImGui::SameLine();
+    ImGui::TextDisabled("(this machine only)");
+    const char* rename_bounty_names[] = {"Off", "Flying Dutchman"};
+    ImGui::Combo("##rename_bounty", &g_set.rename_bounty, rename_bounty_names,
+                 IM_ARRAYSIZE(rename_bounty_names));
+    help("Cosmetic and local, from the Pirate prototypes: Brickbeard's Bounty\n"
+         "reads \"Flying Dutchman\" in this game's text only.\n"
+         "A screen already open shows it once reopened.");
+    badge(WIRED);
     tab_end();
 }
 
@@ -2053,11 +2172,23 @@ void tab_cheats() {
     // docs/406: each gameplay cheat tests that the unit is the local
     // player's (owner byte against FUN_020A2230's); kAiCheats passes that
     // test for every owner. Super Magic and Long Range Magic have no test.
-    ImGui::Checkbox("The AI Gets the Cheats Too", &g_set.ai_cheats);
-    help("The gameplay cheats ticked above (faster building, harvesting\n"
+    // docs/433: one choice of who the ticked cheats help: you (the game's own),
+    // you and the AI (docs/406), or the AI only (a handicap).
+    ImGui::Text("The Cheats Help");
+    {
+        const char* who[] = {"Me (vanilla)", "Me and the AI", "The AI only"};
+        int w = !g_set.ai_cheats ? 0 : (g_set.ai_cheats_only ? 2 : 1);
+        ImGui::Combo("##cheats_help", &w, who, IM_ARRAYSIZE(who));
+        g_set.ai_cheats = w != 0;
+        g_set.ai_cheats_only = w == 2;
+    }
+    help("Who the gameplay cheats ticked above (faster building, harvesting\n"
          "and mining, magic, health, double bricks, the unit cap, towers,\n"
-         "explosions, the hero's invincibility and one hit kills) help the\n"
-         "computer's armies as well as yours. Not online.");
+         "explosions, the hero's invincibility and one hit kills) help.\n"
+         "Me and the AI: the computer's armies get them as well.\n"
+         "The AI only: they stop helping you, for a harder game. Super\n"
+         "Magic and Long Range Magic always help every army, and the\n"
+         "reveal cheats stay yours. Not online.");
     badge(WIRED);
 
     ImGui::Separator();
@@ -2129,6 +2260,11 @@ void tab_input() {
     help("While the blue brick's menu is the open one, 1-9 pick from it\n"
          "instead of the red, yellow or white brick's. Off: 1-9 always\n"
          "pick from the red, yellow or white brick's menu.");
+    ImGui::Checkbox("Click a queued unit to cancel it", &g_set.cancel_queue_click);
+    help("Select a building that is training units. Click a unit's\n"
+         "icon in its queue, on the Top Screen panel, to cancel it and\n"
+         "get its bricks back. It sends the game's own cancel command,\n"
+         "so it is safe in online play. Needs the Top Screen panel.");
     ImGui::Separator();
     {   // SG-0012: swap the two screens, from a key or this button.
         const char* key = g_rebinding_swap
@@ -2284,6 +2420,53 @@ void tab_multiplayer() {
              "may be offline. Both lists a hosted lobby on both servers and\n"
              "shows the lobbies of both.");
         badge(WIRED);
+
+        // docs/425 item 7: a ping per server -- one /health round trip each,
+        // timed on a worker thread (as the game itself talks to it: HTTPS
+        // when that is on). Once when the page first opens, then on demand.
+        {
+            struct Ping { std::string label; int ms = -2; };   // -2 not asked, -1 no answer
+            static std::mutex mu;
+            static std::vector<Ping> pings;
+            static std::atomic<bool> busy{false};
+            static bool asked = false;
+            const bool go = ImGui::Button("Ping servers");
+            if ((go || !asked) && !busy.exchange(true)) {
+                asked = true;
+                std::vector<std::pair<std::string, int>> targets;
+                for (int i = 0; i < nk; ++i) targets.push_back({kKnown[i].host, kKnown[i].port});
+                if (cur == nk) targets.push_back({g_set.master_host, g_set.master_port});
+                {
+                    std::lock_guard<std::mutex> lk(mu);
+                    pings.clear();
+                    for (auto& t : targets) pings.push_back({t.first, -2});
+                }
+                std::thread([targets]() {
+                    for (size_t i = 0; i < targets.size(); ++i) {
+                        static char buf[1024];
+                        const auto t0 = std::chrono::steady_clock::now();
+                        const int n = lb_net_http_get(targets[i].first.c_str(), targets[i].second,
+                                                      "/health", buf, (int)sizeof buf);
+                        const int ms = (int)std::chrono::duration_cast<std::chrono::milliseconds>(
+                                           std::chrono::steady_clock::now() - t0).count();
+                        const bool ok = n > 0 && std::strstr(buf, "\"ok\"") != nullptr;
+                        std::lock_guard<std::mutex> lk(mu);
+                        if (i < pings.size()) pings[i].ms = ok ? ms : -1;
+                    }
+                    busy = false;
+                }).detach();
+            }
+            help("Times one request to each server: lower is better. A server that\n"
+                 "does not answer may be offline.");
+            std::lock_guard<std::mutex> lk(mu);
+            for (const Ping& p : pings) {
+                ImGui::SameLine();
+                if (p.ms == -2) ImGui::TextDisabled("%s: ...", p.label.c_str());
+                else if (p.ms < 0) ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.4f, 1.0f),
+                                                      "%s: no answer", p.label.c_str());
+                else ImGui::Text("%s: %d ms", p.label.c_str(), p.ms);
+            }
+        }
         if (cur == nk || custom_open) {
             ImGui::InputText("Address", g_set.master_host,
                              IM_ARRAYSIZE(g_set.master_host));
@@ -2573,6 +2756,11 @@ void tab_demo() {
     // every input on the frame it was made on however fast the host runs, and
     // at any window size.
     ImGui::TextDisabled("Record your play, then replay it exactly.");
+    ImGui::Separator();
+    ImGui::Checkbox("Record every session", &g_set.record_sessions);
+    help("Each time the game starts, record it to a new lb-session-*.lbdemo\n"
+         "beside the game, so a bug can be replayed exactly. Takes effect the\n"
+         "next time the game starts. Off by default.");
     ImGui::Separator();
     ImGui::InputText("File", g_demo_path, IM_ARRAYSIZE(g_demo_path));
     help("Written as you play, one line per input, so closing the\n"
@@ -2991,6 +3179,7 @@ void tab_team_builder() {
     ImGui::Checkbox("Neutral Creatures in Armies", &g_set.creatures);
     help("Offers the Wolf and the Robot as Close Combat units and the\n"
          "Shark as Special Two, for your army and the Custom opponent.\n"
+         "They are in the game's own army screen too, with their heads.\n"
          "The game gives them a price of 1 brick; on, they cost:\n"
          "Wolf 200 (build 420), Robot 80 (270), Shark 400 (660).\n"
          "The Shark swims: only a Shipyard builds it, so it is for water\n"
@@ -3781,8 +3970,10 @@ void tab_music() {
     // reads the tileset the level actually loaded -- King, Pirate or Mars --
     // which is what "castle / pirate / space" means to the cartridge.
     help("Vanilla overrides nothing.\n"
-         "Faction-aligned follows your builder; Map-specific follows\n"
-         "the tileset. Random picks once per match.\n"
+         "Faction-aligned follows your builder. Map-specific plays one of\n"
+         "the map's two factions, picked each match: King or Wizard on a\n"
+         "castle map, Pirate or Imperial on a pirate map, Earth or Alien on\n"
+         "Mars. Random picks any faction once per match.\n"
          "Always <faction> plays that faction's music in every battle,\n"
          "whatever the map (menus keep their own theme).");
     badge(WIRED);
@@ -4423,6 +4614,34 @@ void draw_top_screen(SDL_Renderer* renderer) {
         const ImVec2 pic(avail.x - 2.0f * ib, avail.y - 2.0f * ib);
         const float sx = pic.x / w, sy = pic.y / h;
         ImGui::Image((ImTextureID)(intptr_t)g_top_tex, pic);
+
+        // SG-0006: a unit queued in a building can be cancelled by clicking
+        // its icon. The game draws the queue here, on the top screen, with
+        // three buttons (rows 148..172; columns 32..56, 64..88, 96..120) whose
+        // handler sends its own cancel command -- but the top screen has no
+        // touch, so no click ever reaches them. A click on one asks the game to
+        // run that handler (lb_patches.cpp, kQuickCancel); it declines unless
+        // the game itself would take the click, so an empty slot does nothing.
+        if (g_set.cancel_queue_click && ImGui::IsItemHovered() && sx > 0.0f &&
+            sy > 0.0f) {
+            const unsigned slots = lb_cancel_slots();
+            const ImVec2 i0 = ImGui::GetItemRectMin();
+            const ImVec2 mp = ImGui::GetIO().MousePos;
+            const float u = (mp.x - i0.x - ib) / sx;
+            const float v = (mp.y - i0.y - ib) / sy;
+            int hit = -1;
+            if (v >= 148.0f && v < 172.0f)
+                for (int s = 0; s < 3; ++s)
+                    if (u >= 32.0f + 32.0f * s && u < 56.0f + 32.0f * s)
+                        hit = s;
+            if (hit >= 0 && ((slots >> hit) & 1u)) {
+                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                ImGui::SetTooltip("Click to cancel this unit\nand get its bricks back");
+                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+                    ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+                    lb_quick_request(40 + hit);
+            }
+        }
 
         // The corrected camera box. The cartridge draws its own indicator sized
         // to the 256x192 it can show; once the window is covering a 21:9
@@ -5608,7 +5827,7 @@ const char* const kBalUnitTips[10] = {
     "Build time (the construction's divisor; larger is slower).",
     "Hit points.",
     "A hero's mana.",
-    "Tiles per second.",
+    "Tiles per second (with \"Speed as stored value\", the Entities Editor's number).",
     "Melee damage, the low end.",
     "Melee damage spread: the high end is damage + spread.",
     "Ticks between attacks (30 a second).",
@@ -5616,6 +5835,7 @@ const char* const kBalUnitTips[10] = {
     "Resources a mine, quarry or well cap yields."};
 int g_bal_faction = 0;
 int g_bal_filter = 0;   // 0 all, 1 units, 2 buildings
+bool g_bal_speed_raw = false;   // docs/425 item 3: Speed as the stored value
 char g_bal_path[512] = "balance.json";
 std::string g_bal_msg;
 bool g_bal_msg_bad = false;
@@ -5671,7 +5891,11 @@ void bal_cell(int kind, int rec, int field, bool locked) {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.82f, 0.25f, 1.0f));
     ImGui::SetNextItemWidth(speed ? 64.0f : 58.0f);
     ImGui::BeginDisabled(locked);
-    if (speed) {
+    if (speed && g_bal_speed_raw) {
+        int v = live;   // the Entities Editor's own number
+        if (ImGui::InputInt("##v", &v, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue))
+            bal_set(rec, field, v < 1 ? 1 : v);
+    } else if (speed) {
         float tps = (float)live * 30.0f / 4096.0f;
         if (ImGui::InputFloat("##v", &tps, 0.0f, 0.0f, "%.2f",
                               ImGuiInputTextFlags_EnterReturnsTrue)) {
@@ -5687,13 +5911,19 @@ void bal_cell(int kind, int rec, int field, bool locked) {
         }
     }
     ImGui::EndDisabled();
+    // docs/425 item 3: a speed says both of its numbers.
+    if (speed && custom < 0 && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("%.2f tiles per second; stored value %d.",
+                          (float)live * 30.0f / 4096.0f, live);
     if (custom >= 0) {
         ImGui::PopStyleColor();
         if (ImGui::IsItemHovered()) {
             const int b = lb_balance_base(rec, field);
             if (speed)
-                ImGui::SetTooltip("Yours. Beneath it: %.2f. Right-click to put "
-                                  "that back.", (float)b * 30.0f / 4096.0f);
+                ImGui::SetTooltip("Yours: %.2f tiles per second, stored value %d. Beneath "
+                                  "it: %.2f (%d). Right-click to put that back.",
+                                  (float)live * 30.0f / 4096.0f, live,
+                                  (float)b * 30.0f / 4096.0f, b);
             else
                 ImGui::SetTooltip("Yours. Beneath it: %d. Right-click to put "
                                   "that back.", b);
@@ -5771,6 +6001,7 @@ void tab_balance_units() {
     if (!faction_env) {
         faction_env = true;
         if (const char* v = std::getenv("LB_BAL_FACTION")) g_bal_faction = std::atoi(v);
+        if (std::getenv("LB_BAL_SPEED_RAW")) g_bal_speed_raw = true;   // test aid
     }
     if (bal_header()) {
         const bool locked = lb_balance_custom_blocked() != nullptr;
@@ -5780,6 +6011,11 @@ void tab_balance_units() {
         const char* filters[] = {"Everything", "Units", "Buildings"};
         ImGui::SetNextItemWidth(130.0f);
         ImGui::Combo("Show", &g_bal_filter, filters, 3);
+        ImGui::SameLine();
+        ImGui::Checkbox("Speed as stored value", &g_bal_speed_raw);   // docs/425 item 3
+        help("Shows and edits Speed as the number the Entities Editor stores (a\n"
+             "distance per tick, x4096), so values can be typed across. Off:\n"
+             "tiles per second. Hover a speed to see both.");
         // The stat columns; the spell fields after them have their own
         // section (tab_balance_heroes).
         const int nf = LB_BAL_SPELL_FIELD0;
@@ -6448,6 +6684,268 @@ void tab_general() {
     tab_end();
 }
 
+// ---- SG-0018: Network > Scores ---------------------------------------------------
+// The master server's score tables (services/master-server-cloudflare/src/scores.js):
+// one table per balance ruleset, filtered by bans, fetched on a worker thread.
+
+struct ScoreRow {
+    std::string name;
+    int hero = -1, matches = 0, wins = 0, losses = 0;
+    int units_built = 0, units_lost = 0, units_killed = 0;
+    int buildings_built = 0, buildings_lost = 0, buildings_killed = 0, bricks = 0;
+};
+struct ScoreState {
+    int state = 0;                  // 0 not asked, 1 asking, 2 shown, 3 failed
+    std::string error;
+    std::vector<std::string> rulesets;
+    std::vector<ScoreRow> rows;
+};
+std::mutex g_sc_mu;
+ScoreState g_sc;
+std::atomic<bool> g_sc_busy{false};
+
+// A number or a string field of one flat JSON object.
+int sc_num(const std::string& o, const char* key) {
+    const std::string pat = std::string("\"") + key + "\":";
+    const size_t p = o.find(pat);
+    return p == std::string::npos ? 0 : std::atoi(o.c_str() + p + pat.size());
+}
+
+std::string sc_url(const std::string& s) {
+    static const char* hex = "0123456789ABCDEF";
+    std::string o;
+    for (unsigned char c : s) {
+        if (std::isalnum(c) || c == '-' || c == '.' || c == '_') o += (char)c;
+        else { o += '%'; o += hex[c >> 4]; o += hex[c & 15]; }
+    }
+    return o;
+}
+
+// Each {...} in the array that follows `key`.
+std::vector<std::string> sc_objects(const std::string& s, const char* key) {
+    std::vector<std::string> out;
+    size_t p = s.find(std::string("\"") + key + "\":[");
+    if (p == std::string::npos) return out;
+    p = s.find('[', p);
+    int depth = 0;
+    size_t start = 0;
+    bool str = false;
+    for (size_t i = p + 1; i < s.size(); ++i) {
+        const char c = s[i];
+        if (str) {
+            if (c == '\\') ++i;
+            else if (c == '"') str = false;
+            continue;
+        }
+        if (c == '"') str = true;
+        else if (c == '{') { if (depth++ == 0) start = i; }
+        else if (c == '}') { if (--depth == 0) out.push_back(s.substr(start, i - start + 1)); }
+        else if (c == ']' && depth == 0) break;
+    }
+    return out;
+}
+
+// A GET to the master server; the reply, or an empty string with `error`.
+std::string sc_get(const std::string& host, int port, const std::string& path,
+                   std::string* error) {
+    std::vector<char> buf(256 * 1024);
+    const int n = lb_net_http_get(host.c_str(), port, path.c_str(), buf.data(), (int)buf.size());
+    if (n < 0) {
+        *error = buf.data()[0] ? buf.data() : "no answer";
+        return std::string();
+    }
+    return std::string(buf.data(), (size_t)n);
+}
+
+void sc_run(std::string host, int port, std::string query) {
+    ScoreState r;
+    std::string error;
+    const std::string list = sc_get(host, port, "/scores/rulesets", &error);
+    const std::string table = error.empty() ? sc_get(host, port, "/scores" + query, &error)
+                                            : std::string();
+    if (!error.empty()) {
+        r.state = 3;
+        r.error = "Could not reach the master server (" + error + ").";
+    } else if (table.find("\"rows\"") == std::string::npos) {
+        r.state = 3;
+        r.error = "This master server keeps no score tables.";
+    } else {
+        r.state = 2;
+        for (const std::string& o : sc_objects(list, "rulesets")) {
+            const std::string v = upd_json_str(o, "ruleset");
+            if (!v.empty()) r.rulesets.push_back(v);
+        }
+        for (const std::string& o : sc_objects(table, "rows")) {
+            ScoreRow row;
+            row.name = upd_json_str(o, "name");
+            row.hero = o.find("\"hero\":-1") != std::string::npos ? -1 : sc_num(o, "hero");
+            row.matches = sc_num(o, "matches");
+            row.wins = sc_num(o, "wins");
+            row.losses = sc_num(o, "losses");
+            row.units_built = sc_num(o, "units_built");
+            row.units_lost = sc_num(o, "units_lost");
+            row.units_killed = sc_num(o, "units_killed");
+            row.buildings_built = sc_num(o, "buildings_built");
+            row.buildings_lost = sc_num(o, "buildings_lost");
+            row.buildings_killed = sc_num(o, "buildings_killed");
+            row.bricks = sc_num(o, "bricks");
+            r.rows.push_back(row);
+        }
+    }
+    std::fprintf(stderr, "[lb_scores] table %s: %s, %zu row(s), %zu ruleset(s) at %llu ms%s%s\n",
+                 query.c_str(), r.state == 2 ? "ok" : "failed", r.rows.size(),
+                 r.rulesets.size(), (unsigned long long)SDL_GetTicks64(),
+                 r.error.empty() ? "" : " - ", r.error.c_str());
+    std::fflush(stderr);
+    {
+        std::lock_guard<std::mutex> lk(g_sc_mu);
+        g_sc = r;
+    }
+    g_sc_busy = false;
+}
+
+// A head from the battle HUD's sheet, as a picture (no button).
+void hero_image(int bp, float size) {
+    SDL_Texture* hud = lb_teams_hud_atlas(g_team_renderer);
+    float u0, v0, u1, v1;
+    if (bp >= 0 && hud && lb_teams_hud_icon_uv(bp, &u0, &v0, &u1, &v1))
+        ImGui::Image((ImTextureID)(intptr_t)hud, ImVec2(size, size), ImVec2(u0, v0),
+                     ImVec2(u1, v1));
+    else
+        ImGui::Dummy(ImVec2(size, size));
+}
+
+void tab_scores() {
+    if (!tab_begin("Scores")) return;
+    guide("The best players of online matches, kept by the master server: one table per "
+          "balance ruleset. The host reports each match when it ends. Matches with cheats "
+          "on do not count.");
+    ImGui::Checkbox("Keep me out of the score tables", &g_set.scores_opt_out);
+    help("Your matches are not added to the tables from the next lobby you host or\n"
+         "join. Matches already counted stay.");
+    ImGui::Spacing();
+
+    static int ruleset = 0;   // 0 every ruleset, else rulesets[ruleset - 1]
+    static int bans = 0;      // 0 any, 1 with unit bans, 2 without
+    static int unit = -1;     // a unit that was banned, or -1 for any
+    static std::string asked = "\x01";
+    ScoreState s;
+    {
+        std::lock_guard<std::mutex> lk(g_sc_mu);
+        s = g_sc;
+    }
+    if (ruleset > (int)s.rulesets.size()) ruleset = 0;
+    {
+        static int said = -1;
+        if (said != s.state) {
+            said = s.state;
+            std::fprintf(stderr, "[lb_scores] page: state %d, %zu row(s) at %llu ms\n",
+                         s.state, s.rows.size(), (unsigned long long)SDL_GetTicks64());
+            std::fflush(stderr);
+        }
+    }
+
+    ImGui::SetNextItemWidth(220.0f);
+    if (ImGui::BeginCombo("Ruleset", ruleset ? s.rulesets[(size_t)ruleset - 1].c_str()
+                                             : "Every ruleset")) {
+        if (ImGui::Selectable("Every ruleset", ruleset == 0)) ruleset = 0;
+        for (size_t i = 0; i < s.rulesets.size(); ++i)
+            if (ImGui::Selectable(s.rulesets[i].c_str(), ruleset == (int)i + 1))
+                ruleset = (int)i + 1;
+        ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    static const char* const kBans[] = {"Any bans", "With unit bans", "Without unit bans"};
+    ImGui::SetNextItemWidth(170.0f);
+    ImGui::Combo("##scbans", &bans, kBans, 3);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(200.0f);
+    if (ImGui::BeginCombo("Banned unit", unit < 0 ? "Any" : lb_teams_unit_name(unit))) {
+        if (ImGui::Selectable("Any", unit < 0)) unit = -1;
+        for (int bp = 0; bp < 182; ++bp) {
+            const char* nm = lb_teams_unit_name(bp);
+            if (!nm || !*nm || !std::strcmp(nm, "?") || !std::strncmp(nm, "unit ", 5)) continue;
+            char id[96];
+            std::snprintf(id, sizeof id, "%s##scu%d", nm, bp);
+            if (ImGui::Selectable(id, unit == bp)) unit = bp;
+        }
+        ImGui::EndCombo();
+    }
+    help("Only the matches where this unit was banned.");
+
+    std::string query = "?limit=100";
+    if (ruleset) query += "&ruleset=" + sc_url(s.rulesets[(size_t)ruleset - 1]);
+    if (bans == 1) query += "&bans=on";
+    if (bans == 2) query += "&bans=off";
+    if (unit >= 0) query += "&banned=" + std::to_string(unit);
+    const bool refresh = ImGui::Button("Refresh");
+    if ((refresh || query != asked) && !g_sc_busy.exchange(true)) {
+        asked = query;
+        {
+            std::lock_guard<std::mutex> lk(g_sc_mu);
+            g_sc.state = 1;
+        }
+        const std::string host = g_set.master_host;
+        const int port = g_set.master_port;
+        std::thread([host, port, query]() { sc_run(host, port, query); }).detach();
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", g_set.master_host);
+
+    if (s.state == 1 || s.state == 0) ImGui::TextDisabled("Asking the master server...");
+    if (s.state == 3) ImGui::TextWrapped("%s", s.error.c_str());
+    if (s.state == 2 && s.rows.empty()) ImGui::TextDisabled("No matches recorded here yet.");
+    if (s.state == 2 && !s.rows.empty() &&
+        ImGui::BeginTable("scores", 10, ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
+                                            ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingFixedFit,
+                          ImVec2(0.0f, ImGui::GetContentRegionAvail().y - 4.0f))) {
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableSetupColumn("#");
+        ImGui::TableSetupColumn("Player", ImGuiTableColumnFlags_WidthStretch);
+        for (const char* c : {"Wins", "Losses", "Win %", "Units destroyed", "Units lost",
+                              "Buildings destroyed", "Buildings lost", "Bricks"})
+            ImGui::TableSetupColumn(c);
+        ImGui::TableHeadersRow();
+        const float icon = ImGui::GetTextLineHeight() * 1.4f;
+        for (size_t i = 0; i < s.rows.size(); ++i) {
+            const ScoreRow& r = s.rows[i];
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn(); ImGui::Text("%zu", i + 1);
+            ImGui::TableNextColumn();
+            hero_image(r.hero, icon);
+            if (ImGui::IsItemHovered() && r.hero >= 0)
+                ImGui::SetTooltip("Most played: %s", lb_teams_unit_name(r.hero));
+            ImGui::SameLine();
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextUnformatted(r.name.c_str());
+            ImGui::TableNextColumn(); ImGui::Text("%d", r.wins);
+            ImGui::TableNextColumn(); ImGui::Text("%d", r.losses);
+            ImGui::TableNextColumn();
+            ImGui::Text("%d%%", r.matches ? (int)std::lround(100.0 * r.wins / r.matches) : 0);
+            ImGui::TableNextColumn(); ImGui::Text("%d", r.units_killed);
+            ImGui::TableNextColumn(); ImGui::Text("%d", r.units_lost);
+            ImGui::TableNextColumn(); ImGui::Text("%d", r.buildings_killed);
+            ImGui::TableNextColumn(); ImGui::Text("%d", r.buildings_lost);
+            ImGui::TableNextColumn(); ImGui::Text("%d", r.bricks);
+        }
+        ImGui::EndTable();
+    }
+    tab_end();
+}
+
+// docs/431 (SG-0010): the community map archive, one map at a time.
+SDL_Renderer* g_maps_ren = nullptr;   // set by lb_overlay_draw, for the thumbnails
+
+void tab_map_archive() {
+    if (!tab_begin("Maps")) return;
+    guide("Free Play maps from the community map archive and the port's own (beta and "
+          "prototype maps). Pick a map to see its picture and facts, Download it into "
+          "your mods/maps folder, then Load new maps now. In a lobby, a map you lack "
+          "is fetched for you.");
+    lb_mapbrowser_draw(g_maps_ren);
+    tab_end();
+}
+
 const std::vector<MenuHeader>& menu_headers() {
     static const std::vector<MenuHeader> k = {
         {"Settings", {{"General", "General", tab_general},
@@ -6468,9 +6966,11 @@ const std::vector<MenuHeader>& menu_headers() {
                      {"Ban Maps", "Ban Maps", tab_ban_maps},
                      {"Presets", "Balance Presets", tab_balance_presets}}},
         {"Cheats", {{"Cheats", "Cheats", tab_cheats}}},
-        {"Network", {{"Multiplayer", "Multiplayer", tab_multiplayer}}},
+        {"Network", {{"Multiplayer", "Multiplayer", tab_multiplayer},
+                     {"Scores", "Scores", tab_scores}}},
         {"Tools", {{"Recordings", "Demo", tab_demo},
-                   {"Windows", "Windows", section_windows}}},
+                   {"Windows", "Windows", section_windows},
+                   {"Maps", "Maps", tab_map_archive}}},
     };
     return k;
 }
@@ -6707,6 +7207,7 @@ extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
                          (int)g_wide_field, (int)g_top_visible, g_top_w, g_top_h);
     }
     if (!window || !renderer) return;
+    g_maps_ren = renderer;   // docs/431
     // Before any panel logic and independent of every panel's visibility, so
     // the band audit's reference dump lands whether or not anything is open.
     // See the note at its definition and docs/291.
@@ -7517,6 +8018,12 @@ extern "C" int lb_setting_chat_toasts(void) { return g_set.chat_toasts ? 1 : 0; 
 extern "C" int lb_setting_fetch_maps(void) { return g_set.fetch_maps ? 1 : 0; }   // docs/420
 extern "C" int lb_setting_fast_link(void) { return g_set.fast_link ? 1 : 0; }     // docs/423
 extern "C" int lb_setting_match_picture(void) { return g_set.match_picture ? 1 : 0; }   // docs/428
+// SG-0018: LB_SCORES_OPT_OUT=0|1 forces it (a test aid).
+extern "C" int lb_setting_scores_opt_out(void) {
+    static const char* v = std::getenv("LB_SCORES_OPT_OUT");
+    if (v && *v) return std::atoi(v) ? 1 : 0;
+    return g_set.scores_opt_out ? 1 : 0;
+}
 extern "C" int lb_setting_discord_status(void) { return g_set.discord_status ? 1 : 0; }   // docs/430
 extern "C" int lb_setting_discord_hero(void) { return g_set.discord_hero ? 1 : 0; }
 // docs/419. LB_MASTER_HTTPS=0|1 forces it (a test aid).
@@ -7537,6 +8044,18 @@ extern "C" int lb_setting_smooth_models(void) {   // docs/411; LB_SMOOTH_MODELS
         forced = v ? (std::atoi(v) ? 1 : 0) : -1;
     }
     return forced >= 0 ? forced : (g_set.smooth_models ? 1 : 0);
+}
+
+extern "C" int lb_setting_res3d(void) {   // docs/434; LB_RES3D=1..4, a test aid
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_RES3D");
+        forced = v ? std::atoi(v) : -1;
+        if (forced > 4) forced = 4;
+    }
+    if (forced >= 1) return forced;
+    if (forced == 0) return 1;
+    return 1 + (g_set.res3d < 0 ? 0 : g_set.res3d > 3 ? 3 : g_set.res3d);
 }
 
 extern "C" int lb_setting_mod_palette(void) {   // docs/410
@@ -7588,7 +8107,8 @@ extern "C" int lb_setting_attack_boost_ranged(void) {
         const char* v = std::getenv("LB_ATTACKBOOST");
         forced = v ? std::atoi(v) : -1;
     }
-    return forced >= 0 ? forced : g_set.attack_boost_ranged;
+    const int m = forced >= 0 ? forced : g_set.attack_boost_ranged;
+    return m < 0 ? 0 : (m > 2 ? 2 : m);   // docs/433: 2 = not the blast
 }
 
 // LB_HOTWIRE_TRANSPORT=<0|1|2> forces the combo without the UI, so mode 1 --
@@ -7776,9 +8296,11 @@ extern "C" int lb_setting_ai_cheats(void) {
     static int forced = -2;
     if (forced == -2) {
         const char* v = std::getenv("LB_AI_CHEATS");
-        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+        // docs/433: 0 me, 1 me and the AI, 2 the AI only.
+        forced = v ? std::min(std::max(std::atoi(v), 0), 2) : -1;
     }
-    return forced >= 0 ? forced : (g_set.ai_cheats ? 1 : 0);
+    return forced >= 0 ? forced
+                       : (g_set.ai_cheats ? (g_set.ai_cheats_only ? 2 : 1) : 0);
 }
 
 // SG-0017: the AI casts single-target spells. LB_AI_TAP_SPELLS=0|1 forces it.
@@ -7791,6 +8313,17 @@ extern "C" int lb_setting_ai_tap_spells(void) {
         forced = v ? (std::atoi(v) ? 1 : 0) : -1;
     }
     return forced >= 0 ? forced : (g_set.ai_tap_spells ? 1 : 0);
+}
+
+// SG-0002: the computer plays the player's side (Free Play, offline).
+// LB_AI_SPECTATE=0|1 forces it. lb_patches.cpp applies it only with no network.
+extern "C" int lb_setting_ai_spectate(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_AI_SPECTATE");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.ai_spectate ? 1 : 0);
 }
 
 // Which faction's music a match plays. 0 vanilla (the game untouched),
@@ -7848,17 +8381,18 @@ extern "C" int lb_setting_plantation_name(void) {
 // / LB_RENAME_BROADSIDE=<0|1> force them, like LB_LEADER_NAME.
 extern "C" int lb_setting_rename(int which) {
     // LB_RENAME_ALL=1 forces every rename on (test aid, SG-0003/SG-0014).
-    static const char* const kEnv[9] = {"LB_RENAME_CLAW_TANK", "LB_RENAME_GEMMA",
-                                        "LB_RENAME_BROADSIDE", "LB_RENAME_ASSAULT_SHIP",
-                                        "LB_RENAME_ATTACK_SHIP", "LB_RENAME_EARTH_TRANSPORT",
-                                        "LB_RENAME_ALIEN_TRANSPORT", "LB_RENAME_STARFIGHTER",
-                                        "LB_RENAME_STARSHIP1"};
-    static int forced[9] = {-1, -1, -1, -1, -1, -1, -1, -1, -1};
+    static const char* const kEnv[11] = {"LB_RENAME_CLAW_TANK", "LB_RENAME_GEMMA",
+                                         "LB_RENAME_BROADSIDE", "LB_RENAME_ASSAULT_SHIP",
+                                         "LB_RENAME_ATTACK_SHIP", "LB_RENAME_EARTH_TRANSPORT",
+                                         "LB_RENAME_ALIEN_TRANSPORT", "LB_RENAME_STARFIGHTER",
+                                         "LB_RENAME_STARSHIP1", "LB_RENAME_PIRATE_BUILDINGS",
+                                         "LB_RENAME_BOUNTY"};
+    static int forced[11] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
     static bool read_env = false;
     if (!read_env) {
         read_env = true;
         const char* all = std::getenv("LB_RENAME_ALL");
-        for (int i = 0; i < 9; ++i) {
+        for (int i = 0; i < 11; ++i) {
             if (all && std::atoi(all) == 1) forced[i] = 1;
             if (const char* v = std::getenv(kEnv[i])) {
                 const int n = std::atoi(v);
@@ -7866,12 +8400,13 @@ extern "C" int lb_setting_rename(int which) {
             }
         }
     }
-    if (which < 0 || which > 8) return 0;
-    const int own[9] = {g_set.rename_claw_tank, g_set.rename_gemma,
-                        g_set.rename_broadside, g_set.rename_assault_ship,
-                        g_set.rename_attack_ship, g_set.rename_earth_transport,
-                        g_set.rename_alien_transport, g_set.rename_starfighter,
-                        g_set.rename_starship1};
+    if (which < 0 || which > 10) return 0;
+    const int own[11] = {g_set.rename_claw_tank, g_set.rename_gemma,
+                         g_set.rename_broadside, g_set.rename_assault_ship,
+                         g_set.rename_attack_ship, g_set.rename_earth_transport,
+                         g_set.rename_alien_transport, g_set.rename_starfighter,
+                         g_set.rename_starship1, g_set.rename_pirate_buildings,
+                         g_set.rename_bounty};
     const int m = forced[which] >= 0 ? forced[which] : own[which];
     return (m < 0 || m > 1) ? 0 : m;
 }
@@ -8175,7 +8710,9 @@ extern "C" const char* lb_net_lobby_options_json(void) {
     kv.push_back({"EMP disables transports", g_set.emp_transports ? "On" : "Off"});
     kv.push_back({"AI rebuilds its hero", g_set.ai_hero_rebuild ? "On" : "Off"});
     kv.push_back({"Hotwired transports leave", g_set.transport_release ? "On" : "Off"});
-    kv.push_back({"Attack boost reaches ranged", g_set.attack_boost_ranged ? "On" : "Off"});
+    kv.push_back({"Attack boost reaches ranged",
+                  g_set.attack_boost_ranged >= 2 ? "On, no blast"
+                  : g_set.attack_boost_ranged ? "On" : "Off"});
     kv.push_back({"Fix hotwired healing", g_set.fix_hotwired_healing ? "On" : "Off"});
     {
         static const char* const kFrom[7] = {"Off", "King", "Wizard", "Pirate",
@@ -8199,9 +8736,47 @@ extern "C" const char* lb_net_lobby_options_json(void) {
     kv.push_back({"Cheats", cheats.empty() ? "None" : cheats});
     if (g_set.unlock_units) kv.push_back({"Unlock all units", "On"});
     if (g_set.unlock_maps) kv.push_back({"Unlock all maps", "On"});   // docs/407
-    if (g_set.banned_units[0]) kv.push_back({"Banned units", g_set.banned_units});
-    if (g_set.banned_maps[0]) kv.push_back({"Banned maps", g_set.banned_maps});   // docs/429
-    if (g_set.unit_map_bans[0]) kv.push_back({"Units banned on some maps", g_set.unit_map_bans});
+    // The lists by name, as the game shows them, never as the settings' ids
+    // and tokens ("133,179", "s5,h<hash>").
+    auto unit_names = [](const char* ids, const char* sep) {
+        std::string o;
+        for (const char* p = ids; p && *p;) {
+            const int bp = std::atoi(p);
+            if (!o.empty()) o += sep;
+            o += lb_teams_unit_name(bp);
+            while (*p && *p != ',') ++p;
+            if (*p) ++p;
+        }
+        return o;
+    };
+    auto map_names = [](const char* toks) {
+        static char buf[1024];
+        lb_maps_names_of(toks, buf, (int)sizeof buf);
+        return std::string(buf);
+    };
+    if (g_set.banned_units[0])
+        kv.push_back({"Banned units", unit_names(g_set.banned_units, ", ")});
+    if (g_set.banned_maps[0])
+        kv.push_back({"Banned maps", map_names(g_set.banned_maps)});   // docs/429
+    if (g_set.unit_map_bans[0]) {
+        // "bp:tok+tok;bp:tok" -> "Sheriff: The Pond, Avast; ..."
+        std::string o;
+        const std::string umb = g_set.unit_map_bans;
+        size_t at = 0;
+        while (at < umb.size()) {
+            size_t end = umb.find(';', at);
+            if (end == std::string::npos) end = umb.size();
+            const std::string one = umb.substr(at, end - at);
+            const size_t colon = one.find(':');
+            if (colon != std::string::npos) {
+                if (!o.empty()) o += "; ";
+                o += std::string(lb_teams_unit_name(std::atoi(one.c_str()))) + ": " +
+                     map_names(one.substr(colon + 1).c_str());
+            }
+            at = end + 1;
+        }
+        kv.push_back({"Units banned on some maps", o});
+    }
     if (g_set.ban_preset[0]) kv.push_back({"Ban preset", g_set.ban_preset});
     if (g_set.random_maps) kv.push_back({"Random map entries", "On"});
     if (g_set.tourney_team) kv.push_back({"Random team (tourney)", "On"});

@@ -230,8 +230,8 @@ STORY_ROUTE = ROUTE[:4] + [
     # A and START were tried here first and do nothing: this screen is
     # touch-only, which is why the generic advance sat on it for fourteen
     # attempts. Two taps again, select then confirm.
-    (52, 50, 2.5),     # select a story: select Knights
-    (52, 50, 4.0),     # select a story: enter Knights
+    (int(os.environ.get('LB_STORY_X', 52)), int(os.environ.get('LB_STORY_Y', 50)), 2.5),     # select a story (LB_STORY_X/Y pick another)
+    (int(os.environ.get('LB_STORY_X', 52)), int(os.environ.get('LB_STORY_Y', 50)), 4.0),     # enter it
     # "Level Select" has Act 1 / Act 2 / Act 3 tabs across the top and a map of
     # mission nodes below. ACT 3 ON PURPOSE: Act 1 mission 1 is the campaign's
     # TUTORIAL, and a tutorial mission holds the camera still until its
@@ -1350,6 +1350,9 @@ def main():
                    "C:\\devkitPro\\msys2\\usr\\bin" + os.pathsep +
                    env.get("PATH", ""))
     env["LB_DUMP_ADAPTIVE"] = out
+    # A run records its own session (lb-session-*.lbdemo), which the game
+    # no longer does by default: a crashed run replays from it.
+    env.setdefault("LB_DEMO_RECORD", "1")
     # THE DIAGNOSTICS THE SELECTION PROBES PARSE, armed automatically.
     #
     # --click-sweep reads the player's base position out of the port's own

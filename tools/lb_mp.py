@@ -72,6 +72,9 @@ def launch(out, index, port, extra_env, base_port=None):
     # instance renames its profile at the main menu (LB_TEST_RENAME, saved by
     # the game itself) to a neutral test name. --env LB_TEST_RENAME=... wins.
     env.setdefault("LB_TEST_RENAME", "Tester%d" % (index + 1))
+    # Each instance records its session, which the game no longer does by
+    # default (a desync or crash replays from it).
+    env.setdefault("LB_DEMO_RECORD", "1")
     # On the test display, as lb_exp.py (docs/396).
     env.setdefault("LB_DISPLAY_W", "1920")
     env.setdefault("LB_DISPLAY_H", "1080")

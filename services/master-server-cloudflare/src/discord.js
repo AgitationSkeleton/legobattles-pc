@@ -6,11 +6,11 @@
 // nothing is sent. A message that fails is let go; the game never waits on it.
 
 // Names as they are, not as Discord's formatting would take them.
-export function plain(s) {
+export function plain(s, max = 100) {
   return String(s == null ? '' : s)
     .replace(/[\r\n]+/g, ' ')
     .replace(/[\\*_~`|>#[\]()<:@-]/g, '\\$&')
-    .slice(0, 100);
+    .slice(0, max);
 }
 
 // "12 min", "1 h 5 min", "40 s".
@@ -28,7 +28,9 @@ export function settingsText(options) {
   const lines = [];
   for (const [k, v] of Object.entries(options).slice(0, 24)) {
     if (v === '' || v == null) continue;
-    lines.push('• ' + plain(k) + ': ' + plain(typeof v === 'object' ? JSON.stringify(v) : v));
+    // A value may be a list of map or unit names (docs/429): longer than a name.
+    lines.push('• ' + plain(k) + ': ' +
+               plain(typeof v === 'object' ? JSON.stringify(v) : v, 400));
   }
   return lines.join('\n');
 }

@@ -40,9 +40,13 @@ MODS = [
     ("FactionWars2", "factionwars 2.0.1.ebp", "2.0.1"),
     ("Vanilplus",   "VanilPlus1.2.1.ebp", "1.2.1"),
     ("Fusion",      "fusion 1-2.ebp", "1.2"),
+    # Appended, so every stored slot keeps meaning the same pack. A bare
+    # Entities.ebp in its own directory (docs/426).
+    ("Rebalance2",  "rebalance-1.18.1/Entities.ebp", "1.18.1"),
 ]
 # Dropdown names where "<name> <version>" is not it.
-DISPLAY = {"FactionWars2": "FactionWars 2.0.1", "Vanilplus": "Vanil+ 1.2.1"}
+DISPLAY = {"FactionWars2": "FactionWars 2.0.1", "Vanilplus": "Vanil+ 1.2.1",
+           "Rebalance2": "Rebalance 1.18.1"}
 BASE = "VANILLA_MapBase.nds"
 TARGET = "BP/Entities.ebp"
 

@@ -19,6 +19,11 @@
 			{
 				"name": "RELAY",
 				"class_name": "RelayRoom"
+			},
+			// SG-0018: the score tables, one object (src/scores.js).
+			{
+				"name": "SCORES",
+				"class_name": "Scores"
 			}
 		]
 	},
@@ -33,6 +38,12 @@
 			"tag": "relay-v1",
 			"new_sqlite_classes": [
 				"RelayRoom"
+			]
+		},
+		{
+			"tag": "scores-v1",
+			"new_sqlite_classes": [
+				"Scores"
 			]
 		}
 	],

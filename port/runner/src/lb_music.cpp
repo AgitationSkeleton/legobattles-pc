@@ -403,7 +403,12 @@ extern "C" int lb_music_wanted_side(void) {
             g_world = scan_world();
             g_world_map = map;
         }
-        return (g_world >= 0 && g_world < 3) ? kWorldSide[g_world] : -1;
+        // Either of the world's two factions, picked once per match (the
+        // owner's rule: a Mars map plays Earth or Alien, not always Earth),
+        // with the same per-match seed as Random.
+        if (g_world < 0 || g_world >= 3) return -1;
+        pick_random(map);
+        return kWorldSide[g_world] + (int)((g_random_seed >> 8) & 1u);
     }
     return -1;
 }

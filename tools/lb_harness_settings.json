@@ -4,6 +4,7 @@
   "ui_scale": 1.0000,
   "pixel_scale": 2.0000,
   "hud_scale": 1.0000,
+  "res3d": 0,
   "balance_patch": 0,
   "hotwire_mode": 0,
   "hotwire_transport": 0,

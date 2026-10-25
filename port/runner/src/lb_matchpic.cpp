@@ -340,9 +340,8 @@ struct Match {
 // The map's Free Play preview: <stem>mini.NCGR, 4 bpp, 8x8 tiles in a 16-tile row.
 // Index 0 is clear. Its palette is not a file of its own (the map select gets it
 // at run time), so a terrain ramp is used.
-bool load_preview(const std::string& stem, std::vector<uint8_t>* idx, int* size) {
-    std::vector<uint8_t> f(32 * 1024);
-    const int n = lb_rom_read_unwrapped((stem + "mini.NCGR").c_str(), f.data(), (int)f.size());
+bool decode_preview(const std::vector<uint8_t>& f, int n, std::vector<uint8_t>* idx,
+                    int* size) {
     if (n < 0x30 + 0x2000 || n > (int)f.size() || std::memcmp(f.data(), "RGCN", 4) != 0)
         return false;
     const uint8_t* pix = f.data() + 0x30;
@@ -360,6 +359,11 @@ bool load_preview(const std::string& stem, std::vector<uint8_t>* idx, int* size)
         }
     *size = std::max(maxx, maxy);
     return *size > 0;
+}
+bool load_preview(const std::string& stem, std::vector<uint8_t>* idx, int* size) {
+    std::vector<uint8_t> f(32 * 1024);
+    const int n = lb_rom_read_unwrapped((stem + "mini.NCGR").c_str(), f.data(), (int)f.size());
+    return decode_preview(f, n, idx, size);
 }
 
 // SG-0004 (docs/430): the map select's real palette. ARM9 table 0x020C4A54 is
@@ -596,6 +600,90 @@ std::vector<int> banned_list() {
 
 }  // namespace
 
+// docs/431: the map browser's thumbnail. A map's <stem>mini.NCGR (plain or
+// COMP-wrapped) drawn with the map select's own palette for its world; 128x128
+// pixels in `out` (R,G,B,A in memory order; index 0 is the dark backdrop),
+// `*size` the used square. Returns 0 when the file is not a Free Play preview.
+bool lb_mods_unwrap(std::vector<uint8_t>* b);   // lb_mods.cpp
+extern "C" int lb_matchpic_mini_rgba(const unsigned char* ncgr, size_t n, int world,
+                                     unsigned int* out, int* size) {
+    std::vector<uint8_t> f(ncgr, ncgr + n);
+    if (!lb_mods_unwrap(&f)) return 0;
+    std::vector<uint8_t> idx;
+    if (!decode_preview(f, (int)f.size(), &idx, size)) return 0;
+    uint32_t pal[16];
+    if (!world_palette(world, pal)) {
+        // Before the game's memory holds the bank: a plain terrain ramp.
+        static const uint32_t kRamp[16] = {
+            0, rgba(52, 70, 46), rgba(30, 44, 34), rgba(78, 116, 72), rgba(104, 142, 88),
+            rgba(136, 168, 112), rgba(64, 90, 150), rgba(214, 196, 120), rgba(180, 150, 90),
+            rgba(160, 160, 160), rgba(200, 200, 200), rgba(255, 255, 255), rgba(200, 80, 80),
+            rgba(80, 80, 200), rgba(80, 200, 80), rgba(230, 230, 60)};
+        std::memcpy(pal, kRamp, sizeof pal);
+    }
+    for (int i = 0; i < 128 * 128; ++i) {
+        const int v = idx[(size_t)i];
+        out[i] = v ? pal[v] : rgba(18, 30, 60);
+    }
+    return 1;
+}
+
+// docs/429 (the owner's rule): THE RANDOM ENTRY DOES NOT SHOW ITS DRAW. The map
+// select uploads the selected map's preview (`<stem>mini`, a 128x128 4bpp
+// bitmap, 8192 bytes) through FUN_0204E1D0; while a Random entry is selected, the
+// Random opponent's "?" is drawn into that buffer instead, scaled to the drawn
+// map's preview size and matched to its world's map-select palette (index 0
+// stays clear). Returns 1 when painted.
+extern "C" int lb_teams_question_rgba(unsigned int out[56 * 56]);   /* lb_teams.cpp */
+extern "C" int lb_matchpic_paint_random_preview(uint32_t buf, uint32_t n, const char* name) {
+    if (n != 8192u || buf < 0x02000000u || buf + n > 0x02400000u || !name) return 0;
+    std::string stem = name;
+    if (stem.size() < 5 || stem.compare(stem.size() - 4, 4, "mini") != 0) return 0;
+    stem.resize(stem.size() - 4);
+    static unsigned int q[56 * 56];
+    if (!lb_teams_question_rgba(q)) return 0;
+    uint32_t pal[16];
+    if (!world_palette(map_world(stem), pal)) return 0;
+    // The uploaded buffer is the bitmap (the .NCBR's layout): 128 pixels a
+    // row, 4 bits each, 64 bytes a row -- not the .NCGR file's 8x8 tiles.
+    // The drawn map's extent, from its own preview: a 64- or 96-tile map.
+    int size = 0;
+    for (uint32_t i = 0; i < n; ++i) {
+        const uint8_t b = bus_read_u8(buf + i);
+        if (!b) continue;
+        const int x = (int)((i & 63u) * 2u + 1u), y = (int)(i >> 6);
+        size = std::max(size, std::max(x + 1, y + 1));
+    }
+    if (size < 32) size = 64;
+    if (size > 128) size = 128;
+    auto nearest = [&](unsigned int c) {
+        const int r = (int)(c & 255u), g = (int)((c >> 8) & 255u), b = (int)((c >> 16) & 255u);
+        int best = 1, bd = 1 << 30;
+        for (int k = 1; k < 16; ++k) {
+            const int dr = r - (int)(pal[k] & 255u), dg = g - (int)((pal[k] >> 8) & 255u),
+                      db = b - (int)((pal[k] >> 16) & 255u);
+            const int d = dr * dr + dg * dg + db * db;
+            if (d < bd) { bd = d; best = k; }
+        }
+        return best;
+    };
+    // The "?" fills most of the map's square, centred.
+    const int box = size * 7 / 8, off = (size - box) / 2;
+    for (uint32_t i = 0; i < n; ++i) bus_write_u8(buf + i, 0u);
+    for (int y = 0; y < box; ++y)
+        for (int x = 0; x < box; ++x) {
+            const unsigned int c = q[(size_t)(y * 56 / box) * 56u + (size_t)(x * 56 / box)];
+            if (!(c >> 24)) continue;
+            const int px = off + x, py = off + y;
+            const uint32_t at = buf + (uint32_t)(py * 64 + (px >> 1));
+            uint8_t b = bus_read_u8(at);
+            const int v = nearest(c);
+            b = (px & 1) ? (uint8_t)((b & 0x0Fu) | (v << 4)) : (uint8_t)((b & 0xF0u) | v);
+            bus_write_u8(at, b);
+        }
+    return 1;
+}
+
 extern "C" void lb_matchpic_note_player(int player, const unsigned char rec[20]) {
     if (player < 0 || player >= kMaxPlayers) return;
     if (g_players[player].have) {   // a player seen again: a new match
@@ -673,6 +761,16 @@ void watch_teams() {
     }
 }
 
+// Test aid: LB_MATCHPIC_FAKE_RESULT=1 -- when the game decided nothing, the
+// first player is the winner and the others lost (exercises the wire path).
+static void fake_result_if_asked() {
+    if (!std::getenv("LB_MATCHPIC_FAKE_RESULT")) return;
+    bool any = false;
+    for (int s : g_team_state) any = any || s != 0;
+    if (!any)
+        for (int k = 0; k < kMaxPlayers; ++k) g_team_state[k] = k == 0 ? 2 : 1;
+}
+
 extern "C" void lb_matchpic_on_playing(void) {
     for (int& s : g_team_state) s = 0;
     g_watch = true;
@@ -703,14 +801,7 @@ extern "C" int lb_matchpic_result(char* winners, int wcap, char* losers, int lca
     const bool watched = g_watch;
     g_watch = false;
     if (!watched) return 0;
-    // Test aid: LB_MATCHPIC_FAKE_RESULT=1 -- when the game decided nothing, the
-    // first player is the winner and the others lost (exercises the wire path).
-    if (std::getenv("LB_MATCHPIC_FAKE_RESULT")) {
-        bool any = false;
-        for (int s : g_team_state) any = any || s != 0;
-        if (!any)
-            for (int k = 0; k < kMaxPlayers; ++k) g_team_state[k] = k == 0 ? 2 : 1;
-    }
+    fake_result_if_asked();
     std::string w, l;
     for (int k = 0; k < kMaxPlayers; ++k) {
         if (!g_players[k].have || g_team_state[k] == 0) continue;
@@ -724,6 +815,66 @@ extern "C" int lb_matchpic_result(char* winners, int wcap, char* losers, int lca
                  w.empty() ? "" : w.substr(0, w.size() - 1).c_str(),
                  l.empty() ? "" : l.substr(0, l.size() - 1).c_str());
     return !w.empty() || !l.empty();
+}
+
+// SG-0018: the host's report of its match for the score tables, as the JSON
+// fields of POST /score after the code and token: the ruleset (the balance in
+// force), the cheats, the banned units and each player's line (won, hero, the
+// stats lb_scores.cpp read). Call it before lb_matchpic_result, which ends the
+// watch. Returns 0 when there is nothing to report: no match was watched, the
+// game decided nobody, or cheats were on (the server refuses those anyway).
+extern "C" int lb_matchpic_score_json(char* out, int cap) {
+    if (cap > 0) out[0] = '\0';
+    if (!g_watch) return 0;
+    fake_result_if_asked();
+    const unsigned cheats = (unsigned)lb_cheat_mask_live();
+    if (cheats) {
+        std::fprintf(stderr, "[lb_scores] cheats were on: the match is not reported\n");
+        std::fflush(stderr);
+        return 0;
+    }
+    std::string ruleset = "Vanilla";
+    const int slot = lb_balance_applied_slot();
+    if (slot > 0) ruleset = lb_balance_name(slot);
+    if (lb_balance_custom_size() > 0) ruleset = "Custom Rules";
+    auto esc = [](const std::string& s) {
+        std::string o = "\"";
+        for (char c : s) {
+            if (c == '"' || c == '\\') o += '\\';
+            if ((unsigned char)c >= 0x20) o += c;
+        }
+        return o + "\"";
+    };
+    std::string j = "\"ruleset\":" + esc(ruleset) + ",\"cheats\":0,\"banned\":[";
+    const std::vector<int> banned = banned_list();
+    for (size_t i = 0; i < banned.size(); ++i) j += (i ? "," : "") + std::to_string(banned[i]);
+    j += "],\"players\":[";
+    int n = 0;
+    for (int k = 0; k < kMaxPlayers; ++k) {
+        const int st = g_team_state[k];
+        if (!g_players[k].have || (st != 1 && st != 2 && st != 3)) continue;
+        LbMatchStats s{};
+        if (!lb_scores_player_stats(k, &s)) {
+            s.units_built = s.units_lost = s.units_killed = -1;
+            s.buildings_built = s.buildings_lost = s.buildings_killed = s.bricks = -1;
+        }
+        char line[400];
+        std::snprintf(line, sizeof line,
+                      "{\"name\":%s,\"won\":%s,\"hero\":%d,\"units_built\":%d,"
+                      "\"units_lost\":%d,\"units_killed\":%d,\"buildings_built\":%d,"
+                      "\"buildings_lost\":%d,\"buildings_killed\":%d,\"bricks\":%d}",
+                      esc(g_players[k].name).c_str(), st == 2 ? "true" : "false",
+                      g_players[k].bp[0], s.units_built, s.units_lost, s.units_killed,
+                      s.buildings_built, s.buildings_lost, s.buildings_killed, s.bricks);
+        j += (n++ ? "," : "") + std::string(line);
+    }
+    j += "]";
+    if (n < 2) return 0;
+    if ((int)j.size() >= cap) return 0;
+    std::memcpy(out, j.c_str(), j.size() + 1);
+    std::fprintf(stderr, "[lb_scores] report: %s\n", out);
+    std::fflush(stderr);
+    return 1;
 }
 
 // LB_MATCHPIC_TEST=1: two teams of the King default army, map 1, once the front
@@ -745,11 +896,15 @@ extern "C" void lb_matchpic_tick(void) {
         return;
     static const int kKing[9] = {0, 2, 3, 4, 5, 6, 7, 8, 9};
     Match m;
-    for (int i = 0; i < 2; ++i) {
+    // LB_MATCHPIC_TEST_PLAYERS=2..4: that many teams (docs/428's 3-team layout).
+    const char* tp = std::getenv("LB_MATCHPIC_TEST_PLAYERS");
+    const int np = tp ? std::max(2, std::min(4, std::atoi(tp))) : 2;
+    static const unsigned kTestColour[4] = {0u, 4u, 1u, 3u};   // red, purple, blue, yellow
+    for (int i = 0; i < np; ++i) {
         Player p;
         p.have = true;
-        p.name = i ? "Tester2" : "Tester1";
-        p.colour = team_colour_rgba(i ? 4u : 0u);   // purple, red
+        p.name = "Tester" + std::to_string(i + 1);
+        p.colour = team_colour_rgba(kTestColour[i]);
         for (int k = 0; k < 9; ++k) p.bp[k] = kKing[k] + (i ? 20 : 0) * 0;
         m.players.push_back(p);
     }

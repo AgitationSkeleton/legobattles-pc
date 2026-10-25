@@ -77,12 +77,16 @@ cp -p "$W/port/runner/src/lb_vwh.cpp" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_relay.cpp" "$TREE/runner/src/"
 # The notification sound, on its own audio device (docs/427).
 cp -p "$W/port/runner/src/lb_sfx.cpp" "$TREE/runner/src/"
+# Post-match statistics for the high-score table (SG-0018).
+cp -p "$W/port/runner/src/lb_scores.cpp" "$TREE/runner/src/"
 # The picture of a match for the Discord log (docs/428).
 cp -p "$W/port/runner/src/lb_matchpic.cpp" "$TREE/runner/src/"
 # Map bans, per-map unit bans, Random maps, ban presets (docs/429).
 cp -p "$W/port/runner/src/lb_mapbans.cpp" "$TREE/runner/src/"
 # Discord Rich Presence over the local IPC pipe (docs/430, SG-0020).
 cp -p "$W/port/runner/src/lb_discord.cpp" "$TREE/runner/src/"
+# A host sends a joiner its mod map (docs/432).
+cp -p "$W/port/runner/src/lb_maptx.cpp" "$TREE/runner/src/"
 # The first-run setup: the player's own ROM, Europe or USA (docs/394).
 cp -p "$W/port/runner/src/lb_setup.cpp" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_music.cpp" "$TREE/runner/src/"
@@ -91,6 +95,11 @@ cp -p "$W/port/runner/src/lb_demo.cpp" "$TREE/runner/src/"
 # army record, the Custom/Random opponent and the ban rules.
 cp -p "$W/port/runner/src/lb_teams.cpp" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_wide2d.inc" "$TREE/runner/src/"
+# 3D resolution (docs/433): the hi-res partner renderer, its compositing and
+# its presentation. Includes, so no source list entry.
+cp -p "$W/port/runner/src/lb_hires_soft.inc" "$TREE/runner/vendor/melonds/"
+cp -p "$W/port/runner/src/lb_hires_comp.inc" "$TREE/runner/src/"
+cp -p "$W/port/runner/src/lb_hires_front.inc" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_field.h"   "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_field.cpp" "$TREE/runner/src/"
 # The map-space visibility record (docs/247). Its own TU so that deleting

@@ -569,11 +569,58 @@ bool marquee_hide_guest() {
 // alone: its grey cells are its locked factions.
 constexpr uint32_t kImageXfer = 0x0204E1D0u;   // arm
 extern "C" int lb_teams_paste_portraits(uint32_t buf);   /* lb_teams.cpp */
+extern "C" int lb_matchpic_paint_random_preview(uint32_t buf, uint32_t n,
+                                                const char* name);   /* lb_matchpic.cpp */
+// docs/429: the map select's selection is a Random entry (map_preview_override),
+// and when it last said so.
+bool g_random_preview = false;
+unsigned long long g_random_preview_at = 0;
+bool random_preview_now() {
+    return g_random_preview && SDL_GetTicks64() - g_random_preview_at < 300u;
+}
 void image_xfer_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kImageXfer);
     const uint32_t desc = g_cpu.R[2];
     const uint32_t name = bus_read_u32(g_cpu.R[13] + 8u);
     auto ram = [](uint32_t p) { return p >= 0x02000000u && p < 0x02400000u; };
+    // Test aid: LB_XFER_LOG=1 names every image upload (name, size, vram).
+    static const bool xlog = std::getenv("LB_XFER_LOG") != nullptr;
+    if (xlog && ram(desc) && ram(name)) {
+        static int said = 0;
+        if (said++ < 400) {
+            char s[64];
+            int n = 0;
+            for (; n < 63; ++n) {
+                const char ch = (char)bus_read_u8(name + (uint32_t)n);
+                if (!ch) break;
+                s[n] = ch;
+            }
+            s[n] = 0;
+            std::fprintf(stderr, "[lb_xfer] %s: %u bytes, kind %u, vram %08X\n", s,
+                         (unsigned)bus_read_u32(desc + 0x10u), (unsigned)g_cpu.R[0],
+                         (unsigned)g_cpu.R[1]);
+            std::fflush(stderr);
+        }
+    }
+    // docs/429: a Random entry's preview is the "?", never the drawn map.
+    if (random_preview_now() && ram(desc) && ram(name) && bus_read_u32(desc + 0x10u) == 8192u) {
+        char s[64];
+        int n = 0;
+        for (; n < 63; ++n) {
+            const char ch = (char)bus_read_u8(name + (uint32_t)n);
+            if (!ch) break;
+            s[n] = ch;
+        }
+        s[n] = 0;
+        if (lb_matchpic_paint_random_preview(bus_read_u32(desc + 0x14u), 8192u, s)) {
+            static int said = 0;
+            if (said++ < 3) {
+                std::fprintf(stderr, "[lb_maps] the Random entry shows the \"?\" "
+                             "(not %s)\n", s);
+                std::fflush(stderr);
+            }
+        }
+    }
     if (ram(desc) && ram(name) && bus_read_u32(desc + 0x10u) == 65536u) {
         char s[64];
         int n = 0;
@@ -1458,6 +1505,8 @@ void set_owner_override() {
 
 constexpr uint32_t kApplyDamage      = 0x0206E970u;   // three callers
 constexpr uint32_t kRangedApplyRet   = 0x0206E44Cu;   // after func_0206E408's bl
+constexpr uint32_t kImpactApplyRet1  = 0x0206E578u;   // func_0206E450, every target on the line
+constexpr uint32_t kImpactApplyRet2  = 0x0206E600u;   // func_0206E450, the single target
 constexpr uint32_t kEntityPool       = 0x02155028u;
 
 // func_0205C9B4: index and generation into the entity pool, then a kind test.
@@ -1503,12 +1552,30 @@ void apply_damage_observer() {
                          "[lb_projectile] ranged damage applied %u times\n", n);
     }
 
+    // docs/433: WHICH OF THE APPLIER'S FOUR CALL SITES THIS IS. ApplyDamage
+    // has three callers; the area one calls it once per entity in the blast.
+    //
+    //   0206E44C  func_0206E408  a hit in flight        roll = blueprint +0x6C/+0x6E
+    //   0206E578  func_0206E450  a non-exploding shot   roll = +0x70/+0x72
+    //                            reaching every target on its line
+    //   0206E600  func_0206E450  a non-exploding shot's single target, +0x70/+0x72
+    //   0206E890  func_0206E60C  THE BLAST: each entity in range, the roll
+    //                            already scaled by distance, +0x70/+0x72
+    //
+    // Mode 1 ("On", docs/95) boosts the first only; mode 2 adds the next two
+    // and still leaves the blast alone. The blast is reached only for a
+    // projectile whose "explodes" byte (+0x6B) is set (docs/59).
+    const int boost_mode = lb_attack_boost_live();
+    const uint32_t lr = g_cpu.R[14];
+    const bool direct = lr == kRangedApplyRet;
+    const bool arrival = lr == kImpactApplyRet1 || lr == kImpactApplyRet2;
+
     // r0 is the damage command, whose +0x24 is the projectile's handle -- the
     // same field func_0206E408 resolved on its way here.
-    const uint32_t projectile = (g_cpu.R[14] == kRangedApplyRet &&
-                                 lb_attack_boost_live())
+    const uint32_t projectile = (boost_mode >= 1 && (direct || (boost_mode >= 2 && arrival)))
                                     ? resolve_handle_kind(g_cpu.R[0] + 0x24u, 1u)
                                     : 0u;
+    int32_t applied_delta = 0;
     if (projectile) {
         const uint32_t shooter = resolve_handle_kind(projectile + 0x164u, 0u);
         if (shooter) {
@@ -1521,10 +1588,19 @@ void apply_damage_observer() {
             // small or negative. Matching the recorded width.
             const int32_t base = sinfo ? (int32_t)bus_read_u8(sinfo + 0x68u) : 0;
             const int32_t buffed = (int32_t)bus_read_u16(shooter + 0x170u);
-            const int32_t delta = buffed - base;
+            int32_t delta = buffed - base;
+            // LB_TEST_BOOST=<n>: a test aid that stands in for a cast attack
+            // boost by adding n to every shooter that has none (a run has no
+            // easy way to buff a ranged unit). Unset, nothing changes.
+            static const int test_boost = [] {
+                const char* v = std::getenv("LB_TEST_BOOST");
+                return v ? std::atoi(v) : 0;
+            }();
+            if (test_boost > 0 && delta <= 0) delta = test_boost;
             if (sinfo && delta > 0) {
                 g_cpu.R[2] += (uint32_t)delta;   // damage_min
                 g_cpu.R[3] += (uint32_t)delta;   // damage_max
+                applied_delta = delta;
                 // COUNT IT, so "this control is wired" can be a measurement.
                 // The badge stays READ until a run shows this firing: the
                 // consumer being present is not evidence that it ever runs,
@@ -1536,6 +1612,35 @@ void apply_damage_observer() {
                                  "[lb_attackboost] applied +%d to a ranged "
                                  "attack (%u so far)\n", (int)delta, n);
             }
+        }
+    }
+
+    // LB_DMGLOG=<n>: say the first n damage applications (docs/433): the call
+    // site (lr), the roll as it goes in (after any boost), what was added,
+    // the projectile's "explodes" flag, its shooter's owner, and the target's
+    // health before the hit. A test aid; with it unset this does nothing.
+    {
+        static const int cap = [] {
+            const char* v = std::getenv("LB_DMGLOG");
+            return v ? std::atoi(v) : 0;
+        }();
+        static int said = 0;
+        if (cap > 0 && said < cap) {
+            ++said;
+            const uint32_t proj = resolve_handle_kind(g_cpu.R[0] + 0x24u, 1u);
+            const uint32_t pdef = proj ? bus_read_u32(proj + 0x160u) : 0u;
+            const uint32_t pinfo = pdef ? bus_read_u32(pdef + 8u) : 0u;
+            const uint32_t tgt = resolve_handle_kind(g_cpu.R[1], 0u);
+            const uint32_t shot = proj ? resolve_handle_kind(proj + 0x164u, 0u) : 0u;
+            std::fprintf(stderr,
+                         "[lb_dmg] lr=%08X roll=%u..%u boost=+%d explodes=%d "
+                         "shooter_owner=%d shooter_cat=%d target=%08X hp=%d\n",
+                         lr, g_cpu.R[2], g_cpu.R[3], (int)applied_delta,
+                         pinfo ? (int)bus_read_u8(pinfo + 0x6Bu) : -1,
+                         shot ? (int)bus_read_u8(shot + 0xE4u) : -1,
+                         shot ? (int)entity_category(shot) : -1,
+                         tgt, tgt ? (int)bus_read_u16(tgt + 0x1A0u) : -1);
+            std::fflush(stderr);
         }
     }
 
@@ -3088,6 +3193,34 @@ constexpr uint32_t kViewSlot = 0x02157FACu;        // registry slot 0x5C
 constexpr uint32_t kViewVtable = 0x0214F0ECu;
 constexpr uint32_t kPenEventVtable = 0x0213B998u;
 
+// ---- SG-0006: CANCEL A UNIT QUEUED IN A BUILDING ----------------------------
+//
+// THE GAME HAS THE WHOLE PATH. A selected building's queue is drawn on the TOP
+// screen by the InfoTab (vtable 0214EA04, the registry's slot at 02157F84):
+// three ButtonWidgets, ids 730..732, in the layout UI/Game/InfoTab.bin at
+// rows 148..172, columns 32..56, 64..88 and 96..120. Their callback is
+// FUN_020D471C (Thumb; the widget's +8 holds it |1), the InfoTab's button
+// handler: widget r0, PenEvent r1, tab r2. For ids 730..732 (the jump table at
+// 020D4756 sends 0x2DA..0x2DC to 020D47AC) it checks the tab's state
+// ([+0x390] == 1, [+0x394] == 2, byte [+0x355] == 0), that the slot is below
+// the queue's length ([+0x80]) and the selection is one building ([+0x58] ==
+// 1), then calls FUN_02005958 -- CancelProduceQueueItemCommand's factory, id 26
+// -- with the local player, the building's two-byte id (building+0xDC) and the
+// slot. The command goes out through the same command stream as every other
+// order, so every machine runs it in the same tick: it is a normal input and
+// nothing here touches the queue or the bricks.
+//
+// WHY NOBODY CAN CLICK IT. The top screen has no touch panel, and the pen path
+// only reaches widgets of the touch screen's view. The cartridge's cancel is
+// complete and unreachable. This runs that callback with the event the pen
+// path would build for a click (the shortcuts' way, docs/383), from a click on
+// the Top Screen panel (lb_overlay.cpp). Requests 40..42 are slot 1..3.
+constexpr uint32_t kInfoTabSlot = 0x02157F84u;
+constexpr uint32_t kInfoTabVtable = 0x0214EA04u;
+constexpr uint32_t kInfoTabCb = 0x020D471Cu;       // thumb
+constexpr int kQuickCancel = 40;
+constexpr int kQueueWidgetId = 730;
+
 extern "C" void lb_demo_note_quick(int action);   /* src/lb_demo.cpp */
 extern "C" int lb_demo_playing(void);
 
@@ -3104,6 +3237,9 @@ struct QuickCall {
     int action = -1, id = 0;
 };
 QuickCall g_qc;
+// SG-0006: which of the three queue slots the game would take a click on now
+// (bit n = slot n+1), refreshed each view update, for the Top Screen panel.
+std::atomic<unsigned> g_cancel_slots{0};
 
 bool quick_log() {
     static const bool on = std::getenv("LB_QUICKLOG") != nullptr;
@@ -3184,6 +3320,38 @@ const char* quick_gate(uint32_t screen, int action, uint32_t* w_out,
         }
     }
     return why;
+}
+
+// SG-0006: would the cartridge's handler (FUN_020D471C) turn a click on queue
+// slot `slot` (0..2) into the cancel command now? The tests it makes, read
+// rather than called, so a recording only notes a click that does something.
+// nullptr means yes.
+const char* quick_cancel_gate(uint32_t view, int slot, uint32_t* w_out,
+                              uint32_t* tab_out) {
+    if (const char* why = quick_screen_gate(view)) return why;
+    const uint32_t tab = bus_read_u32(kInfoTabSlot);
+    if (!guest_ptr(tab) || bus_read_u32(tab) != kInfoTabVtable)
+        return "no info panel";
+    if (bus_read_u32(tab + 0x58u) != 1u) return "not one building selected";
+    if (bus_read_u32(tab + 0x390u) != 1u || bus_read_u32(tab + 0x394u) != 2u ||
+        bus_read_u8(tab + 0x355u))
+        return "the panel is not showing a queue";
+    if (slot < 0 || slot >= (int)bus_read_u32(tab + 0x80u))
+        return "nothing in that slot";
+    const uint32_t layout = bus_read_u32(tab + 0x1Cu);
+    if (!guest_ptr(layout)) return "no layout";
+    const uint32_t w = quick_find_widget(layout, kQueueWidgetId + slot);
+    if (!w) return "no widget";
+    if (bus_read_u32(w + 8u) != (kInfoTabCb | 1u)) return "not the queue button";
+    const uint32_t rec = bus_read_u32(w + 4u);
+    if (!guest_ptr(rec)) return "no record";
+    const uint8_t f = bus_read_u8(rec);
+    const uint32_t grp = bus_read_u32(rec + 0x14u);
+    if ((f & 2u) || (guest_ptr(grp) && bus_read_u8(grp + 1u))) return "hidden";
+    if ((f & 1u) && bus_read_u32(w + 0x10u) == 0u) return "disabled";
+    *w_out = w;
+    *tab_out = tab;
+    return nullptr;
 }
 
 // ---- docs/385: ITEM N OF THE SECOND BRICK'S LIST ----
@@ -3272,7 +3440,8 @@ uint32_t quick_list_item(uint32_t screen, int g, int n) {
 // The frontend's request (UI thread). A demo being replayed owns the input.
 extern "C" void lb_quick_request(int action) {
     const bool ok = (action >= 0 && action <= 2) ||
-                    (action > kQuickItem && action <= kQuickItem + 9);
+                    (action > kQuickItem && action <= kQuickItem + 9) ||
+                    (action >= kQuickCancel && action < kQuickCancel + 3);
     if (!ok || lb_demo_playing()) return;
     g_quick_req.store(action);
 }
@@ -3286,9 +3455,12 @@ extern "C" void lb_quick_replay(int action) {
     }
     if ((action >= 0 && action <= 2) ||
         (action > kQuickItem && action <= kQuickItem + 9) ||
-        (action > kQuickBlueItem && action <= kQuickBlueItem + 9))
+        (action > kQuickBlueItem && action <= kQuickBlueItem + 9) ||
+        (action >= kQuickCancel && action < kQuickCancel + 3))
         g_quick_req.store(action);
 }
+// SG-0006: the queue slots a click would cancel now (bit n = slot n+1).
+extern "C" unsigned lb_cancel_slots(void) { return g_cancel_slots.load(); }
 extern "C" int lb_setting_quick_blue(void);   /* lb_overlay.cpp */
 
 namespace {
@@ -3305,7 +3477,8 @@ void quick_save() {
 
 // Enter widget w's callback as a tail call that returns into 020DD708, below
 // the update's own stack (g_qc.sp, from quick_save).
-void quick_enter(uint32_t w, int id, uint32_t screen, int action) {
+void quick_enter(uint32_t w, int id, uint32_t screen, int action,
+                 uint32_t cb = kHudButtonCb, uint32_t arg2 = 0) {
     // The PenEvent the widget manager would pass for a click: vtable, touch
     // (E+0xC = 1), release (E+0x18 = 1), and the widget's centre, which
     // nothing on this path reads.
@@ -3331,12 +3504,12 @@ void quick_enter(uint32_t w, int id, uint32_t screen, int action) {
     g_qc.active = true;
     g_cpu.R[0] = w;
     g_cpu.R[1] = ev;
-    g_cpu.R[2] = screen;
+    g_cpu.R[2] = arg2 ? arg2 : screen;
     g_cpu.R[3] = 1u;
     g_cpu.R[13] = g_qc.sp_call;
     g_cpu.R[14] = kViewUpdate | 1u;   // back here, in Thumb
-    g_cpu.R[15] = kHudButtonCb;
-    runtime_dispatch_with_exchange(kHudButtonCb | 1u);
+    g_cpu.R[15] = cb;
+    runtime_dispatch_with_exchange(cb | 1u);
 }
 
 // TEST AID (docs/385), in the spirit of LB_CHEATS and LB_UNLOCKS: two heroes
@@ -3435,7 +3608,32 @@ void view_update_override(void) {
             lb_setting_quick_blue() && !quick_screen_gate(vs) &&
             quick_list_open(vs, 0))
             want = want - kQuickItem + kQuickBlueItem;
-        if (want > kQuickBlueItem) {
+        {   // SG-0006: which queue slots a click would cancel, for the panel.
+            unsigned m = 0;
+            uint32_t w0 = 0, t0 = 0;
+            for (int s = 0; s < 3; ++s)
+                if (!quick_cancel_gate(vs, s, &w0, &t0)) m |= 1u << s;
+            g_cancel_slots.store(m);
+        }
+        if (want >= kQuickCancel && want < kQuickCancel + 3) {
+            // SG-0006: the game's own queue-slot button, clicked.
+            const int slot = want - kQuickCancel;
+            uint32_t w = 0, tab = 0;
+            const char* why = quick_cancel_gate(vs, slot, &w, &tab);
+            if (quick_log())
+                std::fprintf(stderr, "[lb_quick] cancel queue slot %d: %s%s "
+                             "(widget %d)\n", slot + 1,
+                             why ? "declined, " : "clicked", why ? why : "",
+                             kQueueWidgetId + slot);
+            if (!why) {
+                lb_demo_note_quick(want);
+                g_qitem.n = 0;
+                quick_save();
+                quick_enter(w, kQueueWidgetId + slot, vs, want, kInfoTabCb,
+                            tab);
+                return;
+            }
+        } else if (want > kQuickBlueItem) {
             const int n = want - kQuickBlueItem;
             const char* why = quick_screen_gate(vs);
             if (!why && !quick_list_open(vs, 0)) why = "the blue list is closed";
@@ -4289,7 +4487,10 @@ struct RenRule { const char* needle; const char* name; int id; };
 // every harness route shows, so the supply path can be seen working.
 // Rules 4..9 (SG-0003/SG-0014): ships. The two "Transport Ship" rules are by id
 // (489 Earth, 509 Alien, the ids beside those factions' ships in every .lng).
-constexpr int kRenCount = 10;
+// Rules 10..12 (SG-0021): the Pirate prototypes' names. 10 and 11 are one
+// option (the two buildings swap), and one pass never rewrites its own output,
+// so "Plantation" -> "Shanty Shack" is not then turned into "Tavern".
+constexpr int kRenCount = 13;
 constexpr RenRule kRenRules[kRenCount] = {{"Claw Tank", "Crystal Reaper", -1},
                                           {"Gemma", "Doctor Kelvin", -1},
                                           {"Broadside", "Governor Tyranny", -1},
@@ -4299,7 +4500,10 @@ constexpr RenRule kRenRules[kRenCount] = {{"Claw Tank", "Crystal Reaper", -1},
                                           {"Transport Ship", "Recon Dropship", 489},
                                           {"Transport Ship", "Hyper Carrier", 509},
                                           {"Starfighter", "Switch Fighter", -1},
-                                          {"Starship 1", "Rocket", -1}};
+                                          {"Starship 1", "Rocket", -1},
+                                          {"Shanty Shack", "Tavern", -1},
+                                          {"Plantation", "Shanty Shack", -1},
+                                          {"Brickbeard's Bounty", "Flying Dutchman", -1}};
 uint16_t g_ren_hit[kRenIds];       // per id: bit r set if rule r changes it
 uint32_t g_ren_file = 0u, g_ren_lang = 0u;
 unsigned g_ren_logged = 0u;        // active mask last logged for this table
@@ -4355,8 +4559,13 @@ bool ren_rewrite(const char* src, uint32_t lang, unsigned mask, int id, char* ou
 unsigned ren_active_mask() {
     static const bool probe = std::getenv("LB_RENAME_PROBE") != nullptr;   // test aid
     unsigned m = probe ? 8u : 0u;
-    for (int r = 0; r < kRenCount; ++r)
-        if (r != 3 && lb_setting_rename(r < 3 ? r : r - 1)) m |= 1u << r;
+    // Rule r's option: 0..2 as they are, rule 3 has none, 4..9 the next six,
+    // 10 and 11 one option (SG-0021's two buildings), 12 the last.
+    for (int r = 0; r < kRenCount; ++r) {
+        if (r == 3) continue;
+        const int opt = r < 3 ? r : r <= 10 ? r - 1 : r - 2;
+        if (lb_setting_rename(opt)) m |= 1u << r;
+    }
     return m;
 }
 
@@ -4594,6 +4803,11 @@ void ptr_append_override(void) {
 void map_preview_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kMapPreview);
     const int nx = lb_maps_extra_count();
+    bool random = false;
+    if (nx > 0) {
+        const uint32_t list = bus_read_u32(g_cpu.R[0] + 0x84u);
+        random = guest_ptr(list) && (int)bus_read_u8(list + 0x50u) < nx;
+    }
     if (nx > 0) {
         const uint32_t screen = g_cpu.R[0];
         const uint32_t list = bus_read_u32(screen + 0x84u);
@@ -4610,11 +4824,18 @@ void map_preview_override(void) {
             }
         }
     }
+    // The preview's upload is queued and happens after this call, so the
+    // selection is remembered with the time; image_xfer_override trusts it
+    // only while the map select keeps calling here (300 ms), and the choice
+    // being confirmed clears it -- a battle's own minimap is never touched.
+    g_random_preview = random;
+    g_random_preview_at = SDL_GetTicks64();
     if (original) original();
 }
 
 void map_confirm_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kMapConfirm);
+    g_random_preview = false;   // the choice is made: previews are maps again
     const uint32_t screen = g_cpu.R[0];
     int idx = -1;
     const uint32_t m = map_list_selected(screen, &idx);
@@ -4890,6 +5111,108 @@ bool sentinels_hold() {
     return true;
 }
 
+// BR-0006: THE FORCED WORLD'S ART, FOR SEAMS. A detail index picks among a few
+// table-A pieces by how their edges meet the cells around it, in the forced
+// world's own pixels (the tile data and palette of <World>Tileset.NCGR/NCLR,
+// read from the ROM; table A's entries are read from the guest, so blank-slot
+// stand-ins are already in). Pictures only.
+extern "C" int lb_rom_read(const char* path, unsigned char* out, int cap);
+extern "C" int lb_rom_read_unwrapped(const char* path, unsigned char* out, int cap);
+
+struct EdgePix {
+    bool ok = false;
+    int16_t L[16][3], R[16][3], T[24][3], B[24][3];
+};
+
+struct TilesetArt {
+    std::vector<uint8_t> tiles;     // 64 bytes per 8x8 tile, 8 bits per pixel
+    uint16_t pal[256] = {};
+    bool ok = false;
+    std::vector<EdgePix> edges;     // by table-A index, lazily
+    std::vector<uint8_t> done;
+};
+
+bool load_tileset_art(int world, TilesetArt* art) {
+    static const char* const kStem[3] = {"KingTileset", "PirateTileset", "MarsTileset"};
+    if (world < 0 || world > 2) return false;
+    const std::string stem = kStem[world];
+    std::vector<uint8_t> g, c;
+    const std::string gp = stem + ".NCGR", cp = stem + ".NCLR";
+    int n = lb_rom_read_unwrapped(gp.c_str(), nullptr, 0);
+    if (n < 0x30) return false;
+    g.resize((size_t)n);
+    if (lb_rom_read_unwrapped(gp.c_str(), g.data(), n) != n) return false;
+    n = lb_rom_read(cp.c_str(), nullptr, 0);
+    if (n < 0x30) return false;
+    c.resize((size_t)n);
+    if (lb_rom_read(cp.c_str(), c.data(), n) != n) return false;
+    auto rd32 = [](const std::vector<uint8_t>& v, size_t o) {
+        return (uint32_t)v[o] | ((uint32_t)v[o + 1] << 8) | ((uint32_t)v[o + 2] << 16) |
+               ((uint32_t)v[o + 3] << 24);
+    };
+    if (std::memcmp(g.data(), "RGCN", 4) != 0 || std::memcmp(c.data(), "RLCN", 4) != 0)
+        return false;
+    const size_t gsz = rd32(g, 0x28), goff = 0x18u + rd32(g, 0x2C);
+    const size_t csz = rd32(c, 0x20), coff = 0x18u + rd32(c, 0x24);
+    if (goff + gsz > g.size() || coff + csz > c.size() || csz < 2) return false;
+    art->tiles.assign(g.begin() + (long)goff, g.begin() + (long)(goff + gsz));
+    for (size_t i = 0; i < 256 && 2 * i + 1 < csz; ++i)
+        art->pal[i] = (uint16_t)(c[coff + 2 * i] | (c[coff + 2 * i + 1] << 8));
+    art->edges.assign(5120u, EdgePix());
+    art->done.assign(5120u, 0u);
+    art->ok = true;
+    return true;
+}
+
+// The edge pixels of table-A metatile `idx` (3x2 tiles of 8x8; index-0 pixels
+// are black), as common.py/seam.py's mt_array does.
+const EdgePix& edge_pix(TilesetArt& art, uint32_t A, uint32_t idx) {
+    EdgePix& ep = art.edges[idx];
+    if (art.done[idx]) return ep;
+    art.done[idx] = 1u;
+    int px[16][24][3];
+    const uint32_t ent = metatile_entry(A, idx);
+    for (int k = 0; k < 6; ++k) {
+        const uint32_t e = bus_read_u16(ent + 2u * (uint32_t)k);
+        const size_t t = e & 0x3FFu;
+        for (int r = 0; r < 8; ++r)
+            for (int cc = 0; cc < 8; ++cc) {
+                const int sr = (e & 0x800u) ? 7 - r : r, sc = (e & 0x400u) ? 7 - cc : cc;
+                int v[3] = {0, 0, 0};
+                if ((t + 1u) * 64u <= art.tiles.size()) {
+                    const uint8_t b = art.tiles[t * 64u + (size_t)sr * 8u + (size_t)sc];
+                    if (b) {
+                        const uint16_t col = art.pal[b];
+                        v[0] = (col & 31) << 3; v[1] = ((col >> 5) & 31) << 3;
+                        v[2] = ((col >> 10) & 31) << 3;
+                    }
+                }
+                for (int q = 0; q < 3; ++q)
+                    px[(k / 3) * 8 + r][(k % 3) * 8 + cc][q] = v[q];
+            }
+    }
+    for (int r = 0; r < 16; ++r)
+        for (int q = 0; q < 3; ++q) { ep.L[r][q] = (int16_t)px[r][0][q]; ep.R[r][q] = (int16_t)px[r][23][q]; }
+    for (int cc = 0; cc < 24; ++cc)
+        for (int q = 0; q < 3; ++q) { ep.T[cc][q] = (int16_t)px[0][cc][q]; ep.B[cc][q] = (int16_t)px[15][cc][q]; }
+    ep.ok = true;
+    return ep;
+}
+
+// a left of b (x3, so it sums with the vertical cost on one scale) / a above b (x2).
+int seam_h(const EdgePix& a, const EdgePix& b) {
+    int s = 0;
+    for (int r = 0; r < 16; ++r)
+        for (int q = 0; q < 3; ++q) s += std::abs(a.R[r][q] - b.L[r][q]);
+    return s * 3;
+}
+int seam_v(const EdgePix& a, const EdgePix& b) {
+    int s = 0;
+    for (int c = 0; c < 24; ++c)
+        for (int q = 0; q < 3; ++q) s += std::abs(a.B[c][q] - b.T[c][q]);
+    return s * 2;
+}
+
 // True when the tables were there to patch.
 bool patch_forced_tables(uint32_t map) {
     const uint32_t A = bus_read_u32(map + 0x338u);
@@ -5042,6 +5365,14 @@ bool patch_forced_tables(uint32_t map) {
                             if (by_inner && (n >= split || !inner[ni])) continue;
                             if (n < split) {
                                 if (mostly_inner[v - split] && edge_piece[n]) continue;
+                                // BR-0006: THE MINE PAD IS NEVER COPIED. Table-A
+                                // 13,14 / 18,19 are the crack a well cap stands
+                                // on, used only at mines in all three worlds
+                                // (index_roles: role M, 100%). As a neighbour's
+                                // vote it drew crack fragments around the pad:
+                                // 94 detail entries over every map and forced
+                                // world, none with this rule (fill392b.py).
+                                if (n == 13 || n == 14 || n == 18 || n == 19) continue;
                                 votes[v - split].push_back((uint16_t)stand_in(n));
                             }
                             else if (choice[n - split] >= 0)
@@ -5080,6 +5411,92 @@ bool patch_forced_tables(uint32_t map) {
         if (plain)
             std::fprintf(stderr, "[lb_tileset] %d detail index(es) took the plain "
                          "fill (edge pieces rejected)\n", plain);
+        // BR-0006: SEAMS DECIDE. The vote above settles what each index may
+        // look like (a role); it cannot see that a rim piece beside a flat
+        // fill leaves a hard rectangle (white outcrops forced to Mars became
+        // dark mesas with square blocks). So each index re-picks among its own
+        // candidates -- the neighbouring table-A pieces of its class that
+        // survive the edge and pad rules, the plain fill of its class, and the
+        // vote's choice -- by the pixel seams to the 4 cells around its cells,
+        // in the forced world's own art (3 rounds, so detail neighbours see
+        // each other's picks; ties to the lowest index). Offline, all maps x
+        // forced worlds: seams beyond the target world's own 99th percentile
+        // next to a detail cell 7.5% -> 2.2%, role mismatches 0.49% -> 0.03%
+        // (fill392b.py, variant "seam"). Without the ROM's art it is skipped.
+        static const bool no_seam = std::getenv("LB_TILESET_NOSEAM") != nullptr;
+        TilesetArt art;
+        if (!no_seam && !cls.empty() && load_tileset_art(g_level_world, &art)) {
+            std::vector<std::vector<int>> cand((size_t)max_k + 1u);
+            std::vector<std::vector<size_t>> kcell((size_t)max_k + 1u);
+            for (size_t i = 0; i < e.size(); ++i)
+                if (e[i] >= split) kcell[e[i] - split].push_back(i);
+            for (int k = 0; k <= max_k; ++k) {
+                if (kcell[(size_t)k].empty()) continue;
+                std::vector<int>& cs = cand[(size_t)k];
+                if (choice[(size_t)k] >= 0) cs.push_back(choice[(size_t)k]);
+                const int wc = want_cls[(size_t)k];
+                const int fill = wc == 0 ? 116 : wc == 2 ? 96 : wc == 3 ? 64 : wc == 5 ? 89 : -1;
+                if (fill >= 0) cs.push_back(fill);
+                for (size_t i : kcell[(size_t)k]) {
+                    const int x = (int)(i % (size_t)w), y = (int)(i / (size_t)w);
+                    for (int dy = -1; dy <= 1; ++dy)
+                        for (int dx = -1; dx <= 1; ++dx) {
+                            const int nx = x + dx, ny = y + dy;
+                            if ((!dx && !dy) || nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+                            const size_t ni = (size_t)ny * w + nx;
+                            const uint16_t n = e[ni];
+                            if (n >= split || (int)cls[ni] != wc) continue;
+                            if (mostly_inner[(size_t)k] && edge_piece[n]) continue;
+                            if (n == 13 || n == 14 || n == 18 || n == 19) continue;
+                            cs.push_back((int)stand_in(n));
+                        }
+                }
+                std::sort(cs.begin(), cs.end());
+                cs.erase(std::unique(cs.begin(), cs.end()), cs.end());
+            }
+            int moved = 0;
+            for (int round = 0; round < 3; ++round) {
+                std::vector<int> next = choice;
+                for (int k = 0; k <= max_k; ++k) {
+                    const std::vector<int>& cs = cand[(size_t)k];
+                    if (cs.size() < 2u) continue;
+                    std::vector<long> cost(cs.size(), 0L);
+                    long counted = 0;
+                    for (size_t i : kcell[(size_t)k]) {
+                        const int x = (int)(i % (size_t)w), y = (int)(i / (size_t)w);
+                        static const int kD[4][2] = {{0, -1}, {1, 0}, {0, 1}, {-1, 0}};
+                        for (const auto& d : kD) {
+                            const int nx = x + d[0], ny = y + d[1];
+                            if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+                            const uint16_t v = e[(size_t)ny * w + nx];
+                            int nb;
+                            if (v < split) nb = (int)v;
+                            else {
+                                if ((int)(v - split) == k || choice[v - split] < 0) continue;
+                                nb = choice[v - split];
+                            }
+                            const EdgePix& np = edge_pix(art, A, (uint32_t)nb);
+                            for (size_t c = 0; c < cs.size(); ++c) {
+                                const EdgePix& cp = edge_pix(art, A, (uint32_t)cs[c]);
+                                if (d[1] == -1) cost[c] += seam_v(np, cp);
+                                else if (d[1] == 1) cost[c] += seam_v(cp, np);
+                                else if (d[0] == 1) cost[c] += seam_h(cp, np);
+                                else cost[c] += seam_h(np, cp);
+                            }
+                            ++counted;
+                        }
+                    }
+                    if (!counted) continue;
+                    size_t bi = 0;
+                    for (size_t c = 1; c < cs.size(); ++c)
+                        if (cost[c] < cost[bi]) bi = c;
+                    next[(size_t)k] = cs[bi];
+                }
+                choice.swap(next);
+            }
+            for (int k = 0; k <= max_k; ++k) if (!cand[(size_t)k].empty()) ++moved;
+            std::fprintf(stderr, "[lb_tileset] seam pick over %d detail index(es)\n", moved);
+        }
         for (int k = 0; k <= max_k; ++k) {
             if (tlog)
                 std::fprintf(stderr, "[lb_tileset] k=%d class=%d inner=%d choice=%d\n",
@@ -5437,6 +5854,7 @@ extern "C" void lb_patches_lobby_forget(void) {
     g_lobby_key = 0;
     g_lobby_want = 0xFFFFFFFFu;
     g_lobby_withheld = false;
+    lb_maptx_forget();   // docs/432: and stop asking a host for its map
 }
 
 void ready_toggle_override(void) {
@@ -5601,8 +6019,11 @@ void lobby_packet_override(void) {
                                   "mods/maps and join again.",
                                   name[0] ? name : "?");
                     lb_overlay_notice(text);
-                    // docs/420: and look for it in the community archive.
-                    if (name[0]) lb_mapfetch_request(name);
+                    // docs/432: the archive's copy with the host's identity,
+                    // else the host's own; docs/420's lookup by name only
+                    // when the host lists no identity for it.
+                    if (local < 0 && r == 1) lb_maptx_want(hash, name);
+                    else if (name[0]) lb_mapfetch_request(name);
                 }
             }
         }
@@ -5635,6 +6056,43 @@ void team_add_bricks_override(void) {
         std::fprintf(stderr, "[lb_gold] a Gold Brick: %u bricks (the game's %u)\n",
                      (unsigned)g_cpu.R[1], (unsigned)stock);
         std::fflush(stderr);
+    }
+    if (original) original();
+}
+// docs/430 (BR-0002, SG-0009): THE ARMY SCREEN'S TWO FILTERS, FOR A CREATURE.
+// FUN_020B96FC lists a minifig card for a slot when FUN_020EAC1C (slots 0-4:
+// is this unit one the screen shows) or FUN_020EB21C (slots 5-8: its special
+// tier) says so. Neither knows the Wolf, the Robot or the Shark. While their
+// cards are in (lb_teams.cpp), they answer for them -- from that call site
+// only (lr is the instruction after each `bl`), so FUN_020CE964's
+// collection screen, which also calls FUN_020EAC1C, is left alone.
+constexpr uint32_t kArmyListable = 0x020EAC1Cu;      // thumb
+constexpr uint32_t kArmyTier = 0x020EB21Cu;          // thumb
+constexpr uint32_t kArmyListableRet = 0x020B9786u;   // FUN_020B96FC's calls
+constexpr uint32_t kArmyTierRet = 0x020B97ACu;
+extern "C" int lb_teams_card_listable(int unit);   /* lb_teams.cpp */
+extern "C" int lb_teams_card_tier(int unit);
+void army_listable_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kArmyListable);
+    if ((g_cpu.R[14] & ~1u) == kArmyListableRet) {
+        const int v = lb_teams_card_listable((int)(g_cpu.R[0] & 0xFFFFu));
+        if (v >= 0) {
+            g_cpu.R[0] = (uint32_t)v;
+            lb_override_return();
+            return;
+        }
+    }
+    if (original) original();
+}
+void army_tier_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kArmyTier);
+    if ((g_cpu.R[14] & ~1u) == kArmyTierRet) {
+        const int v = lb_teams_card_tier((int)(g_cpu.R[0] & 0xFFFFu));
+        if (v >= 0) {
+            g_cpu.R[0] = (uint32_t)v;
+            lb_override_return();
+            return;
+        }
     }
     if (original) original();
 }
@@ -5803,6 +6261,10 @@ const NdsDispatchEntry kOverrideTable[] = {
     /* Thumb. Hands the placement checkmark the point docs/372's widened rule
        gives it; every other call is a pure tail call. */
     {kWidgetSetPos, 1u, widget_setpos_observer, nullptr},  /* 0x020EA4D8 */
+    /* Thumb. The army screen's two list filters, answered for a creature
+       from FUN_020B96FC's calls only; otherwise a pure tail call. docs/430. */
+    {kArmyListable, 1u, army_listable_override, nullptr},  /* 0x020EAC1C */
+    {kArmyTier, 1u, army_tier_override, nullptr},          /* 0x020EB21C */
     /* GRADED, NOT PATCHED. docs/333. */
     /* ARM. The game's array append: pure tail call except from the map
        list's two sites. docs/429. */
@@ -5853,7 +6315,8 @@ static_assert(kRosterBuild < kRegistryFind &&
               kOppSetupLabel < kEnemyCycle &&
               kEnemyCycle < kMapListFill && kMapListFill < kMapConfirm &&
               kMapConfirm < kMapPreview && kMapPreview < kMarkerPlace &&
-              kWidgetSetPos < kPtrAppend && kPtrAppend < kSplitArray &&
+              kWidgetSetPos < kArmyListable && kArmyListable < kArmyTier &&
+              kArmyTier < kPtrAppend && kPtrAppend < kSplitArray &&
               kMarkerPlace < kHeroHud &&
               kHeroHud < kViewUpdate && kViewUpdate < kScreenUpdate &&
               kScreenUpdate < kWidgetRect &&
@@ -6207,6 +6670,11 @@ void apply_caps() {
 // fingerprints, rather than scanning 4 MB of RAM a second time.
 extern "C" unsigned int lb_patches_blueprint_base(void) {
     return (unsigned int)g_blueprint_base;
+}
+// docs/430: the block is found AND the loader has finished it (the snapshots
+// are taken), so a card record may be written.
+extern "C" int lb_patches_blueprint_settled(void) {
+    return g_blueprint_base != 0u && g_bp_settled ? 1 : 0;
 }
 // docs/386: whether the builders are equalised in the game right now.
 extern "C" int lb_same_builders_applied(void) { return g_builders_patched; }
@@ -9201,6 +9669,7 @@ static void field_dump_if_asked(void) {
     if (seq >= 6) state = 0;
 }
 
+extern "C" int lb_ai_spectate_active(void);   /* SG-0002, below */
 static void apply_cheats(void) {
     // Enabling must be STICKY, not one-shot. The first version wrote only when
     // the desired value changed, which looked right and failed in practice: the
@@ -9219,7 +9688,9 @@ static void apply_cheats(void) {
     if (flags < 0x02000000u || flags >= 0x02400000u) return;   // not up yet
     const int n = lb_setting_cheat_count();
     for (int i = 0; i < n && i < 32; ++i) {
-        const int8_t want = (int8_t)(lb_setting_cheat(i) ? 1 : 0);
+        // SG-0002: spectating a computer-vs-computer battle shows the map
+        const int8_t want = (int8_t)((lb_setting_cheat(i) ||
+                                      (i == 0 && lb_ai_spectate_active())) ? 1 : 0);
         if (want) {
             if (bus_read_u8(flags + (uint32_t)i) != 1u) {
                 bus_write_u8(flags + (uint32_t)i, 1u);
@@ -10480,6 +10951,31 @@ static void effect_log(void) {
 // Screen x is entity x minus camera x, both in the same map space, so a
 // negative value is in the LEFT widened column and >= 256 is in the RIGHT one.
 // Those are exactly the two bands the vanilla game never draws.
+/* docs/434 test aid: LB_TEST_CAMSPECIAL=1 puts the first Transport or Siege
+   entity (category 5 or 6) in the middle of the guest's view, so a special's
+   model can be photographed without driving the camera there. */
+static void lb_test_camspecial(void) {
+    static int on = -1;
+    if (on < 0) on = std::getenv("LB_TEST_CAMSPECIAL") ? 1 : 0;
+    if (!on) return;
+    static unsigned n = 0;
+    if ((++n % 20u) != 0u) return;
+    int cx = 0, cy = 0;
+    if (!lb_field_camera(&cx, &cy)) return;
+    for (int i = 0; i < 4096; ++i) {
+        int o = 0, c = -1, x = 0, y = 0;
+        if (!lb_field_entity_at(i, &o, &c, &x, &y)) break;
+        if (c != 5 && c != 6) continue;
+        static int said = 0;
+        if (said++ < 3)
+            std::fprintf(stderr, "[lb_camspecial] category %d entity at "
+                         "%d,%d owner %d, camera was %d,%d\n", c, x, y, o,
+                         cx, cy);
+        lb_field_camera_write(x - 128, y - 96);
+        return;
+    }
+}
+
 static void entity_log(void) {
     static int on = -1;
     if (on < 0) on = std::getenv("LB_ENTLOG") ? 1 : 0;
@@ -11383,6 +11879,42 @@ const HotwirePatch kAiCheats[] = {
     {0x0206E84Cu, 0xE1510000u, 0xE1500000u, "17 super explosions"},
 };
 
+// docs/433: THE AI ONLY. The same sixteen owner tests, left as the game wrote
+// them (cmp owner, local player) and the instructions that act on the result
+// turned round instead: every `eq` below becomes `ne` and every `bne skip`
+// becomes `beq skip` (bit 28 of the word), so the effect runs for a unit that
+// is NOT the local player's and the local player's units get the stock path.
+// Each word was read from the image and its condition field checked (0 = eq,
+// 1 = ne) by scratchpad/flip.py; nothing else follows a compare here that
+// reads its flags before they are set again.
+const HotwirePatch kAiOnlyFlips[] = {
+    {0x02050C40u, 0x03A07000u, 0x13A07000u, "1 one hit kill"},
+    {0x0206EA5Cu, 0x03A07000u, 0x13A07000u, "1 one hit kill (shot)"},
+    {0x0205248Cu, 0x03A06001u, 0x13A06001u, "2 fast building"},
+    {0x02052490u, 0x0A000002u, 0x1A000002u, "2 fast building"},
+    {0x02054DE8u, 0x03A07001u, 0x13A07001u, "2 fast repair"},
+    {0x0205F200u, 0x03A06004u, 0x13A06004u, "3 fast magic"},
+    {0x0206D1F8u, 0x01A04084u, 0x11A04084u, "4 double bricks"},
+    {0x0205F390u, 0x1A00002Bu, 0x0A00002Bu, "7 regenerating health"},
+    {0x02053238u, 0x03A00001u, 0x13A00001u, "11 fast harvesting"},
+    {0x0205323Cu, 0x08BD8010u, 0x18BD8010u, "11 fast harvesting"},
+    {0x02085EB8u, 0x03A00001u, 0x13A00001u, "12 full unit cap"},
+    {0x02085EBCu, 0x08BD8038u, 0x18BD8038u, "12 full unit cap"},
+    {0x02085FB4u, 0x03A00001u, 0x13A00001u, "12 full unit cap"},
+    {0x02085FB8u, 0x08BD8070u, 0x18BD8070u, "12 full unit cap"},
+    {0x02086488u, 0x00890008u, 0x10890008u, "12 full unit cap"},
+    {0x0208648Cu, 0x028DD018u, 0x128DD018u, "12 full unit cap"},
+    {0x02086490u, 0x05C040CFu, 0x15C040CFu, "12 full unit cap"},
+    {0x02086494u, 0x08BD83F8u, 0x18BD83F8u, "12 full unit cap"},
+    {0x0205E85Cu, 0x1A00001Bu, 0x0A00001Bu, "13 invincible hero"},
+    {0x0206EA98u, 0x02860C01u, 0x12860C01u, "13 invincible hero (shot)"},
+    {0x0206EA9Cu, 0x01D07AB0u, 0x11D07AB0u, "13 invincible hero (shot)"},
+    {0x0206D854u, 0x01A07087u, 0x11A07087u, "14 fast mining"},
+    {0x020698A4u, 0x1A00001Du, 0x0A00001Du, "16 upgraded towers"},
+    {0x0206E850u, 0x1A000009u, 0x0A000009u, "17 super explosions"},
+};
+
+// 0 = the cheats are the local player's, 1 = the AI's too, 2 = the AI's only.
 extern "C" int lb_ai_cheats_live(void) {
     const int net = lb_net_guest_state();
     if (net > 0) return 0;            // hosting or joining: no AI, and lockstep
@@ -11390,26 +11922,37 @@ extern "C" int lb_ai_cheats_live(void) {
 }
 
 static void apply_ai_cheats(void) {
-    static int applied = 0;           // 0 = stock, 1 = patched
+    static int applied = 0;           // 0 = stock, 1 = everyone, 2 = AI only
     static unsigned gen = 0;          // a reset restores stock
     if (gen != g_boot_gen) { gen = g_boot_gen; applied = 0; }
     const int played = lb_demo_play_ai_cheats();
-    const int want = played >= 0 ? played : lb_ai_cheats_live();
+    int want = played >= 0 ? played : lb_ai_cheats_live();
+    if (want < 0 || want > 2) want = want ? 1 : 0;
     if (want == applied) return;
 
     const int n = (int)(sizeof kAiCheats / sizeof kAiCheats[0]);
+    const int nf = (int)(sizeof kAiOnlyFlips / sizeof kAiOnlyFlips[0]);
     int ready = 0;
     for (const HotwirePatch& p : kAiCheats) {
         const uint32_t got = bus_read_u32(p.addr);
         if (got == p.stock || got == p.want) ++ready;
     }
-    if (ready != n) return;           // not loaded yet, or not this build
+    for (const HotwirePatch& p : kAiOnlyFlips) {
+        const uint32_t got = bus_read_u32(p.addr);
+        if (got == p.stock || got == p.want) ++ready;
+    }
+    if (ready != n + nf) return;      // not loaded yet, or not this build
 
+    // The compares: always-equal for mode 1, the game's own otherwise. The
+    // flips: turned round for mode 2 only.
     for (const HotwirePatch& p : kAiCheats)
-        bus_write_u32(p.addr, want ? p.want : p.stock);
+        bus_write_u32(p.addr, want == 1 ? p.want : p.stock);
+    for (const HotwirePatch& p : kAiOnlyFlips)
+        bus_write_u32(p.addr, want == 2 ? p.want : p.stock);
     applied = want;
-    std::fprintf(stderr, "[lb_cheat] the AI gets the cheats: %s (%d sites)\n",
-                 want ? "ON" : "off", n);
+    std::fprintf(stderr, "[lb_cheat] the cheats help: %s (%d sites)\n",
+                 want == 2 ? "the AI only" : want == 1 ? "me and the AI" : "me",
+                 want == 2 ? nf : n);
     std::fflush(stderr);
 }
 
@@ -11545,6 +12088,147 @@ static void apply_ai_hero_multi(void) {
     std::fprintf(stderr, "[lb_aihero] the AI may field %d heroes (%s)\n", want,
                  want > 1 ? "patched" : "stock");
     std::fflush(stderr);
+}
+
+// SG-0002: AI VS AI. The computer plays the player's side too (Free Play,
+// offline). THE GAME'S OWN PATH: stage 4 of the CreateGameEvent
+// (FUN_0208AF58, state 4) walks the four player slots and builds a computer
+// player (FUN_0208AED4 -> FUN_0208A004, appended to the list at *0x0215697C)
+// for every slot whose player id is >= 1; id 0 is the human and nothing marks
+// a human as such. Two halfword edits make it include id 0:
+//
+//     0208AF98  cmp r0,#1 ; blt skip        ->  cmp r0,#0 ; blt skip
+//                (an empty slot is -1; the human is 0)
+//
+// and the walk runs 3..0 instead of 0..3 (movs r4,#3 / subs r4,#1 / cmp r4,#0 /
+// bge), so the OPPONENT's computer player is still list entry 0: the mission
+// (MultiplayerMissionBase v06/v07, FUN_02045CB4/FUN_02045D50) scripts "AI 0"
+// against the local team and the player's side would otherwise aim at itself.
+// The scripted start for the player's own computer player (its target, its
+// attack and defend mix, the switch of mix 95 s in) is then copied across
+// from entry 0 by plain stores, mirrored (aimed at the opponent). Free Play
+// only (the mission's v06 is MultiplayerMissionBase's), offline only, and
+// Reveal Map is held on while it is active (apply_cheats).
+struct SpecPatch { uint32_t addr; uint16_t stock, want; };
+constexpr SpecPatch kAiSpectate[] = {
+    {0x0208AF8Eu, 0x2400u, 0x2403u},   // movs r4,#0   -> movs r4,#3
+    {0x0208AF98u, 0x2801u, 0x2800u},   // cmp r0,#1    -> cmp r0,#0
+    {0x0208AFB4u, 0x1C64u, 0x1E64u},   // adds r4,#1   -> subs r4,#1
+    {0x0208AFB6u, 0x2C04u, 0x2C00u},   // cmp r4,#4    -> cmp r4,#0
+    {0x0208AFB8u, 0xDBEAu, 0xDAEAu},   // blt loop     -> bge loop
+};
+static int g_ai_spectate_on = 0;       // patched in and the mission is Free Play
+
+extern "C" int lb_ai_spectate_active(void) { return g_ai_spectate_on; }
+
+static bool free_play_mission(void) {
+    auto ram = [](uint32_t p) { return p >= 0x02000000u && p < 0x02400000u; };
+    const uint32_t m = bus_read_u32(0x02154078u + 8u);   // FUN_02045AE8
+    if (!ram(m)) return false;
+    const uint32_t vt = bus_read_u32(m);
+    if (!ram(vt)) return false;
+    const uint32_t v6 = bus_read_u32(vt + 6u * 4u);
+    return v6 == 0x02045BC8u || v6 == 0x02045BC9u;
+}
+
+static void ai_spectate_mirror(void) {
+    auto ram = [](uint32_t p) { return p >= 0x02000000u && p < 0x02400000u; };
+    static uint32_t seen_a1 = 0;
+    static int stage = 0;               // 1 = script copied, 2 = mix switched
+    static unsigned gen = 0;
+    if (gen != g_boot_gen) { gen = g_boot_gen; seen_a1 = 0; stage = 0; }
+    const uint32_t ais = bus_read_u32(0x0215697Cu);
+    if (!ram(ais)) return;
+    const uint32_t ad = bus_read_u32(ais + 4u);
+    const int32_t an = (int32_t)bus_read_u32(ais + 8u);
+    if (!ram(ad) || an != 2) return;
+    const uint32_t a0 = bus_read_u32(ad), a1 = bus_read_u32(ad + 4u);
+    if (!ram(a0) || !ram(a1)) return;
+    if (a1 != seen_a1) { seen_a1 = a1; stage = 0; }
+    const uint32_t s44 = bus_read_u32(a1 + 0x44u), s4c = bus_read_u32(a1 + 0x4Cu),
+                   s50 = bus_read_u32(a1 + 0x50u);
+    if (!ram(s44) || !ram(s4c) || !ram(s50)) return;
+    // v06 has run for entry 0 when its mix byte is 0x46.
+    if (stage == 0 && bus_read_u8(a0 + 0x5Cu) == 0x46u) {
+        const uint8_t opp = bus_read_u8(a0 + 0x36u);     // entry 0's own team
+        const uint8_t me  = bus_read_u8(a1 + 0x36u);     // the player's team
+        const uint8_t t0  = bus_read_u8(a0 + 0x37u);     // what entry 0 hunts
+        if (t0 != me || opp == me) return;               // not the layout we expect
+        // The opponent's start tile: the map's start table (map = *0x02156CB0,
+        // flags +0x234+slot, entries +0x238+slot*8, tile bytes at +4,+5) entry that is not the one
+        // entry 0 was aimed at.
+        const uint32_t s44a0 = bus_read_u32(a0 + 0x44u);
+        uint8_t hx = ram(s44a0) ? bus_read_u8(s44a0 + 0x60u) : 12u;
+        uint8_t hy = ram(s44a0) ? bus_read_u8(s44a0 + 0x61u) : 9u;
+        uint8_t ox = 12, oy = 9;
+        const uint32_t map = bus_read_u32(0x02156CB0u);
+        if (ram(map)) {
+            for (uint32_t s = 0; s < 4; ++s) {
+                if (!bus_read_u8(map + 0x234u + s)) continue;
+                const uint8_t x = bus_read_u8(map + 0x23Cu + s * 8u);
+                const uint8_t y = bus_read_u8(map + 0x23Du + s * 8u);
+                if (x == hx && y == hy) continue;
+                ox = x; oy = y;
+                break;
+            }
+        }
+        bus_write_u8(a1 + 0x37u, opp);
+        bus_write_u8(s4c + 0x22u, opp);
+        bus_write_u8(s44 + 0x64u, opp);
+        bus_write_u8(s44 + 0x60u, ox);
+        bus_write_u8(s44 + 0x61u, oy);
+        bus_write_u8(s4c + 0x3Bu, 1);
+        bus_write_u8(a1 + 0x32u, 1);
+        bus_write_u8(s50 + 0x15u, 1);
+        bus_write_u8(a1 + 0x33u, 1);
+        bus_write_u8(s50 + 0x14u, 1);
+        bus_write_u8(s4c + 0x3Eu, 1);
+        bus_write_u8(s4c + 0x3Au, 1);
+        bus_write_u8(s50 + 0x17u, 1);
+        bus_write_u8(a1 + 0x5Cu, 0x46);
+        bus_write_u8(a1 + 0x5Du, 0x1E);
+        bus_write_u32(s50 + 0x38u, 0x1Eu);
+        bus_write_u32(s4c + 0x24u, 5u);
+        bus_write_u8(s4c + 0x3Du, 1);
+        stage = 1;
+        std::fprintf(stderr, "[lb_spectate] the player's computer player %08X is "
+                     "aimed at team %u, start tile (%u,%u); entry 0 was aimed at "
+                     "(%u,%u)\n", a1, opp, ox, oy, hx, hy);
+        std::fflush(stderr);
+    } else if (stage == 1 && bus_read_u8(a0 + 0x5Cu) == 0x12u) {
+        bus_write_u8(a1 + 0x5Cu, 0x12);
+        bus_write_u8(a1 + 0x5Du, 0x3C);
+        bus_write_u32(s50 + 0x38u, 0x3Cu);
+        stage = 2;
+        std::fprintf(stderr, "[lb_spectate] attack mix switched for the player's "
+                     "computer player\n");
+        std::fflush(stderr);
+    }
+}
+
+static void apply_ai_spectate(void) {
+    static int applied = 0;
+    static unsigned gen = 0;
+    if (gen != g_boot_gen) { gen = g_boot_gen; applied = 0; g_ai_spectate_on = 0; }
+    int want = (lb_net_guest_state() <= 0 && lb_setting_ai_spectate()) ? 1 : 0;
+    if (want && !free_play_mission()) want = 0;
+    if (want != applied) {
+        const int n = (int)(sizeof kAiSpectate / sizeof kAiSpectate[0]);
+        int ready = 0;
+        for (const SpecPatch& p : kAiSpectate) {
+            const uint32_t got = bus_read_u16(p.addr);
+            if (got == p.stock || got == p.want) ++ready;
+        }
+        if (ready != n) return;         // not loaded yet, or not this build
+        for (const SpecPatch& p : kAiSpectate)
+            bus_write_u16(p.addr, want ? p.want : p.stock);
+        applied = want;
+        std::fprintf(stderr, "[lb_spectate] the computer plays the player's "
+                     "side: %s\n", want ? "ON" : "off");
+        std::fflush(stderr);
+    }
+    g_ai_spectate_on = applied;
+    if (applied) ai_spectate_mirror();
 }
 
 // docs/408: LB_CAMREST=1 logs every place the shown camera (the ground's,
@@ -12830,6 +13514,7 @@ extern "C" void lb_patches_on_vblank(void) {
     // dispatched guest slice -- so runtime_dispatch has no slice to return
     // into and unwinds immediately. It is called from the override instead,
     // which is guest context, the way issue_waiting_to_die already does it.
+    lb_test_camspecial();   /* docs/434 */
     entity_log();
     effect_log();
     apply_touch_extension();
@@ -12842,7 +13527,9 @@ extern "C" void lb_patches_on_vblank(void) {
     apply_ai_hero_rebuild();
     apply_ai_hero_multi();
     apply_ai_tap_spells();
+    apply_ai_spectate();              // SG-0002
     brick_log();
+    lb_scores_tick();                 // SG-0018: match statistics, read only
     cam_rest_log();                   // docs/408 test aid
     // Move the order path off the cartridge's byte touch
     // fields. Gated on LB_ORDERFIX; a no-op unless it is set. docs/238.

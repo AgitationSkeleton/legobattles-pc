@@ -201,7 +201,8 @@ Import a save
 Report a bug
   1. Open the Discord bug channel.
   2. Say what you were doing.
-  3. Attach the newest file in logs\\ and the newest lb-session-*.lbdemo.
+  3. Attach the newest file in logs\\, and the newest lb-session-*.lbdemo if
+     Record every session (Tools > Recordings) is on.
 """
 
 

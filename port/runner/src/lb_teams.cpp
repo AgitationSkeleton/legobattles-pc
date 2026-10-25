@@ -37,6 +37,9 @@ extern "C" {
 }
 
 extern "C" unsigned int lb_patches_blueprint_base(void);   /* lb_patches.cpp */
+extern "C" int lb_patches_blueprint_settled(void);         /* lb_patches.cpp */
+extern "C" bool lb_field_entity_at(int index, int* owner, int* category,
+                                   int* map_x, int* map_y);   /* lb_field.cpp */
 
 namespace {
 
@@ -686,6 +689,209 @@ bool build_hud_atlas() {
     return true;
 }
 
+// ---- the creatures on the game's own army screen (BR-0002, SG-0009) ----------
+//
+// docs/430. The army screen lists a unit through a minifig COLLECTABLE
+// blueprint that names it (+0x60 the unit, +0x6C its unlock bit): FUN_020B96FC
+// walks all 551 blueprints, keeps kind 2 / category 0x0B whose unit passes
+// FUN_020EAC1C (slots 0-4, by category) or FUN_020EB21C's tier (slots 5-8), and
+// FUN_020B859C finds the one naming each pick of the army record. The Wolf,
+// the Robot and the Shark have no minifig, so the list never offers them and a
+// team holding one found no card for its slot (a locked King).
+//
+// Each creature is given a card by turning one story-only collectable record
+// (548 Minikit_I3_5, 549 Ticket, 550 CK1_3_Scroll: pick-ups of campaign
+// levels, nothing in Free Play or a lobby) into a minifig for as long as the
+// front end is up. The record's +0x6C points at the King hero's unlock bit
+// (96), which every profile has unlocked and bought. Two overrides in
+// lb_patches.cpp let the creature through the two filters, from that one call
+// site. The head is the battle HUD's (the front end's sheet has a "?" at the
+// creature's key position): its pixels are written over the game's resident
+// copy of UI/MiniHeads while the screen is up, in the same sub-palette (5).
+//
+// Off: no byte of the game is touched.
+struct CardRec { int rec; int unit; };
+const CardRec kCardRecs[3] = {{548, 169}, {549, 138}, {550, 155}};   // Wolf, Robot, Shark
+constexpr uint32_t kCardBit = 96u;                                    // minifig 356's slot
+struct CardOld { uint8_t cat; uint32_t unit; uint8_t lock; uint16_t bit; };
+CardOld g_card_old[3];
+bool g_cards_applied = false;
+uint32_t g_cards_base = 0u;
+std::vector<uint8_t> g_cards_ref;     // the ROM's own sheet, to know it when we see it
+
+bool battle_present() {
+    const uint32_t view = bus_read_u32(kViewSlot);
+    if (guest_ptr(view) && bus_read_u32(view + 0x1Cu) != 0u) return true;
+    return lb_field_entity_at(0, nullptr, nullptr, nullptr, nullptr);
+}
+
+// The army screen is alive: its registry slot holds it and its layout is up.
+uint32_t army_screen() {
+    const uint32_t a = bus_read_u32(kArmySlot);
+    return guest_ptr(a) && bus_read_u32(a + 0x1Cu) != 0u ? a : 0u;
+}
+
+// 24x24 of a creature's HUD head as 4bpp tiles in the 3x3 order of a head cell
+// (tile (tx,ty) at 32 * (ty * 3 + tx)), the key position and the sub-palette
+// the Game UIMgrData gives it. The same source and rectangle as build_hud_atlas.
+bool head_tiles(int bp, uint8_t out[288], int* pos_out, int* sub_out) {
+    const uint32_t count = bus_read_u32(kHeadCount);
+    if (count == 0 || count > 551u || bus_read_u32(kHeadKeys + 4u) != 2u) return false;
+    std::vector<uint8_t> game, fe, ui;
+    if (!nitro_file("UI/MiniHeadsGame.NCGR", &game) || !comp_unwrap(&game) ||
+        !nitro_file("UI/MiniHeads.NCGR", &fe) || !comp_unwrap(&fe) ||
+        !nitro_file("UI/Game/UIMgrData.bin", &ui) || !comp_unwrap(&ui) ||
+        ui.size() < 8)
+        return false;
+    int pos = -1;
+    for (uint32_t k = 0; k < count && k < 160u; ++k)
+        if (bus_read_u32(kHeadKeys + 4u * k) == (uint32_t)bp) { pos = (int)k; break; }
+    if (pos < 0) return false;
+    const unsigned rec = kHeadRecBase + (unsigned)pos;
+    if (rec >= rd16(ui.data()) || 8u + (rec + 1u) * 0x1Cu > ui.size()) return false;
+    const uint32_t frame = rd32(ui.data() + 8u + rec * 0x1Cu);
+    if (frame == 0 || frame + 0x1Cu > ui.size() || ui[frame + 0x0Cu] != 0) return false;
+    const unsigned sx = rd16(ui.data() + frame + 0x14u);
+    const unsigned sy = rd16(ui.data() + frame + 0x16u);
+    const std::vector<uint8_t>& f = (bp == 155 || bp == 169) ? fe : game;   // Shark, Wolf
+    const long c = section(f, "RAHC");
+    if (c < 0) return false;
+    const uint8_t* cb = f.data() + c;
+    const unsigned tw = rd16(cb + 10);
+    const uint32_t doff = rd32(cb + 28);
+    if (tw * 8u != (unsigned)kAtlasW || sx + 24u > (unsigned)kAtlasW ||
+        sy + 24u > (unsigned)kAtlasH || (size_t)c + 8u + doff + 46080u > f.size())
+        return false;
+    const uint8_t* pix = cb + 8 + doff;
+    std::memset(out, 0, 288);
+    for (unsigned y = 0; y < 24u; ++y)
+        for (unsigned x = 0; x < 24u; ++x) {
+            const unsigned px = sx + x, py = sy + y;
+            const uint8_t byte =
+                pix[((py >> 3) * tw + (px >> 3)) * 32 + (py & 7) * 4 + ((px & 7) >> 1)];
+            const unsigned v = (px & 1) ? (byte >> 4) : (byte & 15u);
+            uint8_t& o = out[((y >> 3) * 3 + (x >> 3)) * 32 + (y & 7) * 4 + ((x & 7) >> 1)];
+            o = (uint8_t)(o | ((x & 1) ? (v << 4) : v));
+        }
+    *pos_out = pos;
+    *sub_out = ui[frame + 0x0Fu];
+    return true;
+}
+
+struct CardHead { bool ok = false; bool tried = false; uint8_t t[288]; int pos = -1, sub = 0; };
+CardHead g_card_head[3];
+
+// The game's resident copy of UI/MiniHeads (4bpp, 48 x 30 tiles): the army
+// screen's image manager (+0x44) -> its source image -> +0x38 -> +4 -> +0x14.
+uint32_t resident_sheet(uint32_t army) {
+    const uint32_t o0 = bus_read_u32(army + 0x44u);
+    if (!guest_ptr(o0)) return 0u;
+    const uint32_t o1 = bus_read_u32(o0 + 0x38u);
+    if (!guest_ptr(o1)) return 0u;
+    const uint32_t o2 = bus_read_u32(o1 + 4u);
+    if (!guest_ptr(o2)) return 0u;
+    const uint32_t p = bus_read_u32(o2 + 0x14u);
+    return guest_ptr(p) && guest_ptr(p + 46079u) ? p : 0u;
+}
+
+// Whether `sheet` is UI/MiniHeads as the ROM has it, outside the three cells.
+bool sheet_is_ours(uint32_t sheet) {
+    if (g_cards_ref.empty()) {
+        std::vector<uint8_t> fe;
+        if (!nitro_file("UI/MiniHeads.NCGR", &fe) || !comp_unwrap(&fe)) return false;
+        const long c = section(fe, "RAHC");
+        if (c < 0) return false;
+        const uint32_t doff = rd32(fe.data() + c + 28);
+        if ((size_t)c + 8u + doff + 46080u > fe.size()) return false;
+        g_cards_ref.assign(fe.begin() + c + 8 + doff, fe.begin() + c + 8 + doff + 46080);
+    }
+    // Heads 0, 40 and 80 (cells nobody here touches): 288 bytes each.
+    for (int h : {0, 40, 80})
+        for (int t = 0; t < 9; ++t) {
+            const uint32_t off = (uint32_t)(((h / 16) * 3 + t / 3) * 48 + (h % 16) * 3 + t % 3) * 32u;
+            for (uint32_t b = 0; b < 32u; b += 4)
+                if (bus_read_u32(sheet + off + b) != rd32(&g_cards_ref[off + b])) return false;
+        }
+    return true;
+}
+
+void cards_sheet(uint32_t army) {
+    const uint32_t sheet = resident_sheet(army);
+    if (!sheet) return;
+    static uint32_t checked = 0u;
+    static bool ours = false;
+    if (sheet != checked) { checked = sheet; ours = sheet_is_ours(sheet); }
+    if (!ours) return;
+    for (int i = 0; i < 3; ++i) {
+        CardHead& h = g_card_head[i];
+        if (!h.tried) {
+            h.tried = true;
+            h.ok = head_tiles(kCardRecs[i].unit, h.t, &h.pos, &h.sub);
+            std::fprintf(stderr, "[lb_cards] creature %d head: %s (key position %d, "
+                         "sub-palette %d)\n", kCardRecs[i].unit, h.ok ? "read" : "NOT READ",
+                         h.pos, h.sub);
+            std::fflush(stderr);
+        }
+        if (!h.ok) continue;
+        for (int t = 0; t < 9; ++t) {
+            const uint32_t off = (uint32_t)(((h.pos / 16) * 3 + t / 3) * 48 +
+                                            (h.pos % 16) * 3 + t % 3) * 32u;
+            for (uint32_t b = 0; b < 32u; b += 4) {
+                const uint32_t w = rd32(&h.t[t * 32 + b]);
+                if (bus_read_u32(sheet + off + b) != w) bus_write_u32(sheet + off + b, w);
+            }
+        }
+    }
+}
+
+void cards_tick() {
+    const uint32_t base = lb_patches_blueprint_base();
+    if (base != g_cards_base) {   // a game reset reloaded the blueprints
+        g_cards_base = base;
+        g_cards_applied = false;
+    }
+    const bool want = lb_creatures_live() != 0 && !battle_present();
+    if (!g_cards_applied && !want) return;
+    if (!base || !lb_patches_blueprint_settled()) return;
+    if (want && !g_cards_applied) {
+        // The record walk is lb_teams' own (bp_addr): kind 2 records are 0x70.
+        for (int i = 0; i < 3; ++i) {
+            const uint32_t r = bp_addr(kCardRecs[i].rec);
+            if (!r || bus_read_u8(r + 8u) != 2u) return;   // not the layout this knows
+        }
+        for (int i = 0; i < 3; ++i) {
+            const uint32_t r = bp_addr(kCardRecs[i].rec);
+            g_card_old[i] = {(uint8_t)bus_read_u8(r + 0x5Cu), bus_read_u32(r + 0x60u),
+                             (uint8_t)bus_read_u8(r + 0x6Bu),
+                             (uint16_t)bus_read_u16(r + 0x6Cu)};
+            bus_write_u8(r + 0x5Cu, 0x0Bu);                       // a minifig
+            bus_write_u32(r + 0x60u, (uint32_t)kCardRecs[i].unit);
+            bus_write_u8(r + 0x6Bu, 0xFFu);                       // has an unlock bit
+            bus_write_u16(r + 0x6Cu, (uint16_t)kCardBit);
+        }
+        g_cards_applied = true;
+        std::fprintf(stderr, "[lb_cards] the creatures have army-screen cards "
+                     "(records 548-550)\n");
+        std::fflush(stderr);
+    } else if (!want && g_cards_applied) {
+        if (army_screen()) return;   // its cells hold these records: wait
+        for (int i = 0; i < 3; ++i) {
+            const uint32_t r = bp_addr(kCardRecs[i].rec);
+            if (!r) continue;
+            bus_write_u8(r + 0x5Cu, g_card_old[i].cat);
+            bus_write_u32(r + 0x60u, g_card_old[i].unit);
+            bus_write_u8(r + 0x6Bu, g_card_old[i].lock);
+            bus_write_u16(r + 0x6Cu, g_card_old[i].bit);
+        }
+        g_cards_applied = false;
+        std::fprintf(stderr, "[lb_cards] the creature cards are back to the "
+                     "campaign's records\n");
+        std::fflush(stderr);
+        return;
+    }
+    if (const uint32_t army = army_screen()) cards_sheet(army);
+}
+
 // ---- the enemy -------------------------------------------------------------
 LbTeam g_enemy = {{0, 2, 3, 4, 5, 6, 7, 8, 9}};
 bool g_enemy_set = false;
@@ -1258,10 +1464,47 @@ extern "C" int lb_teams_paste_portraits(uint32_t buf) {
     return 1;
 }
 
+// The Random opponent's "?" (the LEGO Store cell, Iconic_LegoStore 64,0) in its
+// own colours, 56x56 RGBA with alpha 0 where the cell is clear: the map
+// select's Random entry draws it in place of the drawn map (lb_matchpic.cpp).
+extern "C" int lb_teams_question_rgba(unsigned int out[56 * 56]) {
+    static std::vector<unsigned int> cell;
+    if (cell.empty()) {
+        if (!g_rom) return 0;
+        Bitmap ls;
+        if (!load_atlas("Iconic_LegoStore", &ls)) return 0;
+        cell.assign(56u * 56u, 0u);
+        for (int y = 0; y < 56; ++y)
+            for (int x = 0; x < 56; ++x) {
+                const uint8_t i = ls.px[(size_t)y * 256u + (size_t)(64 + x)];
+                if (!i) continue;
+                const uint16_t c = ls.pal[i];
+                const unsigned r = (c & 31u) << 3, g = ((c >> 5) & 31u) << 3,
+                               b = ((c >> 10) & 31u) << 3;
+                cell[(size_t)y * 56u + (size_t)x] = 0xFF000000u | (b << 16) | (g << 8) | r;
+            }
+    }
+    std::memcpy(out, cell.data(), 56u * 56u * sizeof(unsigned int));
+    return 1;
+}
+
 // docs/390: once a frame, make sure records 0x4A/0x4B carry the portraits'
 // frames whenever the FE UIMgrData is loaded (it is reloaded after a battle,
 // and the load fixup never fills a record the file leaves empty).
+// docs/430: the army screen's two filters, for a creature, while its card is
+// in (lb_patches.cpp's overrides of FUN_020EAC1C and FUN_020EB21C, from the
+// army screen's list call only). -1: not ours, ask the game.
+extern "C" int lb_teams_card_listable(int unit) {
+    if (!g_cards_applied) return -1;
+    return unit == 169 || unit == 138 ? 1 : -1;
+}
+extern "C" int lb_teams_card_tier(int unit) {
+    if (!g_cards_applied) return -1;
+    return unit == 155 ? 2 : -1;   // Special Two, where the Team Builder puts it
+}
+
 extern "C" void lb_teams_portrait_tick(void) {
+    cards_tick();   // docs/430: every frame; it does nothing while the option is off
     static int tick = 0;
     if (++tick < 15) return;
     tick = 0;
@@ -1480,7 +1723,9 @@ extern "C" int lb_rules_outgoing(unsigned char* buf, int cap) {
         at[3] = (unsigned char)lb_setting_hotwire_mode();
         at[4] = (unsigned char)lb_setting_hotwire_transport();
         at[5] = (unsigned char)(lb_setting_transport_release() ? 1 : 0);
-        at[6] = (unsigned char)(lb_setting_attack_boost_ranged() ? 1 : 0);
+        // docs/433: 0 off, 1 on, 2 on without the blast. A build that predates
+        // 2 reads it as on; the builds differ then and the 'V' page says so.
+        at[6] = (unsigned char)std::min(std::max(lb_setting_attack_boost_ranged(), 0), 2);
         at[7] = (unsigned char)(lb_setting_fix_hotwired_healing() ? 1 : 0);
         const unsigned cm = (unsigned)lb_cheat_mask_live();
         for (int b = 0; b < 4; ++b) at[8 + b] = (unsigned char)(cm >> (8 * b));
@@ -1712,7 +1957,7 @@ extern "C" void lb_rules_incoming(const unsigned char* buf, int len,
             v.hotwire_mode = q[3] <= 2 ? q[3] : 0;
             v.hotwire_transport = q[4] <= 2 ? q[4] : 0;
             v.transport_release = q[5] ? 1 : 0;
-            v.attack_boost = q[6] ? 1 : 0;
+            v.attack_boost = q[6] <= 2 ? q[6] : 1;   // docs/433: 2 = no blast
             v.fix_healing = q[7] ? 1 : 0;
             v.cheats = ((unsigned)q[8] | ((unsigned)q[9] << 8) |
                         ((unsigned)q[10] << 16) | ((unsigned)q[11] << 24)) & 0x3FFFFu;
