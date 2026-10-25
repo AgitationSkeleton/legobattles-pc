@@ -245,7 +245,7 @@ void finish_locked() {
     lb_overlay_notice(text.c_str());
 }
 
-// ARCHIVE FIRST (the owner's rule): the community archive's copy with this
+// ARCHIVE FIRST: the community archive's copy with this
 // exact identity (lb_mapfetch_install_by_hash, which hashes every candidate),
 // on a worker thread; the host is asked only when the archive has none.
 void archive_then_host(uint64_t hash, std::string name) {

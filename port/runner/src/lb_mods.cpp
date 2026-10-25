@@ -582,13 +582,21 @@ void scan(const std::vector<uint8_t>& rom, const Nitro& own) {
             std::fclose(f);
             return ok;
         };
-        const fs::path loose = dir / "maps";
+        // A map folder anywhere under mods/ counts (mods/maps/ is the documented
+        // place, but a player dropping the folders straight into mods/ saw no
+        // maps); mods/cache/ -- the map browser's downloaded zips -- is skipped.
+        const fs::path loose = dir;
         std::vector<fs::path> folders;
         if (fs::is_directory(loose, ec))
             for (auto it = fs::recursive_directory_iterator(loose, ec);
                  it != fs::recursive_directory_iterator(); it.increment(ec)) {
                 if (ec) break;
-                if (it->is_directory(ec)) folders.push_back(it->path());
+                if (!it->is_directory(ec)) continue;
+                if (it.depth() == 0 && lower(it->path().filename().string()) == "cache") {
+                    it.disable_recursion_pending();
+                    continue;
+                }
+                folders.push_back(it->path());
             }
         std::sort(folders.begin(), folders.end());
         int loose_n = 0;
@@ -599,7 +607,7 @@ void scan(const std::vector<uint8_t>& rom, const Nitro& own) {
                 }, &m))
                 continue;
             m.slot = 1000 + loose_n;
-            m.source = "mods/maps/" + f.lexically_relative(loose).generic_string();
+            m.source = "mods/" + f.lexically_relative(loose).generic_string();
             if (std::any_of(g_maps.begin(), g_maps.end(),
                             [&](const ModMap& o) { return o.hash == m.hash; }))
                 continue;

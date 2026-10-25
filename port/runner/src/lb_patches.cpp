@@ -571,12 +571,18 @@ constexpr uint32_t kImageXfer = 0x0204E1D0u;   // arm
 extern "C" int lb_teams_paste_portraits(uint32_t buf);   /* lb_teams.cpp */
 extern "C" int lb_matchpic_paint_random_preview(uint32_t buf, uint32_t n,
                                                 const char* name);   /* lb_matchpic.cpp */
+extern "C" int lb_matchpic_paint_random_preview2(uint32_t buf, uint32_t n, const char* name,
+                                                 int tiled);
 // docs/429: the map select's selection is a Random entry (map_preview_override),
 // and when it last said so.
 bool g_random_preview = false;
 unsigned long long g_random_preview_at = 0;
+// The choice was made on a Random entry: every preview stays the "?" -- the
+// next screens' top-screen minimap too -- until the battle's map is parsed.
+bool g_random_hidden = false;
 bool random_preview_now() {
-    return g_random_preview && SDL_GetTicks64() - g_random_preview_at < 300u;
+    return g_random_hidden ||
+           (g_random_preview && SDL_GetTicks64() - g_random_preview_at < 300u);
 }
 void image_xfer_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kImageXfer);
@@ -653,6 +659,28 @@ bool placement_active() {
 void gfx_transfer_observer(void) {
     const uint32_t src = g_cpu.R[2];
     const uint32_t len = g_cpu.R[3];
+    // Test aid: LB_XFER_LOG=1 also lists these (kind, vram, source, bytes),
+    // the sizes from 2 KB up, a few hundred.
+    // docs/429: a Random pick's top-screen minimap (the settings screen's
+    // 8 KB tiled copy, sent from 0x0202BD40) is the "?" too, until the battle.
+    if (len == 8192u && g_cpu.R[14] == 0x0202BD40u && random_preview_now()) {
+        const int ok = lb_matchpic_paint_random_preview2(src, len, nullptr, 1);
+        static int said = 0;
+        if (ok && said++ < 3) {
+            std::fprintf(stderr, "[lb_maps] the top screen shows the \"?\" too\n");
+            std::fflush(stderr);
+        }
+    }
+    static const bool xlog = std::getenv("LB_XFER_LOG") != nullptr;
+    if (xlog && len >= 2048u) {
+        static int said = 0;
+        if (said++ < 300) {
+            std::fprintf(stderr, "[lb_gfx] kind %u vram %08X src %08X: %u bytes (lr %08X)\n",
+                         (unsigned)g_cpu.R[0], (unsigned)g_cpu.R[1], (unsigned)src,
+                         (unsigned)len, (unsigned)g_cpu.R[14]);
+            std::fflush(stderr);
+        }
+    }
     // TWO DIFFERENT PASSES SEND THIS EXACT TRANSFER, and blanking on the
     // source alone suppressed both.
     //
@@ -4830,15 +4858,18 @@ void map_preview_override(void) {
     // being confirmed clears it -- a battle's own minimap is never touched.
     g_random_preview = random;
     g_random_preview_at = SDL_GetTicks64();
+    if (!random) g_random_hidden = false;   // back on the list, a real map is picked
     if (original) original();
 }
 
 void map_confirm_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kMapConfirm);
-    g_random_preview = false;   // the choice is made: previews are maps again
+    g_random_preview = false;
     const uint32_t screen = g_cpu.R[0];
     int idx = -1;
     const uint32_t m = map_list_selected(screen, &idx);
+    // A Random pick stays hidden until the battle (map_parse_override).
+    g_random_hidden = m && idx >= 0 && idx < lb_maps_extra_count();
     if (m) {
         const int mp = bus_read_u8(screen + 0xA7u) != 0 ? 1 : 0;
         std::fprintf(stderr, "[lb_maps] %s map chosen%s: name id %u\n",
@@ -4987,6 +5018,7 @@ extern "C" unsigned lb_level_pick(unsigned salt) {
 
 void map_parse_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kMapParse);
+    g_random_hidden = false;   // docs/429: the battle is loading; its minimap is real
     const uint32_t buf = g_cpu.R[1];
     if (guest_ptr(buf) && bus_read_u8(buf) == 'M' && bus_read_u8(buf + 1u) == 'A' &&
         bus_read_u8(buf + 2u) == 'P' && bus_read_u8(buf + 3u) == 'T' &&
@@ -12005,6 +12037,28 @@ static void apply_ai_hero_rebuild(void) {
 // a target for tap spells and the caster drops the cast. `lsls r1,r2,#26`
 // (r2 still holds the flags) leaves Z set exactly when no bit 1..5 is set, so
 // the existing beq skips only the self-cast spells. Offline only.
+// SG-0017 step 2: THE CHOOSER NEVER WANTS CATEGORY 1. FUN_0209754C scores each
+// of the hero's spells by FUN_0209849C(desires, category) -- the highest weight
+// of a desire node with that category -- and no branch ever builds a category-1
+// node, so Hotwire (row 32) and EMP (row 27), the two category-1 spells, score
+// 0 and are never cast, though the target code for category 1 exists (FUN_02097AF4
+// case 1: enemy siege/vehicle units in reach, exactly Hotwire's targets). The
+// 44-byte scorer is rewritten in its own 44 bytes, the same loop counting down,
+// plus: no match and category 1 -> weight 0x28. Checked with capstone.
+constexpr uint32_t kSpellScore = 0x0209849Cu;   // thumb, 22 halfwords
+constexpr uint16_t kSpellScoreStock[22] = {
+    0xB478, 0x688C, 0x2000, 0x1C03, 0x2C00, 0xDD0D, 0x684C, 0x6826, 0x7A35, 0x4295, 0xD103,
+    0x7A75, 0x4285, 0xD900, 0x1C28, 0x688D, 0x1C5B, 0x1D24, 0x42AB, 0xDBF2, 0xBC78, 0x4770};
+constexpr uint16_t kSpellScoreCat1[22] = {
+    0xB470, 0x2000, 0x688B, 0x684C, 0x3B01, 0xD408, 0xCC40, 0x7A35, 0x4295, 0xD1F9, 0x7A75,
+    0x4285, 0xD9F6, 0x1C28, 0xE7F4, 0x2800, 0xD102, 0x2A01, 0xD100, 0x2028, 0xBC70, 0x4770};
+
+static bool spell_score_is(const uint16_t (&w)[22]) {
+    for (uint32_t i = 0; i < 22u; ++i)
+        if (bus_read_u16(kSpellScore + 2u * i) != w[i]) return false;
+    return true;
+}
+
 static void apply_ai_tap_spells(void) {
     static int applied = 0;
     static unsigned gen = 0;
@@ -12013,7 +12067,10 @@ static void apply_ai_tap_spells(void) {
     if (want == applied) return;
     const uint32_t got = bus_read_u16(0x02097A60u);
     if (got != 0x2900u && got != 0x0691u) return;   // not loaded, or not this build
+    if (!spell_score_is(kSpellScoreStock) && !spell_score_is(kSpellScoreCat1)) return;
     bus_write_u16(0x02097A60u, want ? 0x0691u : 0x2900u);
+    const uint16_t (&w)[22] = want ? kSpellScoreCat1 : kSpellScoreStock;
+    for (uint32_t i = 0; i < 22u; ++i) bus_write_u16(kSpellScore + 2u * i, w[i]);
     applied = want;
     std::fprintf(stderr, "[lb_aispell] the AI uses targeted spells: %s\n",
                  want ? "ON" : "off");

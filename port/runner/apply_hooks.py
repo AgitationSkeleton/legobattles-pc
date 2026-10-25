@@ -7609,6 +7609,8 @@ def apply(runner_dir, imgui_dir):
           "src/lb_discord.cpp",
           # A host sends a joiner its mod map (docs/432).
           "src/lb_maptx.cpp",
+          # Download and install a release in place (docs/435).
+          "src/lb_update.cpp",
           # The first-run setup (docs/394).
           "src/lb_setup.cpp",
           "%s/imgui.cpp" % imgui,
@@ -7707,8 +7709,12 @@ def apply(runner_dir, imgui_dir):
     edit(cmake, "target_link_libraries(nds_runner PRIVATE nds_banks",
          ["if(WIN32)",
           "    target_link_libraries(nds_runner PRIVATE comdlg32 winhttp)",   # docs/419: HTTPS
-          "    find_library(LB_ZLIB NAMES libz.a z)",   # docs/420: inflate, statically
-          "    target_link_libraries(nds_runner PRIVATE ${LB_ZLIB})",
+          # docs/420: inflate, statically. -l:libz.a, not find_library: the
+          # compiler then takes the zlib beside its own headers. find_library
+          # searched the shell's PATH, and the release runner's devkitPro
+          # shell gave it devkitPro's MSYS-runtime libz.a, whose inflate fails
+          # in the native game (v0.3.0: the Maps page listed nothing).
+          "    target_link_libraries(nds_runner PRIVATE -l:libz.a)",
           "endif()"])
     done.append("CMakeLists.txt: comdlg32 for the native file picker")
 

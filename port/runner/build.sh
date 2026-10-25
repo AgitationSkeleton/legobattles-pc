@@ -87,6 +87,8 @@ cp -p "$W/port/runner/src/lb_mapbans.cpp" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_discord.cpp" "$TREE/runner/src/"
 # A host sends a joiner its mod map (docs/432).
 cp -p "$W/port/runner/src/lb_maptx.cpp" "$TREE/runner/src/"
+# Download and install a release in place (docs/435).
+cp -p "$W/port/runner/src/lb_update.cpp" "$TREE/runner/src/"
 # The first-run setup: the player's own ROM, Europe or USA (docs/394).
 cp -p "$W/port/runner/src/lb_setup.cpp" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_music.cpp" "$TREE/runner/src/"

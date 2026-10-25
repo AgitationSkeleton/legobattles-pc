@@ -580,6 +580,12 @@ int lb_matchpic_score_json(char* out, int cap);
 /* SG-0018 (lb_net.cpp): a blocking GET to a master server; the reply's length, or
    -1 with the error in `out`. */
 int lb_net_http_get(const char* host, int port, const char* path, char* out, int cap);
+/* docs/435 (lb_update.cpp): download and install a release in place. */
+int  lb_update_supported(void);
+int  lb_update_start(const char* url, const char* version);
+int  lb_update_state(char* msg, int cap);   /* 0 idle 1 down 2 install 3 done 4 failed */
+void lb_update_restart(void);
+void lb_update_cleanup(void);
 /* One on/off setting straight from settings.json, before the settings load. */
 int lb_settings_file_bool(const char* key, int dflt);
 /* SG-0018: Network > Scores. 1 when this player keeps out of the tables. */

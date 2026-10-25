@@ -379,13 +379,14 @@ struct Settings {
     bool master_https = true;
     bool match_picture = true;     // docs/428
     bool scores_opt_out = false;   // SG-0018: keep out of the score tables
-    // Record every session to lb-session-*.lbdemo. Off by default (the owner's
-    // rule); lb_demo reads it from the file at the first vblank, before the
+    // Record every session to lb-session-*.lbdemo. Off by default;
+    // lb_demo reads it from the file at the first vblank, before the
     // settings load (lb_settings_file_bool).
     bool record_sessions = false;
     bool discord_status = true;    // docs/430: Discord Rich Presence
     bool discord_hero = true;      // docs/430: ... with the hero as the small image
     bool update_check = true;      // docs/430: look for a newer release at startup
+    bool auto_update = false;      // docs/435: and install it by itself
     // docs/420: a lobby's mod map this machine lacks is fetched from the archive.
     bool fetch_maps = true;
     bool fast_link = true;      // docs/423: the host-level WH
@@ -742,6 +743,8 @@ extern "C" void lb_settings_save(void) {
                   g_set.discord_hero ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"update_check\": %s,\n",
                   g_set.update_check ? "true" : "false"); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"auto_update\": %s,\n",
+                  g_set.auto_update ? "true" : "false"); o += buf;   // docs/435
     std::snprintf(buf, sizeof buf, "  \"fetch_maps\": %s,\n",
                   g_set.fetch_maps ? "true" : "false"); o += buf;   // docs/420
     std::snprintf(buf, sizeof buf, "  \"fast_link\": %s,\n",
@@ -898,6 +901,7 @@ extern "C" void lb_settings_load(void) {
     json_get_bool(s, "discord_status", &g_set.discord_status);   // docs/430
     json_get_bool(s, "discord_hero", &g_set.discord_hero);
     json_get_bool(s, "update_check", &g_set.update_check);
+    json_get_bool(s, "auto_update", &g_set.auto_update);   // docs/435
     json_get_bool(s, "fetch_maps", &g_set.fetch_maps);       // docs/420
     json_get_bool(s, "fast_link", &g_set.fast_link);         // docs/423
     json_get_int(s, "master_port", &g_set.master_port);
@@ -1533,6 +1537,13 @@ void tab_enhancements() {
          "loses track of the second one. On, it rebuilds after every death.\n"
          "Free Play only.");
     badge(WIRED);
+    // SG-0002: AI vs AI.
+    ImGui::Checkbox("AI Plays My Side (Spectate)", &g_set.ai_spectate);
+    help("Free Play only: the computer plays your side as well, so two\n"
+         "computer players fight and you watch. The map is revealed.\n"
+         "You can still give orders to your units. Takes effect when a\n"
+         "battle starts. Not online.");
+    badge(WIRED);
     ImGui::Spacing();
     ImGui::Text("Attack Boost Reaches Ranged Units");
     const char* atk_modes[] = {"Off (vanilla)", "On",
@@ -1709,17 +1720,9 @@ void tab_balance_spells() {
     ImGui::Spacing();
     ImGui::Checkbox("AI Uses Targeted Spells", &g_set.ai_tap_spells);
     help("The computer's heroes also cast the spells you aim at one unit\n"
-         "(damage spells, unit boosts). In the game they only cast spells\n"
-         "that hit the ground or themselves. Not online.");
-    badge(WIRED);
-
-    // SG-0002: AI vs AI.
-    ImGui::Spacing();
-    ImGui::Checkbox("AI Plays My Side (Spectate)", &g_set.ai_spectate);
-    help("Free Play only: the computer plays your side as well, so two\n"
-         "computer players fight and you watch. The map is revealed.\n"
-         "You can still give orders to your units. Takes effect when a\n"
-         "battle starts. Not online.");
+         "(damage spells, unit boosts), and Hotwire and EMP, which the game's\n"
+         "AI never chooses. In the game they only cast spells that hit the\n"
+         "ground or themselves. Not online.");
     badge(WIRED);
     tab_end();
 }
@@ -6517,6 +6520,7 @@ void tab_balance_presets() {
 struct UpdateInfo {
     int state = 0;   // 0 not checked, 1 checking, 2 done, 3 failed
     std::string tag, name, notes, url, error;
+    std::string asset;    // docs/435: the release's game zip (not the source zip)
     bool newer = false;   // a release that differs from this build and is not older
 };
 std::mutex g_upd_mu;
@@ -6594,6 +6598,18 @@ void upd_run(bool quiet) {
         const std::string bare = (!r.tag.empty() && (r.tag[0] == 'v' || r.tag[0] == 'V'))
                                      ? r.tag.substr(1) : r.tag;
         r.newer = (dm && dr) ? dr > dm : (!bare.empty() && mine.find(bare) == std::string::npos);
+        // docs/435: the game zip among the assets (the other is the source).
+        const std::string key = "\"browser_download_url\":";
+        for (size_t p = reply.find(key); p != std::string::npos; p = reply.find(key, p + 1)) {
+            const size_t q0 = reply.find('"', p + key.size());
+            const size_t q1 = q0 == std::string::npos ? q0 : reply.find('"', q0 + 1);
+            if (q1 == std::string::npos) break;
+            const std::string u = reply.substr(q0 + 1, q1 - q0 - 1);
+            if (u.size() > 4 && u.compare(u.size() - 4, 4, ".zip") == 0 &&
+                u.find("runner-source") == std::string::npos &&
+                u.find("/LegoBattles-PC-") != std::string::npos)
+                r.asset = u;
+        }
     }
     std::fprintf(stderr, "[lb_update] %s: %s tag \"%s\" newer=%d (this build \"%s\")%s%s\n",
                  quiet ? "startup check" : "check", r.state == 3 ? "failed" : "ok",
@@ -6605,10 +6621,19 @@ void upd_run(bool quiet) {
         g_upd = r;
     }
     if (quiet && r.newer) {
-        const std::string msg = "A newer version is available: " + r.tag +
-                                " (you run " + lb_port_version() +
-                                "). Settings > General has the download page.";
-        lb_overlay_notice(msg.c_str());
+        // docs/435: Install updates automatically downloads and installs it;
+        // the new version runs from the next start.
+        if (g_set.auto_update && !r.asset.empty() &&
+            lb_update_start(r.asset.c_str(), r.tag.c_str())) {
+            const std::string msg = "Installing " + r.tag + " (you run " + lb_port_version() +
+                                    "). Settings > General says when it is ready.";
+            lb_overlay_notice(msg.c_str());
+        } else {
+            const std::string msg = "A newer version is available: " + r.tag +
+                                    " (you run " + lb_port_version() +
+                                    "). Settings > General can install it.";
+            lb_overlay_notice(msg.c_str());
+        }
     }
     g_upd_busy = false;
 }
@@ -6667,10 +6692,40 @@ void tab_general() {
             ImGui::EndChild();
         }
         if (ImGui::Button("Open download page")) SDL_OpenURL(u.url.c_str());
+        // docs/435: or download and install it here.
+        if (u.newer && !u.asset.empty()) {
+            ImGui::SameLine();
+            const bool can = lb_update_supported() != 0;
+            char umsg[256];
+            const int us = lb_update_state(umsg, (int)sizeof umsg);
+            ImGui::BeginDisabled(!can || us == 1 || us == 2 || us == 3);
+            if (ImGui::Button("Install update")) lb_update_start(u.asset.c_str(), u.tag.c_str());
+            ImGui::EndDisabled();
+            ImGui::SetItemTooltip("Downloads the new version from GitHub and installs it over\n"
+                                  "this one. Your settings, saves, ROM and mods are kept.");
+            if (!can)
+                ImGui::TextDisabled("Installing here works in the downloaded game only.");
+        }
+    }
+    {
+        char umsg[256];
+        const int us = lb_update_state(umsg, (int)sizeof umsg);
+        if (us == 1 || us == 2) ImGui::TextUnformatted(umsg);
+        if (us == 4) ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.4f, 1.0f), "%s", umsg);
+        if (us == 3) {
+            ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "%s", umsg);
+            if (ImGui::Button("Restart now")) lb_update_restart();
+        }
     }
     ImGui::Checkbox("Check for updates at startup", &g_set.update_check);
     help("Looks for a newer release a few seconds after the game starts, and says so\n"
          "only when there is one.");
+    ImGui::BeginDisabled(!g_set.update_check);
+    ImGui::Checkbox("Install updates automatically", &g_set.auto_update);
+    help("With the check at startup on: a newer release is downloaded and installed\n"
+         "by itself, and runs from the next start. Your settings, saves, ROM and mods\n"
+         "are kept.");
+    ImGui::EndDisabled();
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::TextDisabled("Discord");
@@ -6968,9 +7023,9 @@ const std::vector<MenuHeader>& menu_headers() {
         {"Cheats", {{"Cheats", "Cheats", tab_cheats}}},
         {"Network", {{"Multiplayer", "Multiplayer", tab_multiplayer},
                      {"Scores", "Scores", tab_scores}}},
+        {"Maps", {{"Map archive", "Maps", tab_map_archive}}},
         {"Tools", {{"Recordings", "Demo", tab_demo},
-                   {"Windows", "Windows", section_windows},
-                   {"Maps", "Maps", tab_map_archive}}},
+                   {"Windows", "Windows", section_windows}}},
     };
     return k;
 }
@@ -7254,6 +7309,7 @@ extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
         static std::string ini = settings_path("imgui.ini");
         ImGui::GetIO().IniFilename = ini.c_str();
         lb_settings_load();
+        lb_update_cleanup();   // docs/435: the files the last update replaced
         ImGui::StyleColorsDark();
         if (!ImGui_ImplSDL2_InitForSDLRenderer(window, renderer)) {
             std::fprintf(stderr, "[lb_overlay] SDL2 backend init failed\n");
@@ -7374,6 +7430,19 @@ extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
     draw_top_screen(renderer);
     draw_battlefield(renderer);
     draw_notice();   // docs/413
+    // SG-0016: while Skip the intro screens fast-forwards the boot logos (they
+    // ignore input and run on the game's own timers, so the boot is only run
+    // faster), cover the window, so the player sees a short loading screen
+    // and then the title, not the logos racing past.
+    if (lb_boot_skip_wanted()) {
+        ImDrawList* fg = ImGui::GetForegroundDrawList();
+        const ImVec2 sz = ImGui::GetIO().DisplaySize;
+        fg->AddRectFilled(ImVec2(0, 0), sz, IM_COL32(0, 0, 0, 255));
+        const char* text = "Loading...";
+        const ImVec2 ts = ImGui::CalcTextSize(text);
+        fg->AddText(ImVec2((sz.x - ts.x) * 0.5f, (sz.y - ts.y) * 0.5f),
+                    IM_COL32(200, 200, 200, 255), text);
+    }
     lb_swear_selftest_if_asked();   // docs/415
     bans_roundtrip_if_asked();      // docs/419
     lb_chat_draw(renderer);         // docs/415

@@ -281,7 +281,7 @@ void fetch(std::string name) {
     lb_overlay_notice(text);
     g_busy = false;
 }
-// ---- docs/431: the Maps page (Tools > Maps) ----------------------------------
+// ---- docs/431: the Maps page (the Maps header) ----------------------------------
 //
 // Lists the archive's Free Play maps one by one: a thumbnail (the map's own
 // minimap pair, drawn with the map select's palette), what its .map file says
@@ -332,11 +332,18 @@ void arc_scan_installed() {
     g_inst_names.clear();
     g_inst_hashes.clear();
     std::error_code ec;
-    const fs::path loose = fs::u8path(lb_mods_dir()) / "maps";
+    // Anywhere under mods/ (lb_mods.cpp reads map folders there), but not the
+    // downloaded zips in mods/cache/.
+    const fs::path loose = fs::u8path(lb_mods_dir());
     if (!fs::is_directory(loose, ec)) return;
     for (auto it = fs::recursive_directory_iterator(loose, ec);
          it != fs::recursive_directory_iterator(); it.increment(ec)) {
         if (ec) break;
+        if (it.depth() == 0 && it->is_directory(ec) &&
+            lower(it->path().filename().string()) == "cache") {
+            it.disable_recursion_pending();
+            continue;
+        }
         if (!it->is_regular_file(ec) || lower(it->path().extension().string()) != ".map")
             continue;
         g_inst_names.insert(lower(it->path().parent_path().filename().string()));
@@ -570,40 +577,76 @@ void arc_draw(SDL_Renderer* ren) {
         if (!warn.empty())
             ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "%s", warn.c_str());
     }
-    const ImVec2 avail = ImGui::GetContentRegionAvail();
-    ImGui::BeginChild("lb_arc_list", ImVec2(avail.x * 0.38f, avail.y), ImGuiChildFlags_Borders);
-    ImGui::SetNextItemWidth(-1.0f);
+    // THE CATALOGUE: every map's thumbnail with its name
+    // beneath, in a grid grouped by pack; a click shows that map's details
+    // beside it.
+    ImGui::SetNextItemWidth(260.0f);
     ImGui::InputTextWithHint("##arcsearch", "Search by name", search, sizeof search);
-    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(160.0f);
     const char* kSizes[] = {"All sizes", "64x64 (small)", "96x96 (large)"};
     ImGui::Combo("##arcsize", &size_filter, kSizes, 3);
-    ImGui::Separator();
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    const float detail_w = sel >= 0 ? std::max(300.0f, avail.x * 0.34f) : 0.0f;
+    ImGui::BeginChild("lb_arc_grid", ImVec2(sel >= 0 ? avail.x - detail_w - 8.0f : 0.0f, avail.y),
+                      ImGuiChildFlags_Borders);
     const std::string q = lower(search);
+    const float tile = 112.0f, pad = 12.0f;
+    const int cols = std::max(1, (int)((ImGui::GetContentRegionAvail().x + pad) / (tile + pad)));
     std::string last_pack;
-    int shown = 0;
+    int shown = 0, col = 0;
     for (int i = 0; i < (int)g_arc.size(); ++i) {
-        const ArcMap& m = g_arc[(size_t)i];
+        ArcMap& m = g_arc[(size_t)i];
         if (!q.empty() && lower(m.name).find(q) == std::string::npos) continue;
         if (size_filter && m.st[0] != (size_filter == 1 ? 64 : 96)) continue;
         if (m.pack != last_pack) {
             last_pack = m.pack;
+            if (col) ImGui::NewLine();
+            col = 0;
+            ImGui::Spacing();
             ImGui::TextDisabled("%s", m.pack.c_str());
+            ImGui::Separator();
         }
-        char label[256];
-        std::snprintf(label, sizeof label, "%s  (%dx%d)%s###arc%d", lb_swear_shown(m.name.c_str()),
-                      m.st[0], m.st[1], m.installed ? "  - installed" : "", i);
-        if (ImGui::Selectable(label, sel == i)) sel = i;
+        if (col) ImGui::SameLine(0.0f, pad);
+        ImGui::BeginGroup();
+        ImGui::PushID(i);
+        arc_texture(m, ren);
+        const ImVec4 tint = m.installed ? ImVec4(0.75f, 1.0f, 0.75f, 1.0f)
+                                        : ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+        const ImVec4 bg = sel == i ? ImVec4(0.95f, 0.75f, 0.15f, 1.0f) : ImVec4(0, 0, 0, 0);
+        bool hit;
+        if (m.tex && m.tsize > 0) {
+            const float u = (float)m.tsize / 128.0f;
+            hit = ImGui::ImageButton("##t", (ImTextureID)(intptr_t)m.tex, ImVec2(tile, tile),
+                                     ImVec2(0, 0), ImVec2(u, u), bg, tint);
+        } else {
+            hit = ImGui::Button("?", ImVec2(tile + 8.0f, tile + 8.0f));
+        }
+        if (hit) sel = (sel == i) ? -1 : i;
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s\n%dx%d, %d players%s", lb_swear_shown(m.name.c_str()), m.st[0],
+                              m.st[1], m.st[3], m.installed ? "\nInstalled" : "");
+        // The name beneath, cut to the tile's width.
+        std::string nm = lb_swear_shown(m.name.c_str());
+        while (nm.size() > 3 && ImGui::CalcTextSize(nm.c_str()).x > tile + 8.0f)
+            nm = nm.substr(0, nm.size() - 4) + "..";
+        const float nx = (tile + 8.0f - ImGui::CalcTextSize(nm.c_str()).x) * 0.5f;
+        if (nx > 0) ImGui::SetCursorPosX(ImGui::GetCursorPosX() + nx);
+        if (m.installed) ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "%s", nm.c_str());
+        else ImGui::TextUnformatted(nm.c_str());
+        ImGui::PopID();
+        ImGui::EndGroup();
+        col = (col + 1) % cols;
         ++shown;
     }
     if (!shown) ImGui::TextDisabled("No map matches.");
     ImGui::EndChild();
-    ImGui::SameLine();
-    ImGui::BeginChild("lb_arc_detail", ImVec2(0, avail.y), ImGuiChildFlags_Borders);
     if (sel < 0 || sel >= (int)g_arc.size()) {
-        ImGui::TextDisabled("Pick a map in the list.");
-        ImGui::EndChild();
+        sel = -1;
         return;
     }
+    ImGui::SameLine();
+    ImGui::BeginChild("lb_arc_detail", ImVec2(0, avail.y), ImGuiChildFlags_Borders);
     ArcMap& m = g_arc[(size_t)sel];
     arc_texture(m, ren);
     ImGui::SetWindowFontScale(1.2f);
@@ -613,12 +656,11 @@ void arc_draw(SDL_Renderer* ren) {
     ImGui::Spacing();
     if (m.tex && m.tsize > 0) {
         const float u = (float)m.tsize / 128.0f;
-        ImGui::Image((ImTextureID)(intptr_t)m.tex, ImVec2(256.0f, 256.0f), ImVec2(0, 0),
+        ImGui::Image((ImTextureID)(intptr_t)m.tex, ImVec2(192.0f, 192.0f), ImVec2(0, 0),
                      ImVec2(u, u));
     } else {
         ImGui::TextDisabled("No preview.");
     }
-    ImGui::SameLine();
     ImGui::BeginGroup();
     static const char* const kWorld[3] = {"King (castle)", "Pirate", "Mars"};
     ImGui::Text("Size: %d x %d", m.st[0], m.st[1]);
@@ -675,7 +717,7 @@ void arc_draw(SDL_Renderer* ren) {
 }
 }  // namespace
 
-// docs/431: the Maps page's body (Tools > Maps in lb_overlay.cpp).
+// docs/431: the Maps page's body (the Maps header in lb_overlay.cpp).
 void lb_mapbrowser_draw(SDL_Renderer* renderer) { arc_draw(renderer); }
 
 // A lobby wants `name`, which this machine lacks. Once per name per run.

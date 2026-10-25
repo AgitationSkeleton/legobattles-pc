@@ -949,7 +949,7 @@ extern "C" void lb_demo_apply_env(void) {
     done = true;
     if (const char* p = std::getenv("LB_DEMO_REC")) lb_demo_start_record(p);
     else if (const char* q = std::getenv("LB_DEMO_PLAY")) lb_demo_start_play(q);
-    // ONLY WHEN ASKED (the owner's rule): "Record every session" in
+    // ONLY WHEN ASKED: "Record every session" in
     // Tools > Recordings, off by default. It is read from settings.json
     // here because this runs at the first vblank, before the settings load.
     // LB_DEMO_RECORD=1 forces it on (the harness).

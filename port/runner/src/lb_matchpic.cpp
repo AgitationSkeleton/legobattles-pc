@@ -628,35 +628,61 @@ extern "C" int lb_matchpic_mini_rgba(const unsigned char* ncgr, size_t n, int wo
     return 1;
 }
 
-// docs/429 (the owner's rule): THE RANDOM ENTRY DOES NOT SHOW ITS DRAW. The map
+// docs/429: THE RANDOM ENTRY DOES NOT SHOW ITS DRAW. The map
 // select uploads the selected map's preview (`<stem>mini`, a 128x128 4bpp
 // bitmap, 8192 bytes) through FUN_0204E1D0; while a Random entry is selected, the
 // Random opponent's "?" is drawn into that buffer instead, scaled to the drawn
 // map's preview size and matched to its world's map-select palette (index 0
 // stays clear). Returns 1 when painted.
 extern "C" int lb_teams_question_rgba(unsigned int out[56 * 56]);   /* lb_teams.cpp */
+extern "C" int lb_matchpic_paint_random_preview2(uint32_t buf, uint32_t n, const char* name,
+                                                 int tiled);
 extern "C" int lb_matchpic_paint_random_preview(uint32_t buf, uint32_t n, const char* name) {
-    if (n != 8192u || buf < 0x02000000u || buf + n > 0x02400000u || !name) return 0;
-    std::string stem = name;
-    if (stem.size() < 5 || stem.compare(stem.size() - 4, 4, "mini") != 0) return 0;
-    stem.resize(stem.size() - 4);
+    if (!name) return 0;
+    std::string s = name;
+    if (s.size() < 5 || s.compare(s.size() - 4, 4, "mini") != 0) return 0;
+    return lb_matchpic_paint_random_preview2(buf, n, name, 0);
+}
+
+// `name` "<stem>mini" gives the world's palette (the map select's upload, a
+// bitmap); without one (the top screen's tiled copy, which arrives with no
+// name) white and black are entries 14 and 11, the same in all three banks.
+// `tiled`: the .NCGR layout (8x8 tiles of 32 bytes, 16 to a row) instead of
+// the bitmap (64 bytes a row); its clear value is its own corner pixel (that
+// copy has no transparent index).
+extern "C" int lb_matchpic_paint_random_preview2(uint32_t buf, uint32_t n, const char* name,
+                                                 int tiled) {
+    if (n != 8192u || buf < 0x02000000u || buf + n > 0x02400000u) return 0;
     static unsigned int q[56 * 56];
     if (!lb_teams_question_rgba(q)) return 0;
     uint32_t pal[16];
-    if (!world_palette(map_world(stem), pal)) return 0;
-    // The uploaded buffer is the bitmap (the .NCBR's layout): 128 pixels a
-    // row, 4 bits each, 64 bytes a row -- not the .NCGR file's 8x8 tiles.
+    bool have_pal = false;
+    if (name) {
+        std::string stem = name;
+        if (stem.size() > 4) stem.resize(stem.size() - 4);
+        have_pal = world_palette(map_world(stem), pal);
+    }
+    auto addr = [&](int px, int py) {
+        return tiled ? buf + (uint32_t)(((py >> 3) * 16 + (px >> 3)) * 32 + (py & 7) * 4 +
+                                        ((px & 7) >> 1))
+                     : buf + (uint32_t)(py * 64 + (px >> 1));
+    };
+    auto pixel = [&](int px, int py) {
+        const uint8_t b = bus_read_u8(addr(px, py));
+        return (px & 1) ? (b >> 4) : (b & 15);
+    };
+    // The bitmap's index 0 is clear; the tiled copy draws every index (its 0
+    // is magenta), so its square is black and its "?" white (below).
+    const int clear = tiled ? 11 : 0;
     // The drawn map's extent, from its own preview: a 64- or 96-tile map.
     int size = 0;
-    for (uint32_t i = 0; i < n; ++i) {
-        const uint8_t b = bus_read_u8(buf + i);
-        if (!b) continue;
-        const int x = (int)((i & 63u) * 2u + 1u), y = (int)(i >> 6);
-        size = std::max(size, std::max(x + 1, y + 1));
-    }
+    for (int y = 0; y < 128; ++y)
+        for (int x = 0; x < 128; ++x)
+            if (pixel(x, y) != 0) size = std::max(size, std::max(x + 1, y + 1));
     if (size < 32) size = 64;
     if (size > 128) size = 128;
     auto nearest = [&](unsigned int c) {
+        if (!have_pal) return (c & 0xFFFFFFu) ? 14 : 11;
         const int r = (int)(c & 255u), g = (int)((c >> 8) & 255u), b = (int)((c >> 16) & 255u);
         int best = 1, bd = 1 << 30;
         for (int k = 1; k < 16; ++k) {
@@ -667,17 +693,49 @@ extern "C" int lb_matchpic_paint_random_preview(uint32_t buf, uint32_t n, const 
         }
         return best;
     };
+    // THE GLYPH ONLY (no tinted tile, no gold border). The cell is
+    // a dark navy "?" (000828) on a blue tile inside a gold frame: the glyph
+    // is the dark pixels of the tile's interior (the frame and its shadow are
+    // the outer 8 pixels). It is drawn black with a white outline around it,
+    // both of which every world palette has, so it looks the same on any map,
+    // and the rest is clear (index 0) over the preview frame's blue.
+    auto lum = [](unsigned int c) {
+        return (int)((c & 255u) * 3u + ((c >> 8) & 255u) * 6u + ((c >> 16) & 255u)) / 10;
+    };
+    static uint8_t glyph[56 * 56];   // 0 clear, 1 white outline, 2 black body
+    for (int y = 0; y < 56; ++y)
+        for (int x = 0; x < 56; ++x) {
+            const unsigned int c = q[(size_t)y * 56u + (size_t)x];
+            glyph[y * 56 + x] = (x >= 8 && x < 50 && y >= 6 && y < 50 && (c >> 24) &&
+                                 lum(c) < 40)
+                                    ? 2
+                                    : 0;
+        }
+    for (int y = 0; y < 56; ++y)
+        for (int x = 0; x < 56; ++x) {
+            if (glyph[y * 56 + x]) continue;
+            bool near = false;
+            for (int dy = -2; dy <= 2 && !near; ++dy)
+                for (int dx = -2; dx <= 2 && !near; ++dx) {
+                    const int xx = x + dx, yy = y + dy;
+                    near = xx >= 0 && yy >= 0 && xx < 56 && yy < 56 && glyph[yy * 56 + xx] == 2;
+                }
+            if (near) glyph[y * 56 + x] = 1;
+        }
+    const int white = nearest(0xFFFFFFFFu), black = nearest(0xFF000000u);
     // The "?" fills most of the map's square, centred.
     const int box = size * 7 / 8, off = (size - box) / 2;
-    for (uint32_t i = 0; i < n; ++i) bus_write_u8(buf + i, 0u);
+    const uint8_t fill = (uint8_t)(clear | (clear << 4));
+    for (uint32_t i = 0; i < n; ++i) bus_write_u8(buf + i, fill);
     for (int y = 0; y < box; ++y)
         for (int x = 0; x < box; ++x) {
-            const unsigned int c = q[(size_t)(y * 56 / box) * 56u + (size_t)(x * 56 / box)];
-            if (!(c >> 24)) continue;
+            const uint8_t gk = glyph[(size_t)(y * 56 / box) * 56u + (size_t)(x * 56 / box)];
+            if (!gk) continue;
             const int px = off + x, py = off + y;
-            const uint32_t at = buf + (uint32_t)(py * 64 + (px >> 1));
+            const uint32_t at = addr(px, py);
             uint8_t b = bus_read_u8(at);
-            const int v = nearest(c);
+            // On the tiled copy's black square the body is white, its outline black.
+            const int v = tiled ? (gk == 2 ? white : black) : (gk == 1 ? white : black);
             b = (px & 1) ? (uint8_t)((b & 0x0Fu) | (v << 4)) : (uint8_t)((b & 0xF0u) | v);
             bus_write_u8(at, b);
         }
