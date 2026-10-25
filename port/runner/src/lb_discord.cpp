@@ -86,7 +86,9 @@ const HeroKey kHeroKey[] = {
     {145, "hero_king_kahuka"}, {149, "hero_ninja_master"}, {161, "hero_dwarf_king"},
     {165, "hero_troll_king"}, {175, "hero_forestman"}, {176, "hero_ghost"},
     {177, "hero_sheriff"}, {178, "hero_conquistador"}, {179, "hero_agent_chase"},
-    {180, "hero_classic_space"}, {181, "hero_santa"}};
+    {180, "hero_classic_space"}, {181, "hero_santa"},
+    // docs/436: the neutral creatures, when one is the army's hero.
+    {138, "hero_robot"}, {155, "hero_shark"}, {169, "hero_wolf"}, {153, "hero_monkey"}};
 
 std::string json_esc(const std::string& s) {
     std::string o;

@@ -87,7 +87,8 @@ bool lb_https_request(const std::string& host, int port, const std::string& meth
                       std::string* reply, std::string* error);
 extern "C" int lb_demo_playing(void);   /* lb_demo.cpp */
 extern "C" void lb_quick_request(int action);   /* lb_patches.cpp */
-extern "C" unsigned lb_cancel_slots(void);      /* lb_patches.cpp, SG-0006 */
+extern "C" int lb_top_buttons(int* out, int max);   /* lb_patches.cpp, SG-0006 */
+extern "C" int lb_top_minimap(void);                /* lb_patches.cpp */
 
 namespace {
 
@@ -270,6 +271,13 @@ struct Settings {
     // docs/410: the Wolf, Robot and Shark in armies (lb_teams.cpp, cand_on;
     // their prices, lb_patches.cpp kCreaturePrices). Online, the host's.
     bool creatures = false;
+    // docs/437: owned creatures are tinted in their owner's team colour
+    // (lb_patches.cpp, creature_tint). Needs `creatures`; this machine's own.
+    bool creature_tint = true;
+    // docs/436: the army slot each creature falls under (Wolf, Robot, Shark):
+    // 0 the default, else 1 + the Team Builder slot (0 Hero, 2 Close Combat,
+    // 3 Ranged, 4 Mounted, 5/6/7 Special One/Two/Three). Online, the host's.
+    int  creature_slot[4] = {0, 0, 0, 0};
     int  attack_boost_ranged = 0;  // 0 vanilla, 1 ranged units benefit too
     bool fix_hotwired_healing = false;
     // docs/385: the monkey cage (cosmetic, this machine only), on by default.
@@ -641,6 +649,11 @@ extern "C" void lb_settings_save(void) {
                   g_set.transport_release ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"creatures\": %s,\n",
                   g_set.creatures ? "true" : "false"); o += buf;   // docs/410
+    std::snprintf(buf, sizeof buf, "  \"creature_tint\": %s,\n",
+                  g_set.creature_tint ? "true" : "false"); o += buf;   // docs/437
+    std::snprintf(buf, sizeof buf, "  \"creature_slots\": [%d, %d, %d, %d],\n",
+                  g_set.creature_slot[0], g_set.creature_slot[1],
+                  g_set.creature_slot[2], g_set.creature_slot[3]); o += buf;   // docs/436
     std::snprintf(buf, sizeof buf, "  \"attack_boost_ranged\": %d,\n",
                   g_set.attack_boost_ranged); o += buf;
     std::snprintf(buf, sizeof buf, "  \"fix_hotwired_healing\": %s,\n",
@@ -849,7 +862,12 @@ extern "C" void lb_settings_load(void) {
     json_get_bool(s, "ai_hero_rebuild", &g_set.ai_hero_rebuild);
     json_get_bool(s, "transport_release", &g_set.transport_release);
     json_get_bool(s, "creatures", &g_set.creatures);   // docs/410
+    json_get_bool(s, "creature_tint", &g_set.creature_tint);   // docs/437
+    json_get_ints(s, "creature_slots", g_set.creature_slot, 4);   // docs/436
+    for (int& c : g_set.creature_slot)
+        if (c < 0 || c > 8 || c <= 2) c = 0;   // 1 + slot; Hero (1) and Builder (2) are not offered
     json_get_int(s, "attack_boost_ranged", &g_set.attack_boost_ranged);
+    if (g_set.attack_boost_ranged == 1) g_set.attack_boost_ranged = 2;   // BR-0019: the old "On"
     json_get_bool(s, "fix_hotwired_healing", &g_set.fix_hotwired_healing);
     json_get_bool(s, "fix_monkey_cage", &g_set.fix_monkey_cage);   // docs/385
     json_get_bool(s, "own_hero_spells", &g_set.own_hero_spells);   // docs/385
@@ -1546,22 +1564,27 @@ void tab_enhancements() {
     badge(WIRED);
     ImGui::Spacing();
     ImGui::Text("Attack Boost Reaches Ranged Units");
-    const char* atk_modes[] = {"Off (vanilla)", "On",
-                               "On, shots only (no blast)"};
+    // BR-0019/0020: the old "On" (value 1) boosted only a hit in flight, which
+    // Free Play's arrows never are, so a player who chose it saw nothing. The
+    // choice is now Off or On, On being value 2; value 1 survives only for
+    // recordings and older hosts that carry it.
+    const char* atk_modes[] = {"Off (vanilla)", "On (no blast)"};
     {
         const bool lk = host_locked();
         host_lock_begin(lk);
-        int atk = lk ? g_hs.attack_boost : g_set.attack_boost_ranged;
+        int atk = (lk ? g_hs.attack_boost : g_set.attack_boost_ranged) ? 1 : 0;
         ImGui::Combo("##attack_boost_ranged", &atk, atk_modes, IM_ARRAYSIZE(atk_modes));
-        if (!lk) g_set.attack_boost_ranged = atk;
+        if (!lk) g_set.attack_boost_ranged = atk ? 2 : 0;
         host_lock_end(lk);
         host_lock_note(lk);
     }
     help("Vanilla buffs melee damage only; ranged keeps the projectile's own.\n"
-         "On adds the same delta to a projectile's hit in flight.\n"
-         "Shots only adds it to every shot that lands on its target too,\n"
-         "but never to the splash of a boulder, fireball or cannonball.\n"
-         "Online, the host's setting applies to everyone.");
+         "On lets Attack Boost raise every shot that lands on its target:\n"
+         "a shooter with melee damage gets the same bonus, one without\n"
+         "(archers, riflemen, most ranged heroes) does double damage, as\n"
+         "the boost does to a melee blow. Never the splash of a boulder,\n"
+         "fireball or cannonball. Online, the host's setting applies to\n"
+         "everyone.");
     badge(UNSEEN);
     // The reasoning behind this setting lived in TEN TextDisabled lines, which
     // the panel then followed with a two-line summary of the same thing.
@@ -2263,11 +2286,13 @@ void tab_input() {
     help("While the blue brick's menu is the open one, 1-9 pick from it\n"
          "instead of the red, yellow or white brick's. Off: 1-9 always\n"
          "pick from the red, yellow or white brick's menu.");
-    ImGui::Checkbox("Click a queued unit to cancel it", &g_set.cancel_queue_click);
-    help("Select a building that is training units. Click a unit's\n"
-         "icon in its queue, on the Top Screen panel, to cancel it and\n"
-         "get its bricks back. It sends the game's own cancel command,\n"
-         "so it is safe in online play. Needs the Top Screen panel.");
+    ImGui::Checkbox("Clickable top screen", &g_set.cancel_queue_click);
+    help("Click the Top Screen panel as if it were a touch screen:\n"
+         "a unit in a building's queue cancels it (bricks back), a\n"
+         "unit's portrait in a group takes it out of the selection,\n"
+         "and the minimap moves the camera (click or drag). Each runs\n"
+         "the game's own handler for that spot, so it is safe in online\n"
+         "play: the camera is only your view. Needs the Top Screen panel.");
     ImGui::Separator();
     {   // SG-0012: swap the two screens, from a key or this button.
         const char* key = g_rebinding_swap
@@ -3180,7 +3205,7 @@ void tab_team_builder() {
 
     // docs/410: the neutral creatures as army units, at real prices.
     ImGui::Checkbox("Neutral Creatures in Armies", &g_set.creatures);
-    help("Offers the Wolf and the Robot as Close Combat units and the\n"
+    help("Offers the Wolf, the Robot and the Monkey as Close Combat units and the\n"
          "Shark as Special Two, for your army and the Custom opponent.\n"
          "They are in the game's own army screen too, with their heads.\n"
          "The game gives them a price of 1 brick; on, they cost:\n"
@@ -3191,6 +3216,55 @@ void tab_team_builder() {
     if (lb_rules_host_flags() >= 0)
         ImGui::TextDisabled("In this lobby, the host's: %s",
                             lb_creatures_live() ? "On" : "Off");
+    // docs/437: owned creatures take their owner's team colour.
+    ImGui::BeginDisabled(!g_set.creatures);
+    ImGui::Checkbox("Tint creatures by team", &g_set.creature_tint);
+    ImGui::EndDisabled();
+    help("Colours an owned creature in its owner's team colour, so you can\n"
+         "tell whose it is: the Wolf's and the Monkey's body, the Robot's\n"
+         "wheels, the Shark's back. A wild creature keeps its own colours.\n"
+         "Needs the option above. Looks only: this machine alone, and it\n"
+         "changes nothing online (every player sees their own setting).");
+    badge(WIRED);
+    // docs/436: which army slot each creature falls under.
+    {
+        static const char* const kWho[4] = {"Wolf", "Robot", "Shark", "Monkey"};
+        static const int kDef[4] = {2, 2, 6, 2};   // where docs/410 put them
+        static const int kSlotsOffered[] = {2, 3, 5, 6, 7};   // Hero: docs/436; Mounted and, for three of them, the Specials: docs/437, not loadable
+        const bool joined = lb_rules_host_flags() >= 0;
+        const int shown = joined ? lb_creature_slots_live() : lb_setting_creature_slots();
+        ImGui::BeginDisabled(joined || !g_set.creatures);
+        for (int i = 0; i < 4; ++i) {
+            const int code = (shown >> (4 * i)) & 15;
+            int cur = code ? code - 1 : kDef[i];
+            if (!lb_creature_slot_allowed(i, cur)) cur = kDef[i];
+            char label[64];
+            std::snprintf(label, sizeof label, "%s is", kWho[i]);
+            ImGui::SetNextItemWidth(150.0f * g_ui_scale);
+            std::string shown_name = lb_teams_slot_label(cur);
+            if (!code) shown_name += " (default)";
+            if (ImGui::BeginCombo(label, shown_name.c_str())) {
+                for (int s : kSlotsOffered) {
+                    if (!lb_creature_slot_allowed(i, s)) continue;
+                    std::string nm = lb_teams_slot_label(s);
+                    if (s == kDef[i]) nm += " (default)";
+                    nm += "##cs" + std::to_string(s);
+                    if (ImGui::Selectable(nm.c_str(), s == cur))
+                        g_set.creature_slot[i] = s == kDef[i] ? 0 : s + 1;
+                }
+                ImGui::EndCombo();
+            }
+        }
+        ImGui::EndDisabled();
+        help("Which army slot each creature takes, in the Team Builder and\n"
+             "the game's army screen. The Wolf, Robot and Monkey can be Close\n"
+             "Combat or Ranged (trained at the Barracks); the Shark can only be\n"
+             "a Special (the Shipyard). Mounted, Hero and the Specials for the\n"
+             "others are not offered: the game cannot load them (they have no\n"
+             "sprites or model for that kind). Needs the option above. Online,\n"
+             "the host's setting applies.");
+        badge(WIRED);
+    }
     ImGui::Separator();
 
     // The dropdown: King (Free Play's default), the save's team when it is
@@ -4617,32 +4691,79 @@ void draw_top_screen(SDL_Renderer* renderer) {
         const ImVec2 pic(avail.x - 2.0f * ib, avail.y - 2.0f * ib);
         const float sx = pic.x / w, sy = pic.y / h;
         ImGui::Image((ImTextureID)(intptr_t)g_top_tex, pic);
+        const ImVec2 pic_item0 = ImGui::GetItemRectMin();   // before any later item
 
-        // SG-0006: a unit queued in a building can be cancelled by clicking
-        // its icon. The game draws the queue here, on the top screen, with
-        // three buttons (rows 148..172; columns 32..56, 64..88, 96..120) whose
-        // handler sends its own cancel command -- but the top screen has no
-        // touch, so no click ever reaches them. A click on one asks the game to
-        // run that handler (lb_patches.cpp, kQuickCancel); it declines unless
-        // the game itself would take the click, so an empty slot does nothing.
-        if (g_set.cancel_queue_click && ImGui::IsItemHovered() && sx > 0.0f &&
-            sy > 0.0f) {
-            const unsigned slots = lb_cancel_slots();
-            const ImVec2 i0 = ImGui::GetItemRectMin();
-            const ImVec2 mp = ImGui::GetIO().MousePos;
-            const float u = (mp.x - i0.x - ib) / sx;
-            const float v = (mp.y - i0.y - ib) / sy;
-            int hit = -1;
-            if (v >= 148.0f && v < 172.0f)
-                for (int s = 0; s < 3; ++s)
-                    if (u >= 32.0f + 32.0f * s && u < 56.0f + 32.0f * s)
-                        hit = s;
-            if (hit >= 0 && ((slots >> hit) & 1u)) {
-                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-                ImGui::SetTooltip("Click to cancel this unit\nand get its bricks back");
-                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
-                    ImGui::IsMouseClicked(ImGuiMouseButton_Right))
-                    lb_quick_request(40 + hit);
+        // THE TOP SCREEN, CLICKABLE (SG-0006, and the owner's "the top screen
+        // cannot be clicked"). The DS has no touch on its top screen, so the
+        // cartridge's own buttons there -- the selected units' portraits, the
+        // production queue, and the minimap -- never get a pen event. A click
+        // here asks the game to run the handler it already has for that spot
+        // (lb_patches.cpp: kQuickInfo for the buttons, kQuickMinimap for the
+        // minimap); the game declines unless it would take the click itself.
+        // lb_top_buttons lists only the buttons it would take NOW.
+        //
+        // Each spot is an InvisibleButton, so a press on one is a click on an
+        // item and does not start dragging the panel by its picture, which a
+        // press on the bare Image does.
+        if (g_set.cancel_queue_click && sx > 0.0f && sy > 0.0f) {
+            const ImVec2 i0 = pic_item0;
+            const ImVec2 img0(i0.x + ib, i0.y + ib);
+            int btn[24 * 5];
+            const int nb = lb_top_buttons(btn, 24);
+            for (int k = 0; k < nb; ++k) {
+                const int id = btn[k * 5];
+                const float x0 = (float)btn[k * 5 + 1], y0 = (float)btn[k * 5 + 2];
+                const float x1 = (float)btn[k * 5 + 3], y1 = (float)btn[k * 5 + 4];
+                if (x1 <= x0 || y1 <= y0) continue;
+                ImGui::SetCursorScreenPos(
+                    ImVec2(img0.x + x0 * sx, img0.y + y0 * sy));
+                ImGui::PushID(id);
+                ImGui::InvisibleButton("##topbtn",
+                                       ImVec2((x1 - x0) * sx, (y1 - y0) * sy),
+                                       ImGuiButtonFlags_MouseButtonLeft |
+                                           ImGuiButtonFlags_MouseButtonRight);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                    ImGui::SetTooltip(
+                        id >= 730 && id <= 732
+                            ? "Click to cancel this unit\nand get its bricks back"
+                        : id <= 721
+                            ? "Click to take this unit\nout of the selection"
+                            : "Click to use this button");
+                    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+                        ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+                        lb_quick_request(id >= 730 && id <= 732 ? 40 + (id - 730)
+                                                               : 50 + (id - 713));
+                }
+                ImGui::PopID();
+            }
+            // The minimap: the 96x96 square at (136,40) the cartridge's own tap
+            // handler takes. A click, or a drag across it, centres the camera.
+            if (lb_top_minimap()) {
+                ImGui::SetCursorScreenPos(
+                    ImVec2(img0.x + 136.0f * sx, img0.y + 40.0f * sy));
+                ImGui::InvisibleButton("##topmap", ImVec2(96.0f * sx, 96.0f * sy),
+                                       ImGuiButtonFlags_MouseButtonLeft);
+                if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
+                    ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                    if (!ImGui::IsItemActive())
+                        ImGui::SetTooltip("Click to move the camera here");
+                }
+                if (ImGui::IsItemActive() &&
+                    ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                    const ImVec2 mp = ImGui::GetIO().MousePos;
+                    int lx = (int)std::floor((mp.x - img0.x) / sx) - 136;
+                    int ly = (int)std::floor((mp.y - img0.y) / sy) - 40;
+                    lx = lx < 0 ? 0 : (lx > 95 ? 95 : lx);
+                    ly = ly < 0 ? 0 : (ly > 95 ? 95 : ly);
+                    static int last_x = -1, last_y = -1;
+                    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+                        lx != last_x || ly != last_y) {
+                        last_x = lx;
+                        last_y = ly;
+                        lb_quick_request(1000 + ly * 96 + lx);
+                    }
+                }
             }
         }
 
@@ -4706,7 +4827,7 @@ void draw_top_screen(SDL_Renderer* renderer) {
         if (have_rect && !g_top_box_found) have_rect = false;
         if (have_rect) {
             // The picture's own corner, inside Image()'s border.
-            const ImVec2 item0 = ImGui::GetItemRectMin();
+            const ImVec2 item0 = pic_item0;
             const ImVec2 img0(item0.x + ib, item0.y + ib);
             float ax = 0.0f, ay = 0.0f, bx = 0.0f, by = 0.0f;
             lb_field_map_to_minimap((int)vx0, (int)vy0, &ax, &ay);
@@ -7466,6 +7587,27 @@ extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
                     for (int i = 0; i < LB_TEAM_SLOTS; ++i) g_set.enemy_team[i] = v[i];
             }
         }
+        // docs/436: LB_PLAYER_TEAM=<9 blueprints> does Set Team once, as soon
+        // as the game lets it (a profile loaded, no battle, no army screen).
+        // Test aid only.
+        static int pt_v[LB_TEAM_SLOTS], pt_state = -1;   // -1 unread, 0 none, 1 waiting, 2 done
+        if (pt_state < 0) {
+            pt_state = 0;
+            if (const char* p = std::getenv("LB_PLAYER_TEAM")) {
+                int k = 0, used = 0;
+                while (k < LB_TEAM_SLOTS && std::sscanf(p, "%d%n", &pt_v[k], &used) == 1) {
+                    p += used;
+                    if (*p == ',') ++p;
+                    ++k;
+                }
+                if (k == LB_TEAM_SLOTS) pt_state = 1;
+            }
+        }
+        if (pt_state == 1) {
+            const LbTeam mine = team_of(pt_v);
+            char why[160] = "";
+            if (lb_teams_set_team(&mine, why, (int)sizeof why)) pt_state = 2;
+        }
         const LbTeam enemy = team_of(g_set.enemy_team);
         lb_teams_set_enemy(&enemy);
         unsigned char bits[24];
@@ -8236,6 +8378,16 @@ extern "C" int lb_rules_local_flags(void) {
            (lb_setting_creatures() ? LB_RULE_CREATURES : 0);   // docs/410
 }
 
+// docs/437: Tint creatures by team (default on). LB_CREATURE_TINT=0|1 forces it.
+extern "C" int lb_setting_creature_tint(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_CREATURE_TINT");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.creature_tint ? 1 : 0);
+}
+
 // docs/410: LB_CREATURES=0|1 forces it.
 extern "C" int lb_setting_creatures(void) {
     static int forced = -2;
@@ -8244,6 +8396,28 @@ extern "C" int lb_setting_creatures(void) {
         forced = v ? (std::atoi(v) ? 1 : 0) : -1;
     }
     return forced >= 0 ? forced : (g_set.creatures ? 1 : 0);
+}
+
+// docs/436: this machine's creature slots, packed 4 bits a creature (Wolf low):
+// 0 the default, else 1 + the slot. LB_CREATURE_SLOTS=w,r,s forces them, each a
+// slot index (0 Hero, 2 Close Combat, 3 Ranged, 4 Mounted, 5-7 Specials) or -1.
+extern "C" int lb_setting_creature_slots(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        forced = -1;
+        if (const char* v = std::getenv("LB_CREATURE_SLOTS")) {
+            int a[4] = {-1, -1, -1, -1};
+            std::sscanf(v, "%d,%d,%d,%d", &a[0], &a[1], &a[2], &a[3]);
+            forced = 0;
+            for (int i = 0; i < 4; ++i) {
+                const int c = (a[i] == 0 || (a[i] >= 3 && a[i] <= 7)) ? a[i] + 1 : 0;   // docs/436: Hero (0) only for LB_CREATURE_HERO
+                forced |= c << (4 * i);
+            }
+        }
+    }
+    if (forced >= 0) return forced;
+    return g_set.creature_slot[0] | (g_set.creature_slot[1] << 4) |
+           (g_set.creature_slot[2] << 8) | (g_set.creature_slot[3] << 12);
 }
 
 // The "Fix Hotwired Healing" checkbox had NO getter: nothing in the port could

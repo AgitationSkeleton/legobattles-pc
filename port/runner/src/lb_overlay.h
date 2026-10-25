@@ -778,6 +778,15 @@ int          lb_transport_release_live(void);
 int          lb_setting_creatures(void);
 int          lb_demo_play_creatures(void);
 int          lb_creatures_live(void);
+int          lb_creature_slot_allowed(int creature_index, int slot);   /* docs/437, lb_patches.cpp */
+// docs/436: the army slot of each creature, packed 4 bits a creature (Wolf,
+// Robot, Shark; 0 the default, else 1 + the Team Builder slot), carried as the
+// rules datagram's 'C' page and by recordings (kind 16).
+int          lb_setting_creature_slots(void);
+int          lb_demo_play_creature_slots(void);
+int          lb_rules_host_creature_slots(void);   /* -1 unless joined */
+int          lb_creature_slots_live(void);
+int          lb_creature_slot(int unit);   /* 0 Hero .. 7, or -1 if not a creature */
 // BR-0011 / BR-0015: the rest of what changes the simulation, carried in an
 // 'S' page of the host's rules (lb_teams.cpp). On a joiner these are the
 // host's while joined, else this machine's.

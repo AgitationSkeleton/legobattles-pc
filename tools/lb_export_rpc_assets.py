@@ -163,6 +163,10 @@ def export_heroes(rom, lang, outdir, manifest):
     ebp = rom.file("BP/Entities.ebp")
     bps, _ = lb_blueprints.parse(ebp, lang)
     heroes = [b for b in bps if b["type"] == 0 and b.get("category_id") == 0]
+    # docs/436: a neutral creature can be an army's hero (Robot 138, Shark 155,
+    # Wolf 169); their heads are on the same sheets (the Shark's and Wolf's on
+    # the front end's, see `sheet` below).
+    heroes += [b for b in bps if b["type"] == 0 and b["index"] in (138, 153, 155, 169)]
     count = rom.u32(HEAD_COUNT)
     keys = [rom.u32(HEAD_KEYS + 4 * k) for k in range(min(count, 166))]
     ui = rom.file("UI/Game/UIMgrData.bin")

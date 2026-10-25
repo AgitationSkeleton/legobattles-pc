@@ -2084,7 +2084,15 @@ extern "C" const uint32_t* lb_hud_shift_line(const uint32_t* line, int y,
         const bool row_out = y < g_raster_band_y || y >= g_raster_band_y + 192;
         for (int x = s_x0; x < s_x1 && x < width; ++x) {
             if (x < 0 || !((s_hud[x] >> 24) & 0x1Fu)) continue;
-            if (!row_out && x >= g_raster_band && x < g_raster_band + 256)
+            // The cartridge's own cells clear what is under a UI element --
+            // but not under a command icon or the placement checkmark that
+            // straddles its screen edge: SpriteUI_MarkCells' range for a
+            // checkmark at native x -12 is columns -2..-1, so the 4 px of it
+            // inside column 0 keep the footprint's stud drawn over them.
+            // Layer-0 pixels (bit 31) are therefore covered wherever they
+            // are; where the cartridge did clear the cell nothing changes.
+            if (!row_out && x >= g_raster_band && x < g_raster_band + 256 &&
+                !(s_hud[x] & 0x80000000u))
                 continue;                  // the cartridge's own cells
             cover_begin();
             g_cover[(size_t)x] = 1u;

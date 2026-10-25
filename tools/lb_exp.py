@@ -1546,7 +1546,7 @@ def main():
               "is left exactly as it is" % EXE)
     log = open(os.path.join(out, "stderr.log"), "wb")
     proc = subprocess.Popen(
-        [EXE, "dummy", "4000000000", "--rom", ROM,
+        [EXE, "dummy", os.environ.get("LB_RUN_CYCLES", "4000000000"), "--rom", ROM,
          "--config", args.config,
          # A save private to this run. The route creates a profile, so sharing
          # one save between runs means the second run meets a profile-select
@@ -1743,6 +1743,8 @@ def main():
         # it by evidence.
         stepdir = os.path.join(out, "route")
         os.makedirs(stepdir, exist_ok=True)
+        if route and os.environ.get("LB_ROUTE_PRE"):
+            time.sleep(float(os.environ["LB_ROUTE_PRE"]))   # a loaded host boots slowly
         for n, step in enumerate(route):
             if step[0] == "key":
                 _, mask, presses, wait = step

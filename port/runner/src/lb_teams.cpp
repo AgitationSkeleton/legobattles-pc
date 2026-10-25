@@ -257,9 +257,8 @@ const Cand kBuilder[] = {
 const Cand kMelee[] = {
     {3, 359, 0},  {162, 367, 0}, {23, 372, 1}, {166, 380, 1}, {43, 385, 2},
     {63, 398, 3}, {83, 411, 4},  {103, 424, 5},
-    // docs/410: the neutral creatures, behind lb_creatures_live (cand_on):
-    // Wolf (CastleNeutral) and Robot (MarsNeutral), both category 2.
-    {169, 0, 6},  {138, 0, 6},
+    // docs/410: the neutral creatures are not listed here: kCreatures below
+    // places them, by default Close Combat (docs/436).
 };
 const Cand kRanged[] = {
     {4, 360, 0},   {24, 373, 1}, {44, 386, 2},  {146, 393, 2}, {64, 399, 3},
@@ -277,10 +276,9 @@ const Cand kSiege2[] = {
     {7, 363, 0},   {163, 368, 0}, {27, 376, 1},  {167, 381, 1},
     {47, 389, 2},  {147, 394, 2}, {67, 402, 3},  {151, 407, 3},
     {87, 415, 4},  {131, 420, 4}, {107, 428, 5}, {135, 433, 5},
-    // docs/410: the Shark (PirateNeutral, category 6, SharkBite). The tier
-    // function FUN_020EB21C gives it none, but the army record's three
-    // special fields only differ in which menu lists them.
-    {155, 0, 6},
+    // docs/410: the Shark (PirateNeutral, category 6, SharkBite) is placed by
+    // kCreatures below. The tier function FUN_020EB21C gives it none, but the
+    // army record's three special fields only differ in which menu lists them.
 };
 const Cand kSiege3[] = {
     {8, 364, 0}, {28, 377, 1}, {48, 390, 2}, {68, 403, 3}, {88, 416, 4},
@@ -321,13 +319,35 @@ const uint16_t kKingDefault[LB_TEAM_SLOTS] = {0, 2, 3, 4, 5, 6, 7, 8, 9};
 // docs/410: a creature (no minifig) only while the option allows them.
 bool cand_on(const Cand& c) { return c.minifig != 0 || lb_creatures_live() != 0; }
 
+// docs/436: THE CREATURES' SLOTS. Each creature sits in the slot the setting
+// gives it (lb_creature_slot: by default the Wolf and the Robot in Close
+// Combat, the Shark in Special Two), after the slot's minifig units.
+const Cand kCreatures[4] = {{169, 0, 6}, {138, 0, 6}, {155, 0, 6}, {153, 0, 6}};   // Wolf, Robot, Shark, Monkey
+int creature_slot_of(int i) { return lb_creature_slot(kCreatures[i].unit); }
+// How many candidates slot `s` has before the option is looked at, and the
+// k-th of them: the static ones, then the creatures that chose this slot.
+int slot_total(int s) {
+    int n = kSlots[s].n;
+    for (int i = 0; i < 4; ++i) n += creature_slot_of(i) == s;
+    return n;
+}
+const Cand& slot_item(int s, int k) {
+    if (k < kSlots[s].n) return kSlots[s].c[k];
+    k -= kSlots[s].n;
+    for (int i = 0; i < 4; ++i)
+        if (creature_slot_of(i) == s && k-- == 0) return kCreatures[i];
+    return kCreatures[0];   // not reached for k < slot_total(s)
+}
+
 const Cand* find_cand(int unit, int* slot_out) {
     for (int s = 0; s < LB_TEAM_SLOTS; ++s)
-        for (int k = 0; k < kSlots[s].n; ++k)
-            if (kSlots[s].c[k].unit == unit && cand_on(kSlots[s].c[k])) {
+        for (int k = 0; k < slot_total(s); ++k) {
+            const Cand& c = slot_item(s, k);
+            if (c.unit == unit && cand_on(c)) {
                 if (slot_out) *slot_out = s;
-                return &kSlots[s].c[k];
+                return &c;
             }
+        }
     return nullptr;
 }
 
@@ -711,10 +731,10 @@ bool build_hud_atlas() {
 //
 // Off: no byte of the game is touched.
 struct CardRec { int rec; int unit; };
-const CardRec kCardRecs[3] = {{548, 169}, {549, 138}, {550, 155}};   // Wolf, Robot, Shark
+const CardRec kCardRecs[4] = {{548, 169}, {549, 138}, {550, 155}, {547, 153}};   // Wolf, Robot, Shark, Monkey (547 Minikits_I3_4)
 constexpr uint32_t kCardBit = 96u;                                    // minifig 356's slot
 struct CardOld { uint8_t cat; uint32_t unit; uint8_t lock; uint16_t bit; };
-CardOld g_card_old[3];
+CardOld g_card_old[4];
 bool g_cards_applied = false;
 uint32_t g_cards_base = 0u;
 std::vector<uint8_t> g_cards_ref;     // the ROM's own sheet, to know it when we see it
@@ -779,7 +799,7 @@ bool head_tiles(int bp, uint8_t out[288], int* pos_out, int* sub_out) {
 }
 
 struct CardHead { bool ok = false; bool tried = false; uint8_t t[288]; int pos = -1, sub = 0; };
-CardHead g_card_head[3];
+CardHead g_card_head[4];
 
 // The game's resident copy of UI/MiniHeads (4bpp, 48 x 30 tiles): the army
 // screen's image manager (+0x44) -> its source image -> +0x38 -> +4 -> +0x14.
@@ -822,7 +842,7 @@ void cards_sheet(uint32_t army) {
     static bool ours = false;
     if (sheet != checked) { checked = sheet; ours = sheet_is_ours(sheet); }
     if (!ours) return;
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < 4; ++i) {
         CardHead& h = g_card_head[i];
         if (!h.tried) {
             h.tried = true;
@@ -855,11 +875,11 @@ void cards_tick() {
     if (!base || !lb_patches_blueprint_settled()) return;
     if (want && !g_cards_applied) {
         // The record walk is lb_teams' own (bp_addr): kind 2 records are 0x70.
-        for (int i = 0; i < 3; ++i) {
+        for (int i = 0; i < 4; ++i) {
             const uint32_t r = bp_addr(kCardRecs[i].rec);
             if (!r || bus_read_u8(r + 8u) != 2u) return;   // not the layout this knows
         }
-        for (int i = 0; i < 3; ++i) {
+        for (int i = 0; i < 4; ++i) {
             const uint32_t r = bp_addr(kCardRecs[i].rec);
             g_card_old[i] = {(uint8_t)bus_read_u8(r + 0x5Cu), bus_read_u32(r + 0x60u),
                              (uint8_t)bus_read_u8(r + 0x6Bu),
@@ -871,11 +891,11 @@ void cards_tick() {
         }
         g_cards_applied = true;
         std::fprintf(stderr, "[lb_cards] the creatures have army-screen cards "
-                     "(records 548-550)\n");
+                     "(records 547-550)\n");
         std::fflush(stderr);
     } else if (!want && g_cards_applied) {
         if (army_screen()) return;   // its cells hold these records: wait
-        for (int i = 0; i < 3; ++i) {
+        for (int i = 0; i < 4; ++i) {
             const uint32_t r = bp_addr(kCardRecs[i].rec);
             if (!r) continue;
             bus_write_u8(r + 0x5Cu, g_card_old[i].cat);
@@ -904,6 +924,7 @@ uint8_t g_bans_recv[kBanBytes] = {};       // under g_rules_mu
 bool g_bans_recv_ok = false;               // under g_rules_mu
 unsigned g_bans_recv_from = 0;             // under g_rules_mu
 uint8_t g_flags_recv = 0;                  // docs/406; under g_rules_mu
+int g_cslots_recv = 0;                     // docs/436; under g_rules_mu
 // docs/413: the host's mod maps as its rules list them (key, content hash,
 // name), and whether its rules carried the list at all (an older build's
 // do not).
@@ -1017,15 +1038,15 @@ extern "C" int lb_rules_fresh(void) {
 extern "C" int lb_teams_slot_count(int slot) {
     if (slot < 0 || slot >= LB_TEAM_SLOTS) return 0;
     int n = 0;
-    for (int k = 0; k < kSlots[slot].n; ++k) n += cand_on(kSlots[slot].c[k]);
+    for (int k = 0; k < slot_total(slot); ++k) n += cand_on(slot_item(slot, k));
     return n;
 }
 
 extern "C" int lb_teams_slot_unit(int slot, int k) {
     if (slot < 0 || slot >= LB_TEAM_SLOTS || k < 0) return -1;
-    for (int i = 0; i < kSlots[slot].n; ++i) {
-        if (!cand_on(kSlots[slot].c[i])) continue;
-        if (k-- == 0) return kSlots[slot].c[i].unit;
+    for (int i = 0; i < slot_total(slot); ++i) {
+        if (!cand_on(slot_item(slot, i))) continue;
+        if (k-- == 0) return slot_item(slot, i).unit;
     }
     return -1;
 }
@@ -1304,9 +1325,9 @@ extern "C" void lb_teams_randomize(LbTeam* t, int fieldable_only) {
     static std::mt19937 rng(std::random_device{}());
     for (int s = 0; s < LB_TEAM_SLOTS; ++s) {
         std::vector<int> pool;
-        for (int k = 0; k < kSlots[s].n; ++k) {
-            const int u = kSlots[s].c[k].unit;
-            if (!cand_on(kSlots[s].c[k])) continue;   // docs/410
+        for (int k = 0; k < slot_total(s); ++k) {
+            const int u = slot_item(s, k).unit;
+            if (!cand_on(slot_item(s, k))) continue;   // docs/410
             if (fieldable_only && lb_teams_unit_state(u) != 2) continue;
             pool.push_back(u);
         }
@@ -1496,11 +1517,14 @@ extern "C" int lb_teams_question_rgba(unsigned int out[56 * 56]) {
 // army screen's list call only). -1: not ours, ask the game.
 extern "C" int lb_teams_card_listable(int unit) {
     if (!g_cards_applied) return -1;
-    return unit == 169 || unit == 138 ? 1 : -1;
+    // docs/436: any creature; the screen has already matched the slot to the
+    // unit's own category, which the creature layer set from the slot.
+    return unit == 169 || unit == 138 || unit == 155 || unit == 153 ? 1 : -1;
 }
 extern "C" int lb_teams_card_tier(int unit) {
     if (!g_cards_applied) return -1;
-    return unit == 155 ? 2 : -1;   // Special Two, where the Team Builder puts it
+    const int s = lb_creature_slot(unit);   // Special One/Two/Three = 5/6/7
+    return s >= 5 && s <= 7 ? s - 4 : -1;
 }
 
 extern "C" void lb_teams_portrait_tick(void) {
@@ -1563,8 +1587,8 @@ static void team_generate(unsigned seed, int player, const uint8_t* bits, LbTeam
     };
     for (int s = 0; s < LB_TEAM_SLOTS; ++s) {
         std::vector<int> pool;
-        for (int k = 0; k < kSlots[s].n; ++k) {
-            const Cand& c = kSlots[s].c[k];
+        for (int k = 0; k < slot_total(s); ++k) {
+            const Cand& c = slot_item(s, k);
             if (!cand_on(c)) continue;
             if (!king_default(c.unit) &&
                 (ban_bit(bits, c.unit) || lb_maps_unit_banned_here(c.unit)))
@@ -1753,6 +1777,17 @@ extern "C" int lb_rules_outgoing(unsigned char* buf, int cap) {
             buf[n++] = (unsigned char)vl;
             std::memcpy(buf + n, v, (size_t)vl);
             n += vl;
+            // docs/436: then the 'C' page, after the 'V' page: 'C', a page
+            // version (1), the army slot code of the Wolf, the Robot and the
+            // Shark (0 the default, else 1 + the slot). Older builds stop
+            // reading at the 'V' page; a host without it has every creature in
+            // its default slot.
+            if (n + 6 <= cap) {
+                const int packed = lb_setting_creature_slots();
+                buf[n++] = 'C';
+                buf[n++] = 1;
+                for (int i = 0; i < 4; ++i) buf[n++] = (unsigned char)((packed >> (4 * i)) & 15);
+            }
         }
     }
     static int largest = 0;
@@ -1790,6 +1825,7 @@ extern "C" void lb_rules_on_leave(void) {
     g_bans_recv_ok = false;
     g_bans_recv_from = 0;
     g_flags_recv = 0;
+    g_cslots_recv = 0;
     g_maps_recv.clear();
     g_maps_recv_has = false;
     g_bal_done = false;
@@ -1854,6 +1890,14 @@ extern "C" int lb_rules_host_flags(void) {
     if (!net_joined(lb_net_guest_state())) return -1;
     std::lock_guard<std::mutex> lk(g_rules_mu);
     return g_bans_recv_ok ? g_flags_recv : 0;
+}
+
+// docs/436: the host's creature slots (packed, see lb_overlay.h): -1 when this
+// machine decides, 0 for a host that sends none.
+extern "C" int lb_rules_host_creature_slots(void) {
+    if (!net_joined(lb_net_guest_state())) return -1;
+    std::lock_guard<std::mutex> lk(g_rules_mu);
+    return g_bans_recv_ok ? g_cslots_recv : 0;
 }
 
 extern "C" void lb_rules_incoming(const unsigned char* buf, int len,
@@ -1996,8 +2040,28 @@ extern "C" void lb_rules_incoming(const unsigned char* buf, int len,
     // SG-0013 (docs/430): the host's build page ('V'), straight after the
     // balance page (or the maps, when the host sent no balance).
     std::string host_version;
-    if (at + 3 <= len && buf[at] == 'V' && buf[at + 1] == 1 && at + 3 + buf[at + 2] <= len)
+    int c_at = -1;
+    if (at + 3 <= len && buf[at] == 'V' && buf[at + 1] == 1 && at + 3 + buf[at + 2] <= len) {
         host_version.assign((const char*)buf + at + 3, buf[at + 2]);
+        c_at = at + 3 + buf[at + 2];
+    }
+    // docs/436: the 'C' page after it: the creatures' army slots. None from an
+    // older host: all in their default slots (0). Not gated on freshness, like
+    // the flags.
+    {
+        int packed = 0;
+        if (c_at >= 0 && c_at + 6 <= len && buf[c_at] == 'C' && buf[c_at + 1] == 1)
+            for (int i = 0; i < 4; ++i) {
+                const int c = buf[c_at + 2 + i];
+                packed |= ((c >= 0 && c <= 8 && c != 2) ? c : 0) << (4 * i);
+            }
+        if (!g_bans_recv_ok || packed != g_cslots_recv) {
+            std::fprintf(stderr, "[lb_teams] the host's creature slots from instance "
+                         "%u: %03X\n", sender, (unsigned)packed);
+            std::fflush(stderr);
+        }
+        g_cslots_recv = packed;
+    }
     if (bal_done_now) {
         std::fprintf(stderr, "[lb_teams] the host's balance from instance %u: "
                      "seed %016llX, %d value(s) in %d page(s)\n", sender,
@@ -2119,8 +2183,9 @@ extern "C" int lb_teams_enforce_bans(unsigned char rec[20], char* why, int cap,
     for (int s = 0; s < LB_TEAM_SLOTS; ++s) {
         const int bp = rec[kSlots[s].rec_off] | (rec[kSlots[s].rec_off + 1] << 8);
         // docs/410: a creature counts as banned unless the host allows them.
-        const bool creature = (bp == 169 || bp == 138 || bp == 155) &&
-                              !lb_creatures_live();
+        // docs/436: or sits in a slot other than the host's choice for it.
+        const bool creature = (bp == 169 || bp == 138 || bp == 155 || bp == 153) &&
+                              (!lb_creatures_live() || lb_creature_slot(bp) != s);
         if (!king_default(bp) &&
             (ban_bit(bits, bp) || creature || lb_maps_unit_banned_here(bp))) {
             if (!names.empty()) names += ", ";

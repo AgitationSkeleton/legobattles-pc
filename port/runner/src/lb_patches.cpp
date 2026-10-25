@@ -28,6 +28,7 @@
 
 #include "lb_overlay.h"
 #include "gpu3d.h"
+#include "vram.h"        // docs/437: the texture-palette bank the creature tint writes
 #include "lb_field.h"
 #include "lb_fxvtables.h"
 #include "lb_shadow.h"
@@ -1625,7 +1626,43 @@ void apply_damage_observer() {
                 return v ? std::atoi(v) : 0;
             }();
             if (test_boost > 0 && delta <= 0) delta = test_boost;
-            if (sinfo && delta > 0) {
+            // BR-0019/0020: THE BOOST'S DELTA IS 0 FOR A UNIT WITH NO MELEE
+            // DAMAGE. The recompute (func_0205CCC4) MULTIPLIES the melee
+            // damage by 2.0 for a net attack-up buff (0x2000 in 20.12 fixed
+            // point at 0205CEE8..0205CF08 -- the damage stat is stack index 1),
+            // so a shooter with melee_damage 0 (every archer, rifleman and
+            // many heroes) reads buffed = 0 * 2 = 0 and delta = 0: nothing was
+            // added and the boost never reached it, with the option on. A
+            // multiplier shows only in the stat block's per-stat counts of
+            // positive and negative buffs (stats +0x1A + 2*index, rewritten
+            // by the same recompute): index 1 is entity +0x180 / +0x181. So
+            // for such a shooter, with a boost and no penalty, the shot's roll
+            // is doubled, which is what the same buff does to a melee blow.
+            // A unit whose melee_damage is above 0 keeps the delta above.
+            // LB_TEST_UPSTACK=1: a test aid that stands in for a cast boost
+            // on a shooter with no melee damage (a run cannot easily keep a
+            // spell on a ranged unit while an enemy is in range): its attack
+            // up-count reads as 1. Unset, the real count is read.
+            static const bool test_up = std::getenv("LB_TEST_UPSTACK") != nullptr;
+            bool doubled = false;
+            if (sinfo && base == 0 && delta <= 0 &&
+                (test_up || bus_read_u8(shooter + 0x180u) > 0) &&
+                bus_read_u8(shooter + 0x181u) == 0) {
+                doubled = true;
+            }
+            if (sinfo && doubled) {
+                const uint32_t lo = g_cpu.R[2], hi = g_cpu.R[3];
+                g_cpu.R[2] = lo * 2u;   // damage_min
+                g_cpu.R[3] = hi * 2u;   // damage_max
+                applied_delta = (int32_t)hi;
+                static unsigned fired2 = 0;
+                const unsigned n2 = ++fired2;
+                if ((n2 & (n2 - 1u)) == 0u)   // 1, 2, 4, 8, ...
+                    std::fprintf(stderr,
+                                 "[lb_attackboost] doubled a ranged attack "
+                                 "(roll %u..%u, melee 0; %u so far)\n",
+                                 lo, hi, n2);
+            } else if (sinfo && delta > 0) {
                 g_cpu.R[2] += (uint32_t)delta;   // damage_min
                 g_cpu.R[3] += (uint32_t)delta;   // damage_max
                 applied_delta = delta;
@@ -1662,12 +1699,17 @@ void apply_damage_observer() {
             const uint32_t shot = proj ? resolve_handle_kind(proj + 0x164u, 0u) : 0u;
             std::fprintf(stderr,
                          "[lb_dmg] lr=%08X roll=%u..%u boost=+%d explodes=%d "
-                         "shooter_owner=%d shooter_cat=%d target=%08X hp=%d\n",
+                         "shooter_owner=%d shooter_cat=%d target=%08X hp=%d "
+                         "shooter_melee=%d/%d up=%d down=%d\n",
                          lr, g_cpu.R[2], g_cpu.R[3], (int)applied_delta,
                          pinfo ? (int)bus_read_u8(pinfo + 0x6Bu) : -1,
                          shot ? (int)bus_read_u8(shot + 0xE4u) : -1,
                          shot ? (int)entity_category(shot) : -1,
-                         tgt, tgt ? (int)bus_read_u16(tgt + 0x1A0u) : -1);
+                         tgt, tgt ? (int)bus_read_u16(tgt + 0x1A0u) : -1,
+                         shot ? (int)bus_read_u16(shot + 0x170u) : -1,
+                         shot ? (int)bus_read_u8(bus_read_u32(bus_read_u32(shot + 0x160u) + 8u) + 0x68u) : -1,
+                         shot ? (int)bus_read_u8(shot + 0x180u) : -1,
+                         shot ? (int)bus_read_u8(shot + 0x181u) : -1);
             std::fflush(stderr);
         }
     }
@@ -2374,6 +2416,87 @@ void fp_post_override(void) {
     }
     // After the camera is back: the checkmark's point for this call (docs/372).
     checkmark_stash(g_cpu.R[0]);
+    if (original) original();
+}
+
+// ── The footprint and its checkmark stay up while the camera moves ──────────
+//
+// The placement tick (func_02037EC0) paints the footprint and sets the
+// verdict (state+0x24) that func_02036FBC reads to show the checkmark, but
+// only when FUN_020AC240 -- the one-liner `[0x0214BBA4+4] == 5` -- says the
+// view is at rest. While the camera glides (the d-pad, WASD, edge-pan, a
+// minimap jump: that word is 3 then 4) it skips the painter, clears the
+// footprint (FUN_0203B7B8) and leaves the verdict 0, so the checkmark is
+// hidden (measured: +0x24 is 0 exactly while the word is 3 or 4,
+// back to 1 at 5; vanilla does the same). The DS cannot scroll BG3 smoothly,
+// so hiding it was the cartridge's cure for a footprint that would swim.
+//
+// The whole HUD goes the same way, not just the checkmark: the HUD view's
+// update (kViewUpdate, 0x020DD708, Thumb) asks the same question at its two
+// first steps (0x020DD710 and 0x020DD744) and skips its widget screen
+// (FUN_020E1BF4) when it is not at rest -- measured with a per-call counter,
+// ten UI sprites tick at rest and only the four world ones while the camera
+// moves, and vanilla's own screen loses its bricks the same way.
+//
+// On a PC people scroll constantly, and a HUD that vanishes with every move
+// (and a checkmark with it) reads as missing. In the adaptive view those
+// three callers are told the view is at rest in the glide states too (3, 4
+// and 5); the widgets, the painter and func_02036FBC then run as they do at
+// rest, with the moving camera, and docs/372's rule places the checkmark
+// each frame. The one other caller (0x020ABBD0) and the native/Vanilla view
+// keep the stock answer. LB_GLIDECHK=0 turns it off.
+constexpr uint32_t kRestCheck = 0x020AC240u;        // ARM: view mode == 5
+constexpr uint32_t kRestCheckPlaceRet = 0x02037F14u;   // func_02037EC0
+constexpr uint32_t kRestCheckViewRet1 = 0x020DD714u;   // kViewUpdate, Thumb
+constexpr uint32_t kRestCheckViewRet2 = 0x020DD748u;
+constexpr uint32_t kViewModeWord = 0x0214BBA4u;
+
+// And the footprint itself, at the first step of a scroll: the camera manager
+// (0x020AB54C and 0x020AB9F4, the modes that start a scroll) blanks BG3 with
+// FUN_0203B78C, and the placement tick only paints it again a tick later --
+// two presented frames with the checkmark over bare ground. While a placement
+// is live (view+0x78) in the adaptive view that blank is skipped from those two
+// calls: the painter clears and fills the whole buffer every tick anyway
+// (func_020370B4 starts with the 0x600-byte clear), so nothing stale stays.
+constexpr uint32_t kBg3Blank = 0x0203B78Cu;         // ARM
+constexpr uint32_t kBg3BlankRet1 = 0x020AB550u;
+constexpr uint32_t kBg3BlankRet2 = 0x020AB9F8u;
+
+void bg3_blank_override(void) {
+    static const bool off = [] {
+        const char* v = std::getenv("LB_GLIDECHK");
+        return v && v[0] == '0';
+    }();
+    const uint32_t lr = g_cpu.R[14];
+    if (!off && (lr == kBg3BlankRet1 || lr == kBg3BlankRet2) && lb_setting_enhanced() &&
+        (nds_gpu3d_output_width() > 256u || nds_gpu3d_output_height() > 192u)) {
+        const uint32_t view = bus_read_u32(0x02152034u);
+        if (check_in_ram(view) && bus_read_u8(view + 0x78u) != 0u) {
+            lb_override_return();
+            return;
+        }
+    }
+    void (*original)(void) = lb_dispatch_original(0, kBg3Blank);
+    if (original) original();
+}
+
+void rest_check_override(void) {
+    static const bool off = [] {
+        const char* v = std::getenv("LB_GLIDECHK");
+        return v && v[0] == '0';
+    }();
+    const uint32_t lr = g_cpu.R[14];
+    if (!off &&
+        (lr == kRestCheckPlaceRet || (lr & ~1u) == kRestCheckViewRet1 ||
+         (lr & ~1u) == kRestCheckViewRet2) &&
+        lb_setting_enhanced() &&
+        (nds_gpu3d_output_width() > 256u || nds_gpu3d_output_height() > 192u)) {
+        const uint32_t mode = bus_read_u32(kViewModeWord + 4u);
+        g_cpu.R[0] = (mode >= 3u && mode <= 5u) ? 1u : 0u;
+        lb_override_return();
+        return;
+    }
+    void (*original)(void) = lb_dispatch_original(0, kRestCheck);
     if (original) original();
 }
 
@@ -3248,6 +3371,25 @@ constexpr uint32_t kInfoTabVtable = 0x0214EA04u;
 constexpr uint32_t kInfoTabCb = 0x020D471Cu;       // thumb
 constexpr int kQuickCancel = 40;
 constexpr int kQueueWidgetId = 730;
+// The whole top screen, by mouse. Every button the InfoTab draws has FUN_020D471C
+// as its handler: ids 713..721 (the selected units' portraits: drop one from
+// the selection), 730..732 (the queue: cancel that unit), 733..735 (the second
+// row of the same strip). Request 50 + (id - 713) runs that button's own
+// handler. 730..732 are also the older requests 40..42.
+constexpr int kQuickInfo = 50;
+constexpr int kInfoFirstId = 713;
+constexpr int kInfoLastId = 735;
+// The minimap is not a widget. The cartridge's own tap handler for it is
+// FUN_0203CA74 (ARM; r0 = a PenEvent whose position, at +0x20/+0x22, is
+// in top-screen pixels): it takes the point inside the 96x96 square at (136,40),
+// centres the camera on the matching spot of the map, clamps it with the
+// camera's bound rect (FUN_0203906C), masks it with 0xFFF8 (docs/393) and sets
+// it (FUN_02039038). Request 1000 + y * 96 + x, x and y being the point's
+// offset in that square. The camera is view state, not simulation (docs/85),
+// so it is not sent over the link; a recording notes it because later taps are
+// in the camera's coordinates.
+constexpr int kQuickMinimap = 1000;
+constexpr uint32_t kMinimapTap = 0x0203CA74u;     // arm
 
 extern "C" void lb_demo_note_quick(int action);   /* src/lb_demo.cpp */
 extern "C" int lb_demo_playing(void);
@@ -3265,9 +3407,6 @@ struct QuickCall {
     int action = -1, id = 0;
 };
 QuickCall g_qc;
-// SG-0006: which of the three queue slots the game would take a click on now
-// (bit n = slot n+1), refreshed each view update, for the Top Screen panel.
-std::atomic<unsigned> g_cancel_slots{0};
 
 bool quick_log() {
     static const bool on = std::getenv("LB_QUICKLOG") != nullptr;
@@ -3354,32 +3493,118 @@ const char* quick_gate(uint32_t screen, int action, uint32_t* w_out,
 // slot `slot` (0..2) into the cancel command now? The tests it makes, read
 // rather than called, so a recording only notes a click that does something.
 // nullptr means yes.
-const char* quick_cancel_gate(uint32_t view, int slot, uint32_t* w_out,
-                              uint32_t* tab_out) {
-    if (const char* why = quick_screen_gate(view)) return why;
+// The InfoTab (the top screen's selection panel), or 0.
+uint32_t quick_infotab() {
     const uint32_t tab = bus_read_u32(kInfoTabSlot);
-    if (!guest_ptr(tab) || bus_read_u32(tab) != kInfoTabVtable)
-        return "no info panel";
-    if (bus_read_u32(tab + 0x58u) != 1u) return "not one building selected";
-    if (bus_read_u32(tab + 0x390u) != 1u || bus_read_u32(tab + 0x394u) != 2u ||
-        bus_read_u8(tab + 0x355u))
-        return "the panel is not showing a queue";
-    if (slot < 0 || slot >= (int)bus_read_u32(tab + 0x80u))
-        return "nothing in that slot";
+    if (!guest_ptr(tab) || bus_read_u32(tab) != kInfoTabVtable) return 0u;
+    return tab;
+}
+
+// Would the cartridge's handler (FUN_020D471D) do something for button `id`
+// now? The state tests its jump table's arms make, read rather than called:
+//   713..721  [+0x390] == 2 (several units selected) and the unit is listed
+//             (selection count at +0x58): the unit leaves the selection and
+//             its control groups (FUN_020E318C);
+//   730..732  [+0x390] == 1, [+0x394] == 2, byte [+0x355] == 0, one building
+//             selected, slot < queue length ([+0x80]): the cancel command;
+//   733..735  [+0x390] == 1, [+0x394] == 1, one unit selected.
+const char* quick_info_state(uint32_t tab, int id) {
+    if (id >= 713 && id <= 721) {
+        if (bus_read_u32(tab + 0x390u) != 2u) return "not several units";
+        if (id - 713 >= (int)bus_read_u32(tab + 0x58u)) return "no unit there";
+        return nullptr;
+    }
+    if (id >= 730 && id <= 732) {
+        if (bus_read_u32(tab + 0x58u) != 1u) return "not one building selected";
+        if (bus_read_u32(tab + 0x390u) != 1u || bus_read_u32(tab + 0x394u) != 2u ||
+            bus_read_u8(tab + 0x355u))
+            return "the panel is not showing a queue";
+        if (id - 730 >= (int)bus_read_u32(tab + 0x80u)) return "nothing in that slot";
+        return nullptr;
+    }
+    if (id >= 733 && id <= 735) {
+        if (bus_read_u32(tab + 0x58u) != 1u) return "not one unit selected";
+        if (bus_read_u32(tab + 0x390u) != 1u || bus_read_u32(tab + 0x394u) != 1u)
+            return "the panel is not showing these";
+        return nullptr;
+    }
+    return "not a button";
+}
+
+// The widget for InfoTab button `id`, if the pen path would deliver a click on
+// it now. *rect gets its top-screen rectangle {x0, y0, x1, y1}.
+const char* quick_info_gate(uint32_t view, int id, uint32_t* w_out,
+                            uint32_t* tab_out, int* rect = nullptr) {
+    if (const char* why = quick_screen_gate(view)) return why;
+    const uint32_t tab = quick_infotab();
+    if (!tab) return "no info panel";
+    if (const char* why = quick_info_state(tab, id)) return why;
     const uint32_t layout = bus_read_u32(tab + 0x1Cu);
     if (!guest_ptr(layout)) return "no layout";
-    const uint32_t w = quick_find_widget(layout, kQueueWidgetId + slot);
+    const uint32_t w = quick_find_widget(layout, id);
     if (!w) return "no widget";
-    if (bus_read_u32(w + 8u) != (kInfoTabCb | 1u)) return "not the queue button";
+    if (bus_read_u32(w + 8u) != (kInfoTabCb | 1u)) return "not an info button";
     const uint32_t rec = bus_read_u32(w + 4u);
     if (!guest_ptr(rec)) return "no record";
     const uint8_t f = bus_read_u8(rec);
     const uint32_t grp = bus_read_u32(rec + 0x14u);
     if ((f & 2u) || (guest_ptr(grp) && bus_read_u8(grp + 1u))) return "hidden";
     if ((f & 1u) && bus_read_u32(w + 0x10u) == 0u) return "disabled";
+    if (rect) {   // the record: y0 at +4, x0 at +6, y1 at +8, x1 at +0xA
+        rect[0] = (int16_t)bus_read_u16(rec + 6u);
+        rect[1] = (int16_t)bus_read_u16(rec + 4u);
+        rect[2] = (int16_t)bus_read_u16(rec + 0xAu);
+        rect[3] = (int16_t)bus_read_u16(rec + 8u);
+    }
     *w_out = w;
     *tab_out = tab;
     return nullptr;
+}
+
+const char* quick_cancel_gate(uint32_t view, int slot, uint32_t* w_out,
+                              uint32_t* tab_out) {
+    return quick_info_gate(view, kQueueWidgetId + slot, w_out, tab_out);
+}
+
+// Is the minimap what the right half of the top screen shows? The InfoTab's
+// pane mode at +0x394 says: 0 is the minimap (nothing selected, a hero, or
+// several units), 1 the build costs and 2 a building's builds and queue --
+// read in play (a base selected: 2, its red list open: 1, a hero: 0). The
+// widgets' own hidden flags do not say; the minimap is not a widget.
+const char* quick_minimap_gate(uint32_t view) {
+    if (const char* why = quick_screen_gate(view)) return why;
+    const uint32_t tab = quick_infotab();
+    if (!tab) return "no info panel";
+    if (bus_read_u32(tab + 0x394u) != 0u) return "a panel covers the minimap";
+    return nullptr;
+}
+
+// What a click can reach on the top screen now, for the Top Screen panel
+// (UI thread). Each entry packs: id - 713 (5 bits), x0 (9), y0 (8), x1 (9),
+// y1 (8). Refreshed each view update.
+std::atomic<uint64_t> g_top_btn[24];
+std::atomic<int> g_top_btn_n{0};
+std::atomic<int> g_top_minimap{0};
+
+void quick_top_refresh(uint32_t view) {
+    int n = 0;
+    uint64_t packed[24];
+    if (!quick_screen_gate(view) && quick_infotab()) {
+        for (int id = kInfoFirstId; id <= kInfoLastId && n < 24; ++id) {
+            if (id >= 722 && id <= 729) continue;
+            uint32_t w = 0, t = 0;
+            int r[4] = {0, 0, 0, 0};
+            if (quick_info_gate(view, id, &w, &t, r)) continue;
+            packed[n++] = ((uint64_t)(id - kInfoFirstId) << 34) |
+                          ((uint64_t)(r[0] & 0x1FF) << 25) |
+                          ((uint64_t)(r[1] & 0xFF) << 17) |
+                          ((uint64_t)(r[2] & 0x1FF) << 8) |
+                          (uint64_t)(r[3] & 0xFF);
+        }
+    }
+    for (int i = 0; i < n; ++i) g_top_btn[i].store(packed[i]);
+    g_top_btn_n.store(n);
+    g_top_minimap.store(quick_minimap_gate(view) ? 0 : 1);
 }
 
 // ---- docs/385: ITEM N OF THE SECOND BRICK'S LIST ----
@@ -3469,10 +3694,30 @@ uint32_t quick_list_item(uint32_t screen, int g, int n) {
 extern "C" void lb_quick_request(int action) {
     const bool ok = (action >= 0 && action <= 2) ||
                     (action > kQuickItem && action <= kQuickItem + 9) ||
-                    (action >= kQuickCancel && action < kQuickCancel + 3);
+                    (action >= kQuickCancel && action < kQuickCancel + 3) ||
+                    (action >= kQuickInfo &&
+                     action <= kQuickInfo + kInfoLastId - kInfoFirstId) ||
+                    (action >= kQuickMinimap && action < kQuickMinimap + 96 * 96);
     if (!ok || lb_demo_playing()) return;
     g_quick_req.store(action);
 }
+// The top screen's clickable spots (see quick_top_refresh): up to `max`
+// buttons as {id, x0, y0, x1, y1}, and whether the minimap is up.
+extern "C" int lb_top_buttons(int* out, int max) {
+    const int n = g_top_btn_n.load();
+    int k = 0;
+    for (int i = 0; i < n && k < max; ++i) {
+        const uint64_t p = g_top_btn[i].load();
+        out[k * 5 + 0] = (int)(p >> 34) + kInfoFirstId;
+        out[k * 5 + 1] = (int)((p >> 25) & 0x1FF);
+        out[k * 5 + 2] = (int)((p >> 17) & 0xFF);
+        out[k * 5 + 3] = (int)((p >> 8) & 0x1FF);
+        out[k * 5 + 4] = (int)(p & 0xFF);
+        ++k;
+    }
+    return k;
+}
+extern "C" int lb_top_minimap(void) { return g_top_minimap.load(); }
 // A replayed `q` event (lb_demo_tick): run it in this frame, as recorded.
 extern "C" void lb_keyboard_type(int ch);   /* docs/396, below */
 extern "C" void lb_quick_replay(int action) {
@@ -3484,11 +3729,12 @@ extern "C" void lb_quick_replay(int action) {
     if ((action >= 0 && action <= 2) ||
         (action > kQuickItem && action <= kQuickItem + 9) ||
         (action > kQuickBlueItem && action <= kQuickBlueItem + 9) ||
-        (action >= kQuickCancel && action < kQuickCancel + 3))
+        (action >= kQuickCancel && action < kQuickCancel + 3) ||
+        (action >= kQuickInfo &&
+         action <= kQuickInfo + kInfoLastId - kInfoFirstId) ||
+        (action >= kQuickMinimap && action < kQuickMinimap + 96 * 96))
         g_quick_req.store(action);
 }
-// SG-0006: the queue slots a click would cancel now (bit n = slot n+1).
-extern "C" unsigned lb_cancel_slots(void) { return g_cancel_slots.load(); }
 extern "C" int lb_setting_quick_blue(void);   /* lb_overlay.cpp */
 
 namespace {
@@ -3540,6 +3786,38 @@ void quick_enter(uint32_t w, int id, uint32_t screen, int action,
     runtime_dispatch_with_exchange(cb | 1u);
 }
 
+// The cartridge's minimap tap (FUN_0203CA74, ARM) for a pen at top-screen
+// pixel (x, y): it takes the PenEvent itself in r0 and picks the position up at
+// +0x1C/+0x1E, as the widgets' handlers do. Entered as a tail call that returns
+// into the view update, like quick_enter.
+void quick_enter_minimap(uint32_t screen, int x, int y, int action) {
+    const uint32_t ev = (g_qc.sp - 0x40u) & ~7u;
+    bus_write_u32(ev + 0x00u, kPenEventVtable);
+    bus_write_u32(ev + 0x04u, 0u);
+    bus_write_u32(ev + 0x08u, 0u);
+    bus_write_u32(ev + 0x0Cu, 1u);
+    bus_write_u32(ev + 0x10u, 0u);
+    bus_write_u32(ev + 0x14u, 0u);
+    bus_write_u32(ev + 0x18u, 1u);
+    bus_write_u16(ev + 0x1Cu, (uint16_t)x);
+    bus_write_u16(ev + 0x1Eu, (uint16_t)y);
+    // The handler reads the pen through FUN_0203CBA8 -> FUN_020F2A88, a vector
+    // copy that takes {vtable, s16 x, s16 y} at event + 0x1C: x is at +0x20.
+    bus_write_u16(ev + 0x20u, (uint16_t)x);
+    bus_write_u16(ev + 0x22u, (uint16_t)y);
+    g_qc.sp_call = ev - 8u;
+    g_qc.screen = screen;
+    g_qc.action = action;
+    g_qc.id = 806;
+    g_qc.active = true;
+    g_cpu.R[0] = ev;
+    g_cpu.R[1] = ev;
+    g_cpu.R[13] = g_qc.sp_call;
+    g_cpu.R[14] = kViewUpdate | 1u;   // back here, in Thumb
+    g_cpu.R[15] = kMinimapTap;
+    runtime_dispatch_with_exchange(kMinimapTap);
+}
+
 // TEST AID (docs/385), in the spirit of LB_CHEATS and LB_UNLOCKS: two heroes
 // of one player, for Prioritize Own Hero Spells, without a hotwire drive.
 // LB_TEST_ADOPT_FILE names a path. Whenever that file appears holding
@@ -3550,9 +3828,14 @@ void quick_enter(uint32_t w, int id, uint32_t screen, int action,
 // byte is not the same thing: it ended the match in a "Victory!" (run t385q).
 constexpr uint32_t kSetOwnerFn = 0x020598C4u;   // arm
 
+bool creature_adopt_next(uint32_t* unit, uint32_t* owner);   // docs/437 test aid
 bool test_adopt_due(uint32_t* unit, uint32_t* owner) {
     static const char* file = std::getenv("LB_TEST_ADOPT_FILE");
     static unsigned tick = 0;
+    if (!file && std::getenv("LB_TEST_CREATURE_OWNERS")) {
+        if ((++tick % 30u) != 0u) return false;
+        return creature_adopt_next(unit, owner);
+    }
     if (!file || (++tick % 30u) != 0u) return false;
     FILE* f = std::fopen(file, "rb");
     if (!f) return false;
@@ -3603,8 +3886,27 @@ bool quick_item_step(uint32_t screen) {
 }
 }  // namespace
 
+static int g_mm_log = 0;   // updates until the minimap tap's result is logged
+
 void view_update_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kViewUpdate);
+    if (g_mm_log > 0 && --g_mm_log == 0 && quick_log()) {
+        // Where the tap left the camera and the widened surface (LB_QUICKLOG).
+        int cx = 0, cy = 0, mw = 0, mh = 0;
+        const int ow = (int)nds_gpu3d_output_width();
+        const int oh = (int)nds_gpu3d_output_height();
+        const uint32_t cam = bus_read_u32(0x02152030u + 4u);
+        if (guest_ptr(cam)) {
+            cx = (int16_t)bus_read_u16(cam + 0x5Eu);
+            cy = (int16_t)bus_read_u16(cam + 0x60u);
+        }
+        lb_widemap_map_px(&mw, &mh);
+        const int bl = lb_band_left(ow), bt = lb_band_top(oh);
+        std::fprintf(stderr,
+                     "[lb_quick] minimap result: camera %d,%d surface %dx%d "
+                     "band %d,%d map %dx%d -> surface centre %d,%d\n", cx, cy,
+                     ow, oh, bl, bt, mw, mh, cx - bl + ow / 2, cy - bt + oh / 2);
+    }
     if (g_qc.active) {
         if (g_cpu.R[13] == g_qc.sp_call) {
             g_qc.active = false;
@@ -3636,14 +3938,41 @@ void view_update_override(void) {
             lb_setting_quick_blue() && !quick_screen_gate(vs) &&
             quick_list_open(vs, 0))
             want = want - kQuickItem + kQuickBlueItem;
-        {   // SG-0006: which queue slots a click would cancel, for the panel.
-            unsigned m = 0;
-            uint32_t w0 = 0, t0 = 0;
-            for (int s = 0; s < 3; ++s)
-                if (!quick_cancel_gate(vs, s, &w0, &t0)) m |= 1u << s;
-            g_cancel_slots.store(m);
-        }
-        if (want >= kQuickCancel && want < kQuickCancel + 3) {
+        quick_top_refresh(vs);   // what a click on the top screen can reach
+        if (want >= kQuickMinimap) {
+            // The minimap's own tap handler, at the point clicked.
+            const int lx = (want - kQuickMinimap) % 96;
+            const int ly = (want - kQuickMinimap) / 96;
+            const char* why = quick_minimap_gate(vs);
+            if (quick_log())
+                std::fprintf(stderr, "[lb_quick] minimap tap at %d,%d: %s%s\n",
+                             lx, ly, why ? "declined, " : "clicked",
+                             why ? why : "");
+            if (!why) {
+                lb_demo_note_quick(want);
+                g_qitem.n = 0;
+                quick_save();
+                g_mm_log = 4;
+                quick_enter_minimap(vs, 136 + lx, 40 + ly, want);
+                return;
+            }
+        } else if (want >= kQuickInfo &&
+                   want <= kQuickInfo + kInfoLastId - kInfoFirstId) {
+            // Any other button of the selection panel: the game's own handler.
+            const int id = kInfoFirstId + (want - kQuickInfo);
+            uint32_t w = 0, tab = 0;
+            const char* why = quick_info_gate(vs, id, &w, &tab);
+            if (quick_log())
+                std::fprintf(stderr, "[lb_quick] info button %d: %s%s\n", id,
+                             why ? "declined, " : "clicked", why ? why : "");
+            if (!why) {
+                lb_demo_note_quick(want);
+                g_qitem.n = 0;
+                quick_save();
+                quick_enter(w, id, vs, want, kInfoTabCb, tab);
+                return;
+            }
+        } else if (want >= kQuickCancel && want < kQuickCancel + 3) {
             // SG-0006: the game's own queue-slot button, clicked.
             const int slot = want - kQuickCancel;
             uint32_t w = 0, tab = 0;
@@ -6128,11 +6457,424 @@ void army_tier_override(void) {
     }
     if (original) original();
 }
+// docs/436: THE WOLF HAS NO FRONT-END PLAYER CARD. The army screen's top screen
+// shows the card of the selected unit: FUN_02030A70 names its files
+// "UI/FEPlayerCards/" + the blueprint's name, and the ROM ships a card for the
+// Robot and the Shark but none for the Wolf (only UI/GamePlayerCards/Wolf). The
+// load of the missing file never finishes: the screen stays black. It was
+// never seen while the Wolf sat in Close Combat, where the screen opens on the
+// hero; with the Wolf as the hero it is the first card asked for. The game's
+// own answer for "no unit" is the K_Unknown card, which a null unit gets here.
+constexpr uint32_t kFeCard = 0x02030A70u;   // ARM
+void fe_card_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kFeCard);
+    const uint32_t w = g_cpu.R[1];
+    if (w >= 0x02000000u && w < 0x02400000u) {
+        const uint32_t rec = bus_read_u32(w + 4u);
+        // Not gated on the option: the file is missing whoever asks (a lobby
+        // card of a player whose army holds a Wolf included).
+        if (rec >= 0x02000000u && rec < 0x02400000u && bus_read_u16(rec + 4u) == 169u)
+            g_cpu.R[1] = 0u;
+    }
+    if (original) original();
+}
 void float_number_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kFloatNumber);
     if ((g_cpu.R[14] & ~1u) == kGoldShowRet) g_cpu.R[1] = gold_brick_value(g_cpu.R[1]);
     if (original) original();
 }
+
+// docs/437: OWNED CREATURES TAKE THEIR OWNER'S TEAM COLOUR (SG-0024).
+//
+// A unit is a textured billboard (Unit_BuildBillboard 0203ABC8, the quad
+// emitter 0204C210). Its palette is a bank of the one sprite palette
+// (Sprites/KingFaction.NCLR, 16 banks of 16 colours, in 3D texture-palette VRAM):
+// the bank is entity+0x30 = 2 * the owner's player number + 1 if selected, and
+// 0 + the selected flag for a neutral owner (no team record). View_SetupLevelBGs
+// puts each player's team colour in entries 12-14 of that player's two banks,
+// and a minifig's sheet draws its team-coloured parts with those entries.
+// The Wolf, Robot and Monkey sheets (x_dog_1, x_rob_1, x_mon_1) never use
+// entries 12-14, so an owned one looks like a wild one.
+//
+// The bank is also the whole of the palette choice, and entries 1-11 are the
+// same in every bank, so what a creature needs is a bank of its own: copies of
+// its owner's bank with the body entries (below) replaced by that owner's
+// three team shades, kept at the top of the 64 KiB texture-palette bank E where
+// nothing is allocated. creature_tint_prepare writes them every frame (changing
+// nothing when they are current) and the draw override points an owned
+// creature's entity+0x30 at its bank, just before the quad is emitted from
+// Unit_BuildBillboard's call. entity+0x30 is rewritten every frame by the
+// billboard builder, so nothing but the picture sees it.
+constexpr uint32_t kBillboardDraw = 0x0202DA80u;       // arm
+constexpr uint32_t kBillboardDrawRet = 0x0203B2ACu;    // after Unit_BuildBillboard's call
+constexpr uint32_t kNeutralOwnerByte = 0x02155420u;    // FUN_02087634
+extern "C" int lb_setting_creature_tint(void);         /* lb_overlay.cpp */
+extern "C" int lb_creatures_live(void);                /* below */
+namespace {
+struct TintEntry { uint8_t entry, shade; };   // shade 0 light, 1 mid, 2 dark (entries 12-14), 3 darker
+struct CreatureTint { uint16_t bp; uint8_t n; TintEntry m[5]; };
+const CreatureTint kCreatureTints[3] = {
+    {169, 3, {{2, 0}, {3, 1}, {4, 2}}},                        // Wolf: the grey body
+    {138, 5, {{6, 0}, {7, 0}, {8, 1}, {9, 2}}},                // Robot: the orange wheels
+    {153, 4, {{8, 0}, {9, 1}, {10, 2}, {11, 3}}},              // Monkey: the brown body
+};
+constexpr uint32_t kTintBase = 0x3A00u;   // texture-palette address of the first tinted bank
+constexpr int kTintPlayers = 6;
+uint32_t g_tint_vpal = 0;
+// What the block held when we last wrote it (sprite banks, then the Shark's).
+// A palette the game allocates over it later shows as a difference: the tint
+// then stops for the level (g_tint_dead) rather than fight the game for it.
+uint8_t g_tint_shadow[0x600];
+bool g_tint_shadow_valid = false, g_tint_dead = false;
+void creature_test_cam();
+
+// The texture-palette VRAM as one array indexed by texture-palette address:
+// the physical bank the game mapped there (this port's game maps G, 16 KiB).
+uint8_t* texpal_flat(uint32_t* size) {
+    for (unsigned b : {6u, 5u}) {   // G, then F, at slot 0
+        const unsigned c = nds_vramcnt(b);
+        if ((c & 0x87u) == 0x83u && ((c >> 3) & 3u) == 0u) {
+            *size = 0x4000u;
+            return nds_vram_bank_data(b);
+        }
+    }
+    if ((nds_vramcnt(4) & 0x87u) == 0x83u) {
+        *size = 0x10000u;
+        return nds_vram_bank_data(4);
+    }
+    return nullptr;
+}
+// The sprite palette's texture-palette address: view+0x1C -> handle -> object
+// (+0x38) -> VRAM allocation (+8). 0 while there is none.
+uint32_t sprite_palette_vram() {
+    const uint32_t view = bus_read_u32(0x02152034u);
+    if (!guest_ptr(view)) return 0;
+    const uint32_t obj = bus_read_u32(view + 0x1Cu + 8u);
+    if (!guest_ptr(obj)) return 0;
+    const uint32_t alloc = bus_read_u32(obj + 0x38u);
+    if (!guest_ptr(alloc)) return 0;
+    const uint32_t v = bus_read_u32(alloc + 8u);
+    return v < 0x10000u - 0x200u ? v : 0;
+}
+int tint_kind(uint32_t bp) {
+    const unsigned idx = bus_read_u16(bp + 4u);
+    for (int k = 0; k < 3; ++k)
+        if (kCreatureTints[k].bp == idx) return k;
+    return -1;
+}
+uint16_t darker(uint16_t c) {   // 0.6 of each 5-bit channel
+    return (uint16_t)((((c & 31u) * 3u / 5u)) | ((((c >> 5) & 31u) * 3u / 5u) << 5) |
+                      ((((c >> 10) & 31u) * 3u / 5u) << 10));
+}
+// The tinted bank for creature k, player p, selected s: its slot 0..35 in the
+// block at kTintBase, and the bank number the quad emitter takes (an offset
+// from the sprite palette's own address, in 32-byte banks).
+int tint_slot(int k, int p, int s) { return (k * kTintPlayers + p) * 2 + s; }
+int tint_bank_number(uint32_t vpal, int slot) {
+    return (int)((kTintBase - vpal) / 0x20u) + slot;
+}
+
+// One tinted bank, built from the owner's own bank as it is now. Returns true
+// when it changed the VRAM.
+bool tint_build(uint8_t* e, uint32_t vpal, int k, int p, int s) {
+    uint16_t bank[16];
+    std::memcpy(bank, e + vpal + (uint32_t)(2 * p + s) * 0x20u, sizeof bank);
+    const uint16_t shade[4] = {bank[12], bank[13], bank[14], darker(bank[14])};
+    const CreatureTint& t = kCreatureTints[k];
+    for (int i = 0; i < t.n; ++i) bank[t.m[i].entry] = shade[t.m[i].shade];
+    uint8_t* dst = e + kTintBase + (uint32_t)tint_slot(k, p, s) * 0x20u;
+    if (std::memcmp(dst, bank, sizeof bank) == 0) return false;
+    std::memcpy(dst, bank, sizeof bank);
+    return true;
+}
+
+// Once a frame, from the view update, before the frame's geometry.
+void creature_tint_prepare() {
+    static const bool log = std::getenv("LB_TINT_LOG") != nullptr;
+    g_tint_vpal = 0;
+    creature_test_cam();
+    if (!lb_creatures_live() || !lb_setting_creature_tint()) return;
+    {   // Only in a battle: in the menus nothing is read or written.
+        int cx = 0, cy = 0;
+        if (!lb_field_camera(&cx, &cy)) {
+            g_tint_shadow_valid = false;
+            g_tint_dead = false;
+            return;
+        }
+    }
+    const uint32_t vpal = sprite_palette_vram();
+    uint32_t tp_size = 0;
+    uint8_t* e = texpal_flat(&tp_size);
+    if (log) {
+        static unsigned why = 0;
+        if ((why++ % 300u) == 0u)
+        {
+            const uint32_t view = bus_read_u32(0x02152034u);
+            const uint32_t obj = guest_ptr(view) ? bus_read_u32(view + 0x1Cu + 8u) : 0u;
+            const uint32_t alloc = guest_ptr(obj) ? bus_read_u32(obj + 0x38u) : 0u;
+            std::fprintf(stderr, "[lb_tint] view %08X obj %08X alloc %08X +8 %08X vramcnt A-I %02X %02X %02X %02X %02X %02X %02X %02X %02X\n",
+                         view, obj, alloc, guest_ptr(alloc) ? bus_read_u32(alloc + 8u) : 0u,
+                         (unsigned)nds_vramcnt(0), (unsigned)nds_vramcnt(1), (unsigned)nds_vramcnt(2),
+                         (unsigned)nds_vramcnt(3), (unsigned)nds_vramcnt(4), (unsigned)nds_vramcnt(5),
+                         (unsigned)nds_vramcnt(6), (unsigned)nds_vramcnt(7), (unsigned)nds_vramcnt(8));
+        }
+    }
+    static uint32_t last_vpal = 0;
+    if (!vpal || vpal != last_vpal) {   // no battle, or a new level's palette
+        last_vpal = vpal;
+        g_tint_shadow_valid = false;
+        g_tint_dead = false;
+    }
+    if (!vpal || !e || (vpal & 0x1Fu) != 0u || vpal + 0x200u > kTintBase ||
+        kTintBase + 3u * kTintPlayers * 2u * 0x20u + 12u * 0x20u > tp_size || g_tint_dead) return;
+    {
+        // The block is the top 0x600 bytes of the 16 KiB: the game allocates
+        // texture palettes upward from 0 (about 0x1200 used in a battle, docs/437).
+        // Stop if anything else has reached within 0x200 of it, or written in it.
+        static unsigned scan = 0;
+        uint32_t high = 0;
+        if ((scan++ % 30u) == 0u || log) {
+            for (uint32_t a = kTintBase; a >= 0x20u; a -= 0x20u) {
+                bool any = false;
+                for (uint32_t i = 0; i < 0x20u && !any; ++i) any = e[a - 0x20u + i] != 0;
+                if (any) { high = a; break; }
+            }
+            static uint32_t max_high = 0;
+            if (high > max_high) {
+                max_high = high;
+                if (log) std::fprintf(stderr, "[lb_tint] texture-palette high water now %04X (block at %04X)\n",
+                                      (unsigned)high, (unsigned)kTintBase);
+            }
+        }
+        const bool foreign = g_tint_shadow_valid &&
+                             std::memcmp(e + kTintBase, g_tint_shadow, sizeof g_tint_shadow) != 0;
+        if (foreign || high > kTintBase - 0x200u) {
+            g_tint_dead = true;
+            std::fprintf(stderr, "[lb_tint] the tint block at %04X is not free (%s, high water %04X): creature tint off for this level\n",
+                         (unsigned)kTintBase, foreign ? "overwritten" : "crowded", (unsigned)high);
+            return;
+        }
+    }
+    bool changed = false;
+    if (!std::getenv("LB_TINT_NOWRITE"))
+        for (int k = 0; k < 3; ++k)
+            for (int p = 0; p < kTintPlayers; ++p)
+                for (int s = 0; s < 2; ++s) changed |= tint_build(e, vpal, k, p, s);
+    if (changed) nds_vram_note_capture_write();   // the 3D renderer re-reads texture palettes
+    std::memcpy(g_tint_shadow, e + kTintBase, g_tint_shadow_valid ? 0x480u : sizeof g_tint_shadow);   // then the Shark's half is kept by its own writes
+    g_tint_shadow_valid = true;
+    g_tint_vpal = vpal;
+    if (log) {
+        static unsigned tick = 0;
+        if ((tick++ % 300u) == 0u) {
+            char map[129] = {};
+            for (int b = 0; b < 128 && (uint32_t)(b + 1) * 512u <= tp_size; ++b) {
+                bool any = false;
+                for (int i = 0; i < 512 && !any; ++i) any = e[b * 512 + i] != 0;
+                map[b] = any ? '#' : '.';
+            }
+                        std::fprintf(stderr, "[lb_tint] vpal %05X E-map %s\n", (unsigned)vpal, map);
+            std::fflush(stderr);
+        }
+    }
+}
+
+// TEST AIDS (docs/437), off unless named. LB_TEST_CREATURE_OWNERS=a,b,..: the
+// creatures on the field (Wolf, Robot, Monkey, Shark, in pool order) are given
+// to these owners in turn through Entity::SetOwner, from test_adopt_due.
+// LB_TEST_CAMCREATURE=1: the camera centres on the creatures' middle.
+bool creature_adopt_next(uint32_t* unit, uint32_t* owner) {
+    static std::vector<int> owners;
+    static bool parsed = false;
+    static std::vector<uint32_t> tried;
+    if (!parsed) {
+        parsed = true;
+        const char* v = std::getenv("LB_TEST_CREATURE_OWNERS");
+        while (v && *v) {
+            owners.push_back(std::atoi(v));
+            const char* c = std::strchr(v, ',');
+            if (!c) break;
+            v = c + 1;
+        }
+    }
+    if (owners.empty()) return false;
+    const uint32_t pool = bus_read_u32(kEntityPoolPtr);
+    if (!guest_ptr(pool)) return false;
+    const uint32_t array = bus_read_u32(pool + 8u);
+    const int32_t count = (int32_t)bus_read_u32(pool + 0xCu);
+    if (!guest_ptr(array) || count <= 0) return false;
+    size_t ordinal = 0, present = 0;
+    for (int32_t i = 0; i < count && i < 4096; ++i) {   // wait until all of them stand
+        const uint32_t e = bus_read_u32(array + (uint32_t)i * 4u);
+        if (!guest_ptr(e) || bus_read_u8(e + 0x227u) == 0u) continue;
+        const uint32_t bp = unit_blueprint(e);
+        const unsigned idx = bp ? bus_read_u16(bp + 4u) : 0u;
+        if (idx == 169 || idx == 138 || idx == 153 || idx == 155) ++present;
+    }
+    if (present < owners.size()) return false;
+    for (int32_t i = 0; i < count && i < 4096; ++i) {
+        const uint32_t e = bus_read_u32(array + (uint32_t)i * 4u);
+        if (!guest_ptr(e) || bus_read_u8(e + 0x227u) == 0u) continue;
+        const uint32_t bp = unit_blueprint(e);
+        if (!bp) continue;
+        const unsigned idx = bus_read_u16(bp + 4u);
+        if (idx != 169 && idx != 138 && idx != 153 && idx != 155) continue;
+        if (ordinal >= owners.size()) return false;   // only the first few
+        const int want = owners[ordinal++];
+        if ((int)bus_read_u8(e + 0xE4u) == want) continue;
+        if (std::find(tried.begin(), tried.end(), e) != tried.end()) continue;
+        tried.push_back(e);
+        *unit = e;
+        *owner = (uint32_t)want;
+        return true;
+    }
+    return false;
+}
+void creature_test_cam() {
+    static const bool on = std::getenv("LB_TEST_CAMCREATURE") != nullptr;
+    if (!on) return;
+    static unsigned n = 0;
+    if ((++n % 20u) != 0u) return;
+    const uint32_t pool = bus_read_u32(kEntityPoolPtr);
+    if (!guest_ptr(pool)) return;
+    const uint32_t array = bus_read_u32(pool + 8u);
+    const int32_t count = (int32_t)bus_read_u32(pool + 0xCu);
+    if (!guest_ptr(array) || count <= 0) return;
+    long sx = 0, sy = 0;
+    int cnt = 0;
+    for (int32_t i = 0; i < count && i < 4096; ++i) {
+        const uint32_t e = bus_read_u32(array + (uint32_t)i * 4u);
+        if (!guest_ptr(e) || bus_read_u8(e + 0x227u) == 0u) continue;
+        const uint32_t bp = unit_blueprint(e);
+        if (!bp) continue;
+        const unsigned idx = bus_read_u16(bp + 4u);
+        if (idx != 169 && idx != 138 && idx != 153 && idx != 155) continue;
+        if (bus_read_u8(e + 0xE4u) != 0u) continue;   // owner 0's: the others stand beside it
+        sx += ((int32_t)bus_read_u32(e + 0xECu) >> 12) - 29;   // lb_field.cpp's entity-to-map offsets
+        sy += ((int32_t)bus_read_u32(e + 0xF0u) >> 12) - 1;
+        ++cnt;
+    }
+    // Latched at the first sight of owner 0's creature, which is the moment the
+    // owners were handed out and all of them stand together: they wander off
+    // later, and a camera that follows one of them ends in the fog.
+    static bool latched = false;
+    static int lx = 0, ly = 0;
+    if (!latched && cnt) {
+        latched = true;
+        lx = (int)(sx / cnt) - 128;
+        ly = (int)(sy / cnt) - 96;
+    }
+    if (latched) lb_field_camera_write(lx, ly);
+}
+
+// The draw override: lr says whose call it is.
+void billboard_draw_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kBillboardDraw);
+    if (g_tint_vpal && (g_cpu.R[14] & ~1u) == kBillboardDrawRet) {
+        static const bool log = std::getenv("LB_TINT_LOG") != nullptr;
+        const uint32_t ent = g_cpu.R[0] - 0x10u;
+        const uint32_t bp = guest_ptr(ent) ? unit_blueprint(ent) : 0u;
+        const int k = bp ? tint_kind(bp) : -1;
+        if (k >= 0) {
+            const unsigned owner = bus_read_u8(ent + 0xE4u);
+            const uint32_t mgr = bus_read_u32(0x0215540Cu);
+            const uint32_t arr = guest_ptr(mgr) ? bus_read_u32(mgr + 8u) : 0u;
+            const bool owned = owner != bus_read_u8(kNeutralOwnerByte) && guest_ptr(arr) &&
+                               guest_ptr(bus_read_u32(arr + 4u * owner));
+            const unsigned cur = bus_read_u16(ent + 0x30u);
+            if (log)
+                std::fprintf(stderr, "[lb_tint] unit bp %u owner %u (neutral id %u) owned %d bank %u\n",
+                             (unsigned)bus_read_u16(bp + 4u), owner,
+                             (unsigned)bus_read_u8(kNeutralOwnerByte), owned ? 1 : 0, cur);
+            if (owned && cur < 2u * kTintPlayers)
+                bus_write_u16(ent + 0x30u, (uint16_t)tint_bank_number(
+                    g_tint_vpal, tint_slot(k, (int)(cur >> 1), (int)(cur & 1u))));
+        }
+    }
+    if (original) original();
+}
+
+// THE SHARK is a model (P_Shark), not a billboard: Building_Draw3D (0203B3AC)
+// sets each material's palette offset (+0x1C, in 16-byte units: the model
+// palette's base, u16 at model+0x62, plus 2 per bank, the bank being the owner's
+// colour slot) and draws it with FUN_020FE824, whose one caller is at 0203B724.
+// P_Shark's palette has no team entries in use, so an owned Shark looks wild
+// too. At that call (lr 0203B728; the model is r0, the entity r11, the material
+// block r9) an owned Shark's materials are pointed at a copy of the colour
+// slot's bank with its body entries (3 the flanks, 4 the back, 2 the lighter
+// grey) in the owner's team shades, in the 16-byte units after the sprite
+// banks. A wild Shark's materials are put back on bank 6, the neutral slot (the
+// same entries 1-11 as the others), since a material keeps the last owner's
+// offset.
+constexpr uint32_t kModelDraw = 0x020FE824u;       // arm
+constexpr uint32_t kModelDrawRet = 0x0203B728u;
+constexpr uint32_t kSharkBp = 155;
+constexpr uint32_t kSharkTintBase = kTintBase + 36u * 0x20u;   // 12 banks, to the end of the 16 KiB
+struct SharkMat { uint32_t mat; uint16_t plain; };
+std::vector<SharkMat> g_shark_mats;
+
+bool entity_owned(uint32_t ent) {
+    const unsigned owner = bus_read_u8(ent + 0xE4u);
+    const uint32_t mgr = bus_read_u32(0x0215540Cu);
+    const uint32_t arr = guest_ptr(mgr) ? bus_read_u32(mgr + 8u) : 0u;
+    return owner != bus_read_u8(kNeutralOwnerByte) && guest_ptr(arr) &&
+           guest_ptr(bus_read_u32(arr + 4u * owner));
+}
+
+void shark_model_tint(uint32_t model, uint32_t ent, uint32_t sb) {
+    static const bool log = std::getenv("LB_TINT_LOG") != nullptr;
+    if (!guest_ptr(ent) || !guest_ptr(model)) return;
+    const uint32_t bp = unit_blueprint(ent);
+    if (!bp || bus_read_u16(bp + 4u) != kSharkBp) return;
+    const uint32_t base = (uint32_t)bus_read_u16(model + 0x62u);
+    const bool active = g_tint_vpal && entity_owned(ent);
+    if (!active) {   // wild, or the tint off: any material we moved goes back
+        for (const SharkMat& m : g_shark_mats) bus_write_u16(m.mat + 0x1Cu, m.plain);
+        return;
+    }
+    uint32_t tp_size = 0;
+    uint8_t* e = texpal_flat(&tp_size);
+    if (!e || !guest_ptr(sb) || kSharkTintBase + 12u * 0x20u > tp_size) return;
+    const unsigned count = bus_read_u8(sb + 5u);
+    const uint32_t r5 = sb + 4u, off10 = bus_read_u16(sb + 0xAu);
+    const uint32_t stride = bus_read_u16(r5 + off10);
+    bool changed = false;
+    for (unsigned i = 0; i < count && i < 8u; ++i) {
+        const uint32_t rec = r5 + off10 + 4u + stride * i;
+        const uint32_t mat = sb + bus_read_u32(rec);
+        if (!guest_ptr(mat)) continue;
+        const uint32_t old = bus_read_u16(mat + 0x1Cu);
+        const uint32_t src = old * 16u;
+        if (log)
+            std::fprintf(stderr, "[lb_tint] shark material %08X offset %04X base %04X bank %d\n",
+                         mat, old, base, (int)((src - base * 16u) / 0x20u));
+        if (src < base * 16u || src >= base * 16u + 9u * 0x20u || src + 0x20u > tp_size) continue;
+        const uint32_t slot = (src - base * 16u) / 0x20u;
+        if (slot >= 7u) continue;   // the neutral slot is the plain one
+        uint16_t bank[16];
+        std::memcpy(bank, e + src, sizeof bank);
+        bank[2] = bank[3] = bank[12];
+        bank[4] = bank[13];
+        uint8_t* dst = e + kSharkTintBase + slot * 0x20u;
+        if (std::memcmp(dst, bank, sizeof bank) != 0) {
+            std::memcpy(dst, bank, sizeof bank);
+            std::memcpy(g_tint_shadow + (kSharkTintBase - kTintBase) + slot * 0x20u, bank, sizeof bank);
+            changed = true;
+        }
+        bool known = false;
+        for (const SharkMat& m : g_shark_mats) known = known || m.mat == mat;
+        if (!known) g_shark_mats.push_back({mat, (uint16_t)(base + 12u)});
+        bus_write_u16(mat + 0x1Cu, (uint16_t)((kSharkTintBase + slot * 0x20u) / 16u));
+    }
+    if (changed) nds_vram_note_capture_write();
+}
+void model_draw_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kModelDraw);
+    if ((g_cpu.R[14] & ~1u) == kModelDrawRet && (g_tint_vpal || !g_shark_mats.empty()))
+        shark_model_tint(g_cpu.R[0], g_cpu.R[11], g_cpu.R[9]);
+    if (original) original();
+}
+}  // namespace
 
 // MUST BE SORTED ASCENDING BY ADDRESS. This is not a style preference.
 //
@@ -6168,6 +6910,13 @@ const NdsDispatchEntry kOverrideTable[] = {
        LB_SHADOW unset this delegates to the cartridge and only counts; with
        LB_SHADOW=native it runs src/battles/registry.c instead. docs/333. */
     {kRegistryFind, 0u, registry_find_shadow, nullptr},    /* 0x02016A00 */
+    /* ARM. The army screen's front-end player card: the Wolf has none, so it
+       gets the "unknown" card (docs/436). Otherwise a pure tail call. */
+    /* ARM. The billboard quad draw, from Unit_BuildBillboard's call only: an
+       owned creature draws with its owner-tinted palette bank (docs/437).
+       Otherwise a pure tail call. */
+    {kBillboardDraw, 0u, billboard_draw_override, nullptr}, /* 0x0202DA80 */
+    {kFeCard, 0u, fe_card_override, nullptr},              /* 0x02030A70 */
     /* ARM. The level loader ("Maps/" + name + ".map"): an observer that notes
        the map's name for the master server's log (docs/394). */
     {kMapLoad, 0u, map_load_observer, nullptr},            /* 0x02035FAC */
@@ -6185,6 +6934,10 @@ const NdsDispatchEntry kOverrideTable[] = {
     /* ARM. Task_View_CommitBGs: the UI grid's cells under HUD elements the
        port moved are cleared before it blanks BG3 with them. docs/403. */
     {kCommitBGs, 0u, commit_bgs_override, nullptr},        /* 0x020396E0 */
+    /* ARM. The scroll-start BG3 blank, skipped from the camera manager's two
+       calls while a placement is live in the adaptive view; otherwise a pure
+       tail call. */
+    {kBg3Blank, 0u, bg3_blank_override, nullptr},          /* 0x0203B78C */
     {kMarquee, 0u, marquee_observer, nullptr},             /* 0x0203B7FC */
     /* ARM. The placement cell painter: an observer that notes each piece the
        wall-line painter hands it, so the band can draw the culled ones
@@ -6253,6 +7006,9 @@ const NdsDispatchEntry kOverrideTable[] = {
     /* Sign-extends the drag rect's three register arguments before the guest
        normalises it, so a left-band corner stops inverting the rectangle. */
     {kSelRect, 1u, sel_rect_override, nullptr},            /* 0x020AA8E4 */
+    /* ARM. The "view is at rest" test, answered for the placement tick's own
+       call only, in the adaptive view; otherwise a pure tail call. */
+    {kRestCheck, 0u, rest_check_override, nullptr},        /* 0x020AC240 */
     /* Observer only, and only speaks with LB_MARKERLOG=1. */
     /* Thumb. Free Play's opponent mapper: Custom and Random answer 133 and
        queue their army; the six factions are a pure tail call. docs/384. */
@@ -6322,6 +7078,10 @@ const NdsDispatchEntry kOverrideTable[] = {
     /* ARM. A mod map's lobby id, translated to this machine's copy; docs/413. */
     {kLobbyPacket, 0u, lobby_packet_override, nullptr},    /* 0x020F5168 */
     /* ARM. The four WM calls the game makes past WH. docs/423. */
+    /* ARM. The model draw call in Building_Draw3D, from that call only: an owned
+       Shark draws with an owner-tinted palette bank (docs/437). Otherwise a
+       pure tail call. */
+    {kModelDraw, 0u, model_draw_override, nullptr},        /* 0x020FE824 */
     {kWmConnectedAids, 0u, wm_connected_override, nullptr}, /* 0x02118628 */
     {kWmLinkLevel, 0u, wm_link_override, nullptr},         /* 0x021188C4 */
     {kWmSetGameInfo, 0u, wm_game_info_override, nullptr},  /* 0x0211A084 */
@@ -6341,6 +7101,7 @@ const NdsDispatchEntry kOverrideTable[] = {
 // fault after shipping; this refuses to build. Every future entry must be
 // inserted in address order or the build stops here with this message.
 static_assert(kRosterBuild < kRegistryFind &&
+              kRegistryFind < kBillboardDraw && kBillboardDraw < kFeCard &&
               kSelRect < kReadyToggle && kReadyToggle < kMainMenuUpdate &&
               kSelRect < kMainMenuUpdate && kMainMenuUpdate < kEnemyMap &&
               kEnemyMap < kOppSetupLabel &&
@@ -6354,7 +7115,7 @@ static_assert(kRosterBuild < kRegistryFind &&
               kScreenUpdate < kWidgetRect &&
               kRegistryFind < kMapLoad && kMapLoad < kFpPost &&
               kFpPost < kFpPaint && kFpPaint < kCommitBGs &&
-              kCommitBGs < kMarquee &&
+              kCommitBGs < kBg3Blank && kBg3Blank < kMarquee &&
               kMarquee < kFpCell && kFpCell < kStringFromId &&
               kStringFromId < kMissionKey && kMissionKey < kRegisterMissions &&
               kRegisterMissions < kGfxTransfer &&
@@ -6368,6 +7129,7 @@ static_assert(kRosterBuild < kRegistryFind &&
               kMapParse < kFloatNumber && kFloatNumber < kTouchRect &&
               kTouchRect < kMoveIssue &&
               kMoveIssue < kClickDispatch && kClickDispatch < kSelRect &&
+              kSelRect < kRestCheck && kRestCheck < kReadyToggle &&
               kSelRect < kMarkerPlace && kMarkerPlace < kWidgetRect &&
               kWidgetRect < kWidgetSetPos && kWidgetSetPos < kSplitArray &&
               kSplitArray < kGetMs &&
@@ -6378,7 +7140,7 @@ static_assert(kRosterBuild < kRegistryFind &&
               kWhChildConnect < kWhShared && kWhShared < kWhStep &&
               kWhStep < kWhReset && kWhReset < kWhFinalize &&
               kWhFinalize < kWhEnd && kWhEnd < kLobbyPacket &&
-              kLobbyPacket < kWmConnectedAids &&
+              kLobbyPacket < kModelDraw && kModelDraw < kWmConnectedAids &&
               kWmConnectedAids < kWmLinkLevel && kWmLinkLevel < kWmSetGameInfo &&
               kWmSetGameInfo < kWmSetEntry && kWmSetEntry < kFAdd &&
               kFAdd < kFMul && kFMul < kFSub && kFSub < kDivMod &&
@@ -6486,7 +7248,7 @@ uint32_t find_blueprint_block() {
 // and under the player's Balance values, so those still win.
 struct CreaturePrice { int rec; uint16_t cost, build; };
 const CreaturePrice kCreaturePrices[] = {
-    {169, 200, 420}, {138, 80, 270}, {155, 400, 660}};
+    {169, 200, 420}, {138, 80, 270}, {155, 400, 660}, {153, 70, 240}};
 struct CreatureByte { uint32_t addr; uint16_t loaded; };
 std::vector<CreatureByte> g_creatures_loaded;
 int g_creatures_patched = 0;
@@ -6507,6 +7269,32 @@ const CreatureMove kCreatureMoves[] = {{169, 0x16, 1}, {169, 0x17, 1}, {169, 0x1
 struct CreatureMoveByte { uint32_t addr; uint8_t loaded; };
 std::vector<CreatureMoveByte> g_creature_moves_loaded;
 
+// docs/436: THE CREATURES' ARMY SLOT. What lists a unit in a build menu, on the
+// army screen and in the AI's roster is its blueprint's category byte (+0x5C):
+// FUN_020D9844 asks the roster (FUN_020024e8) for categories 2/3/4 at a
+// Barracks, 5/6 at a Special Factory or Shipyard and 0/1 at a Base, and
+// FUN_020B96FC lists a card in slot N when the unit's category is N (slots
+// 0-4) or 5/6 with the tier FUN_020EB21C gives. The roster itself is
+// positional (FUN_02000E78 copies the army record's nine fields in order).
+// So a creature moves to a slot by taking that slot's category, nothing else:
+//   slot 0 Hero -> 0, 2 Close Combat -> 2, 3 Ranged -> 3, 4 Mounted -> 4,
+//   5/6/7 Special One/Two/Three -> 6 (the tier is the army screen's).
+// A Hero also gets spells (the five bytes at +0x72, docs/106), empty on all
+// three, so they start with Area Speed Boost, Area Armour Boost and one
+// attack that Balance > Heroes can change; and the Shark, which swims, takes
+// the Wolf's ground movement anywhere but a Special.
+const int kCreatureRecs[4] = {169, 138, 155, 153};   // Wolf, Robot, Shark, Monkey
+const uint8_t kCreatureWatchOffs[] = {0x16, 0x17, 0x1A, 0x5C,
+                                      0x72, 0x73, 0x74, 0x75, 0x76};
+const uint8_t kCreatureHeroSpells[4][5] = {
+    {0x05, 0x00, 0x09, 0x12, 0x00},    // Wolf: Roar
+    {0x05, 0x00, 0x09, 0x1B, 0x00},    // Robot: EMP
+    {0x05, 0x00, 0x09, 0x0D, 0x00},    // Shark: Earthquake
+    {0x05, 0x00, 0x09, 0x14, 0x00}};   // Monkey: Monkey Swarm
+int creature_category_of_slot(int slot) {
+    return slot >= 5 ? 6 : slot;
+}
+
 void snapshot_creatures() {
     g_creatures_loaded.clear();
     for (const CreaturePrice& c : kCreaturePrices) {
@@ -6519,6 +7307,12 @@ void snapshot_creatures() {
         const uint32_t a = record_addr(g_blueprint_base, (uint32_t)m.rec) + m.off;
         g_creature_moves_loaded.push_back({a, (uint8_t)bus_read_u8(a)});
     }
+    // docs/436: and every byte a slot can change, on all three.
+    for (int rec : kCreatureRecs)
+        for (uint8_t off : kCreatureWatchOffs) {
+            const uint32_t a = record_addr(g_blueprint_base, (uint32_t)rec) + off;
+            g_creature_moves_loaded.push_back({a, (uint8_t)bus_read_u8(a)});
+        }
 }
 void revert_creatures() {
     for (const CreatureByte& b : g_creatures_loaded)
@@ -6534,6 +7328,39 @@ void apply_creatures() {
     }
     for (const CreatureMove& m : kCreatureMoves)
         bus_write_u8(record_addr(g_blueprint_base, (uint32_t)m.rec) + m.off, m.value);
+    // docs/436: the slots.
+    for (int i = 0; i < 4; ++i) {
+        const uint32_t r = record_addr(g_blueprint_base, (uint32_t)kCreatureRecs[i]);
+        const int slot = lb_creature_slot(kCreatureRecs[i]);
+        const int cat = creature_category_of_slot(slot);
+        bus_write_u8(r + 0x5Cu, (uint8_t)cat);
+        if (kCreatureRecs[i] == 155 && cat != 6)   // the Shark leaves the water
+            for (uint32_t off : {0x16u, 0x17u, 0x1Au}) bus_write_u8(r + off, 1);
+        if (cat == 0) {
+            bool empty = true;
+            for (uint32_t k = 0; k < 5; ++k) empty = empty && bus_read_u8(r + 0x72u + k) == 0;
+            // LB_CREATURE_HERO_SPELLS=a,b,c,d,e: a test aid, all three creatures.
+            int test[5] = {-1, -1, -1, -1, -1};
+            if (const char* v = std::getenv("LB_CREATURE_HERO_SPELLS"))
+                std::sscanf(v, "%d,%d,%d,%d,%d", &test[0], &test[1], &test[2], &test[3], &test[4]);
+            if (empty)
+                for (uint32_t k = 0; k < 5; ++k)
+                    bus_write_u8(r + 0x72u + k, test[k] >= 0 ? (uint8_t)test[k]
+                                                             : kCreatureHeroSpells[i][k]);
+        }
+        if (cat == 0)   // test aid: LB_CREATURE_HERO_BYTES=0x70:30,0x77:1 writes these bytes
+            if (const char* v = std::getenv("LB_CREATURE_HERO_BYTES"))
+                for (const char* q = v; q && *q;) {
+                    unsigned off = 0, val = 0;
+                    if (std::sscanf(q, "%x:%u", &off, &val) == 2 && off < 0x7Cu)
+                        bus_write_u8(r + off, (uint8_t)val);
+                    q = std::strchr(q, ',');
+                    if (q) ++q;
+                }
+        if (slot != (i == 2 ? 6 : 2))
+            std::fprintf(stderr, "[lb_patch] creature %d is in slot %d (category %d)\n",
+                         kCreatureRecs[i], slot, cat);
+    }
 }
 
 extern "C" int lb_creatures_live(void) {
@@ -6542,6 +7369,48 @@ extern "C" int lb_creatures_live(void) {
     const int host = lb_rules_host_flags();
     if (host >= 0) return (host & LB_RULE_CREATURES) ? 1 : 0;
     return lb_setting_creatures();
+}
+
+// docs/436: the creatures' slots, packed 4 bits each (Wolf, Robot, Shark; 0 the
+// default): a replay's, else the host's while joined, else this machine's.
+extern "C" int lb_creature_slots_live(void) {
+    const int played = lb_demo_play_creature_slots();
+    if (played >= 0) return played;
+    const int host = lb_rules_host_creature_slots();
+    if (host >= 0) return host;
+    return lb_setting_creature_slots();
+}
+
+// The Team Builder slot (0 Hero, 2 Close Combat, 3 Ranged, 4 Mounted, 5/6/7 the
+// Specials) a creature falls under; -1 for any other unit.
+// docs/437: the slots a creature can be loaded in. The match load asks for a
+// unit's sprite sheets by its category: Close Combat and Ranged take
+// "<name>_0".."_2", which the Wolf, Robot and Monkey have (x_dog, x_rob, x_mon);
+// Mounted takes "_a0".."_w4" and the heroes "_a"/"_w", which they do not, and
+// Special is a 3D model, which they do not have either. The load never
+// finishes (a black screen). The Shark is the other way round: a model, so only
+// the Specials.
+extern "C" int lb_creature_slot_allowed(int creature_index, int slot) {   // 0 Wolf, 1 Robot, 2 Shark, 3 Monkey
+    if (creature_index == 2) return slot >= 5 && slot <= 7;
+    return slot == 2 || slot == 3;
+}
+extern "C" int lb_creature_slot(int unit) {
+    const int i = unit == 169 ? 0 : unit == 138 ? 1 : unit == 155 ? 2 : unit == 153 ? 3 : -1;
+    if (i < 0) return -1;
+    const int code = (lb_creature_slots_live() >> (4 * i)) & 15;
+    // docs/436: code 1 is Hero, which is not offered (a creature at category 0
+    // never finishes loading a match); LB_CREATURE_HERO=1 lets it through to
+    // study that. Code 2 (Builder) is never offered.
+    static const bool hero_ok = std::getenv("LB_CREATURE_HERO") != nullptr;
+    if (code == 0 || code == 2 || code > 8 || (code == 1 && !hero_ok)) return i == 2 ? 6 : 2;   // docs/410's
+    if (!lb_creature_slot_allowed(i, code - 1)) return i == 2 ? 6 : 2;   // docs/437: one that cannot load
+    return code - 1;
+}
+
+// What the creature layer is built from: 0 off, else the option and every
+// creature's slot, so a change of either re-applies it.
+static int creatures_sig(void) {
+    return lb_creatures_live() ? 1 + (lb_creature_slots_live() << 1) : 0;
 }
 
 // docs/386: the five builders' copied fields as the game loaded them, taken at
@@ -13597,6 +14466,7 @@ extern "C" void lb_patches_on_vblank(void) {
     apply_aihero_kill();              // docs/406 test aid
     bp_census();                      // docs/410 test aid
     sprite_dump();                    // mount picture bug test aid
+    creature_tint_prepare();          // docs/437
     apply_insn_hook_policy();
     // Fill the tilemap columns the guest leaves empty, so the widened field
     // shows terrain rather than black. Off unless LB_WIDEMAP is set.
@@ -13771,7 +14641,7 @@ extern "C" void lb_patches_on_vblank(void) {
         builders = lb_balance_host_builders();
         if (builders < 0 || builders > 6) builders = 0;
     }
-    const int creatures = lb_creatures_live() ? 1 : 0;   // docs/410
+    const int creatures = creatures_sig();   // docs/410, docs/436
     if (slot == lb_balance_applied_slot() && builders == g_builders_patched &&
         creatures == g_creatures_patched) {
         // docs/404: only the player's own values changed. They may change in
@@ -13845,7 +14715,7 @@ extern "C" void lb_patches_on_vblank(void) {
     }
     if (creatures) {   // docs/410
         apply_creatures();
-        g_creatures_patched = 1;
+        g_creatures_patched = creatures;
         std::fprintf(stderr, "[lb_patch] neutral creatures priced: Wolf 200, "
                      "Robot 80, Shark 400\n");
     }
@@ -13862,7 +14732,7 @@ extern "C" const char* lb_balance_host_set_why(void) {
     if (b < 0 || b > 6) b = 0;
     if (lb_balance_applied_slot() != lb_balance_host_slot()) return "the pack is not in";
     if (g_builders_patched != b) return "Same Builders is not in";
-    if (g_creatures_patched != (lb_creatures_live() ? 1 : 0)) return "the creatures rule is not in";
+    if (g_creatures_patched != creatures_sig()) return "the creatures rule is not in";
     if (!lb_host_rules_current()) return lb_host_rules_why();
     if (lb_balance_custom_dirty()) {
         const char* why = host_layer_blocked();
@@ -13904,7 +14774,7 @@ extern "C" int lb_balance_host_set_current(void) {
     if (b < 0 || b > 6) b = 0;
     return lb_balance_applied_slot() == lb_balance_host_slot() &&
            g_builders_patched == b && !lb_balance_custom_dirty() &&
-           g_creatures_patched == (lb_creatures_live() ? 1 : 0);
+           g_creatures_patched == creatures_sig();
 }
 
 
