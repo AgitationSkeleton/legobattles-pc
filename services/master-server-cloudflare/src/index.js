@@ -49,6 +49,12 @@
 //                    opted out (no_scores on /announce or /join) or whose name
 //                    the game's swear filter would change is left out.
 //   GET /scores, GET /scores/rulesets   the tables (src/scores.js)
+//
+// And taking rows out (docs/443): the game's player id (player_key on /announce
+// and /join; only its sha256 is kept) lets a player remove their own rows, and
+// the operator removes a name:
+//   POST /scores/forget  {player_key}   10 a hour per address
+//   POST /admin/scores/remove {name}, GET /admin/scores/names?q=   (ADMIN_KEY)
 
 import { DurableObject } from 'cloudflare:workers';
 import { discord, discordImage, plain, lasted, settingsText } from './discord.js';
@@ -93,6 +99,17 @@ function lanPort(v) {
   const n = toInt(v, 0);
   return n >= 1 && n <= 65535 ? n : 0;
 }
+
+// docs/443: a player's id. The game sends a random 128-bit key (32 hex); the
+// server keeps only its sha256, and never in a public view or a Discord line.
+const KEY_OK = /^[0-9a-fA-F]{32}$/;
+async function ownerOf(key) {
+  const s = String(key == null ? '' : key);
+  if (!KEY_OK.test(s)) return '';
+  const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s.toLowerCase()));
+  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+const FORGET_PER_HOUR = 10;
 
 // ---------------------------------------------------------------- Worker ----
 
@@ -158,6 +175,7 @@ export class Directory extends DurableObject {
     this.lobbies = new Map();   // code -> lobby
     this.bans = new Map();      // address -> {reason, created}
     this.rate = new Map();      // address -> {window, count}
+    this.forgets = new Map();   // address -> {window, count}  (docs/443; memory only)
     this.punches = new Map();   // code -> [{address, port, at}]  (docs/400; memory only)
     ctx.blockConcurrencyWhile(async () => {
       const saved = await ctx.storage.get('lobbies');
@@ -320,6 +338,7 @@ export class Directory extends DurableObject {
       case '/poll': return this.poll(body, now);
       case '/match_image': return this.matchImage(body, now);
       case '/score': return this.score(body, now);
+      case '/scores/forget': return this.forget(body, peer, now);
       default: return json(404, { ok: false, error: 'no such endpoint' });
     }
   }
@@ -340,6 +359,8 @@ export class Directory extends DurableObject {
     // (SCORE_MIN_SECONDS: a test's `wrangler dev --var`, never set live.)
     if (seconds < toInt(this.env.SCORE_MIN_SECONDS, MIN_SCORE_SECONDS)) return json(422, { ok: false, error: 'the match was too short' });
     const roster = new Map(this.roster(l).map((p) => [p.name.toLowerCase(), p.name]));
+    const owners = new Map([[l.host_name.toLowerCase(), l.host_owner || '']]);   // docs/443
+    for (const m of l.members) if (!owners.has(m.name.toLowerCase())) owners.set(m.name.toLowerCase(), m.owner || '');
     const out = new Set((l.no_scores || []).map((n) => n.toLowerCase()));
     const seen = new Set();
     const players = [];
@@ -358,7 +379,8 @@ export class Directory extends DurableObject {
       const name = roster.get(key);
       if (out.has(key) || hasSwear(name, this.env.SWEAR_TEST_WORDS)) { ++skipped; continue; }
       const hero = toInt(p.hero, -1);
-      players.push({ ...p, name, won: !!p.won, hero: hero >= 0 && hero < 4096 ? hero : -1 });
+      players.push({ ...p, name, won: !!p.won, hero: hero >= 0 && hero < 4096 ? hero : -1,
+                     owner: owners.get(key) || '' });   // (a client cannot name its own owner)
     }
     if (seen.size < 2) return json(422, { ok: false, error: 'a match needs two players from the lobby' });
     l.score_posted = true;
@@ -368,6 +390,8 @@ export class Directory extends DurableObject {
       .map((b) => toInt(b, -1)).filter((b) => b >= 0 && b < 4096);
     const report = {
       ruleset: rulesetName(body.ruleset),
+      // docs/443: the preset family the game sends; without one Scores derives it.
+      preset: body.preset ? rulesetName(body.preset) : '',
       banned: [...new Set(banned)].sort((a, b) => a - b),
       map: l.map_name || cleanName(body.map_name, ''),
       seconds, version: l.version, players,
@@ -376,6 +400,23 @@ export class Directory extends DurableObject {
       .fetch('https://scores/internal/score', { method: 'POST', body: JSON.stringify(report) });
     if (r.status !== 200) return r;
     return json(200, { ok: true, counted: players.length, skipped });
+  }
+
+  // docs/443: a player removes their own rows. Ten tries an hour per address,
+  // kept in memory; a missing or short key is a 400.
+  async forget(body, peer, now) {
+    const owner = await ownerOf(body.player_key);
+    if (!owner) return json(400, { ok: false, error: 'player_key must be 32 hex characters' });
+    const r = this.forgets.get(peer);
+    if (!r || now - r.window > 3600000) this.forgets.set(peer, { window: now, count: 1 });
+    else if (++r.count > FORGET_PER_HOUR) return json(429, { ok: false, error: 'too many tries; try later' });
+    if (!this.env.SCORES) return json(503, { ok: false, error: 'scores not configured' });
+    return this.scoresCall('/internal/forget', { owner });
+  }
+
+  scoresCall(path, body) {
+    return this.env.SCORES.get(this.env.SCORES.idFromName('scores'))
+      .fetch('https://scores' + path, body === undefined ? {} : { method: 'POST', body: JSON.stringify(body) });
   }
 
   // docs/428: the host's picture of its match (rosters, the map's Free Play
@@ -432,6 +473,7 @@ export class Directory extends DurableObject {
       created: now, seen: now, state: 'open', started: 0, members: [],
       // SG-0018: the players who keep out of the score tables.
       no_scores: body.no_scores ? [cleanName(body.host_name, 'Player')] : [],
+      host_owner: await ownerOf(body.player_key),   // docs/443; never in a view
     };
     this.lobbies.set(code, l);
     await this.save();
@@ -502,9 +544,12 @@ export class Directory extends DurableObject {
     // SG-0018: a joiner who keeps out of the score tables says so here.
     l.no_scores = (l.no_scores || []).filter((n) => n !== name);
     if (body.no_scores) l.no_scores.push(name);
-    if (!l.members.some((m) => m.name === name)) {
+    const owner = await ownerOf(body.player_key);
+    const had = l.members.find((m) => m.name === name);
+    if (had && owner && had.owner !== owner) { had.owner = owner; await this.save(); }
+    if (!had) {
       if (l.members.length >= l.max_players - 1) return json(409, { ok: false, error: 'lobby full' });
-      l.members.push({ name, joined: now });
+      l.members.push({ name, joined: now, owner });
       await this.save();
       this.log(`➕ **${plain(name)}** joined **${plain(l.host_name)}**'s lobby \`${l.code}\`` +
                ` (${this.players(l)}/${l.max_players}).`);
@@ -556,13 +601,25 @@ export class Directory extends DurableObject {
   // The Python GUI's right-click menu, by hand: ADMIN_KEY is a secret.
   async admin(request, path) {
     const key = this.env.ADMIN_KEY;
+    // (Read the body before answering: a refusal that leaves it unread can drop the connection in `wrangler dev`.)
+    const text = request.method === 'POST' ? await request.text().catch(() => '') : '';
     if (!key || request.headers.get('Authorization') !== 'Bearer ' + key)
       return json(403, { ok: false, error: 'forbidden' });
     if (request.method === 'GET' && path === '/admin/lobbies')
       return json(200, { ok: true, lobbies: [...this.lobbies.values()].map((l) => ({ ...this.publicView(l), token: undefined })),
                          bans: [...this.bans.entries()] });
+    // docs/443: look a name up, and remove one from the score tables.
+    if (request.method === 'GET' && path === '/admin/scores/names') {
+      if (!this.env.SCORES) return json(503, { ok: false, error: 'scores not configured' });
+      return this.env.SCORES.get(this.env.SCORES.idFromName('scores'))
+        .fetch('https://scores/internal/names?q=' + encodeURIComponent(new URL(request.url).searchParams.get('q') || ''));
+    }
     let body = {};
-    try { body = await request.json(); } catch { /* empty */ }
+    try { body = JSON.parse(text); } catch { /* empty */ }
+    if (request.method === 'POST' && path === '/admin/scores/remove') {
+      if (!this.env.SCORES) return json(503, { ok: false, error: 'scores not configured' });
+      return this.scoresCall('/internal/remove-name', { name: String(body.name || '') });
+    }
     if (path === '/admin/close') {
       const ok = this.lobbies.delete(String(body.code || '').toUpperCase());
       await this.save();

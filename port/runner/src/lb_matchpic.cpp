@@ -952,7 +952,8 @@ extern "C" int lb_matchpic_score_json(char* out, int cap) {
     std::string ruleset = "Vanilla";
     const int slot = lb_balance_applied_slot();
     if (slot > 0) ruleset = lb_balance_name(slot);
-    if (lb_balance_custom_size() > 0) ruleset = "Custom Rules";
+    std::string preset = lb_balance_family(slot > 0 ? slot : 0);   // docs/443
+    if (lb_balance_custom_size() > 0) ruleset = preset = "Custom Rules";
     auto esc = [](const std::string& s) {
         std::string o = "\"";
         for (char c : s) {
@@ -961,7 +962,8 @@ extern "C" int lb_matchpic_score_json(char* out, int cap) {
         }
         return o + "\"";
     };
-    std::string j = "\"ruleset\":" + esc(ruleset) + ",\"cheats\":0,\"banned\":[";
+    std::string j = "\"ruleset\":" + esc(ruleset) + ",\"preset\":" + esc(preset) +
+                    ",\"cheats\":0,\"banned\":[";
     const std::vector<int> banned = banned_list();
     for (size_t i = 0; i < banned.size(); ++i) j += (i ? "," : "") + std::to_string(banned[i]);
     j += "],\"players\":[";

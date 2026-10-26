@@ -91,6 +91,7 @@ cp -p "$W/port/runner/src/lb_maptx.cpp" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_update.cpp" "$TREE/runner/src/"
 # The first-run setup: the player's own ROM, Europe or USA (docs/394).
 cp -p "$W/port/runner/src/lb_setup.cpp" "$TREE/runner/src/"
+cp -p "$W/port/runner/src/lb_app.rc" "$W/port/runner/src/lb_app.ico" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_music.cpp" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_demo.cpp" "$TREE/runner/src/"
 # Team Builder and Ban Units (docs/384): the ROM reader, the head sheet, the

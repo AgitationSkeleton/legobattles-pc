@@ -3644,12 +3644,19 @@ constexpr int kQuickItem = 10;
 // none, FUN_020DA6BC). The choice is made here and recorded as made, so a
 // recording replays the same whatever the setting.
 constexpr int kQuickBlueItem = 20;
+constexpr int kQuickSettle = 3;   // BR-0026, QuickItem::settle
 
 struct QuickItem {
     int n = 0;                 // 1..9 while one is wanted
     int group = -1;
     uint32_t screen = 0;
     int updates = 0;           // left to wait for it
+    // BR-0026: updates to let pass before clicking, after a brick's callback
+    // opened the list. The list's items are refreshed (an unavailable one --
+    // the hero while yours lives -- gets bit 0 of its record, which its
+    // callback reads as "refuse") by the view update that runs WITH the list
+    // open; the item was clicked before that update ever ran.
+    int settle = 0;
 };
 QuickItem g_qitem;
 
@@ -3877,9 +3884,11 @@ bool quick_item_step(uint32_t screen) {
     }
     const int id = w ? (int)bus_read_u16(bus_read_u32(w + 4u) + 2u) : 0;
     if (quick_log())
-        std::fprintf(stderr, "[lb_quick] item %d of list %d: %s%s (widget %d)\n",
+        std::fprintf(stderr, "[lb_quick] item %d of list %d: %s%s (widget %d, "
+                     "record flags %02X)\n",
                      q.n, q.group, why ? "declined, " : "clicked",
-                     why ? why : "", id);
+                     why ? why : "", id,
+                     w ? (unsigned)bus_read_u8(bus_read_u32(w + 4u)) : 0u);
     const int action = kQuickItem + q.n;
     q.n = 0;
     if (why) return false;
@@ -3919,7 +3928,10 @@ void view_update_override(void) {
                              "returned; the view update runs\n", g_qc.id);
             // docs/385: the list a number key opened -- its item now, with
             // the same saved registers, if the list already shows it.
-            if (g_qitem.n && quick_item_step(g_qc.screen)) return;
+            // BR-0026: not in this update -- the list has not been refreshed
+            // yet (see QuickItem::settle). The view update runs now, and the
+            // item is clicked a few updates later.
+            if (g_qitem.n) g_qitem.settle = kQuickSettle;
             // The update, as it was called.
             g_cpu.R[0] = g_qc.r[0];
             g_cpu.R[1] = g_qc.r[1];
@@ -4008,6 +4020,7 @@ void view_update_override(void) {
                 g_qitem.group = 0;
                 g_qitem.screen = vs;
                 g_qitem.updates = 6;
+                g_qitem.settle = 0;
                 quick_save();
                 if (quick_item_step(vs)) return;
             }
@@ -4029,6 +4042,7 @@ void view_update_override(void) {
                 g_qitem.group = g;
                 g_qitem.screen = screen;
                 g_qitem.updates = 6;
+                g_qitem.settle = 0;
                 quick_save();
                 if (quick_list_open(screen, g)) {
                     if (quick_item_step(screen)) return;
@@ -4062,8 +4076,12 @@ void view_update_override(void) {
             }
         } else if (g_qitem.n) {
             // docs/385: still waiting for the item's list to show it.
-            quick_save();
-            if (quick_item_step(g_cpu.R[0])) return;
+            if (g_qitem.settle > 0) {
+                --g_qitem.settle;
+            } else {
+                quick_save();
+                if (quick_item_step(g_cpu.R[0])) return;
+            }
         } else {
             uint32_t unit = 0, owner = 0;
             if (test_adopt_due(&unit, &owner)) {
@@ -5942,7 +5960,7 @@ static void cast_log(const char* kind) {
     static int said = 0;
     const uint32_t order = g_cpu.R[3];
     {
-        if (clog && order && said < 400) {
+        if (clog && order && said < 4000) {
             ++said;
             const uint32_t ch = g_cpu.R[2];
             uint32_t idx, gen;
@@ -5950,13 +5968,41 @@ static void cast_log(const char* kind) {
             else { idx = ch & 0xFFu; gen = (ch >> 8) & 0xFFu; }
             const uint32_t pool = bus_read_u32(kEntityPoolPtr);
             int owner = -1;
+            uint32_t caster = 0;
             if (pool >= 0x02000000u && pool < 0x02400000u &&
                 idx < bus_read_u32(pool + 0xCu)) {
                 const uint32_t e = bus_read_u32(bus_read_u32(pool + 8u) + 4u * idx);
-                if (e && bus_read_u8(e + 0xDDu) == gen) owner = (int)bus_read_u8(e + 0xE4u);
+                if (e && bus_read_u8(e + 0xDDu) == gen) {
+                    owner = (int)bus_read_u8(e + 0xE4u);
+                    caster = e;
+                }
             }
-            std::fprintf(stderr, "[lb_cast] %s cast: spell %u by owner %d (caster %08X)\n",
-                         kind, (unsigned)bus_read_u8(order), owner, ch);
+            // Test aid (docs/442): what stood around the caster. Enemy
+            // Siege/Special units (category 6) by distance in map pixels
+            // (entity +0xEC/+0xF0 are 20.12 fixed point).
+            int n6 = 0, n6near = 0, nbest = 1 << 30;
+            if (caster) {
+                const uint32_t arr = bus_read_u32(pool + 8u);
+                const uint32_t cnt = bus_read_u32(pool + 0xCu);
+                const int cx = (int)((int32_t)bus_read_u32(caster + 0xECu) >> 12);
+                const int cy = (int)((int32_t)bus_read_u32(caster + 0xF0u) >> 12);
+                for (uint32_t i = 0; i < cnt && i < 4096u; ++i) {
+                    const uint32_t o = bus_read_u32(arr + 4u * i);
+                    if (!o || o == caster || !check_in_ram(o)) continue;
+                    if (bus_read_u8(o + 0xE4u) == (uint32_t)owner) continue;
+                    if (entity_category(o) != 6u) continue;
+                    const double dx = (double)(cx - (int)((int32_t)bus_read_u32(o + 0xECu) >> 12));
+                    const double dy = (double)(cy - (int)((int32_t)bus_read_u32(o + 0xF0u) >> 12));
+                    const int d = (int)__builtin_sqrt(dx * dx + dy * dy);
+                    ++n6;
+                    if (d < nbest) nbest = d;
+                    if (d <= 320) ++n6near;
+                }
+            }
+            std::fprintf(stderr, "[lb_cast] %s cast: spell %u by owner %d (caster %08X) "
+                         "enemy-cat6 total %d within320px %d nearest %d\n",
+                         kind, (unsigned)bus_read_u8(order), owner, ch, n6, n6near,
+                         n6 ? nbest : -1);
             std::fflush(stderr);
         }
     }
@@ -13449,18 +13495,136 @@ static void apply_two_player_maps(void) {
     done = 1;
 }
 
+// SG-0017 step 3 (docs/442): CATEGORY 1 ONLY CASTS WHEN IT HAS A TARGET. The
+// chooser (FUN_0209754C) scores a spell before it looks for a target, and its
+// target code for category 1 (FUN_02097AF4 case 1: enemy category-6 units
+// within the spell's range) falls back, for a ground spell, to casting at the
+// caster's own feet -- so EMP (ground, row 27) went off whenever it won the
+// score, target or not ("the AI spams EMP"). The chooser also ignores what
+// FUN_02097AF4 returns. Two edits, both reached only by category 1:
+//   * 0x02097DC4 (case 1, the no-target arm): `bne` -> `b` to the function's
+//     exit, so a ground spell with nobody to hit returns 0 and writes nothing;
+//   * 0x02097968..0x020979B4 (the chooser's two cast arms, 38 halfwords) are
+//     merged into one -- ground flag 1 or 0, same arguments, same call -- and
+//     after the call, if the spell's category is 1 and FUN_02097AF4 returned 0,
+//     the chooser's result (the spell's flags, [sp,#0x18]) is cleared, so the
+//     wrapper (FUN_02098670) does not cast. Category 0 and 2.. keep every
+//     result as before. Offline only, with the option; stock bytes otherwise.
+constexpr uint32_t kSpellArms = 0x02097968u;   // thumb, 38 halfwords
+constexpr uint16_t kSpellArmsStock[38] = {
+    0x4208, 0xD00F, 0x9829, 0x9100, 0x9001, 0x9828, 0x9904, 0x9002, 0x799C, 0x9A05,
+    0x7C1B, 0x18A2, 0x0612, 0x1C38, 0x0E12, 0xF000, 0xF8B5, 0xE013, 0x9806, 0x2140,
+    0x4208, 0xD10F, 0x2000, 0x9000, 0x9829, 0x9904, 0x9001, 0x9828, 0x9002, 0x799C,
+    0x9A05, 0x7C1B, 0x18A2, 0x0612, 0x1C38, 0x0E12, 0xF000, 0xF8A0};
+constexpr uint16_t kSpellArmsGated[38] = {
+    0x4208, 0xD103, 0x2140, 0x4208, 0xD120, 0x2100, 0x9100, 0x9829, 0x9001, 0x9828,
+    0x9002, 0x9904, 0x799A, 0x9805, 0x1812, 0x0612, 0x0E12, 0x7C1B, 0x1C1C, 0x1C38,
+    0xF000, 0xF8B0, 0x2C01, 0xD10D, 0x2800, 0xD10B, 0x2000, 0x9006, 0x46C0, 0x46C0,
+    0x46C0, 0x46C0, 0x46C0, 0x46C0, 0x46C0, 0x46C0, 0x46C0, 0x46C0};
+constexpr uint32_t kSpellNoTarget = 0x02097DC4u;   // bne -> b
+constexpr uint16_t kSpellNoTargetStock = 0xD100, kSpellNoTargetGated = 0xE2A8;
+
+static bool spell_arms_is(const uint16_t (&w)[38]) {
+    for (uint32_t i = 0; i < 38u; ++i)
+        if (bus_read_u16(kSpellArms + 2u * i) != w[i]) return false;
+    return true;
+}
+
+// SG-0017 step 4 (docs/442): CATEGORY 1 SCORES ONLY WHEN IT HAS SOMETHING TO
+// HIT. The scorer sees no caster and no target, so its weight is one word of
+// code (halfword 19, `movs r0,#0x28`, or `movs r0,#0` to score nothing) that
+// the host sets from the board a few times a second: 0x28 -- what the game
+// gives its own attack spells -- when any hero stands within kCat1Reach map
+// pixels of an enemy Siege/Special unit (category 6, the only thing category 1
+// targets: FUN_02097AF4 case 1), else 0. A fixed 0x28 outranked the 0x14 of
+// the speed and attack boosts every time, so they were never cast again. The
+// reach is wider than the game's own query (10 tiles) on purpose: a miss only
+// costs the pick, because the cast arm above refuses a cast with no target.
+// Map pixels are entity +0xEC/+0xF0 >> 12.
+constexpr uint32_t kCat1Reach = 400u;
+static bool ai_cat1_has_target(void) {
+    const uint32_t pool = bus_read_u32(kEntityPoolPtr);
+    if (pool < 0x02000000u || pool >= 0x02400000u) return false;
+    const uint32_t arr = bus_read_u32(pool + 8u);
+    const uint32_t cnt = bus_read_u32(pool + 0xCu);
+    if (!check_in_ram(arr) || cnt == 0u || cnt > 4096u) return false;
+    uint32_t heroes[64], specials[256];
+    unsigned nh = 0, ns = 0;
+    for (uint32_t i = 0; i < cnt; ++i) {
+        const uint32_t e = bus_read_u32(arr + 4u * i);
+        if (!e || !check_in_ram(e)) continue;
+        const uint8_t cat = entity_category(e);
+        if (cat == 0u && nh < 64u) heroes[nh++] = e;
+        else if (cat == 6u && ns < 256u) specials[ns++] = e;
+    }
+    for (unsigned h = 0; h < nh; ++h) {
+        const int hx = (int)((int32_t)bus_read_u32(heroes[h] + 0xECu) >> 12);
+        const int hy = (int)((int32_t)bus_read_u32(heroes[h] + 0xF0u) >> 12);
+        const uint32_t ho = bus_read_u8(heroes[h] + 0xE4u);
+        for (unsigned s = 0; s < ns; ++s) {
+            if (bus_read_u8(specials[s] + 0xE4u) == ho) continue;
+            const int dx = hx - (int)((int32_t)bus_read_u32(specials[s] + 0xECu) >> 12);
+            const int dy = hy - (int)((int32_t)bus_read_u32(specials[s] + 0xF0u) >> 12);
+            if ((uint32_t)(dx * dx + dy * dy) <= kCat1Reach * kCat1Reach) return true;
+        }
+    }
+    return false;
+}
+
+static void ai_cat1_weight_tick(void) {
+    static unsigned frame = 0;
+    if ((++frame & 7u) != 0u) return;
+    const uint32_t w = kSpellScore + 2u * 19u;
+    for (uint32_t i = 0; i < 22u; ++i) {
+        if (i == 19u) continue;
+        if (bus_read_u16(kSpellScore + 2u * i) != kSpellScoreCat1[i]) return;
+    }
+    const uint32_t cur = bus_read_u16(w);
+    if (cur != 0x2028u && cur != 0x2000u) return;
+    const uint16_t want = ai_cat1_has_target() ? 0x2028u : 0x2000u;
+    if (cur != want) {
+        bus_write_u16(w, want);
+        if (std::getenv("LB_CAST_LOG")) {   // test aid (docs/442)
+            std::fprintf(stderr, "[lb_aispell] category-1 weight %s (a hero within "
+                         "%u px of an enemy Siege/Special unit)\n",
+                         want == 0x2028u ? "0x28" : "0", kCat1Reach);
+            std::fflush(stderr);
+        }
+    }
+}
+
 static void apply_ai_tap_spells(void) {
     static int applied = 0;
     static unsigned gen = 0;
     if (gen != g_boot_gen) { gen = g_boot_gen; applied = 0; }
     const int want = (lb_net_guest_state() <= 0 && lb_setting_ai_tap_spells()) ? 1 : 0;
+    if (want && applied) {
+        static const bool by_board = !(std::getenv("LB_SPELL_BOARD_WEIGHT") &&
+                                       std::atoi(std::getenv("LB_SPELL_BOARD_WEIGHT")) == 0);
+        if (by_board) ai_cat1_weight_tick();
+        return;
+    }
     if (want == applied) return;
+    // The board weight may have left the scorer scoring nothing: put it back
+    // to the patched form first, so the check below (and the restore) see it.
+    if (bus_read_u16(kSpellScore + 2u * 19u) == 0x2000u && applied &&
+        spell_score_is(kSpellScoreCat1) == false)
+        bus_write_u16(kSpellScore + 2u * 19u, 0x2028u);
     const uint32_t got = bus_read_u16(0x02097A60u);
     if (got != 0x2900u && got != 0x0691u) return;   // not loaded, or not this build
     if (!spell_score_is(kSpellScoreStock) && !spell_score_is(kSpellScoreCat1)) return;
+    if (!spell_arms_is(kSpellArmsStock) && !spell_arms_is(kSpellArmsGated)) return;
+    const uint32_t nt = bus_read_u16(kSpellNoTarget);
+    if (nt != kSpellNoTargetStock && nt != kSpellNoTargetGated) return;
+    // Test aid: LB_SPELL_TARGET_GATE=0 leaves the old (ungated) category-1 cast.
+    static const bool gate = !(std::getenv("LB_SPELL_TARGET_GATE") &&
+                               std::atoi(std::getenv("LB_SPELL_TARGET_GATE")) == 0);
     bus_write_u16(0x02097A60u, want ? 0x0691u : 0x2900u);
     const uint16_t (&w)[22] = want ? kSpellScoreCat1 : kSpellScoreStock;
     for (uint32_t i = 0; i < 22u; ++i) bus_write_u16(kSpellScore + 2u * i, w[i]);
+    const uint16_t (&arms)[38] = (want && gate) ? kSpellArmsGated : kSpellArmsStock;
+    for (uint32_t i = 0; i < 38u; ++i) bus_write_u16(kSpellArms + 2u * i, arms[i]);
+    bus_write_u16(kSpellNoTarget, (want && gate) ? kSpellNoTargetGated : kSpellNoTargetStock);
     applied = want;
     std::fprintf(stderr, "[lb_aispell] the AI uses targeted spells: %s\n",
                  want ? "ON" : "off");

@@ -590,6 +590,16 @@ void lb_update_cleanup(void);
 int lb_settings_file_bool(const char* key, int dflt);
 /* SG-0018: Network > Scores. 1 when this player keeps out of the tables. */
 int lb_setting_scores_opt_out(void);
+/* docs/443: this player's id (32 hex), made on first use; sent only to master servers. */
+const char* lb_setting_player_key(void);
+/* docs/443: a POST to a master server (Remove me from the scores table): the reply's
+   length, or -1 with the error in `out`. Blocking: a worker thread. */
+int lb_net_http_post(const char* host, int port, const char* path, const char* body,
+                     char* out, int cap);
+/* docs/443: the second server of "Both" (or LB_EXTRA_SERVER), if any. */
+int lb_net_extra_server(char* host, int cap, int* port);
+/* docs/443: the preset family of a balance slot ("Rebalance" for Rebalance 1.18.1). */
+const char* lb_balance_family(int slot);
 void lb_matchpic_tick(void);           /* LB_MATCHPIC_TEST */
 int  lb_setting_match_picture(void);
 const char* lb_level_map_stem(void);   /* "mpNN" / "z/NN" / campaign stem */

@@ -47,6 +47,18 @@ namespace {
 
 namespace fs = std::filesystem;
 
+// THE APP ICON. lb_app.rc puts lbapp.png into the executable as icon resource 1
+// (what Explorer and shortcuts show). SDL takes a window's icon, for the title
+// bar and the taskbar, from these hints, which it reads when it registers its
+// window class at video init; set here, before main, they reach the setup
+// window and the game's window alike.
+struct AppIconHints {
+    AppIconHints() {
+        SDL_SetHint(SDL_HINT_WINDOWS_INTRESOURCE_ICON, "1");
+        SDL_SetHint(SDL_HINT_WINDOWS_INTRESOURCE_ICON_SMALL, "1");
+    }
+} g_app_icon_hints;
+
 constexpr const char* kEuSha1 = "da60469bd143eb8f47ecf0d7951181b4783c91b4";
 constexpr const char* kUsSha1 = "f25d090feb840e9b4b07546b6929d897e3fb3965";
 constexpr const char* kEuName = "LEGO Battles (Europe) (En,Fr,De,Es,It,Da).nds";

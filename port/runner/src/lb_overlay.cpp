@@ -77,6 +77,9 @@ int lb_widemap_cam_px(int* x, int* y);     /* src/lb_widemap.cpp */
 #include <chrono>   /* legobattles-decomp: lb_field_bench_tick */
 #include <ctime>    /* docs/388: the save cache's timestamps */
 #include <atomic>   /* docs/396: the Reset request */
+#include <cctype>   /* docs/443 */
+#include <random>   /* docs/443: the player id */
+#include <set>      /* docs/443: the scores page's banned units */
 #include <mutex>    /* docs/413: the notice, set from the emulation thread */
 #include <thread>   /* docs/430: the update check's own thread */
 void lb_mapbrowser_draw(SDL_Renderer* renderer);   /* docs/431: lb_mapfetch.cpp */
@@ -395,6 +398,7 @@ struct Settings {
     bool master_https = true;
     bool match_picture = true;     // docs/428
     bool scores_opt_out = false;   // SG-0018: keep out of the score tables
+    char player_id[40] = "";       // docs/443: random, 32 hex; made on first use, never shown
     // Record every session to lb-session-*.lbdemo. Off by default;
     // lb_demo reads it from the file at the first vblank, before the
     // settings load (lb_settings_file_bool).
@@ -764,6 +768,7 @@ extern "C" void lb_settings_save(void) {
                   g_set.match_picture ? "true" : "false"); o += buf;   // docs/428
     std::snprintf(buf, sizeof buf, "  \"scores_opt_out\": %s,\n",
                   g_set.scores_opt_out ? "true" : "false"); o += buf;   // SG-0018
+    json_put_str(o, "player_id", g_set.player_id, true);   // docs/443
     std::snprintf(buf, sizeof buf, "  \"record_sessions\": %s,\n",
                   g_set.record_sessions ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"discord_status\": %s,\n",
@@ -939,6 +944,7 @@ extern "C" void lb_settings_load(void) {
     json_get_bool(s, "master_https", &g_set.master_https);   // docs/419
     json_get_bool(s, "match_picture", &g_set.match_picture);   // docs/428
     json_get_bool(s, "scores_opt_out", &g_set.scores_opt_out);   // SG-0018
+    json_get_str(s, "player_id", g_set.player_id, sizeof g_set.player_id);   // docs/443
     json_get_bool(s, "record_sessions", &g_set.record_sessions);
     json_get_bool(s, "discord_status", &g_set.discord_status);   // docs/430
     json_get_bool(s, "discord_hero", &g_set.discord_hero);
@@ -6287,7 +6293,8 @@ void tab_balance_traits() {
             "No speed: writes 0x0000FFFF, as the Entities Editor's NONE does.",
             "The projectile record a ranged unit fires, or Melee. A unit that "
             "fires one has Melee damage 0. Spare projectile 1-4 are free shots that "
-            "start as a copy of the Arrow: give one its own damage, speed and Sprite "
+            "start as a copy of the Arrow (a balance pack that uses one keeps its own "
+            "values and name): give one its own damage, speed and Sprite "
             "in Balance Attacks and point a unit at it.",
             "AI priority: accumulated in the combat path (docs/25).",
             "Defogged area: how far the unit clears the fog; FF clears the map. "
@@ -6986,10 +6993,14 @@ struct ScoreRow {
     int units_built = 0, units_lost = 0, units_killed = 0;
     int buildings_built = 0, buildings_lost = 0, buildings_killed = 0, bricks = 0;
 };
+struct ScRuleset {
+    std::string name, preset;       // "Rebalance 1.18.1", "Rebalance" (docs/443)
+    int matches = 0;
+};
 struct ScoreState {
     int state = 0;                  // 0 not asked, 1 asking, 2 shown, 3 failed
     std::string error;
-    std::vector<std::string> rulesets;
+    std::vector<ScRuleset> rulesets;
     std::vector<ScoreRow> rows;
 };
 std::mutex g_sc_mu;
@@ -7064,8 +7075,12 @@ void sc_run(std::string host, int port, std::string query) {
     } else {
         r.state = 2;
         for (const std::string& o : sc_objects(list, "rulesets")) {
-            const std::string v = upd_json_str(o, "ruleset");
-            if (!v.empty()) r.rulesets.push_back(v);
+            ScRuleset rs;
+            rs.name = upd_json_str(o, "ruleset");
+            rs.preset = upd_json_str(o, "preset");
+            rs.matches = sc_num(o, "matches");
+            if (rs.preset.empty()) rs.preset = rs.name;   // a server before docs/443
+            if (!rs.name.empty()) r.rulesets.push_back(rs);
         }
         for (const std::string& o : sc_objects(table, "rows")) {
             ScoreRow row;
@@ -7107,26 +7122,309 @@ void hero_image(int bp, float size) {
         ImGui::Dummy(ImVec2(size, size));
 }
 
+// docs/443: what the page is showing. One table per balance preset (a family: all
+// of its versions, or one), matches played without or with unit bans, and with
+// bans the units that were all banned (or exactly those).
+struct ScPick {
+    std::string family;             // the tab
+    std::string version;            // "" every version, else one ruleset
+    int bans = 0;                   // 0 matches without unit bans, 1 with
+    std::set<int> units;            // with bans: all of these were banned
+    bool exact = false;             // ... and nothing else
+    std::string preset_name;        // a ban preset applied, while `units` still equals it
+    std::set<int> preset_units;
+    std::string note;               // the picker's last message
+};
+ScPick g_scp;
+
+// Remove me from the scores table (a worker thread; the result is shown).
+struct ScForget {
+    int state = 0;                  // 0 idle, 1 asking, 2 done, 3 failed
+    int removed = 0;
+    std::string error;
+};
+std::mutex g_scf_mu;
+ScForget g_scf;
+std::atomic<bool> g_scf_busy{false};
+
+void sc_forget_run(std::vector<std::pair<std::string, int>> servers, std::string key) {
+    ScForget r;
+    const std::string body = "{\"player_key\":\"" + key + "\"}";
+    bool any_ok = false;
+    for (size_t i = 0; i < servers.size(); ++i) {
+        std::vector<char> buf(8192);
+        const int n = lb_net_http_post(servers[i].first.c_str(), servers[i].second,
+                                       "/scores/forget", body.c_str(), buf.data(),
+                                       (int)buf.size());
+        const std::string reply = n >= 0 ? std::string(buf.data(), (size_t)n) : std::string();
+        const bool ok = reply.find("\"ok\":true") != std::string::npos;
+        std::fprintf(stderr, "[lb_scores] forget at %s:%d: %s\n", servers[i].first.c_str(),
+                     servers[i].second,
+                     n < 0 ? buf.data() : reply.substr(0, 100).c_str());
+        if (ok) { any_ok = true; r.removed += sc_num(reply, "results"); }
+        else if (i == 0) {   // the first server's trouble is the player's; a second one without tables is quiet
+            r.error = n < 0 ? std::string("Could not reach the master server (") + buf.data() + ")."
+                            : upd_json_str(reply, "error");
+            if (r.error.empty()) r.error = "This master server keeps no score tables.";
+        }
+    }
+    std::fflush(stderr);
+    r.state = any_ok ? 2 : 3;
+    if (any_ok) r.error.clear();
+    std::lock_guard<std::mutex> lk(g_scf_mu);
+    g_scf = r;
+    g_scf_busy = false;
+}
+
+// A word for each unit, as in "Archer, Catapult and 2 more".
+std::string sc_names(const std::set<int>& units) {
+    std::vector<std::string> n;
+    for (int bp : units) n.push_back(lb_teams_unit_name(bp));
+    if (n.size() <= 3) {
+        std::string o;
+        for (size_t i = 0; i < n.size(); ++i)
+            o += (i == 0 ? "" : i + 1 == n.size() ? " and " : ", ") + n[i];
+        return o;
+    }
+    return n[0] + ", " + n[1] + " and " + std::to_string(n.size() - 2) + " more";
+}
+
+bool sc_apply_ban_preset(int i) {
+    char units[512], maps[512], umb[768], note[160];
+    if (!lb_maps_preset_resolve(i, units, sizeof units, maps, sizeof maps, umb, sizeof umb,
+                                note, sizeof note)) {
+        g_scp.note = note;
+        return false;
+    }
+    g_scp.units.clear();
+    for (const char* p = units; *p;) {
+        const int bp = std::atoi(p);
+        if (bp >= 0 && bp < 4096 && g_scp.units.size() < 64) g_scp.units.insert(bp);
+        while (*p && *p != ',') ++p;
+        if (*p) ++p;
+    }
+    g_scp.preset_units = g_scp.units;
+    g_scp.preset_name = i > 0 ? lb_maps_preset_name(i) : "";
+    g_scp.exact = i > 0;   // under exactly that preset's rules
+    g_scp.note = i > 0 ? std::string("Applied \"") + lb_maps_preset_name(i) + "\"." : "Cleared.";
+    return true;
+}
+
+// "Choose units...": the fieldable units as icons with names and tick boxes.
+void sc_unit_popup() {
+    ImGui::SetNextWindowSize(ImVec2(620.0f * g_ui_scale, 520.0f * g_ui_scale), ImGuiCond_Appearing);
+    if (!ImGui::BeginPopup("Choose banned units")) return;
+    ImGui::TextUnformatted("Units that were banned");
+    guide("Tick the units. The table then shows matches where all of them were banned.");
+    {   // Apply preset
+        static int choice = 0;
+        const int n = lb_maps_preset_count();
+        ImGui::SetNextItemWidth(330.0f * g_ui_scale);
+        if (ImGui::BeginCombo("##scpreset", n > 0 ? lb_maps_preset_name(choice) : "")) {
+            for (int i = 0; i < n; ++i)
+                if (ImGui::Selectable(lb_maps_preset_name(i), i == choice)) choice = i;
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Apply preset")) sc_apply_ban_preset(choice);
+        ImGui::SetItemTooltip("Sets the units to a ban preset's (the ones on Balance > Ban Units >\n"
+                              "Presets), and ticks \"Exactly this ban list\".");
+    }
+    if (ImGui::Button("Use my current ban list")) {
+        g_scp.units.clear();
+        for (const char* p = g_set.banned_units; *p;) {
+            const int bp = std::atoi(p);
+            if (bp >= 0 && bp < 192 && !lb_teams_is_king_default(bp) && g_scp.units.size() < 64)
+                g_scp.units.insert(bp);
+            while (*p && *p != ',') ++p;
+            if (*p) ++p;
+        }
+        g_scp.preset_name.clear();
+        g_scp.note = "Using your ban list.";
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Clear")) { g_scp.units.clear(); g_scp.preset_name.clear(); g_scp.note.clear(); }
+    ImGui::SameLine();
+    ImGui::Checkbox("Exactly this ban list", &g_scp.exact);
+    ImGui::SetItemTooltip("Off: matches where these were banned, and maybe others too.\n"
+                          "On: matches where these units, and no others, were banned.");
+    if (!g_scp.note.empty()) { ImGui::SameLine(); ImGui::TextDisabled("%s", g_scp.note.c_str()); }
+    ImGui::Separator();
+    // (A popup sizes itself to its content, so the list has a size of its own.)
+    ImGui::BeginChild("##scunits", ImVec2(600.0f * g_ui_scale, 360.0f * g_ui_scale), true);
+    const float icon = ImGui::GetTextLineHeight() * 1.5f;
+    for (int slot = 0; slot < LB_TEAM_SLOTS; ++slot) {
+        ImGui::TextDisabled("%s", lb_teams_slot_label(slot));
+        if (!ImGui::BeginTable(("##scg" + std::to_string(slot)).c_str(), 3,
+                               ImGuiTableFlags_SizingStretchSame)) continue;
+        const int n = lb_teams_slot_count(slot);
+        for (int k = 0; k < n; ++k) {
+            const int bp = lb_teams_slot_unit(slot, k);
+            if (lb_teams_is_king_default(bp)) continue;   // cannot be banned
+            ImGui::TableNextColumn();
+            hero_image(bp, icon);
+            ImGui::SameLine();
+            bool on = g_scp.units.count(bp) != 0;
+            const bool full = !on && g_scp.units.size() >= 64;
+            ImGui::BeginDisabled(full);
+            if (ImGui::Checkbox((std::string(lb_teams_unit_name(bp)) + "##scu" + std::to_string(bp)).c_str(), &on)) {
+                if (on) g_scp.units.insert(bp); else g_scp.units.erase(bp);
+                if (g_scp.units != g_scp.preset_units) g_scp.preset_name.clear();
+            }
+            ImGui::EndDisabled();
+        }
+        ImGui::EndTable();
+    }
+    ImGui::EndChild();
+    ImGui::Text("%zu unit(s) chosen", g_scp.units.size());
+    ImGui::SameLine();
+    if (ImGui::Button("Done")) ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+}
+
 void tab_scores() {
     if (!tab_begin("Scores")) return;
     guide("The best players of online matches, kept by the master server: one table per "
-          "balance ruleset. The host reports each match when it ends. Matches with cheats "
-          "on do not count.");
+          "balance preset (Vanilla, Vanil+, FactionWars, FunLite, Rebalance and so on), "
+          "for matches played without or with unit bans. The host reports each match "
+          "when it ends. Matches with cheats on do not count.");
     ImGui::Checkbox("Keep me out of the score tables", &g_set.scores_opt_out);
     help("Your matches are not added to the tables from the next lobby you host or\n"
          "join. Matches already counted stay.");
+    ImGui::SameLine();
+    if (ImGui::Button("Remove me from the scores table")) ImGui::OpenPopup("Remove my results");
+    ImGui::SetItemTooltip("Removes the results you have on the master server (and on the second\n"
+                          "server with \"Both\"). They are found by a private ID this game made\n"
+                          "for you the first time you hosted or joined; it is never shown. Results\n"
+                          "from before this version have no ID, so only the server's operator can\n"
+                          "remove those.");
+    if (ImGui::BeginPopupModal("Remove my results", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted("Remove every result you have in the online score tables?");
+        ImGui::TextDisabled("This cannot be undone. To keep future matches out as well, tick\n"
+                            "\"Keep me out of the score tables\" too.");
+        if (ImGui::Button("Remove my results") && !g_scf_busy.exchange(true)) {
+            {
+                std::lock_guard<std::mutex> lk(g_scf_mu);
+                g_scf = ScForget();
+                g_scf.state = 1;
+            }
+            std::vector<std::pair<std::string, int>> servers;
+            servers.push_back({g_set.master_host, g_set.master_port});
+            char xh[128];
+            int xp = 0;
+            if (lb_net_extra_server(xh, sizeof xh, &xp)) servers.push_back({xh, xp});
+            std::thread(sc_forget_run, servers, std::string(lb_setting_player_key())).detach();
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    {
+        ScForget f;
+        {
+            std::lock_guard<std::mutex> lk(g_scf_mu);
+            f = g_scf;
+        }
+        if (f.state == 1) ImGui::TextDisabled("Removing...");
+        if (f.state == 2) {
+            ImGui::TextColored(ImVec4(0.6f, 0.9f, 0.6f, 1.0f), "%s",
+                               f.removed > 0 ? ("Removed " + std::to_string(f.removed) +
+                                                (f.removed == 1 ? " result." : " results.")).c_str()
+                                             : "Nothing to remove.");
+            if (!g_set.scores_opt_out) {
+                ImGui::SameLine();
+                if (ImGui::Button("Also keep me out of future score tables")) g_set.scores_opt_out = true;
+            }
+        }
+        if (f.state == 3) ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.4f, 1.0f), "%s", f.error.c_str());
+    }
     ImGui::Spacing();
 
-    static int ruleset = 0;   // 0 every ruleset, else rulesets[ruleset - 1]
-    static int bans = 0;      // 0 any, 1 with unit bans, 2 without
-    static int unit = -1;     // a unit that was banned, or -1 for any
     static std::string asked = "\x01";
     ScoreState s;
     {
         std::lock_guard<std::mutex> lk(g_sc_mu);
         s = g_sc;
     }
-    if (ruleset > (int)s.rulesets.size()) ruleset = 0;
+    // The tabs: Vanilla, Vanil+, FactionWars, FunLite, Rebalance, Custom Rules, the
+    // other presets the game knows, then any other family the server reports.
+    std::vector<std::string> fams = {"Vanilla", "Vanil+", "FactionWars", "FunLite", "Rebalance",
+                                     "Custom Rules"};
+    auto add_fam = [&](const std::string& f) {
+        if (!f.empty() && std::find(fams.begin(), fams.end(), f) == fams.end()) fams.push_back(f);
+    };
+    for (int slot = 1; slot <= lb_balance_pack_count(); ++slot) add_fam(lb_balance_family(slot));
+    {
+        std::vector<std::string> more;
+        for (const ScRuleset& r : s.rulesets)
+            if (std::find(fams.begin(), fams.end(), r.preset) == fams.end() &&
+                std::find(more.begin(), more.end(), r.preset) == more.end())
+                more.push_back(r.preset);
+        std::sort(more.begin(), more.end());
+        for (const std::string& m : more) fams.push_back(m);
+    }
+    // The one in force on this machine opens first.
+    static bool picked_first = false;
+    std::string in_force = lb_balance_custom_size() > 0 ? "Custom Rules"
+                                                       : lb_balance_family(g_set.balance_patch);
+    if (g_scp.family.empty()) g_scp.family = in_force;
+    if (ImGui::BeginTabBar("##scfam", ImGuiTabBarFlags_FittingPolicyScroll)) {
+        for (const std::string& f : fams) {
+            const bool first = !picked_first && f == g_scp.family;
+            if (ImGui::BeginTabItem(f.c_str(), nullptr, first ? ImGuiTabItemFlags_SetSelected : 0)) {
+                if (g_scp.family != f) { g_scp.family = f; g_scp.version.clear(); }
+                ImGui::EndTabItem();
+            }
+        }
+        picked_first = true;
+        ImGui::EndTabBar();
+    }
+    // The versions this family has on the server.
+    std::vector<const ScRuleset*> versions;
+    int family_matches = 0;
+    for (const ScRuleset& r : s.rulesets)
+        if (r.preset == g_scp.family) { versions.push_back(&r); family_matches += r.matches; }
+    auto version_label = [&](const std::string& n) {
+        const std::string pre = g_scp.family + " ";
+        return n.compare(0, pre.size(), pre) == 0 ? n.substr(pre.size()) : n;
+    };
+    if (versions.size() > 1 || (versions.size() == 1 && versions[0]->name != g_scp.family)) {
+        ImGui::SetNextItemWidth(200.0f * g_ui_scale);
+        if (ImGui::BeginCombo("Version", g_scp.version.empty() ? "All" : version_label(g_scp.version).c_str())) {
+            if (ImGui::Selectable("All", g_scp.version.empty())) g_scp.version.clear();
+            for (const ScRuleset* r : versions)
+                if (ImGui::Selectable((version_label(r->name) + " (" + std::to_string(r->matches) +
+                                       ")##scv" + r->name).c_str(), g_scp.version == r->name))
+                    g_scp.version = r->name;
+            ImGui::EndCombo();
+        }
+        help("Which version of this preset to count. All merges them.");
+    }
+    if (ImGui::RadioButton("Matches without unit bans", g_scp.bans == 0)) g_scp.bans = 0;
+    ImGui::SameLine();
+    if (ImGui::RadioButton("Matches with unit bans", g_scp.bans == 1)) g_scp.bans = 1;
+    if (g_scp.bans == 1) {
+        if (ImGui::Button("Choose units...")) ImGui::OpenPopup("Choose banned units");
+        ImGui::SetItemTooltip("Pick the banned units to look for, or apply a ban preset.");
+        sc_unit_popup();
+        ImGui::SameLine();
+        if (ImGui::Button("Clear##scclear")) { g_scp.units.clear(); g_scp.preset_name.clear(); g_scp.note.clear(); }
+        ImGui::SameLine();
+        ImGui::Checkbox("Exactly this ban list", &g_scp.exact);
+        ImGui::SetItemTooltip("Off: matches where the chosen units were banned, maybe with others.\n"
+                              "On: matches where those units, and no others, were banned.");
+        if (!g_scp.units.empty()) {
+            int shown = 0;
+            for (int bp : g_scp.units) {
+                if (shown++ >= 8) break;
+                hero_image(bp, ImGui::GetTextLineHeight() * 1.3f);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", lb_teams_unit_name(bp));
+                ImGui::SameLine();
+            }
+            ImGui::NewLine();
+        }
+    }
     {
         static int said = -1;
         if (said != s.state) {
@@ -7137,39 +7435,15 @@ void tab_scores() {
         }
     }
 
-    ImGui::SetNextItemWidth(220.0f);
-    if (ImGui::BeginCombo("Ruleset", ruleset ? s.rulesets[(size_t)ruleset - 1].c_str()
-                                             : "Every ruleset")) {
-        if (ImGui::Selectable("Every ruleset", ruleset == 0)) ruleset = 0;
-        for (size_t i = 0; i < s.rulesets.size(); ++i)
-            if (ImGui::Selectable(s.rulesets[i].c_str(), ruleset == (int)i + 1))
-                ruleset = (int)i + 1;
-        ImGui::EndCombo();
+    std::string query = "?limit=100&preset=" + sc_url(g_scp.family);
+    if (!g_scp.version.empty()) query += "&ruleset=" + sc_url(g_scp.version);
+    query += g_scp.bans == 1 ? "&bans=on" : "&bans=off";
+    if (g_scp.bans == 1 && !g_scp.units.empty()) {
+        query += "&banned=";
+        bool firstid = true;
+        for (int bp : g_scp.units) { query += (firstid ? "" : ",") + std::to_string(bp); firstid = false; }
+        if (g_scp.exact) query += "&exact=1";
     }
-    ImGui::SameLine();
-    static const char* const kBans[] = {"Any bans", "With unit bans", "Without unit bans"};
-    ImGui::SetNextItemWidth(170.0f);
-    ImGui::Combo("##scbans", &bans, kBans, 3);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(200.0f);
-    if (ImGui::BeginCombo("Banned unit", unit < 0 ? "Any" : lb_teams_unit_name(unit))) {
-        if (ImGui::Selectable("Any", unit < 0)) unit = -1;
-        for (int bp = 0; bp < 182; ++bp) {
-            const char* nm = lb_teams_unit_name(bp);
-            if (!nm || !*nm || !std::strcmp(nm, "?") || !std::strncmp(nm, "unit ", 5)) continue;
-            char id[96];
-            std::snprintf(id, sizeof id, "%s##scu%d", nm, bp);
-            if (ImGui::Selectable(id, unit == bp)) unit = bp;
-        }
-        ImGui::EndCombo();
-    }
-    help("Only the matches where this unit was banned.");
-
-    std::string query = "?limit=100";
-    if (ruleset) query += "&ruleset=" + sc_url(s.rulesets[(size_t)ruleset - 1]);
-    if (bans == 1) query += "&bans=on";
-    if (bans == 2) query += "&bans=off";
-    if (unit >= 0) query += "&banned=" + std::to_string(unit);
     const bool refresh = ImGui::Button("Refresh");
     if ((refresh || query != asked) && !g_sc_busy.exchange(true)) {
         asked = query;
@@ -7183,18 +7457,37 @@ void tab_scores() {
     }
     ImGui::SameLine();
     ImGui::TextDisabled("%s", g_set.master_host);
-
+    {   // What the table shows, in a line.
+        std::string cap = g_scp.family;
+        if (!g_scp.version.empty()) cap += " " + version_label(g_scp.version);
+        if (g_scp.bans == 0) cap += " - matches without unit bans";
+        else if (g_scp.units.empty()) cap += " - matches with unit bans";
+        else if (!g_scp.preset_name.empty() && g_scp.units == g_scp.preset_units)
+            cap += " - matches " + std::string(g_scp.exact ? "under the " + g_scp.preset_name + " bans"
+                                                           : "that banned at least the " + g_scp.preset_name + " bans");
+        else
+            cap += " - matches where " + sc_names(g_scp.units) + " " +
+                   (g_scp.units.size() == 1 ? "was" : "were") + " banned" +
+                   (g_scp.exact ? " (and nothing else)" : "");
+        if (s.state == 2)
+            cap += " - " + std::to_string(s.rows.size()) + (s.rows.size() >= 100 ? "+" : "") +
+                   (s.rows.size() == 1 ? " player" : " players");
+        ImGui::TextWrapped("%s", cap.c_str());
+    }
     if (s.state == 1 || s.state == 0) ImGui::TextDisabled("Asking the master server...");
     if (s.state == 3) ImGui::TextWrapped("%s", s.error.c_str());
-    if (s.state == 2 && s.rows.empty()) ImGui::TextDisabled("No matches recorded here yet.");
+    if (s.state == 2 && s.rows.empty())
+        ImGui::TextDisabled("%s", family_matches == 0
+                                      ? ("No matches yet for " + g_scp.family + ".").c_str()
+                                      : "No matches recorded here yet.");
     if (s.state == 2 && !s.rows.empty() &&
-        ImGui::BeginTable("scores", 10, ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
+        ImGui::BeginTable("scores", 11,ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
                                             ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingFixedFit,
                           ImVec2(0.0f, ImGui::GetContentRegionAvail().y - 4.0f))) {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("#");
         ImGui::TableSetupColumn("Player", ImGuiTableColumnFlags_WidthStretch);
-        for (const char* c : {"Wins", "Losses", "Win %", "Units destroyed", "Units lost",
+        for (const char* c : {"Matches", "Wins", "Losses", "Win %", "Units destroyed", "Units lost",
                               "Buildings destroyed", "Buildings lost", "Bricks"})
             ImGui::TableSetupColumn(c);
         ImGui::TableHeadersRow();
@@ -7210,6 +7503,7 @@ void tab_scores() {
             ImGui::SameLine();
             ImGui::AlignTextToFramePadding();
             ImGui::TextUnformatted(r.name.c_str());
+            ImGui::TableNextColumn(); ImGui::Text("%d", r.matches);
             ImGui::TableNextColumn(); ImGui::Text("%d", r.wins);
             ImGui::TableNextColumn(); ImGui::Text("%d", r.losses);
             ImGui::TableNextColumn();
@@ -8350,6 +8644,22 @@ extern "C" int lb_setting_scores_opt_out(void) {
     static const char* v = std::getenv("LB_SCORES_OPT_OUT");
     if (v && *v) return std::atoi(v) ? 1 : 0;
     return g_set.scores_opt_out ? 1 : 0;
+}
+// docs/443: the player's id, a random 128 bits as 32 hex characters, made the
+// first time it is asked for and kept in the settings. It is never shown and goes
+// only to the master servers (with a lobby, and with Remove me from the scores).
+extern "C" const char* lb_setting_player_key(void) {
+    bool ok = std::strlen(g_set.player_id) == 32;
+    for (int i = 0; ok && i < 32; ++i) ok = std::isxdigit((unsigned char)g_set.player_id[i]) != 0;
+    if (!ok) {
+        std::random_device rd;
+        static const char* hex = "0123456789abcdef";
+        for (int i = 0; i < 32; ++i) g_set.player_id[i] = hex[rd() & 15u];
+        g_set.player_id[32] = '\0';
+        std::fprintf(stderr, "[lb_scores] made a player id\n");
+        std::fflush(stderr);
+    }
+    return g_set.player_id;
 }
 extern "C" int lb_setting_discord_status(void) { return g_set.discord_status ? 1 : 0; }   // docs/430
 extern "C" int lb_setting_discord_hero(void) { return g_set.discord_hero ? 1 : 0; }

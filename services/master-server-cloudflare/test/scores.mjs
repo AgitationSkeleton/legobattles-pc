@@ -118,5 +118,43 @@ check('Sheriff (177) banned: that match only', r.data.rows.length === 2, r.data.
 r = await call('/scores?banned=999');
 check('a unit never banned: no rows', r.data.rows.length === 0, r.data.rows);
 
+// docs/443: preset families, and ban lists (all-of, exact). New players, so the
+// checks above are not touched.
+async function played(host, join, ruleset, banned, preset) {
+  const lb = await lobby(host, [join]);
+  const rr = await call('/score', { ...lb, ruleset, preset, cheats: 0, banned, players: [
+    { name: host, won: true, hero: 81, ...stats() }, { name: join, won: false, hero: 81, ...stats() }] });
+  await call('/remove', { ...lb, reason: 'end' });
+  return rr;
+}
+await played('Fam1', 'Fam2', 'Rebalance 1.18.1', [12, 40, 77], 'Rebalance');
+await played('Fam1', 'Fam2', 'Rebalance 1.15.2', [12, 40], undefined);   // an old client: no preset
+await played('Fam1', 'Fam2', 'Rebalance 1.15.2', [], 'Rebalance');
+await played('Fam3', 'Fam4', 'FunLite2 (PvE)', [], undefined);
+r = await call('/scores?preset=Rebalance');
+const fam1 = r.data.rows.find((x) => x.name === 'Fam1');
+check('two Rebalance versions merge under one preset', fam1 && fam1.matches === 3 && !r.data.rows.some((x) => x.name === 'Fam3'), r.data.rows);
+r = await call('/scores?ruleset=Rebalance%201.15.2');
+check('an exact ruleset is still one version', r.data.rows.find((x) => x.name === 'Fam1').matches === 2, r.data.rows);
+r = await call('/scores?preset=FunLite');
+check('a report without a preset is filed under its derived family (FunLite2 (PvE) -> FunLite)',
+      r.data.rows.some((x) => x.name === 'Fam3'), r.data.rows);
+r = await call('/scores/rulesets');
+check('rulesets carry their preset', r.data.rulesets.some((x) => x.ruleset === 'Rebalance 1.15.2' && x.preset === 'Rebalance'), r.data);
+const fm = async (q) => ((await call('/scores?preset=Rebalance&' + q)).data.rows.find((x) => x.name === 'Fam1') || { matches: 0 }).matches;
+check('bans=off: the one match with no bans', await fm('bans=off') === 1);
+check('bans=on: the two with bans', await fm('bans=on') === 2);
+check('banned=12,40: all of them banned (both bans matches)', await fm('bans=on&banned=12,40') === 2);
+check('banned=12,40,77: only the match with all three', await fm('bans=on&banned=12,40,77') === 1);
+check('banned=40,77,12 in any order', await fm('bans=on&banned=40,77,12') === 1);
+check('banned=77 alone (the old single form)', await fm('banned=77') === 1);
+check('exact=1 with 12,40 is only the match banning exactly those', await fm('bans=on&banned=12,40&exact=1') === 1);
+check('exact=1 with 12,40,77', await fm('bans=on&banned=12,40,77&exact=1') === 1);
+check('exact=1 with 12 is none', await fm('bans=on&banned=12&exact=1') === 0);
+check('a unit never banned among them: none', await fm('bans=on&banned=12,999') === 0);
+check('junk ids are ignored, not matched', await fm('bans=on&banned=12,abc,-3,99999,40') === 2);
+const many = Array.from({ length: 80 }, (_, i) => i + 100).join(',');
+check('a list longer than 64 is capped (and so matches nothing)', await fm('banned=' + many) === 0);
+
 console.log(`${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

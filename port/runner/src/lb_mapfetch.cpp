@@ -61,19 +61,28 @@ namespace fs = std::filesystem;
 // browser's own rules.
 struct Source {
     const char* name;      // shown in the Maps page
-    const char* repo;      // owner/name on GitHub
+    const char* repo;      // owner/name on its forge
     const char* host;      // raw file host
     const char* base;      // path up to the zips, with both slashes
     const char* cache;     // subfolder of mods/cache ("" for none)
     const char* zips[8];   // the fallback list
     int nzips;
+    const char* api_host;  // the forge's API (GitHub's, Codeberg's: the same tree JSON)
+    const char* tree;      // the top-level tree of the default branch
+    bool lbz;              // one map per .lbz file (LiruJ's map tool) instead of zips of folders
 };
 const Source kSources[] = {
+    // lnee's (codeberg.org/lnee/lbzmaps): each map an .lbz, the package
+    // LegoBattlesMapTool writes -- a zip of map.map, mapimages/@mini*.NCGR/.NCBR,
+    // detailtiles/detailtiles_@.tbp (optional) and manifest.toml, `@` standing
+    // for the map's name. Listed first, by the owner's wish.
+    {"lnee's maps (Codeberg)", "lnee/lbzmaps", "codeberg.org", "/lnee/lbzmaps/raw/branch/master/",
+     "lnee", {}, 0, "codeberg.org", "/api/v1/repos/lnee/lbzmaps/git/trees/master", true},
     {"Community map archive (Ryncat2000)", "Ryncat2000/Lego-Battles-Custom-Map-Archive",
      "raw.githubusercontent.com", "/Ryncat2000/Lego-Battles-Custom-Map-Archive/main/", "",
      {"64 sized.zip", "96 sized.zip", "Better Free Play maps pack.zip",
       "DIFFICULTY PATCH-first wave.zip"},
-     4},
+     4, "api.github.com", "/repos/Ryncat2000/Lego-Battles-Custom-Map-Archive/git/trees/main", false},
     // The port's own (github.com/AgitationSkeleton/legobattles-custom-maps):
     // the cut Mars maps rebuilt from their minimaps, the prototypes' Free
     // Play maps that differ from the final game's, and Ninjago's Free Play maps
@@ -81,7 +90,7 @@ const Source kSources[] = {
     {"LEGO Battles PC custom maps", "AgitationSkeleton/legobattles-custom-maps",
      "raw.githubusercontent.com", "/AgitationSkeleton/legobattles-custom-maps/main/", "custom",
      {"Mars beta maps.zip", "Prototype Free Play maps.zip", "Ninjago Free Play maps.zip"},
-     3},
+     3, "api.github.com", "/repos/AgitationSkeleton/legobattles-custom-maps/git/trees/main", false},
 };
 const int kNumSources = (int)(sizeof kSources / sizeof kSources[0]);
 
@@ -138,8 +147,8 @@ std::vector<Listed> list_zips(const Source& src, bool online) {
     const fs::path index = dir / "index.txt";
     if (online) {
         std::string body, err;
-        if (lb_https_download("api.github.com", std::string("/repos/") + src.repo + "/git/trees/main",
-                              &body, 4u << 20, &err)) {
+        const std::string suffix = src.lbz ? ".lbz" : ".zip";
+        if (lb_https_download(src.api_host, src.tree, &body, 4u << 20, &err)) {
             const std::string key = "\"path\":\"";
             for (size_t p = body.find(key); p != std::string::npos; p = body.find(key, p + 1)) {
                 const size_t a = p + key.size(), b = body.find('"', a);
@@ -149,7 +158,7 @@ std::vector<Listed> list_zips(const Source& src, bool online) {
                 const std::string obj = body.substr(b, end == std::string::npos ? std::string::npos
                                                                                 : end - b);
                 if (name.find('/') != std::string::npos || name.size() < 5 ||
-                    lower(name.substr(name.size() - 4)) != ".zip" ||
+                    lower(name.substr(name.size() - 4)) != suffix ||
                     obj.find("\"type\":\"blob\"") == std::string::npos)
                     continue;
                 std::string sha;
@@ -247,10 +256,11 @@ bool zip_list(const std::string& zip, std::vector<ZipEnt>* out) {
         at += 46 + nlen + xlen + clen;
         for (char& c : e.name) if (c == '\\') c = '/';
         if (e.name.empty() || e.name.back() == '/') continue;   // a folder entry
+        // A file at the zip's root (an .lbz's map.map and manifest.toml) has
+        // the folder "".
         const size_t slash = e.name.rfind('/');
-        if (slash == std::string::npos) continue;
-        e.folder = e.name.substr(0, slash);
-        e.file = e.name.substr(slash + 1);
+        e.folder = slash == std::string::npos ? std::string() : e.name.substr(0, slash);
+        e.file = slash == std::string::npos ? e.name : e.name.substr(slash + 1);
         out->push_back(std::move(e));
     }
     return true;
@@ -298,6 +308,103 @@ int extract_folder(const std::string& zip, const std::string& folder, const fs::
     for (const ZipEnt& e : ents)
         if (e.folder == folder && safe_entry(e) && write_entry(zip, e, dest)) ++written;
     return written;
+}
+
+// ---- .lbz: one map per file (LegoBattlesMapTool's package) ----
+//
+// A zip of map.map, mapimages/@mini.NCGR/.NCBR and @miniNT.NCGR/.NCBR,
+// optionally detailtiles/detailtiles_@.tbp, and manifest.toml (type, name,
+// creator, args = ["mpNN"]: the stock slot it was made from). Every file is
+// already in the game's COMP container, as the loader wants. Installed, it
+// becomes an ordinary map folder: <folder>/<stem>.map, <stem>mini.NCGR ...,
+// DetailTiles_<stem>.tbp.
+
+bool ends_ci(const std::string& s, const std::string& suf);   // below
+
+// A manifest's `key = "value"` (or the first string of `key = [ "..." ]`).
+std::string toml_str(const std::string& t, const char* key) {
+    const std::string k = std::string(key);
+    for (size_t p = 0; (p = t.find(k, p)) != std::string::npos; p += k.size()) {
+        if (p && t[p - 1] != '\n') continue;
+        const size_t q0 = t.find('"', p + k.size());
+        const size_t eol = t.find('\n', p);
+        if (q0 == std::string::npos || (eol != std::string::npos && q0 > eol)) return {};
+        const size_t q1 = t.find('"', q0 + 1);
+        if (q1 == std::string::npos) return {};
+        return t.substr(q0 + 1, q1 - q0 - 1);
+    }
+    return {};
+}
+// A name safe as a folder and file stem.
+std::string lbz_stem(const std::string& file) {
+    std::string s = file.size() > 4 ? file.substr(0, file.size() - 4) : file;
+    std::string out;
+    for (char c : s)
+        if (std::isalnum((unsigned char)c) || c == '-' || c == '_' || c == ' ') out += c;
+    return out.empty() ? std::string("map") : out;
+}
+// The folder an .lbz installs as: its stem, or "NN-stem" when it brings no
+// detail tiles of its own and names a stock slot, so the loader takes that
+// slot's (docs/419's folder rule).
+std::string lbz_folder(const std::string& zip, const std::string& file) {
+    std::vector<ZipEnt> ents;
+    bool tiles = false;
+    std::string manifest;
+    if (zip_list(zip, &ents))
+        for (const ZipEnt& e : ents) {
+            // (some packages carry an empty, 0-byte one: no tiles)
+            if (lower(e.name).rfind("detailtiles/", 0) == 0 && ends_ci(e.name, ".tbp") && e.usize > 0)
+                tiles = true;
+            if (lower(e.name) == "manifest.toml")
+                zip_entry(zip, e.local, e.method, e.csize, e.usize, &manifest, 64u << 10);
+        }
+    const std::string stem = lbz_stem(file);
+    const std::string slot = toml_str(manifest, "args");
+    int n = 0;
+    if (lower(slot).rfind("mp", 0) == 0) n = std::atoi(slot.c_str() + 2);
+    if (!tiles && n >= 1 && n <= 30) {
+        char pre[8];
+        std::snprintf(pre, sizeof pre, "%02d-", n);
+        return pre + stem;
+    }
+    return stem;
+}
+// Unpacks the .lbz `file` into dest/<folder>/. The map files take the folder's
+// stem without a slot prefix.
+int extract_lbz(const std::string& zip, const std::string& folder, const fs::path& dest) {
+    std::vector<ZipEnt> ents;
+    if (!zip_list(zip, &ents)) return 0;
+    const size_t dash = folder.size() > 3 && folder[2] == '-' && std::isdigit((unsigned char)folder[0])
+                            ? 3 : 0;
+    const std::string stem = folder.substr(dash);
+    std::error_code ec;
+    const fs::path dir = dest / fs::u8path(folder);
+    fs::create_directories(dir, ec);
+    int written = 0;
+    for (const ZipEnt& e : ents) {
+        const std::string n = lower(e.name);
+        std::string out;
+        if (n == "map.map") out = stem + ".map";
+        else if (n.rfind("mapimages/@", 0) == 0) out = stem + e.name.substr(11);   // "mini.NCGR"...
+        else if (n.rfind("detailtiles/detailtiles_@", 0) == 0 && ends_ci(n, ".tbp"))
+            out = "DetailTiles_" + stem + ".tbp";
+        else if (n == "manifest.toml") out = "manifest.toml";
+        if (out.empty() || out.find('/') != std::string::npos || out.find("..") != std::string::npos ||
+            e.usize == 0)   // an empty file is no file (the loader would refuse it)
+            continue;
+        std::string bytes;
+        if (!zip_entry(zip, e.local, e.method, e.csize, e.usize, &bytes, 8u << 20)) continue;
+        if (FILE* f = std::fopen((dir / fs::u8path(out)).string().c_str(), "wb")) {
+            if (std::fwrite(bytes.data(), 1, bytes.size(), f) == bytes.size()) ++written;
+            std::fclose(f);
+        }
+    }
+    return written;
+}
+// One map of a source extracted under `dest`: a folder of a zip, or an .lbz.
+int extract_map(const Source& src, const std::string& zip, const std::string& folder,
+                const fs::path& dest) {
+    return src.lbz ? extract_lbz(zip, folder, dest) : extract_folder(zip, folder, dest);
 }
 
 // One of the archive's zips: the cached copy in mods/cache, else (when
@@ -365,6 +472,12 @@ void fetch(std::string name) {
         for (const Listed& lz : list_zips(src, true)) {
             std::string zip;
             if (!load_zip(src, lz, true, &zip, &last_error)) continue;
+            if (src.lbz) {   // an .lbz is one map, installed under its folder name
+                const std::string folder = lbz_folder(zip, lz.name);
+                if (lower(folder) == want || lower(lbz_stem(lz.name)) == want)
+                    files += extract_lbz(zip, folder, mods / "maps" / "_archive");
+                continue;
+            }
             // The zips hold their own top folder ("64 sized/..."), kept as it is.
             files += extract_named(zip, want, mods / "maps" / "_archive");
         }
@@ -493,6 +606,49 @@ void arc_load(bool download) {
             warn += (err.empty() ? zl[z].name + " could not be read" : err) + ". ";
             continue;
         }
+        if (src.lbz) {   // one map per .lbz: its fixed member names
+            const ZipEnt *map_e = nullptr, *mini = nullptr, *man = nullptr;
+            for (const ZipEnt& e : ents) {
+                const std::string n = lower(e.name);
+                if (n == "map.map") map_e = &e;
+                else if (n == "mapimages/@mini.ncgr") mini = &e;
+                else if (n == "manifest.toml") man = &e;
+            }
+            std::string mapb, ncgr, manifest;
+            const char* why = nullptr;
+            if (!map_e || !mini) why = "no map.map or mapimages/@mini.NCGR";
+            else if (!zip_entry(zip, map_e->local, map_e->method, map_e->csize, map_e->usize, &mapb, 8u << 20) ||
+                     !zip_entry(zip, mini->local, mini->method, mini->csize, mini->usize, &ncgr, 1u << 20))
+                why = "its files could not be read";
+            if (man && !why)
+                zip_entry(zip, man->local, man->method, man->csize, man->usize, &manifest, 64u << 10);
+            ArcMap m;
+            if (!why && !lb_mods_map_stats((const unsigned char*)mapb.data(), mapb.size(), m.st))
+                why = "map.map is not a map the game reads";
+            if (why) {
+                std::fprintf(stderr, "[lb_mapbrowser] %s left out: %s (%zu entries)\n",
+                             zl[z].name.c_str(), why, ents.size());
+                continue;
+            }
+            m.src = si;
+            m.zip = z;
+            m.lz = zl[z];
+            m.folder = lbz_folder(zip, zl[z].name);
+            m.name = lbz_stem(zl[z].name);
+            m.pack = src.name;
+            m.hash = fnv_bytes(mapb);
+            m.ncgr.assign(ncgr.begin(), ncgr.end());
+            const std::string by = toml_str(manifest, "creator");
+            const std::string title = toml_str(manifest, "name");
+            const std::string slot = toml_str(manifest, "args");
+            m.notes = zl[z].name;
+            if (!title.empty() && lower(title) != lower(m.name)) m.notes += ": \"" + title + "\"";
+            if (!by.empty()) m.notes += ", by " + by;
+            if (!slot.empty()) m.notes += " (made from slot " + slot + ")";
+            m.notes += ".";
+            maps.push_back(std::move(m));
+            continue;
+        }
         std::map<std::string, std::vector<size_t>> by;
         for (size_t i = 0; i < ents.size(); ++i) by[ents[i].folder].push_back(i);
         for (const auto& kv : by) {
@@ -601,10 +757,15 @@ void arc_start(bool download) {
 
 bool arc_all_cached() {
     std::error_code ec;
-    for (const Source& src : kSources)
-        for (const Listed& lz : list_zips(src, false))
+    for (const Source& src : kSources) {
+        // A source never listed yet (one added in a newer build: nothing cached,
+        // no built-in list) is not cached, or the page would never fetch it.
+        const std::vector<Listed> zl = list_zips(src, false);
+        if (zl.empty()) return false;
+        for (const Listed& lz : zl)
             if (!fs::is_regular_file(cache_dir(src) / fs::u8path(lz.name), ec))
                 return false;
+    }
     return true;
 }
 
@@ -630,7 +791,7 @@ void arc_download(ArcMap& m) {
         g_dl_msg = "The archive is not cached: " + err;
         return;
     }
-    const int n = extract_folder(zip, m.folder, fs::u8path(lb_mods_dir()) / "maps" / "_archive");
+    const int n = extract_map(kSources[m.src], zip, m.folder, fs::u8path(lb_mods_dir()) / "maps" / "_archive");
     std::fprintf(stderr, "[lb_mapbrowser] \"%s\": %d file(s) extracted\n", m.name.c_str(), n);
     std::fflush(stderr);
     if (n <= 0) {
@@ -644,7 +805,66 @@ void arc_download(ArcMap& m) {
     g_dl_new = true;
 }
 
+// SG-0030: DOWNLOAD ALL, for a pack or every pack. A worker extracts the maps
+// that are not installed yet, each zip read once (a pack is up to 16 MB), from
+// a copy of the list; the page marks them installed when it is done.
+struct DlJob { int src; Listed lz; std::string folder; };
+std::atomic<bool> g_dlm_busy{false}, g_dlm_done{false};
+std::string g_dlm_msg;   // under g_arc_mu
+
+void arc_download_many(const std::vector<size_t>& idx) {
+    std::vector<DlJob> jobs;
+    for (size_t i : idx)
+        if (i < g_arc.size() && !g_arc[i].installed)
+            jobs.push_back({g_arc[i].src, g_arc[i].lz, g_arc[i].folder});
+    if (jobs.empty() || g_dlm_busy.exchange(true)) return;
+    {
+        std::lock_guard<std::mutex> lk(g_arc_mu);
+        g_dlm_msg = "Downloading " + std::to_string(jobs.size()) + " map(s)...";
+    }
+    std::thread([jobs]() {
+        int maps = 0, failed = 0;
+        std::string zip, zip_of, err;
+        try {
+            for (const DlJob& j : jobs) {
+                const std::string key = std::to_string(j.src) + "/" + j.lz.name;
+                if (key != zip_of) {
+                    zip.clear();
+                    zip_of = key;
+                    if (!load_zip(kSources[j.src], j.lz, false, &zip, &err)) zip.clear();
+                }
+                if (zip.empty() ||
+                    extract_map(kSources[j.src], zip, j.folder, fs::u8path(lb_mods_dir()) / "maps" / "_archive") <= 0)
+                    ++failed;
+                else
+                    ++maps;
+            }
+        } catch (const std::exception& e) {
+            err = e.what();
+            ++failed;
+        }
+        std::fprintf(stderr, "[lb_mapbrowser] download all: %d map(s) extracted, %d failed\n",
+                     maps, failed);
+        std::fflush(stderr);
+        {
+            std::lock_guard<std::mutex> lk(g_arc_mu);
+            g_dlm_msg = std::to_string(maps) + " map(s) downloaded into mods/maps/_archive" +
+                        (failed ? " (" + std::to_string(failed) + " could not be written)" : "") +
+                        ". Press Load new maps now to see them in the Free Play map list.";
+        }
+        g_dlm_done = true;
+        g_dlm_busy = false;
+    }).detach();
+}
+
 void arc_draw(SDL_Renderer* ren) {
+    if (g_dlm_done.exchange(false)) {   // SG-0030: a batch finished
+        arc_scan_installed();
+        arc_mark_installed();
+        g_dl_new = true;
+        std::lock_guard<std::mutex> lk(g_arc_mu);
+        g_dl_msg = g_dlm_msg;
+    }
     static char search[64] = "";
     static int size_filter = 0;   // 0 all, 1 = 64x64, 2 = 96x96
     static int sel = -1;
@@ -690,10 +910,10 @@ void arc_draw(SDL_Renderer* ren) {
             ImGui::TextUnformatted(msg.empty() ? "Loading the archive..." : msg.c_str());
             return;
         }
-        ImGui::TextWrapped("Nothing is downloaded until you press the button. The two "
-                           "map archives (the community's and the port's own) are a few "
-                           "zips of about 50 MB in all, fetched over HTTPS from GitHub "
-                           "into mods/cache and read from there afterwards. A pack that "
+        ImGui::TextWrapped("Nothing is downloaded until you press the button. The map "
+                           "archives (lnee's, the community's and the port's own) are a few "
+                           "files of about 50 MB in all, fetched over HTTPS from GitHub and "
+                           "Codeberg into mods/cache and read from there afterwards. A pack that "
                            "changes in its archive is fetched again the next time you "
                            "press it.");
         // Test aid: LB_MAPS_LOAD=1 presses Load the archive once.
@@ -726,6 +946,44 @@ void arc_draw(SDL_Renderer* ren) {
     ImGui::SetNextItemWidth(160.0f);
     const char* kSizes[] = {"All sizes", "64x64 (small)", "96x96 (large)"};
     ImGui::Combo("##arcsize", &size_filter, kSizes, 3);
+    {   // SG-0030: every map of every pack not installed yet.
+        std::vector<size_t> missing;
+        for (size_t i = 0; i < g_arc.size(); ++i)
+            if (!g_arc[i].installed) missing.push_back(i);
+        ImGui::SameLine();
+        const bool busy = g_dlm_busy.load();
+        ImGui::BeginDisabled(missing.empty() || busy);
+        char label[64];
+        std::snprintf(label, sizeof label, "Download all (%zu)", missing.size());
+        // Test aid: LB_MAPS_DOWNLOAD_ALL=1 presses it once.
+        static bool aid_all = std::getenv("LB_MAPS_DOWNLOAD_ALL") != nullptr;
+        if (ImGui::Button(busy ? "Downloading..." : label) || (aid_all && !missing.empty())) {
+            aid_all = false;
+            arc_download_many(missing);
+        }
+        ImGui::EndDisabled();
+        ImGui::SetItemTooltip("Copies every map not yet installed, from every pack, into\n"
+                              "mods/maps/_archive. The game loads at most %d mod maps.",
+                              lb_mods_limit());
+        ImGui::SameLine();
+        if (ImGui::Button("Check the archives for new maps")) arc_start(true);
+        ImGui::SetItemTooltip("Asks each archive what it holds now and downloads the packs\n"
+                              "that are new or changed. Otherwise the page reads what is\n"
+                              "already in mods/cache.");
+        if (!g_dl_msg.empty() && sel < 0) ImGui::TextWrapped("%s", g_dl_msg.c_str());
+        if (g_dl_new && sel < 0 && ImGui::Button("Load new maps now##top")) {
+            if (lb_mods_request_rebuild()) {
+                g_dl_new = false;
+                g_dl_msg = "Loading the new maps: the game resets to the title screen.";
+            } else {
+                g_dl_msg = "Restart the game to see the new maps.";
+            }
+        }
+        if (lb_mods_count() + (int)missing.size() > lb_mods_limit() && !missing.empty())
+            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f),
+                               "With every map installed there would be more than the %d "
+                               "the game loads; the rest are left out.", lb_mods_limit());
+    }
     const ImVec2 avail = ImGui::GetContentRegionAvail();
     const float detail_w = sel >= 0 ? std::max(300.0f, avail.x * 0.34f) : 0.0f;
     ImGui::BeginChild("lb_arc_grid", ImVec2(sel >= 0 ? avail.x - detail_w - 8.0f : 0.0f, avail.y),
@@ -748,6 +1006,19 @@ void arc_draw(SDL_Renderer* ren) {
             col = 0;
             ImGui::Spacing();
             ImGui::TextDisabled("%s", m.pack.c_str());
+            {   // SG-0030: the pack's maps not installed yet.
+                std::vector<size_t> missing;
+                for (size_t k = 0; k < g_arc.size(); ++k)
+                    if (g_arc[k].pack == m.pack && !g_arc[k].installed) missing.push_back(k);
+                if (!missing.empty()) {
+                    ImGui::SameLine();
+                    char label[64];
+                    std::snprintf(label, sizeof label, "Download pack (%zu)##%d", missing.size(), i);
+                    ImGui::BeginDisabled(g_dlm_busy.load());
+                    if (ImGui::SmallButton(label)) arc_download_many(missing);
+                    ImGui::EndDisabled();
+                }
+            }
             ImGui::Separator();
         }
         if (col && ImGui::GetItemRectMax().x + pad + cell <= row_end) ImGui::SameLine(0.0f, pad);
@@ -929,13 +1200,13 @@ extern "C" int lb_mapfetch_install_by_hash(unsigned long long hash, char* path_o
             for (const ArcMap& m : g_arc) {
                 if (m.src != si || m.lz.name != lz.name) continue;
                 fs::remove_all(probe, ec);
-                if (extract_folder(zip, m.folder, probe) <= 0) continue;
+                if (extract_map(kSources[si], zip, m.folder, probe) <= 0) continue;
                 unsigned long long h = 0;
                 if (!lb_mods_folder_hash((probe / fs::u8path(m.folder)).string().c_str(), &h) ||
                     h != hash)
                     continue;
                 const fs::path dest = mods / "maps" / "_archive";
-                if (extract_folder(zip, m.folder, dest) <= 0) continue;
+                if (extract_map(kSources[si], zip, m.folder, dest) <= 0) continue;
                 if (path_out && cap > 0)
                     std::snprintf(path_out, (size_t)cap, "%s",
                                   (dest / fs::u8path(m.folder)).string().c_str());

@@ -7613,6 +7613,8 @@ def apply(runner_dir, imgui_dir):
           "src/lb_update.cpp",
           # The first-run setup (docs/394).
           "src/lb_setup.cpp",
+          # The executable's icon (lbapp.png), resource 1.
+          "src/lb_app.rc",
           "%s/imgui.cpp" % imgui,
           "%s/imgui_draw.cpp" % imgui,
           "%s/imgui_tables.cpp" % imgui,
@@ -7621,6 +7623,9 @@ def apply(runner_dir, imgui_dir):
           "%s/backends/imgui_impl_sdlrenderer2.cpp" % imgui],
          indent="    ")
     done.append("CMakeLists.txt: sources")
+    # The icon resource needs the RC language (windres).
+    replace(cmake, "LANGUAGES C CXX)", "LANGUAGES C CXX RC)")
+    done.append("CMakeLists.txt: the RC language, for the app icon")
 
     # ---- Keep the game window off the primary display -----------------------
     #

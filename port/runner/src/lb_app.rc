@@ -1,0 +1,5 @@
+// legobattles-decomp: the executable's icon (lb_app.ico, from lbapp.png).
+// Resource 1 is the icon Explorer and shortcuts show; lb_setup.cpp points SDL's
+// SDL_WINDOWS_INTRESOURCE_ICON hint at it, so every window and its taskbar
+// button use it too.
+1 ICON "lb_app.ico"

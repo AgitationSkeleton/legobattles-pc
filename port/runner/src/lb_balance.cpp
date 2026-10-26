@@ -26,6 +26,8 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cctype>
+#include <cstring>
 #include <cstdio>
 #include <cstdint>
 #include <cstdlib>
@@ -162,6 +164,31 @@ extern "C" int lb_balance_pack_count(void) { return kTableCount; }
 extern "C" const char* lb_balance_name(int slot) {
     if (slot <= 0 || slot > kTableCount) return "Off (Vanilla)";
     return lb_balance_tables[slot - 1].name;
+}
+
+// docs/443: the pack's family, for the score tables to merge its versions. A
+// table's name is the display name tools/lb_genbalance.py makes ("Rebalance
+// 1.15.2", "Vanil+ 1.2.1", "FunLite2 (PvE)"): the name part, without the
+// version or the "(PvE)", and the two FunLites as one. Slot 0 is Vanilla.
+extern "C" const char* lb_balance_family(int slot) {
+    if (slot <= 0 || slot > kTableCount) return "Vanilla";
+    static char fam[kTableCount][32];
+    char* f = fam[slot - 1];
+    std::snprintf(f, 32, "%s", lb_balance_tables[slot - 1].name);
+    if (char* sp = std::strchr(f, ' ')) {
+        if ((sp[1] >= '0' && sp[1] <= '9') || sp[1] == '(') *sp = '\0';
+    }
+    size_t n = std::strlen(f);
+    while (n && f[n - 1] >= '0' && f[n - 1] <= '9') f[--n] = '\0';   // "FunLite2"
+    for (char* c = f; *c; ++c) *c = (char)std::tolower((unsigned char)*c);
+    if (!std::strcmp(f, "funlite")) std::snprintf(f, 32, "FunLite");
+    else {
+        // Back to the name as shown (first letters of the table's own spelling).
+        std::snprintf(f, 32, "%s", lb_balance_tables[slot - 1].name);
+        if (char* sp = std::strchr(f, ' '))
+            if ((sp[1] >= '0' && sp[1] <= '9') || sp[1] == '(') *sp = '\0';
+    }
+    return f;
 }
 
 extern "C" int lb_balance_byte_count(int slot) {
@@ -307,6 +334,12 @@ int spare_number(int rec) {
         if (kSpareRecords[i] == rec) return i + 1;
     return 0;
 }
+// BR-0024/25 (docs/438): a spare is CLAIMED when the loaded blueprint gives it
+// a use of its own -- a pack (FUNLite: Air Fireball, Air Laser, Air Ballista
+// Bolt) points units at it or changes it. A claimed record is left as the pack
+// has it and shows the game's own name for it. Decided in custom_apply from
+// the pack plus the stock data, the same on every machine.
+bool g_spare_claimed[4] = {false, false, false, false};
 
 struct Edit {
     int rec, field, value;
@@ -435,17 +468,23 @@ extern "C" int lb_balance_record_name(int rec, char* out, int cap) {
     out[0] = 0;
     if (kind_of(rec) == LB_BAL_GLOBALS)   // docs/416
         return std::snprintf(out, (size_t)cap, "%s", "Pickups");
-    if (const int sp = spare_number(rec))   // docs/438
+    const int sp = spare_number(rec);   // docs/438
+    if (sp && !g_spare_claimed[sp - 1])
         return std::snprintf(out, (size_t)cap, "Spare projectile %d", sp);
     const uint32_t base = lb_patches_blueprint_base();
     if (!base || kind_of(rec) < 0) return 0;
     const uint32_t s = bus_read_u32(record_at(base, rec));
     if (!guest_ram(s)) return 0;
     int n = 0;
-    for (; n < cap - 1; ++n) {
-        const uint8_t c = bus_read_u8(s + (uint32_t)n);
+    for (int k = 0; k < 255 && n < cap - 1; ++k) {
+        const uint8_t c = bus_read_u8(s + (uint32_t)k);
         if (!c || c < 0x20 || c > 0x7E) break;
-        out[n] = (char)c;
+        // A claimed spare reads as words: "AirBallistaBolt" -> "Air Ballista Bolt".
+        if (sp && k > 0 && c >= 'A' && c <= 'Z' && n < cap - 2) {
+            const uint8_t p = bus_read_u8(s + (uint32_t)k - 1u);
+            if (p >= 'a' && p <= 'z') out[n++] = ' ';
+        }
+        out[n++] = (char)c;
     }
     out[n] = 0;
     return n;
@@ -613,6 +652,30 @@ extern "C" int lb_balance_import_file(const char* path, char* msg, int msg_cap) 
         for (uint32_t o = 0; o < size; ++o)
             if (!covered[o] && van[at + o] != mod[at + o]) ++outside;
     }
+    // BR-0024/25: a spare the file uses (a unit fires it, or it differs from
+    // stock) keeps ALL its menu values as the file has them, so the Arrow
+    // seeding cannot reach the ones that match stock.
+    for (const int rec : kSpareRecords) {
+        const uint32_t at = kFirstRecord + (uint32_t)kUnitRecords * kUnitSize +
+                            (uint32_t)(rec - kUnitRecords) * kAttackSize;
+        bool used = false;
+        for (uint32_t o = 4u; o < kAttackSize; ++o)
+            used = used || mod[at + o] != van[at + o];
+        for (int u = 0; u < kUnitRecords && !used; ++u) {
+            const uint32_t ua = kFirstRecord + (uint32_t)u * kUnitSize + 0x66u;
+            used = (uint32_t)(mod[ua] | (mod[ua + 1] << 8)) == (uint32_t)rec;
+        }
+        if (!used) continue;
+        const int nf = lb_balance_field_count(LB_BAL_ATTACKS);
+        for (int fi = 0; fi < nf; ++fi) {
+            const BalField* f = field_of(rec, fi);
+            if (!f) continue;
+            uint32_t b = 0u;
+            for (int k = 0; k < f->width; ++k)
+                b |= (uint32_t)mod[at + f->off + (uint32_t)k] << (8 * k);
+            if (b <= (uint32_t)f->max) put(g_live, rec, fi, (int)b);
+        }
+    }
     int fields = 0;
     for (int n : per_field_units) fields += n ? 1 : 0;
     for (int n : per_field_attacks) fields += n ? 1 : 0;
@@ -654,9 +717,49 @@ extern "C" int lb_balance_custom_apply(unsigned int base) {
     // docs/438: the spare projectiles start as the Arrow as the pack leaves
     // it (written first, kept in g_written, so the revert above takes them
     // out too). Every machine does this, so the sim agrees online.
+    // BR-0024/25: only a spare the loaded pack leaves unused. RAM now holds
+    // the pack and nothing of the player's (the revert above took it out).
+    {
+        // The game's own blueprint, read once; empty when no ROM is readable.
+        static std::vector<uint8_t> stock;
+        static bool stock_tried = false;
+        if (!stock_tried) {
+            stock_tried = true;
+            if (!lb_mods_blueprint_own(&stock)) stock.clear();
+        }
+        const int slot = g_applied_slot;
+        for (int i = 0; i < 4; ++i) {
+            const int rec = kSpareRecords[i];
+            const uint32_t r = record_at(base, rec);
+            const uint32_t file_off = record_at(0u, rec);
+            bool claimed = false;
+            // 1. a unit fires it
+            for (int u = 0; u < kUnitRecords && !claimed; ++u)
+                claimed = bus_read_u16(record_at(base, u) + 0x66u) == (uint32_t)rec;
+            // 2. the pack's own bytes cover the record
+            if (!claimed && slot > 0 && slot <= kTableCount) {
+                const LbBalanceTable& t = lb_balance_tables[slot - 1];
+                for (uint32_t k = 0; k < t.run_count && !claimed; ++k)
+                    claimed = t.runs[k].offset < file_off + kAttackSize &&
+                              t.runs[k].offset + t.runs[k].length > file_off;
+            }
+            // 3. the record differs from the stock ROM's (a mod's blueprint)
+            if (!claimed && stock.size() >= file_off + kAttackSize)
+                for (uint32_t o = 0u; o < kAttackSize && !claimed; ++o)
+                    claimed = ((o >= 0x0Cu && o < 0x10u) || o >= 0x5Cu) &&
+                              bus_read_u8(r + o) != stock[file_off + o];
+            g_spare_claimed[i] = claimed;
+        }
+    }
     {
         const uint32_t model = record_at(base, kSpareModel);
-        for (const int rec : kSpareRecords) {
+        for (int si = 0; si < 4; ++si) {
+            const int rec = kSpareRecords[si];
+            if (g_spare_claimed[si]) {
+                std::fprintf(stderr, "[lb_balance] record %d is the pack's own "
+                             "(not seeded with the Arrow)\n", rec);
+                continue;
+            }
             const uint32_t r = record_at(base, rec);
             // The speed (+0x0C..0x0F) and the sprite, flags and damages
             // (+0x5C..0x73), byte by byte so a field's "before" stays its own.
@@ -694,6 +797,16 @@ extern "C" int lb_balance_custom_apply(unsigned int base) {
         ++n;
     }
     g_written_gen = g_gen;
+    if (std::getenv("LB_BALANCE_DUMP")) {   // test aid: the spares as now in RAM
+        for (const int rec : kSpareRecords) {
+            const uint32_t r = record_at(base, rec);
+            std::fprintf(stderr, "[lb_balance_dump] %d speed=%u sprite=%u tail=", rec,
+                         bus_read_u32(r + 0x0Cu), bus_read_u8(r + 0x5Du));
+            for (uint32_t o = 0x5Cu; o < kAttackSize; ++o)
+                std::fprintf(stderr, "%02x", bus_read_u8(r + o));
+            std::fprintf(stderr, "\n");
+        }
+    }
     if (n)
         std::fprintf(stderr, "[lb_balance] %d value(s) of the %s set written\n",
                      n, g_play_on ? "recording's" : g_host_on ? "host's" : "player's");

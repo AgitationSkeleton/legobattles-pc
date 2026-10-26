@@ -1083,6 +1083,7 @@ extern "C" void lb_net_announce(const char* server, int port, const char* name,
     body += "\"version\":" + json_str(lb_port_version()) + ",";
     body += "\"options\":" + std::string(lb_net_lobby_options_json());
     if (lb_setting_scores_opt_out()) body += ",\"no_scores\":true";   // SG-0018
+    body += ",\"player_key\":" + json_str(lb_setting_player_key());     // docs/443
     body += "}";
 
     g_host_players = players > 0 ? players : 1;
@@ -1728,7 +1729,10 @@ void post_presence(const char* server, int port, const char* path,
     const std::string body = "{\"code\":" + json_str(code.c_str()) +
                              ",\"name\":" +
                              json_str(name && *name ? name : "Player") +
-                             (out ? ",\"no_scores\":true" : "") + "}";
+                             (out ? ",\"no_scores\":true" : "") +
+                             (std::strcmp(path, "/join") == 0
+                                  ? ",\"player_key\":" + json_str(lb_setting_player_key())   // docs/443
+                                  : std::string()) + "}";
     std::string s = server ? server : "";
     std::string p = path;
     std::thread([s, port, p, body]() {
@@ -2266,6 +2270,28 @@ extern "C" void lb_net_selftest_if_asked(void) {
         std::fprintf(stderr, "[lb_net] self-test: join first lobby -> %s\n",
                      ok ? lb_net_status() : "FAILED");
     }
+}
+
+// docs/443: a POST to a master server, like lb_net_http_get below.
+extern "C" int lb_net_http_post(const char* host, int port, const char* path, const char* body,
+                                char* out, int cap) {
+    std::string error;
+    const std::string r = http_request(host ? host : "", port, "POST", path ? path : "/",
+                                       body ? body : "", &error);
+    if (cap <= 0) return -1;
+    const std::string& s = error.empty() ? r : error;
+    const int n = (int)std::min<size_t>(s.size(), (size_t)cap - 1);
+    std::memcpy(out, s.data(), (size_t)n);
+    out[n] = '\0';
+    return error.empty() ? n : -1;
+}
+
+extern "C" int lb_net_extra_server(char* host, int cap, int* port) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_extra_server.empty() || cap <= 0) return 0;
+    std::snprintf(host, (size_t)cap, "%s", g_extra_server.c_str());
+    *port = g_extra_port;
+    return 1;
 }
 
 // SG-0018: a GET to a master server (Network > Scores reads the tables): the
