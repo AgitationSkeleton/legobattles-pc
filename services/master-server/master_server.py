@@ -416,6 +416,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._punch(body, now)
         if path == "/poll":
             return self._poll(body, now)
+        if path == "/join":
+            return self._member(body, now, True)
+        if path == "/leave":
+            return self._member(body, now, False)
         return self._send(404, {"ok": False, "error": "no such endpoint"})
 
     # -- docs/400: the introduction that opens two routers for each other --
@@ -426,6 +430,31 @@ class Handler(BaseHTTPRequestHandler):
     # waits, collects them. Anyone whose address equals the host's is behind
     # the same router and is given the LAN pair instead. All of it is kept in
     # memory for 30 s: nothing is written to the database.
+
+    def _ended(self, code, m, body):
+        """The Discord line for a lobby its host removed: the match's end (with
+        who won and lost, as the host reports them) or the lobby disbanded."""
+        now = time.time()
+
+        def names(v):
+            v = v if isinstance(v, list) else []
+            return [n for n in (clean_name(x, "") for x in v[:8]) if n]
+
+        def bold(lst):
+            return ", ".join("**%s**" % plain(n) for n in lst)
+        winners, losers = names(body.get("winners")), names(body.get("losers"))
+        result = ""
+        if winners:
+            result = " %s won" % bold(winners) + (", %s lost." % bold(losers) if losers else ".")
+        elif losers:
+            result = " %s lost." % bold(losers)
+        if m["state"] == "playing" or str(body.get("reason") or "") == "end":
+            self.server.discord("\u23F9\uFE0F **%s**'s match%s ended after %s.%s"
+                                % (plain(m["host"]), " on **%s**" % plain(m["map"]) if m["map"] else "",
+                                   lasted(now - (m["started"] or m["created"])), result))
+        else:
+            self.server.discord("\u274C **%s** disbanded the lobby `%s` after %s."
+                                % (plain(m["host"]), code, lasted(now - m["created"])))
 
     def _local_view(self, lob):
         lan = self.server.lan.get(lob.get("code"))
@@ -527,6 +556,15 @@ class Handler(BaseHTTPRequestHandler):
         srv.log("ANNOUNCE", "%s  %s hosted by %s at %s:%d  (%d/%d)"
                 % (code, fields["name"], fields["host_name"],
                    fields["address"], port, players, maxp))
+        with srv.lock:   # the Discord lines' record, in memory only
+            srv.meta[code] = {"host": fields["host_name"], "created": now, "state": "open",
+                              "started": 0.0, "map": fields["map_name"],
+                              "max": maxp, "members": []}
+        settings = settings_text(fields["options"])
+        srv.discord("\U0001F3AE **%s** is hosting a LEGO Battles lobby `%s` (up to %d players%s)%s"
+                    % (plain(fields["host_name"]), code, maxp,
+                       ", build " + plain(fields["version"]) if fields["version"] else "",
+                       "\n" + settings if settings else ""))
         return self._send(200, {"ok": True, "code": code, "token": token,
                                 "ttl": TTL_SECONDS})
 
@@ -543,7 +581,65 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, {"ok": False, "error": "unknown lobby"})
         if isinstance(body.get("players_list"), list):
             srv.store.set_players(code, body["players_list"])
+        self._match_state(code, body, now)
         return self._send(200, {"ok": True, "ttl": TTL_SECONDS})
+
+    def _match_state(self, code, body, now):
+        """The lobby's state from the heartbeat ("open", "starting", "playing"),
+        for the Discord lines only."""
+        srv = self.server
+        state = str(body.get("state") or "")
+        line = None
+        with srv.lock:
+            m = srv.meta.get(code)
+            if not m:
+                return
+            if body.get("map_name"):
+                m["map"] = clean_name(body.get("map_name"), m["map"])
+            if state == "starting" and m["state"] == "open":
+                m["state"] = "starting"
+            if state == "playing" and m["state"] != "playing":
+                m["state"] = "playing"
+                m["started"] = now
+                names = [m["host"]] + list(m["members"])
+                if len(names) < 2 and isinstance(body.get("players_list"), list):
+                    names = [clean_name(p.get("name"), "") for p in body["players_list"]
+                             if isinstance(p, dict)]
+                who = ", ".join("**%s**" % plain(n) for n in names if n)
+                line = ("\u25B6\uFE0F **%s**'s lobby `%s` started a match%s: %s."
+                        % (plain(m["host"]), code,
+                           " on **%s**" % plain(m["map"]) if m["map"] else "", who))
+            if state == "open" and m["state"] != "open":
+                m["state"] = "open"
+        if line:
+            srv.discord(line)
+
+    def _member(self, body, now, joining):
+        """POST /join and /leave {code, name}: a player in a lobby, as the
+        game's lobby reports it. Only for the Discord lines."""
+        srv = self.server
+        code = str(body.get("code") or "").upper()
+        name = clean_name(body.get("name"), "")
+        if not srv.store.lobby(code) or not name:
+            return self._send(404, {"ok": False, "error": "unknown lobby"})
+        line = None
+        with srv.lock:
+            m = srv.meta.get(code)
+            if m:
+                had = name.lower() in [n.lower() for n in m["members"]]
+                if joining and not had and name.lower() != m["host"].lower():
+                    m["members"].append(name)
+                    line = ("\u2795 **%s** joined **%s**'s lobby `%s` (%d/%d)."
+                            % (plain(name), plain(m["host"]), code,
+                               min(m["max"], 1 + len(m["members"])), m["max"]))
+                elif not joining and had:
+                    m["members"] = [n for n in m["members"] if n.lower() != name.lower()]
+                    line = ("\u2796 **%s** left **%s**'s %s."
+                            % (plain(name), plain(m["host"]),
+                               "match" if m["state"] == "playing" else "lobby `%s`" % code))
+        if line:
+            srv.discord(line)
+        return self._send(200, {"ok": True})
 
     def _remove(self, body):
         srv = self.server
@@ -551,6 +647,10 @@ class Handler(BaseHTTPRequestHandler):
         token = str(body.get("token") or "")
         if srv.store.remove(code, token):
             srv.log("CLOSE", "lobby %s closed by its host" % code)
+            with srv.lock:
+                m = srv.meta.pop(code, None)
+            if m:
+                self._ended(code, m, body)
             return self._send(200, {"ok": True})
         return self._send(404, {"ok": False, "error": "unknown lobby"})
 
@@ -559,11 +659,13 @@ class MasterServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, addr, store, log, max_players=DEFAULT_MAX_PLAYERS):
+    def __init__(self, addr, store, log, max_players=DEFAULT_MAX_PLAYERS, discord=None):
         super().__init__(addr, Handler)
         self.store = store
         self.log = log
         self.max_players = max_players
+        self.discord = discord or Discord([], log)
+        self.meta = {}       # code -> the Discord lines' record (state, members...)
         self._last_sweep = 0.0
         # docs/400: in memory only.
         self.lock = threading.Lock()
@@ -582,6 +684,88 @@ class MasterServer(ThreadingHTTPServer):
         self._last_sweep = now
         for code in self.store.expire(now):
             self.log("EXPIRE", "lobby %s stopped heartbeating" % code)
+            with self.lock:
+                m = self.meta.pop(code, None)
+            if m and m["state"] == "playing":
+                self.discord("\u23F9\uFE0F **%s**'s match ended (the host stopped reporting) after %s."
+                             % (plain(m["host"]), lasted(now - (m["started"] or m["created"]))))
+            elif m:
+                self.discord("\U0001F4A4 **%s**'s lobby `%s` expired (the host stopped responding)."
+                             % (plain(m["host"]), code))
+
+
+# ---------------------------------------------------------------- discord ----
+#
+# The server's lines for its operator's Discord channel, worded as the
+# Cloudflare Worker's (services/master-server-cloudflare/src/index.js): a lobby
+# hosted (with its settings), a player joining or leaving, the match starting
+# and ending (with who won), the lobby disbanded or gone quiet. --discord-webhook
+# URL (repeatable) names the channels; without one nothing is sent. One worker
+# thread posts them in order; a message that fails is logged and let go, and
+# the server never waits on Discord. Needs outbound TCP 443.
+
+def plain(s, limit=100):
+    """A name as it is, not as Discord's formatting would take it."""
+    s = re.sub(r"[\r\n]+", " ", "" if s is None else str(s))
+    return re.sub(r"([\\*_~`|>#\[\]()<:@-])", r"\\\1", s)[:limit]
+
+
+def lasted(seconds):
+    s = max(0, int(round(seconds)))
+    if s < 60:
+        return "%d s" % s
+    m = int(round(s / 60.0))
+    return "%d min" % m if m < 60 else "%d h %d min" % (m // 60, m % 60)
+
+
+def settings_text(options):
+    if not isinstance(options, dict):
+        return ""
+    lines = []
+    for k, v in list(options.items())[:24]:
+        if v in ("", None):
+            continue
+        if isinstance(v, (dict, list)):
+            v = json.dumps(v)
+        lines.append("• " + plain(k) + ": " + plain(v, 400))
+    return "\n".join(lines)
+
+
+class Discord:
+    def __init__(self, urls, log, label=""):
+        self.urls = [u for u in (urls or []) if u.startswith("https://")]
+        self.log = log
+        self.name = "LEGO Battles server" + (" (%s)" % label if label else "")
+        self.queue = None
+        if self.urls:
+            import queue
+            self.queue = queue.Queue(maxsize=200)
+            threading.Thread(target=self._run, name="discord", daemon=True).start()
+
+    def __call__(self, text):
+        if not self.queue:
+            return
+        try:
+            self.queue.put_nowait(str(text)[:1900])
+        except Exception:
+            self.log("DISCORD", "queue full; a message was dropped")
+
+    def _run(self):
+        import urllib.request
+        while True:
+            text = self.queue.get()
+            body = json.dumps({"username": self.name, "content": text,
+                               "allowed_mentions": {"parse": []}}).encode("utf-8")
+            for url in self.urls:
+                req = urllib.request.Request(url, data=body, method="POST", headers={
+                    "Content-Type": "application/json",
+                    # Discord refuses urllib's default agent.
+                    "User-Agent": "LEGOBattlesMasterServer (github.com/AgitationSkeleton/legobattles-pc)"})
+                try:
+                    with urllib.request.urlopen(req, timeout=10) as r:
+                        r.read()
+                except Exception as e:   # noqa: BLE001 -- any failure: let it go
+                    self.log("DISCORD", "a message could not be sent (%s)" % e)
 
 
 # ---------------------------------------------------------------- systemd ----
@@ -637,10 +821,11 @@ def _watchdog_setup():
 # ------------------------------------------------------------------- main ----
 
 def build(port=DEFAULT_PORT, db="master.sqlite3", logfile="logs/master.log",
-          echo=True, max_players=DEFAULT_MAX_PLAYERS, host=""):
+          echo=True, max_players=DEFAULT_MAX_PLAYERS, host="", webhooks=None, label=""):
     log = Log(logfile, echo=echo)
     store = Store(db)
-    srv = MasterServer((host, port), store, log, max_players)
+    srv = MasterServer((host, port), store, log, max_players,
+                       Discord(webhooks or [], log, label))
     return srv, store, log
 
 
@@ -665,6 +850,11 @@ def main(argv=None):
     ap.add_argument("--max-players", type=int, default=DEFAULT_MAX_PLAYERS,
                     help="operator ceiling on advertised max_players; the "
                          "game's own cap is not yet read from the ROM")
+    ap.add_argument("--discord-webhook", action="append", default=[], metavar="URL",
+                    help="post lobby and match lines to this Discord webhook "
+                         "(repeatable); also LB_DISCORD_WEBHOOK, comma-separated")
+    ap.add_argument("--discord-label", default="",
+                    help="shown after the sender's name, e.g. King")
     ap.add_argument("--quiet", action="store_true",
                     help="write the log file but do not echo to the console")
     args = ap.parse_args(argv)
@@ -672,12 +862,16 @@ def main(argv=None):
     if logfile is None and args.quiet:
         ap.error("--quiet with no log file would log nowhere")
 
+    hooks = list(args.discord_webhook) + [u.strip() for u in
+                                          os.environ.get("LB_DISCORD_WEBHOOK", "").split(",") if u.strip()]
     srv, store, log = build(args.port, args.db, logfile, not args.quiet,
-                            args.max_players, args.host)
+                            args.max_players, args.host, hooks, args.discord_label)
     log("START", "LEGO Battles master server on %s:%d"
         % (args.host or "0.0.0.0", args.port))
     log("START", "database %s, log %s, ttl %ds, operator ceiling %d players"
         % (args.db, logfile or "(none: console only)", TTL_SECONDS, args.max_players))
+    if srv.discord.urls:
+        log("START", "Discord: %d webhook(s)" % len(srv.discord.urls))
 
     # systemd stops a service with SIGTERM: shut down as Ctrl+C does, so the
     # database is closed cleanly.

@@ -140,6 +140,38 @@ WantedBy=multi-user.target
 The log is then in `journalctl -u <unit>`. `systemctl status` shows the
 server's own status line ("serving on port 28555").
 
+## Discord
+
+`--discord-webhook URL` posts the server's lines to a Discord channel, worded
+as the Cloudflare server's:
+- a lobby hosted, with its settings;
+- a player joining or leaving;
+- the match starting, on which map and with whom;
+- the match ending, with who won and lost;
+- the lobby disbanded or gone quiet.
+
+Give the option twice for two channels. `--discord-label King` adds the label
+to the sender's name ("LEGO Battles server (King)"). The lines go out on a
+background thread, and a failure is logged and let go: the server never waits
+on Discord. It needs outbound TCP 443.
+
+A webhook URL is a secret: anyone who has it can post to the channel. Unit
+files are readable by every user, so under systemd keep it in an environment
+file only root can read:
+
+```ini
+# /etc/lbsserver.env  (chmod 600, owned by root)
+LB_DISCORD_WEBHOOK=https://discord.com/api/webhooks/...
+```
+
+```ini
+[Service]
+EnvironmentFile=/etc/lbsserver.env
+ExecStart=/usr/bin/python3 ./master_server.py --port 28555 --db /srv/lbsserver/data/master.sqlite3 --no-log-file --discord-label King
+```
+
+`LB_DISCORD_WEBHOOK` takes several URLs separated by commas.
+
 ## Executables
 
 The master server also ships as an **executable** in two
