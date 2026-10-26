@@ -65,6 +65,9 @@ CODE_LENGTH = 4
 MAX_NAME = 24            # a lobby or player name, generous but bounded
 DEFAULT_MAX_PLAYERS = 8  # an operator ceiling, NOT the game's cap - see above
 MAX_BODY = 8192          # refuse oversized request bodies outright
+# docs/428: the match picture, a PNG the host posts once per match, base64.
+MAX_IMAGE_BYTES = 400 * 1024
+MAX_IMAGE_BODY = MAX_IMAGE_BYTES * 4 // 3 + 4096
 
 NAME_OK = re.compile(r"^[\w \-'.!?]{1,%d}$" % MAX_NAME)
 
@@ -344,12 +347,12 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             pass
 
-    def _body(self):
+    def _body(self, limit=MAX_BODY):
         try:
             n = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             return None
-        if n <= 0 or n > MAX_BODY:
+        if n <= 0 or n > limit:
             return None
         try:
             return json.loads(self.rfile.read(n).decode("utf-8"))
@@ -402,7 +405,7 @@ class Handler(BaseHTTPRequestHandler):
             srv.log("REFUSED", "banned address %s tried %s" % (self.peer, path))
             return self._send(403, {"ok": False, "error": "banned"})
 
-        body = self._body()
+        body = self._body(MAX_IMAGE_BODY if path == "/match_image" else MAX_BODY)
         if body is None:
             return self._send(400, {"ok": False, "error": "bad or oversized body"})
 
@@ -416,6 +419,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._punch(body, now)
         if path == "/poll":
             return self._poll(body, now)
+        if path == "/match_image":
+            return self._match_image(body)
         if path == "/join":
             return self._member(body, now, True)
         if path == "/leave":
@@ -430,6 +435,36 @@ class Handler(BaseHTTPRequestHandler):
     # waits, collects them. Anyone whose address equals the host's is behind
     # the same router and is given the LAN pair instead. All of it is kept in
     # memory for 30 s: nothing is written to the database.
+
+    def _match_image(self, body):
+        """POST /match_image {code, token, png (base64), map_name}: the host's
+        picture of its match (rosters, the map's preview, the bans), drawn by
+        the game. Once per match, a PNG of a sensible size, posted to the
+        Discord channels; the server never looks inside it."""
+        import base64
+        srv = self.server
+        code = str(body.get("code") or "").upper()
+        lob = srv.store.lobby(code)
+        if not lob or lob.get("token") != str(body.get("token") or ""):
+            return self._send(404, {"ok": False, "error": "unknown lobby"})
+        with srv.lock:
+            m = srv.meta.get(code)
+            if m and m["image"]:
+                return self._send(409, {"ok": False, "error": "already posted for this match"})
+        try:
+            png = base64.b64decode(str(body.get("png") or ""), validate=True)
+        except Exception:
+            return self._send(400, {"ok": False, "error": "png is not base64"})
+        if len(png) < 64 or len(png) > MAX_IMAGE_BYTES or png[:8] != b"\x89PNG\r\n\x1a\n":
+            return self._send(400, {"ok": False, "error": "not a PNG of an accepted size"})
+        with srv.lock:
+            if m:
+                m["image"] = True
+            host = m["host"] if m else lob.get("host_name", "")
+            map_name = (m["map"] if m else "") or clean_name(body.get("map_name"), "")
+        srv.discord.image("\U0001F5FA\uFE0F **%s**'s match%s."
+                          % (plain(host), " on **%s**" % plain(map_name) if map_name else ""), png)
+        return self._send(200, {"ok": True})
 
     def _ended(self, code, m, body):
         """The Discord line for a lobby its host removed: the match's end (with
@@ -559,7 +594,7 @@ class Handler(BaseHTTPRequestHandler):
         with srv.lock:   # the Discord lines' record, in memory only
             srv.meta[code] = {"host": fields["host_name"], "created": now, "state": "open",
                               "started": 0.0, "map": fields["map_name"],
-                              "max": maxp, "members": []}
+                              "max": maxp, "members": [], "image": False}
         settings = settings_text(fields["options"])
         srv.discord("\U0001F3AE **%s** is hosting a LEGO Battles lobby `%s` (up to %d players%s)%s"
                     % (plain(fields["host_name"]), code, maxp,
@@ -611,6 +646,7 @@ class Handler(BaseHTTPRequestHandler):
                            " on **%s**" % plain(m["map"]) if m["map"] else "", who))
             if state == "open" and m["state"] != "open":
                 m["state"] = "open"
+                m["image"] = False   # the next match gets its own picture
         if line:
             srv.discord(line)
 
@@ -742,23 +778,45 @@ class Discord:
             self.queue = queue.Queue(maxsize=200)
             threading.Thread(target=self._run, name="discord", daemon=True).start()
 
-    def __call__(self, text):
+    def __call__(self, text, png=None):
         if not self.queue:
             return
         try:
-            self.queue.put_nowait(str(text)[:1900])
+            self.queue.put_nowait((str(text)[:1900], png))
         except Exception:
             self.log("DISCORD", "queue full; a message was dropped")
+
+    def image(self, text, png):
+        """A message with a picture: a multipart post, the file shown by an
+        embed as attachment://match.png (as the Worker's discordImage)."""
+        self(text, png)
 
     def _run(self):
         import urllib.request
         while True:
-            text = self.queue.get()
-            body = json.dumps({"username": self.name, "content": text,
-                               "allowed_mentions": {"parse": []}}).encode("utf-8")
+            text, png = self.queue.get()
+            payload = {"username": self.name, "content": text,
+                       "allowed_mentions": {"parse": []}}
+            if png:
+                payload["embeds"] = [{"image": {"url": "attachment://match.png"}}]
+                boundary = "lbmaster" + secrets.token_hex(12)
+                body = b"".join([
+                    b"--" + boundary.encode() + b"\r\n",
+                    b'Content-Disposition: form-data; name="payload_json"\r\n',
+                    b"Content-Type: application/json\r\n\r\n",
+                    json.dumps(payload).encode("utf-8"), b"\r\n",
+                    b"--" + boundary.encode() + b"\r\n",
+                    b'Content-Disposition: form-data; name="files[0]"; filename="match.png"\r\n',
+                    b"Content-Type: image/png\r\n\r\n",
+                    png, b"\r\n",
+                    b"--" + boundary.encode() + b"--\r\n"])
+                ctype = "multipart/form-data; boundary=" + boundary
+            else:
+                body = json.dumps(payload).encode("utf-8")
+                ctype = "application/json"
             for url in self.urls:
                 req = urllib.request.Request(url, data=body, method="POST", headers={
-                    "Content-Type": "application/json",
+                    "Content-Type": ctype,
                     # Discord refuses urllib's default agent.
                     "User-Agent": "LEGOBattlesMasterServer (github.com/AgitationSkeleton/legobattles-pc)"})
                 try:

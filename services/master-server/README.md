@@ -148,7 +148,10 @@ as the Cloudflare server's:
 - a player joining or leaving;
 - the match starting, on which map and with whom;
 - the match ending, with who won and lost;
-- the lobby disbanded or gone quiet.
+- the lobby disbanded or gone quiet;
+- the match picture: the teams, the map's preview and the bans, drawn by the
+  host's game and posted once per match (`POST /match_image`, a PNG of up to
+  400 KB).
 
 Give the option twice for two channels. `--discord-label King` adds the label
 to the sender's name ("LEGO Battles server (King)"). The lines go out on a
