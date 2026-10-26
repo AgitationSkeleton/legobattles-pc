@@ -35,6 +35,8 @@ import json
 import os
 import re
 import secrets
+import signal
+import socket
 import sqlite3
 import sys
 import threading
@@ -568,6 +570,11 @@ class MasterServer(ThreadingHTTPServer):
         self.lan = {}        # code -> (lan_address, lan_port)
         self.punches = {}    # code -> [(address, port, when)]
 
+    def service_actions(self):
+        """Called by serve_forever about every half second: the watchdog ping
+        (systemd's WatchdogSec), so a loop that stops serving stops pinging."""
+        _watchdog_ping()
+
     def sweep(self, now):
         """Expire stale advertisements, at most once a second."""
         if now - self._last_sweep < 1.0:
@@ -575,6 +582,56 @@ class MasterServer(ThreadingHTTPServer):
         self._last_sweep = now
         for code in self.store.expire(now):
             self.log("EXPIRE", "lobby %s stopped heartbeating" % code)
+
+
+# ---------------------------------------------------------------- systemd ----
+#
+# The sd_notify protocol, without libsystemd: one datagram to the Unix socket
+# systemd names in NOTIFY_SOCKET (an abstract one when it starts with "@").
+# With Type=notify the service counts as started at READY=1, sent once the port
+# is bound; with WatchdogSec it must ping WATCHDOG=1 within that time or be
+# restarted. Nothing happens when NOTIFY_SOCKET is unset (any other way of
+# running it, and Windows). The unit must allow AF_UNIX for this
+# (RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6); see README.md.
+
+def sd_notify(message):
+    path = os.environ.get("NOTIFY_SOCKET", "")
+    if not path or not hasattr(socket, "AF_UNIX"):
+        return False
+    if path.startswith("@"):
+        path = "\0" + path[1:]
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as s:
+            s.connect(path)
+            s.sendall(message.encode("utf-8"))
+        return True
+    except OSError:
+        return False
+
+
+_watchdog_every = 0.0   # seconds between pings: half of WATCHDOG_USEC, or 0
+_watchdog_last = 0.0
+
+
+def _watchdog_ping():
+    global _watchdog_last
+    if _watchdog_every <= 0:
+        return
+    now = time.monotonic()
+    if now - _watchdog_last >= _watchdog_every:
+        _watchdog_last = now
+        sd_notify("WATCHDOG=1")
+
+
+def _watchdog_setup():
+    global _watchdog_every
+    try:
+        usec = int(os.environ.get("WATCHDOG_USEC", "0"))
+        pid = int(os.environ.get("WATCHDOG_PID", str(os.getpid())))
+    except ValueError:
+        return
+    if usec > 0 and pid == os.getpid():
+        _watchdog_every = usec / 2e6
 
 
 # ------------------------------------------------------------------- main ----
@@ -600,25 +657,46 @@ def main(argv=None):
     ap.add_argument("--port", type=int, default=DEFAULT_PORT)
     ap.add_argument("--host", default="")
     ap.add_argument("--db", default="master.sqlite3")
-    ap.add_argument("--log", default=os.path.join("logs", "master.log"))
+    ap.add_argument("--log", default=os.path.join("logs", "master.log"),
+                    help="the log file; '-' for none (the console only, which "
+                         "systemd puts in its journal)")
+    ap.add_argument("--no-log-file", action="store_true",
+                    help="no log file: the console only (the same as --log -)")
     ap.add_argument("--max-players", type=int, default=DEFAULT_MAX_PLAYERS,
                     help="operator ceiling on advertised max_players; the "
                          "game's own cap is not yet read from the ROM")
     ap.add_argument("--quiet", action="store_true",
                     help="write the log file but do not echo to the console")
     args = ap.parse_args(argv)
+    logfile = None if args.no_log_file or args.log in ("", "-") else args.log
+    if logfile is None and args.quiet:
+        ap.error("--quiet with no log file would log nowhere")
 
-    srv, store, log = build(args.port, args.db, args.log, not args.quiet,
+    srv, store, log = build(args.port, args.db, logfile, not args.quiet,
                             args.max_players, args.host)
     log("START", "LEGO Battles master server on %s:%d"
         % (args.host or "0.0.0.0", args.port))
     log("START", "database %s, log %s, ttl %ds, operator ceiling %d players"
-        % (args.db, args.log, TTL_SECONDS, args.max_players))
+        % (args.db, logfile or "(none: console only)", TTL_SECONDS, args.max_players))
+
+    # systemd stops a service with SIGTERM: shut down as Ctrl+C does, so the
+    # database is closed cleanly.
+    def on_term(signum, frame):
+        raise KeyboardInterrupt
+    try:
+        signal.signal(signal.SIGTERM, on_term)
+    except (AttributeError, ValueError):
+        pass
+    _watchdog_setup()
+    if sd_notify("READY=1\nSTATUS=serving on port %d" % args.port):
+        log("START", "told systemd it is ready%s"
+            % (" (watchdog every %.0f s)" % _watchdog_every if _watchdog_every else ""))
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
-        log("STOP", "interrupted")
+        log("STOP", "stopping")
     finally:
+        sd_notify("STOPPING=1")
         srv.server_close()
         store.close()
     return 0

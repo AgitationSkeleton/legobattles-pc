@@ -67,6 +67,78 @@ database and are enforced on every POST.
 
 Logs go to `logs/master.log` by default in both flavours; the cmd flavour also
 echoes to the console, and `--quiet` turns that off while keeping the file.
+`--no-log-file` (or `--log -`) writes no file: the console only, which is what
+systemd keeps in its journal.
+
+## Running it under systemd
+
+`master_server.py` speaks systemd's notify protocol by itself, with no package
+to install. It does this only when systemd starts it with `Type=notify`; any
+other way of running it is unchanged.
+
+- **READY=1:** sent once the port is bound, so the service counts as started
+  only when it can take connections.
+- **Watchdog:** with `WatchdogSec=`, the server pings from its serve loop. A
+  server that stops serving stops pinging, and systemd restarts it.
+- **SIGTERM:** systemd's stop signal shuts it down cleanly, closing the
+  database.
+
+The notify messages travel over a Unix socket, so the unit must allow
+`AF_UNIX`. Without it, systemd waits for a READY that never arrives and kills
+the service. `AF_UNIX` also lets name resolution work for an `ExecStartPre` that
+pulls updates, on machines that resolve through systemd-resolved's socket.
+
+```ini
+[Unit]
+Description=LEGO Battles master server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+WatchdogSec=30
+User=lbsserver
+WorkingDirectory=/srv/lbsserver/legobattles-pc/services/master-server
+# Optional: update from the repository before each start.
+ExecStartPre=/usr/bin/git -C /srv/lbsserver/legobattles-pc pull --ff-only
+ExecStart=/usr/bin/python3 ./master_server.py --port 28555 --db /srv/lbsserver/data/master.sqlite3 --no-log-file
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/srv/lbsserver
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictSUIDSGID=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+MemoryDenyWriteExecute=yes
+# AF_UNIX for the notify socket (and the resolver's), the rest for players.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SocketBindDeny=any
+SocketBindAllow=ipv4:tcp:28555
+SocketBindAllow=ipv6:tcp:28555
+# The server starts a thread per request; leave room for them.
+TasksMax=128
+
+[Install]
+WantedBy=multi-user.target
+```
+
+The log is then in `journalctl -u <unit>`. `systemctl status` shows the
+server's own status line ("serving on port 28555").
 
 ## Executables
 
