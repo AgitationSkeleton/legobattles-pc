@@ -944,7 +944,7 @@ extern "C" int lb_matchpic_score_json(char* out, int cap) {
     if (!g_watch) return 0;
     fake_result_if_asked();
     const unsigned cheats = (unsigned)lb_cheat_mask_live();
-    if (cheats) {
+    if (cheats || lb_ar_active()) {   // SG-0035: Action Replay codes count as cheating
         std::fprintf(stderr, "[lb_scores] cheats were on: the match is not reported\n");
         std::fflush(stderr);
         return 0;

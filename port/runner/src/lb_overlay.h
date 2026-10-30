@@ -183,6 +183,10 @@ void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer);
 // it.
 bool lb_overlay_event(const SDL_Event* event);
 
+// SG-0027: 1 when this frame's emulation is held (the TAS pause, offline only);
+// a frame advance lets one frame through. Asked once per frame by the frontend.
+int lb_tas_hold_frame(void);
+
 // True while a panel has the mouse. The runner's guest-touch path consults
 // this so a click on a panel is not also delivered as a stylus tap.
 bool lb_overlay_wants_mouse(void);
@@ -598,6 +602,9 @@ int lb_net_http_post(const char* host, int port, const char* path, const char* b
                      char* out, int cap);
 /* docs/443: the second server of "Both" (or LB_EXTRA_SERVER), if any. */
 int lb_net_extra_server(char* host, int cap, int* port);
+/* SG-0029: a joiner's lobby server, and whether the fallback is in use. */
+int lb_net_peer_server(char* out, int cap);
+int lb_net_fallback_on(void);
 /* docs/443: the preset family of a balance slot ("Rebalance" for Rebalance 1.18.1). */
 const char* lb_balance_family(int slot);
 void lb_matchpic_tick(void);           /* LB_MATCHPIC_TEST */
@@ -796,6 +803,12 @@ int          lb_demo_play_gold_target(void);
 int          lb_rules_host_gold_target(void);
 int          lb_gold_rush_target_live(void);
 int          lb_gold_rush_view(int* goal, unsigned bricks[4], int owner[4], int defeated[4]);
+/* SG-0035: Action Replay codes: the enabled set's hash (0 none), the per-frame
+   run, whether codes are in force (online: only if the host's set is the same). */
+unsigned     lb_setting_ar_hash(void);
+int          lb_ar_active(void);
+void         lb_ar_apply_frame(void);
+int          lb_rules_host_ar_hash(unsigned* out);
 // docs/408: a hotwired transport leaves its old owner's AI (kind 12).
 int          lb_setting_transport_release(void);
 int          lb_demo_play_transport_release(void);

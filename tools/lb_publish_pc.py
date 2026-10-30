@@ -140,7 +140,11 @@ def main():
                 for k, line in enumerate(fh, 1):
                     if LEAKS.search(line) and "lb_publish_pc.py" not in rel:
                         leaks.append("%s:%d  %s" % (rel, k, line.strip()[:120]))
-                    elif PRIVATE is not None and PRIVATE.search(line):
+                    elif (PRIVATE is not None and PRIVATE.search(line) and
+                          "lb-public-ok" not in line):
+                        # A line marked lb-public-ok carries a name the owner
+                        # chose to show in the game (the lobby's server tag,
+                        # SG-0029); it is exempt from this check only.
                         leaks.append("%s:%d  (a private name)" % (rel, k))
     if bad:
         print("REFUSING: game-like files in the export:\n  " + "\n  ".join(bad), file=sys.stderr)

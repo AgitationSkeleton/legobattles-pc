@@ -385,6 +385,15 @@ def apply(runner_dir, imgui_dir):
             "                release_relative_mouse();\n")
     done.append("frontend.cpp: quit requests are logged")
 
+    # SG-0027: the TAS controls (lb_overlay.cpp). While paused, a frame's
+    # emulation is skipped -- the window still presents and takes input --
+    # and a frame advance lets exactly one through. Decided once per frame.
+    replace(front,
+            "        while (running && scheduler_system_timestamp() < next_frame &&",
+            "        const bool lb_tas_skip = lb_tas_hold_frame() != 0;  /* legobattles-decomp SG-0027 */\n"
+            "        while (!lb_tas_skip && running && scheduler_system_timestamp() < next_frame &&")
+    done.append("frontend.cpp: TAS pause and frame advance")
+
     # 3. Belt and braces on the guest touch feed. lb_overlay_event already
     #    swallows captured mouse events, but set_touch_from_mouse is reachable
     #    from three call sites and from replay/self-test paths, so gate the

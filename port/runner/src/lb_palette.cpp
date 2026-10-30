@@ -41,6 +41,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 extern "C" {
 #include "runtime_arm.h"
@@ -51,6 +52,8 @@ extern "C" int lb_level_world(void);              /* src/lb_patches.cpp */
 extern "C" unsigned lb_level_pick(unsigned salt); /* src/lb_patches.cpp */
 extern "C" int lb_level_is_mod(void);             /* docs/410 */
 extern "C" int lb_setting_mod_palette(void);      /* lb_overlay.cpp */
+extern "C" const char* lb_setting_custom_palette(int world);   /* SG-0034, lb_overlay.cpp */
+extern "C" const char* lb_mods_dir(void);         /* lb_mods.cpp */
 
 namespace {
 
@@ -58,9 +61,33 @@ constexpr uint32_t kViewPtr = 0x02152034u;
 
 bool main_ram(uint32_t p) { return p >= 0x02000000u && p < 0x02400000u; }
 
-// The two tables per world: [0] vanilla, [1] FactionWars. Built on first use.
-uint16_t g_table[3][2][256];
+// The tables per world: [0] vanilla, [1] FactionWars, built on first use, and
+// [2] the player's own NCLR for that world (SG-0034), loaded when the setting
+// names one.
+uint16_t g_table[3][3][256];
 int g_table_ok[3] = {0, 0, 0};   // 0 not yet, 1 built, -1 failed
+std::string g_custom_name[3];    // the file in g_table[w][2], "" for none
+uint16_t g_custom_prev[256];     // the custom table the RAM copy holds, when it changes
+
+// SG-0034: a custom palette, mods/palettes/<name>: an NCLR (RLCN) with 256
+// BGR555 colours at +0x28, as the game's own tileset palettes. False (and a
+// log line once) when the file is missing or not one.
+bool load_custom(int world, const std::string& name) {
+    const std::string path = std::string(lb_mods_dir()) + "/palettes/" + name;
+    std::FILE* f = std::fopen(path.c_str(), "rb");
+    unsigned char nclr[0x228] = {};
+    const size_t n = f ? std::fread(nclr, 1, sizeof nclr, f) : 0u;
+    if (f) std::fclose(f);
+    if (n < 0x28 + 512 || std::memcmp(nclr, "RLCN", 4) != 0) {
+        std::fprintf(stderr, "[lb_palette] %s is not an NCLR palette (%u bytes read); "
+                     "left as it is\n", path.c_str(), (unsigned)n);
+        std::fflush(stderr);
+        return false;
+    }
+    for (int i = 0; i < 256; ++i)
+        g_table[world][2][i] = (uint16_t)(nclr[0x28 + 2 * i] | (nclr[0x29 + 2 * i] << 8));
+    return true;
+}
 
 bool build_tables(int world) {
     if (g_table_ok[world]) return g_table_ok[world] > 0;
@@ -151,10 +178,26 @@ extern "C" void lb_palette_tick(void) {
     const int modpal = lb_setting_mod_palette();
     if (lb_level_is_mod() && modpal > 0) mode = modpal - 1;
     // 0 Per-Mod (the ROM's own: vanilla), 1 Vanilla, 2 FactionWars, 3 Random.
-    const int want = mode == 2 ? 1 : mode == 3 ? g_random : 0;
-    if (want == g_in_ram) return;
+    int want = mode == 2 ? 1 : mode == 3 ? g_random : 0;
+    // SG-0034: this world's custom palette file, when one is chosen, wins.
+    const char* cname = lb_setting_custom_palette(g_world);
+    const std::string custom = cname ? cname : "";
+    bool custom_changed = false;
+    if (custom != g_custom_name[g_world]) {
+        if (g_in_ram == 2) std::memcpy(g_custom_prev, g_table[g_world][2], sizeof g_custom_prev);
+        if (custom.empty() || load_custom(g_world, custom)) {
+            g_custom_name[g_world] = custom;
+            custom_changed = g_in_ram == 2;
+        } else {
+            g_custom_name[g_world] = custom;   // a bad file: remembered, not retried
+            std::memcpy(g_table[g_world][2], g_table[g_world][0], sizeof g_table[g_world][2]);
+        }
+    }
+    if (!g_custom_name[g_world].empty()) want = 2;
+    if (want == g_in_ram && !custom_changed) return;
 
-    const uint16_t* from = g_table[g_world][g_in_ram];
+    const uint16_t* from = (g_in_ram == 2 && custom_changed) ? g_custom_prev
+                                                             : g_table[g_world][g_in_ram];
     const uint16_t* to = g_table[g_world][want];
     for (int i = 1; i < 256; ++i) {
         if (runtime_index(i) || in_range(i, g_world)) continue;
@@ -175,7 +218,7 @@ extern "C" void lb_palette_tick(void) {
     static const char* const kWorld[3] = {"King", "Pirate", "Mars"};
     std::fprintf(stderr, "[lb_palette] %s tileset now in %s colours%s "
                  "(%d cycled ranges kept in phase%s)\n", kWorld[g_world],
-                 want ? "FactionWars" : "vanilla",
+                 want == 2 ? g_custom_name[g_world].c_str() : want ? "FactionWars" : "vanilla",
                  mode == 3 ? " (Random)" : "", ranges - lost,
                  lost ? ", some not matched and left as they were" : "");
     std::fflush(stderr);

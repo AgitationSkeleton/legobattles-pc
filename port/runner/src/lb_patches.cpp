@@ -15893,6 +15893,7 @@ extern "C" void lb_patches_on_vblank(void) {
     apply_hotwire_anything();
     apply_hotwire_specials_only();
     apply_emp_transports();           // docs/406
+    lb_ar_apply_frame();   // SG-0035: Action Replay codes (recordings do not carry them)
     apply_ai_cheats();
     apply_ai_hero_rebuild();
     apply_ai_hero_multi();

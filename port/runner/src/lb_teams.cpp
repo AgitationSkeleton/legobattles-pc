@@ -926,6 +926,7 @@ unsigned g_bans_recv_from = 0;             // under g_rules_mu
 uint8_t g_flags_recv = 0;                  // docs/406; under g_rules_mu
 int g_cslots_recv = 0;                     // docs/436; under g_rules_mu
 int g_gold_recv = 0;                       // SG-0036; under g_rules_mu
+unsigned g_ar_recv = 0;                    // SG-0035: the host's Action Replay hash; under g_rules_mu
 // docs/413: the host's mod maps as its rules list them (key, content hash,
 // name), and whether its rules carried the list at all (an older build's
 // do not).
@@ -1805,6 +1806,16 @@ extern "C" int lb_rules_outgoing(unsigned char* buf, int cap) {
                     buf[n++] = 'G';
                     buf[n++] = 1;
                     for (int b = 0; b < 4; ++b) buf[n++] = (unsigned char)(g >> (8 * b));
+                    // SG-0035: then the 'A' page: 'A', a version (1) and the
+                    // hash of this machine's enabled Action Replay codes (u32,
+                    // 0 none). A joiner applies its own codes only if its hash
+                    // equals this one; a host without the page counts as 0.
+                    if (n + 6 <= cap) {
+                        const unsigned ah = lb_setting_ar_hash();
+                        buf[n++] = 'A';
+                        buf[n++] = 1;
+                        for (int b = 0; b < 4; ++b) buf[n++] = (unsigned char)(ah >> (8 * b));
+                    }
                 }
             }
         }
@@ -1846,6 +1857,7 @@ extern "C" void lb_rules_on_leave(void) {
     g_flags_recv = 0;
     g_cslots_recv = 0;
     g_gold_recv = 0;
+    g_ar_recv = 0;
     g_maps_recv.clear();
     g_maps_recv_has = false;
     g_bal_done = false;
@@ -1912,14 +1924,24 @@ extern "C" int lb_rules_host_flags(void) {
     return g_bans_recv_ok ? g_flags_recv : 0;
 }
 
-// docs/436: the host's creature slots (packed, see lb_overlay.h): -1 when this
-// machine decides, 0 for a host that sends none.
+// SG-0035: -1 when this machine decides (not joined), else 0 and the host's
+// Action Replay hash (0 when it sent none).
+extern "C" int lb_rules_host_ar_hash(unsigned* out) {
+    if (out) *out = 0;
+    if (!net_joined(lb_net_guest_state())) return -1;
+    std::lock_guard<std::mutex> lk(g_rules_mu);
+    if (out) *out = g_bans_recv_ok ? g_ar_recv : 0;
+    return 0;
+}
+
 extern "C" int lb_rules_host_gold_target(void) {   // SG-0036
     if (!net_joined(lb_net_guest_state())) return -1;
     std::lock_guard<std::mutex> lk(g_rules_mu);
     return g_bans_recv_ok ? g_gold_recv : 0;
 }
 
+// docs/436: the host's creature slots (packed, see lb_overlay.h): -1 when this
+// machine decides, 0 for a host that sends none.
 extern "C" int lb_rules_host_creature_slots(void) {
     if (!net_joined(lb_net_guest_state())) return -1;
     std::lock_guard<std::mutex> lk(g_rules_mu);
@@ -2101,6 +2123,13 @@ extern "C" void lb_rules_incoming(const unsigned char* buf, int len,
             std::fflush(stderr);
         }
         g_gold_recv = gold;
+        // SG-0035: the 'A' page after it: the host's Action Replay hash.
+        unsigned ah = 0;
+        const int a_at = g_at >= 0 ? g_at + 6 : -1;
+        if (a_at >= 0 && a_at + 6 <= len && buf[a_at] == 'A' && buf[a_at + 1] == 1)
+            ah = (unsigned)buf[a_at + 2] | ((unsigned)buf[a_at + 3] << 8) |
+                 ((unsigned)buf[a_at + 4] << 16) | ((unsigned)buf[a_at + 5] << 24);
+        g_ar_recv = ah;
     }
     if (bal_done_now) {
         std::fprintf(stderr, "[lb_teams] the host's balance from instance %u: "

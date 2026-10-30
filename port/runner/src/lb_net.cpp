@@ -2309,3 +2309,21 @@ extern "C" int lb_net_http_get(const char* host, int port, const char* path, cha
     out[n] = '\0';
     return error.empty() ? n : -1;
 }
+
+// SG-0029: the server a joiner's lobby is listed on (the one its Join screen
+// chose), "" when not known; and whether the master-server fallback is the
+// one in use (docs/442). For the lobby screen's label.
+extern "C" int lb_net_peer_server(char* out, int cap) {
+    if (!out || cap <= 0) return 0;
+    std::string s;
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        s = g_peer_server.empty() ? g_list_server : g_peer_server;
+    }
+    std::snprintf(out, (size_t)cap, "%s", s.c_str());
+    return (int)s.size();
+}
+extern "C" int lb_net_fallback_on(void) {
+    std::lock_guard<std::mutex> lk(g_fb_mu);
+    return g_fb_on ? 1 : 0;
+}

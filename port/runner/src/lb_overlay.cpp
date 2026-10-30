@@ -41,6 +41,9 @@
 #include "lb_overlay.h"
 #include "lb_field.h"
 #include "io.h"          /* legobattles-decomp: save manager tab */
+extern "C" {
+#include "runtime_arm.h"   /* SG-0035: bus_read/write for Action Replay */
+}
 
 // The adaptive surface's own geometry, for the corrected minimap box in
 // draw_top_screen. Declared here rather than by including gpu3d.h because
@@ -78,6 +81,8 @@ int lb_widemap_cam_px(int* x, int* y);     /* src/lb_widemap.cpp */
 #include <ctime>    /* docs/388: the save cache's timestamps */
 #include <atomic>   /* docs/396: the Reset request */
 #include <cctype>   /* docs/443 */
+#include <filesystem>   /* SG-0034: mods/palettes */
+extern "C" const char* lb_mods_dir(void);   /* lb_mods.cpp */
 #include <random>   /* docs/443: the player id */
 #include <set>      /* docs/443: the scores page's banned units */
 #include <mutex>    /* docs/413: the notice, set from the emulation thread */
@@ -179,6 +184,9 @@ struct Settings {
     // 3 Random) and a forced tileset (0 Off, 1 Castle, 2 Pirates, 3 Mars,
     // 4 Random).
     int level_palette = 0;
+    // SG-0034: a palette file (mods/palettes/<name>.nclr) for King, Pirate and
+    // Mars levels; "" for none (Level Palettes decides).
+    char custom_pal[3][64] = {"", "", ""};
     int mod_palette = 0;   // docs/410: 0 the same, else Level Palettes' mode + 1
     bool smooth_models = false;   // docs/411: 3D models without edge marking, AA on
     int res3d = 0;                // docs/434: 3D resolution, 0 Native, 1 2x, 2 3x, 3 4x
@@ -195,6 +203,7 @@ struct Settings {
     // view_update_override), not a tap. On by default; false leaves those
     // inputs alone.
     bool quick_keys = true;
+    bool tas_keys = false;   // SG-0027: F5 pause, F6 one frame (offline)
     // docs/398: while the blue brick's list is the open one, 1-9 pick from it
     // instead of the second brick's list. On by default.
     bool quick_keys_blue = true;
@@ -209,6 +218,10 @@ struct Settings {
     int team_working[LB_TEAM_SLOTS] = {0, 2, 3, 4, 5, 6, 7, 8, 9};
     int enemy_team[LB_TEAM_SLOTS] = {0, 2, 3, 4, 5, 6, 7, 8, 9};
     char team_presets[2048] = "";
+    // SG-0035: Action Replay codes ("|" stands for a newline in the file) and
+    // the named sets saved from them.
+    char ar_codes[8192] = "";
+    char ar_sets[16384] = "";
     char banned_units[512] = "";
     // docs/429: map bans ("s5,h<hash>" tokens), the units banned on some maps
     // only ("bp:tok+tok;..."), the ban preset in force and its banned maps,
@@ -611,6 +624,9 @@ extern "C" void lb_settings_save(void) {
                   g_set.steady_cadence ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"level_palette\": %d,\n",
                   g_set.level_palette); o += buf;
+    json_put_str(o, "custom_pal_king", g_set.custom_pal[0], true);     // SG-0034
+    json_put_str(o, "custom_pal_pirate", g_set.custom_pal[1], true);
+    json_put_str(o, "custom_pal_mars", g_set.custom_pal[2], true);
     std::snprintf(buf, sizeof buf, "  \"mod_palette\": %d,\n",
                   g_set.mod_palette); o += buf;   // docs/410
     std::snprintf(buf, sizeof buf, "  \"smooth_models\": %s,\n",
@@ -629,6 +645,8 @@ extern "C" void lb_settings_save(void) {
                   g_set.force_tileset); o += buf;
     std::snprintf(buf, sizeof buf, "  \"quick_keys\": %s,\n",
                   g_set.quick_keys ? "true" : "false"); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"tas_keys\": %s,\n",
+                  g_set.tas_keys ? "true" : "false"); o += buf;   // SG-0027
     std::snprintf(buf, sizeof buf, "  \"quick_keys_blue\": %s,\n",
                   g_set.quick_keys_blue ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"cancel_queue_click\": %s,\n",
@@ -644,6 +662,8 @@ extern "C" void lb_settings_save(void) {
         o += "],\n";
     }
     json_put_str(o, "team_presets", g_set.team_presets, true);
+    json_put_str(o, "ar_codes", g_set.ar_codes, true);   // SG-0035
+    json_put_str(o, "ar_sets", g_set.ar_sets, true);
     json_put_str(o, "ai_opp_team", g_set.ai_opp_team, true);
     std::snprintf(buf, sizeof buf, "  \"gold_rush_target\": %d,\n  \"gold_rush_view\": %s,\n",
                   g_set.gold_rush_target, g_set.gold_rush_view ? "true" : "false"); o += buf;
@@ -855,6 +875,9 @@ extern "C" void lb_settings_load(void) {
     // A file written before this key existed keeps the default (steady).
     json_get_bool(s, "steady_cadence", &g_set.steady_cadence);
     json_get_int(s, "level_palette", &g_set.level_palette);   // docs/387
+    json_get_str(s, "custom_pal_king", g_set.custom_pal[0], sizeof g_set.custom_pal[0]);   // SG-0034
+    json_get_str(s, "custom_pal_pirate", g_set.custom_pal[1], sizeof g_set.custom_pal[1]);
+    json_get_str(s, "custom_pal_mars", g_set.custom_pal[2], sizeof g_set.custom_pal[2]);
     json_get_int(s, "force_tileset", &g_set.force_tileset);   // docs/387
     if (g_set.level_palette < 0 || g_set.level_palette > 3) g_set.level_palette = 0;
     json_get_int(s, "mod_palette", &g_set.mod_palette);   // docs/410
@@ -871,12 +894,15 @@ extern "C" void lb_settings_load(void) {
     if (g_set.mod_palette < 0 || g_set.mod_palette > 4) g_set.mod_palette = 0;
     if (g_set.force_tileset < 0 || g_set.force_tileset > 4) g_set.force_tileset = 0;
     json_get_bool(s, "quick_keys", &g_set.quick_keys);   // docs/383, default on
+    json_get_bool(s, "tas_keys", &g_set.tas_keys);       // SG-0027
     json_get_bool(s, "quick_keys_blue", &g_set.quick_keys_blue);   // docs/398
     json_get_bool(s, "cancel_queue_click", &g_set.cancel_queue_click);   // SG-0006
     // docs/384; a file without them keeps King's team and no presets or bans.
     json_get_ints(s, "team_working", g_set.team_working, LB_TEAM_SLOTS);
     json_get_ints(s, "enemy_team", g_set.enemy_team, LB_TEAM_SLOTS);
     json_get_str(s, "team_presets", g_set.team_presets, sizeof g_set.team_presets);
+    json_get_str(s, "ar_codes", g_set.ar_codes, sizeof g_set.ar_codes);   // SG-0035
+    json_get_str(s, "ar_sets", g_set.ar_sets, sizeof g_set.ar_sets);
     json_get_str(s, "ai_opp_team", g_set.ai_opp_team, sizeof g_set.ai_opp_team);
     json_get_int(s, "gold_rush_target", &g_set.gold_rush_target);
     if (g_set.gold_rush_target < 0 || g_set.gold_rush_target > 1000000) g_set.gold_rush_target = 0;
@@ -1530,6 +1556,49 @@ void tab_display() {
          "found in several mods has no single palette of its own.\n"
          "Changes at once, even mid-battle. Only this machine sees it.");
     badge(WIRED);
+    // SG-0034: the player's own palette files, one per world.
+    {
+        static std::vector<std::string> files;
+        static Uint64 listed = 0;
+        if (SDL_GetTicks64() - listed > 3000 || listed == 0) {   // the folder, every few seconds
+            listed = SDL_GetTicks64();
+            files.clear();
+            std::error_code ec;
+            const std::filesystem::path dir = std::filesystem::u8path(lb_mods_dir()) / "palettes";
+            for (const auto& e : std::filesystem::directory_iterator(dir, ec)) {
+                if (!e.is_regular_file(ec)) continue;
+                const auto u8 = [](const std::filesystem::path& p) {   // C++20: u8string is char8_t
+                    const auto s = p.u8string();
+                    return std::string(reinterpret_cast<const char*>(s.c_str()), s.size());
+                };
+                std::string ext = u8(e.path().extension());
+                for (char& c : ext) c = (char)std::tolower((unsigned char)c);
+                if (ext == ".nclr") files.push_back(u8(e.path().filename()));
+            }
+            std::sort(files.begin(), files.end());
+        }
+        static const char* const kWorld[3] = {"King levels", "Pirate levels", "Mars levels"};
+        for (int w = 0; w < 3; ++w) {
+            char* cur = g_set.custom_pal[w];
+            ImGui::SetNextItemWidth(220.0f * g_ui_scale);
+            char id[48];
+            std::snprintf(id, sizeof id, "%s palette file##cpal%d", kWorld[w], w);
+            if (ImGui::BeginCombo(id, cur[0] ? cur : "(none)")) {
+                if (ImGui::Selectable("(none)", !cur[0])) cur[0] = '\0';
+                for (const std::string& f : files)
+                    if (ImGui::Selectable(f.c_str(), f == cur))
+                        std::snprintf(cur, sizeof g_set.custom_pal[w], "%s", f.c_str());
+                ImGui::EndCombo();
+            }
+        }
+        help("Your own palette files: put .nclr files (the format of the game's\n"
+             "KingTileset.NCLR, PirateTileset.NCLR and MarsTileset.NCLR) in the\n"
+             "mods/palettes folder and pick one for each world. It replaces\n"
+             "Level Palettes for that world's maps. Only this machine sees it.");
+        badge(WIRED);
+        if (files.empty())
+            ImGui::TextDisabled("  No .nclr files in %s/palettes yet.", lb_mods_dir());
+    }
     // docs/410: a separate choice for the mods folder's maps.
     const char* modpals[] = {"Same as Level Palettes", "Per-Mod", "Vanilla",
                              "FactionWars / FunLite2", "Random"};
@@ -2206,6 +2275,474 @@ static const CheatDef kCheats[] = {
 };
 static const int kCheatCount = (int)(sizeof(kCheats) / sizeof(kCheats[0]));
 
+extern "C" int lb_ar_hash_live(void);   // below: the enabled set's hash, 0 none
+extern "C" int lb_ar_active(void);      // below: codes are enabled AND allowed
+
+// ── SG-0035: ACTION REPLAY CODES ─────────────────────────────────────────────
+//
+// Codes are lines of two 8-hex-digit words (`02012345 000003E7`). Each named
+// entry is compiled to a list of ops and run once per VBlank on the ARM9 bus
+// (lb_ar_apply_frame, from lb_patches_on_vblank). RECORDINGS DO NOT CARRY AR
+// CODES: a replay played with codes on can diverge from the recording.
+//
+// Supported: 0/1/2 write 32/16/8 at X+offset; 3/4/5/6 32-bit if greater /
+// less / equal / not equal (Y compared with the memory word); 7/8/9/A the
+// 16-bit forms with a mask (ZZZZYYYY: (mem & ~Z) against Y); B load offset
+// from [X+offset]; C0 loop N times; D0 end-if, D1 end-loop, D2 end-code,
+// D3 set offset, D4 add to data, D5 set data, D6/D7/D8 store data
+// (32/16/8) at Y+offset and step, DC add to offset; E copy Y bytes of the
+// following lines. Anything else is skipped and shown in the menu.
+//
+// A conditional covers the NEXT LINE ONLY, unless a D0 follows it in the same
+// code (before a D2), in which case it covers everything up to that D0.
+// Addresses are held to main RAM (0x02000000..0x023FFFFF); others are skipped.
+struct ArOp {
+    uint32_t a = 0, b = 0;
+    uint8_t k = 0;
+    int end = -1;                 // conditionals: the D0 that closes the block
+    std::vector<uint8_t> data;    // E
+};
+enum { AR_W32, AR_W16, AR_W8, AR_C32, AR_C16, AR_PTR, AR_LOOP, AR_ENDIF,
+       AR_ENDLOOP, AR_ENDCODE, AR_SETOFF, AR_ADDOFF, AR_DADD, AR_DSET,
+       AR_ST32, AR_ST16, AR_ST8, AR_PATCH };
+
+struct ArEntry { std::string name; bool on = true; std::string text; };
+
+struct ArProg {
+    std::vector<ArOp> ops;
+    int unknown = 0;
+    std::string unknown_first;
+};
+
+std::mutex g_ar_mu;
+
+std::string ar_trim(const std::string& s) {
+    size_t b = 0, e = s.size();
+    while (b < e && std::isspace((unsigned char)s[b])) ++b;
+    while (e > b && std::isspace((unsigned char)s[e - 1])) --e;
+    return s.substr(b, e - b);
+}
+
+std::vector<std::string> ar_lines(const std::string& t) {
+    std::vector<std::string> v;
+    size_t p = 0;
+    while (p <= t.size()) {
+        size_t e = t.find('\n', p);
+        if (e == std::string::npos) e = t.size();
+        std::string l = t.substr(p, e - p);
+        if (!l.empty() && l.back() == '\r') l.pop_back();
+        v.push_back(l);
+        p = e + 1;
+    }
+    return v;
+}
+
+// Two words from a line, or false.
+bool ar_words(const std::string& line, uint32_t* a, uint32_t* b) {
+    uint64_t v = 0;
+    int n = 0;
+    for (char c : line) {
+        int d;
+        if (c >= '0' && c <= '9') d = c - '0';
+        else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+        else if (c == ' ' || c == '\t' || c == ',') continue;
+        else return false;
+        if (n >= 16) return false;
+        v = (v << 4) | (uint64_t)d;
+        ++n;
+    }
+    if (n != 16) return false;
+    *a = (uint32_t)(v >> 32);
+    *b = (uint32_t)v;
+    return true;
+}
+
+ArProg ar_compile(const std::string& text) {
+    ArProg p;
+    const std::vector<std::string> ls = ar_lines(text);
+    auto note = [&](const std::string& l) {
+        if (p.unknown++ == 0) p.unknown_first = l;
+    };
+    for (size_t li = 0; li < ls.size(); ++li) {
+        const std::string l = ar_trim(ls[li]);
+        if (l.empty() || l[0] == '#' || l[0] == ';' || l[0] == '[') continue;
+        uint32_t a, b;
+        if (!ar_words(l, &a, &b)) { note(l); continue; }
+        ArOp op;
+        op.a = a; op.b = b;
+        const unsigned n = a >> 28;
+        const unsigned sub = (a >> 24) & 0xFu;
+        bool ok = true;
+        if (n == 0) op.k = AR_W32;
+        else if (n == 1) op.k = AR_W16;
+        else if (n == 2) op.k = AR_W8;
+        else if (n >= 3 && n <= 6) op.k = AR_C32;
+        else if (n >= 7 && n <= 10) op.k = AR_C16;
+        else if (n == 11) op.k = AR_PTR;
+        else if (n == 12) { if (sub == 0) op.k = AR_LOOP; else ok = false; }
+        else if (n == 13) {
+            switch (sub) {
+                case 0: op.k = AR_ENDIF; break;
+                case 1: op.k = AR_ENDLOOP; break;
+                case 2: op.k = AR_ENDCODE; break;
+                case 3: op.k = AR_SETOFF; break;
+                case 4: op.k = AR_DADD; break;
+                case 5: op.k = AR_DSET; break;
+                case 6: op.k = AR_ST32; break;
+                case 7: op.k = AR_ST16; break;
+                case 8: op.k = AR_ST8; break;
+                case 12: op.k = AR_ADDOFF; break;
+                default: ok = false;
+            }
+        } else if (n == 14) {
+            op.k = AR_PATCH;
+            const uint32_t len = std::min<uint32_t>(b, 4096u);
+            for (uint32_t got = 0; got < len;) {
+                if (++li >= ls.size()) break;
+                uint32_t x, y;
+                if (!ar_words(ar_trim(ls[li]), &x, &y)) { --li; break; }
+                for (int i = 0; i < 8 && got < len; ++i, ++got)
+                    op.data.push_back((uint8_t)(((i < 4 ? x : y) >> (24 - 8 * (i & 3))) & 0xFF));
+            }
+        } else ok = false;
+        if (!ok) { note(l); continue; }
+        p.ops.push_back(std::move(op));
+    }
+    for (size_t i = 0; i < p.ops.size(); ++i) {
+        const uint8_t k = p.ops[i].k;
+        if (k != AR_C32 && k != AR_C16) continue;
+        for (size_t j = i + 1; j < p.ops.size(); ++j) {
+            if (p.ops[j].k == AR_ENDCODE) break;
+            if (p.ops[j].k == AR_ENDIF) { p.ops[i].end = (int)j; break; }
+        }
+    }
+    return p;
+}
+
+std::vector<ArEntry> ar_entries_parse(const std::string& in) {
+    std::vector<ArEntry> v;
+    for (const std::string& raw : ar_lines(in)) {
+        const std::string l = ar_trim(raw);
+        if (l.empty()) continue;
+        if (l[0] == '[') {
+            ArEntry e;
+            const size_t c = l.find(']');
+            e.name = ar_trim(l.substr(1, c == std::string::npos ? std::string::npos : c - 1));
+            if (e.name.empty()) e.name = "Code";
+            v.push_back(e);
+            continue;
+        }
+        if (v.empty()) { ArEntry e; e.name = "Imported"; v.push_back(e); }
+        if (l == "#off") { v.back().on = false; continue; }
+        v.back().text += l + "\n";
+    }
+    return v;
+}
+
+std::string ar_entries_write(const std::vector<ArEntry>& v, bool state) {
+    std::string o;
+    for (const ArEntry& e : v) {
+        o += "[" + e.name + "]\n";
+        if (state && !e.on) o += "#off\n";
+        o += e.text;
+        if (!e.text.empty() && e.text.back() != '\n') o += "\n";
+        if (!state) o += "\n";
+    }
+    return o;
+}
+
+std::string ar_clean_name(std::string n) {
+    for (char& c : n) if (c == '[' || c == ']' || c == '|' || c == '\n' || c == '\r') c = ' ';
+    n = ar_trim(n);
+    return n.empty() ? std::string("Code") : n;
+}
+
+// The settings string stores a newline as '|'.
+std::string ar_to_store(std::string s) {
+    for (char& c : s) { if (c == '|') c = '/'; else if (c == '\n') c = '|'; }
+    return s;
+}
+std::string ar_from_store(std::string s) {
+    for (char& c : s) if (c == '|') c = '\n';
+    return s;
+}
+
+std::vector<ArEntry> ar_current() {
+    std::lock_guard<std::mutex> lk(g_ar_mu);
+    return ar_entries_parse(ar_from_store(g_set.ar_codes));
+}
+
+bool ar_commit(const std::vector<ArEntry>& v) {
+    const std::string s = ar_to_store(ar_entries_write(v, true));
+    if (s.size() + 1 > sizeof g_set.ar_codes) return false;
+    std::lock_guard<std::mutex> lk(g_ar_mu);
+    std::snprintf(g_set.ar_codes, sizeof g_set.ar_codes, "%s", s.c_str());
+    return true;
+}
+
+// Named sets: "=Name" then the entries, in the same text form.
+struct ArSet { std::string name, body; };
+std::vector<ArSet> ar_sets_parse() {
+    std::vector<ArSet> v;
+    for (const std::string& l : ar_lines(ar_from_store(g_set.ar_sets))) {
+        if (!l.empty() && l[0] == '=') { v.push_back({ar_trim(l.substr(1)), ""}); continue; }
+        if (!v.empty()) v.back().body += l + "\n";
+    }
+    return v;
+}
+bool ar_sets_write(const std::vector<ArSet>& v) {
+    std::string s;
+    for (const ArSet& x : v) s += "=" + x.name + "\n" + x.body;
+    s = ar_to_store(s);
+    if (s.size() + 1 > sizeof g_set.ar_sets) return false;
+    std::snprintf(g_set.ar_sets, sizeof g_set.ar_sets, "%s", s.c_str());
+    return true;
+}
+
+// ── running ──
+inline bool ar_ok(uint32_t a, uint32_t n) { return a >= 0x02000000u && a + n <= 0x02400000u; }
+
+void ar_run(const ArProg& p, int* budget) {
+    uint32_t off = 0, data = 0;
+    int loop_at = 0;
+    uint32_t loop_n = 0;
+    const int n = (int)p.ops.size();
+    for (int i = 0; i < n && *budget > 0; ++i) {
+        --*budget;
+        const ArOp& o = p.ops[(size_t)i];
+        const uint32_t x = (o.a & 0x0FFFFFFFu) + off;
+        switch (o.k) {
+        case AR_W32: if (ar_ok(x & ~3u, 4)) bus_write_u32(x & ~3u, o.b); break;
+        case AR_W16: if (ar_ok(x & ~1u, 2)) bus_write_u16(x & ~1u, (uint16_t)o.b); break;
+        case AR_W8:  if (ar_ok(x, 1)) bus_write_u8(x, (uint8_t)o.b); break;
+        case AR_C32: case AR_C16: {
+            bool t = false;
+            const unsigned ty = o.a >> 28;
+            if (o.k == AR_C32) {
+                if (ar_ok(x & ~3u, 4)) {
+                    const uint32_t m = bus_read_u32(x & ~3u);
+                    t = ty == 3 ? o.b > m : ty == 4 ? o.b < m : ty == 5 ? o.b == m : o.b != m;
+                }
+            } else if (ar_ok(x & ~1u, 2)) {
+                const uint32_t m = bus_read_u16(x & ~1u) & ~(o.b >> 16) & 0xFFFFu;
+                const uint32_t y = o.b & 0xFFFFu;
+                t = ty == 7 ? y > m : ty == 8 ? y < m : ty == 9 ? y == m : y != m;
+            }
+            if (!t) { if (o.end >= 0) i = o.end; else ++i; }
+            break;
+        }
+        case AR_PTR: if (ar_ok(x & ~3u, 4)) off = bus_read_u32(x & ~3u); break;
+        case AR_LOOP: loop_at = i + 1; loop_n = o.b; break;
+        case AR_ENDLOOP: if (loop_n > 1) { --loop_n; i = loop_at - 1; } break;
+        case AR_ENDCODE: i = n; break;
+        case AR_SETOFF: off = o.b; break;
+        case AR_ADDOFF: off += o.b; break;
+        case AR_DADD: data += o.b; break;
+        case AR_DSET: data = o.b; break;
+        case AR_ST32: { const uint32_t t = (o.b + off) & ~3u; if (ar_ok(t, 4)) bus_write_u32(t, data); data += 4; break; }
+        case AR_ST16: { const uint32_t t = (o.b + off) & ~1u; if (ar_ok(t, 2)) bus_write_u16(t, (uint16_t)data); data += 2; break; }
+        case AR_ST8:  { const uint32_t t = o.b + off; if (ar_ok(t, 1)) bus_write_u8(t, (uint8_t)data); data += 1; break; }
+        case AR_PATCH:
+            for (size_t k = 0; k < o.data.size(); ++k)
+                if (ar_ok(x + (uint32_t)k, 1)) bus_write_u8(x + (uint32_t)k, o.data[k]);
+            break;
+        default: break;
+        }
+    }
+}
+
+// The compiled enabled entries, rebuilt when the stored text changes.
+struct ArLive {
+    std::string src;
+    std::vector<ArProg> progs;
+    uint32_t hash = 0;
+};
+ArLive g_ar_live;
+
+void ar_refresh_locked() {
+    if (g_ar_live.src == g_set.ar_codes) return;
+    g_ar_live.src = g_set.ar_codes;
+    g_ar_live.progs.clear();
+    uint32_t h = 2166136261u;
+    for (const ArEntry& e : ar_entries_parse(ar_from_store(g_ar_live.src))) {
+        if (!e.on) continue;
+        ArProg p = ar_compile(e.text);
+        if (p.ops.empty()) continue;
+        auto mix = [&](uint32_t v) { for (int i = 0; i < 4; ++i) h = (h ^ ((v >> (8 * i)) & 0xFF)) * 16777619u; };
+        for (const ArOp& o : p.ops) {
+            mix(o.a); mix(o.b);
+            for (uint8_t d : o.data) mix(d);
+        }
+        g_ar_live.progs.push_back(std::move(p));
+    }
+    g_ar_live.hash = g_ar_live.progs.empty() ? 0u : (h ? h : 1u);
+}
+
+void tab_action_replay() {
+    if (!tab_begin("Action Replay")) return;
+    guide("Action Replay cheat codes. They run every frame, offline only: online they are "
+          "held off (the game cannot yet check that every player has the same codes, and "
+          "different codes would split the match). While any code is on, scores are not "
+          "reported. Recordings don't include codes, so a replay played with codes on may "
+          "not match what was recorded.");
+    static char name_buf[48] = "";
+    static char text_buf[2048] = "";
+    static int editing = -1;
+    static char set_name[48] = "";
+    static int set_sel = -1;
+    static std::string status;
+    std::vector<ArEntry> v = ar_current();
+    bool dirty = false;
+
+    if (lb_ar_hash_live() != 0) {
+        if (lb_ar_active())
+            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f),
+                               "Codes are ACTIVE: scores will not be reported.");
+        else
+            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f),
+                               "Codes are ticked but held off: they run offline only.");
+    } else {
+        ImGui::TextDisabled("No code is ticked.");
+    }
+    ImGui::Separator();
+    ImGui::TextUnformatted("Codes");
+    if (v.empty()) ImGui::TextDisabled("(none yet: add one below, or Import)");
+    int del = -1;
+    for (int i = 0; i < (int)v.size(); ++i) {
+        ImGui::PushID(i);
+        if (ImGui::Checkbox("##on", &v[(size_t)i].on)) dirty = true;
+        ImGui::SameLine();
+        const ArProg pr = ar_compile(v[(size_t)i].text);
+        ImGui::Text("%s  (%d op%s)", v[(size_t)i].name.c_str(), (int)pr.ops.size(),
+                    pr.ops.size() == 1 ? "" : "s");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Edit")) {
+            editing = i;
+            std::snprintf(name_buf, sizeof name_buf, "%s", v[(size_t)i].name.c_str());
+            std::snprintf(text_buf, sizeof text_buf, "%s", v[(size_t)i].text.c_str());
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Delete")) del = i;
+        if (pr.unknown) {
+            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f),
+                               "    %d line(s) skipped (unknown or malformed), first: %s",
+                               pr.unknown, pr.unknown_first.c_str());
+        }
+        ImGui::PopID();
+    }
+    if (del >= 0) {
+        v.erase(v.begin() + del);
+        if (editing == del) editing = -1;
+        else if (editing > del) --editing;
+        dirty = true;
+    }
+
+    ImGui::Separator();
+    ImGui::TextUnformatted(editing >= 0 ? "Edit code" : "Add code");
+    ImGui::InputText("Name", name_buf, sizeof name_buf);
+    ImGui::InputTextMultiline("##artext", text_buf, sizeof text_buf, ImVec2(-FLT_MIN, 110.0f));
+    help("One line per code, two 8-digit hex words: 02012345 000003E7\n"
+         "Blank lines and lines starting with # are ignored.");
+    if (ImGui::Button(editing >= 0 ? "Save changes" : "Add")) {
+        ArEntry e;
+        e.name = ar_clean_name(name_buf);
+        for (const std::string& l : ar_lines(text_buf)) {
+            const std::string t = ar_trim(l);
+            if (!t.empty()) e.text += t + "\n";
+        }
+        if (editing >= 0 && editing < (int)v.size()) { e.on = v[(size_t)editing].on; v[(size_t)editing] = e; }
+        else v.push_back(e);
+        editing = -1;
+        name_buf[0] = text_buf[0] = 0;
+        dirty = true;
+    }
+    if (editing >= 0) {
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) { editing = -1; name_buf[0] = text_buf[0] = 0; }
+    }
+
+    ImGui::Separator();
+    ImGui::TextUnformatted("Import / export");
+    const std::string file = settings_path("ar_codes.txt");
+    if (ImGui::Button("Import ar_codes.txt")) {
+        FILE* f = std::fopen(file.c_str(), "rb");
+        if (!f) status = "Import: " + file + " was not found.";
+        else {
+            std::string t;
+            char b[4096];
+            size_t n;
+            while ((n = std::fread(b, 1, sizeof b, f)) > 0) t.append(b, n);
+            std::fclose(f);
+            std::vector<ArEntry> in = ar_entries_parse(t);
+            for (ArEntry& e : in) { e.name = ar_clean_name(e.name); e.on = false; v.push_back(e); }
+            status = "Imported " + std::to_string(in.size()) + " code(s), not ticked.";
+            dirty = true;
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Export ar_codes.txt")) {
+        FILE* f = std::fopen(file.c_str(), "wb");
+        if (!f) status = "Export: could not write " + file;
+        else {
+            const std::string t = ar_entries_write(v, false);
+            std::fwrite(t.data(), 1, t.size(), f);
+            std::fclose(f);
+            status = "Exported " + std::to_string(v.size()) + " code(s) to " + file;
+        }
+    }
+    help("A text file in the game folder: [Name] on its own line, then the code\n"
+         "lines. The usual Action Replay layout.");
+
+    ImGui::Separator();
+    ImGui::TextUnformatted("Code sets");
+    std::vector<ArSet> sets = ar_sets_parse();
+    const char* shown = (set_sel >= 0 && set_sel < (int)sets.size()) ? sets[(size_t)set_sel].name.c_str() : "(choose a set)";
+    ImGui::SetNextItemWidth(220.0f);
+    if (ImGui::BeginCombo("##arsets", shown)) {
+        for (int i = 0; i < (int)sets.size(); ++i)
+            if (ImGui::Selectable(sets[(size_t)i].name.c_str(), i == set_sel)) {
+                set_sel = i;
+                std::snprintf(set_name, sizeof set_name, "%s", sets[(size_t)i].name.c_str());
+            }
+        ImGui::EndCombo();
+    }
+    ImGui::InputText("Set name", set_name, sizeof set_name);
+    if (ImGui::Button("Save set")) {
+        const std::string nm = ar_clean_name(set_name);
+        ArSet s{nm, ar_entries_write(v, true)};
+        bool found = false;
+        for (ArSet& x : sets) if (x.name == nm) { x = s; found = true; }
+        if (!found) sets.push_back(s);
+        status = ar_sets_write(sets) ? "Saved set " + nm + "." : "Too many saved sets: delete one.";
+        for (int i = 0; i < (int)sets.size(); ++i) if (sets[(size_t)i].name == nm) set_sel = i;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Load set") && set_sel >= 0 && set_sel < (int)sets.size()) {
+        v = ar_entries_parse(sets[(size_t)set_sel].body);
+        status = "Loaded set " + sets[(size_t)set_sel].name + ".";
+        editing = -1;
+        dirty = true;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Delete set") && set_sel >= 0 && set_sel < (int)sets.size()) {
+        status = "Deleted set " + sets[(size_t)set_sel].name + ".";
+        sets.erase(sets.begin() + set_sel);
+        ar_sets_write(sets);
+        set_sel = -1;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Reset (clear all codes)")) {
+        v.clear();
+        editing = -1;
+        status = "All codes cleared.";
+        dirty = true;
+    }
+    if (!status.empty()) ImGui::TextDisabled("%s", status.c_str());
+    if (dirty && !ar_commit(v)) status = "Too many codes for the settings file: delete some.";
+    tab_end();
+}
+
 void tab_cheats() {
     if (!tab_begin("Cheats")) return;
 
@@ -2353,6 +2890,11 @@ void tab_input() {
          "Each runs the game's own function for that button, without\n"
          "touching the screen, and does nothing when it is not shown.\n"
          "A key bound to a DS button above stays that DS button.");
+    // SG-0027: pause and frame advance, for slow play and tool-assisted runs.
+    ImGui::Checkbox("TAS controls", &g_set.tas_keys);
+    help("F5: pause or resume the game. F6, while paused: advance one frame.\n"
+         "Hold Tab to fast-forward, as always. Offline only: online the game\n"
+         "never pauses. A session recording replays exactly as played.");
     ImGui::Checkbox("Number keys pick from the open blue menu", &g_set.quick_keys_blue);
     help("While the blue brick's menu is the open one, 1-9 pick from it\n"
          "instead of the red, yellow or white brick's. Off: 1-9 always\n"
@@ -4537,6 +5079,74 @@ static void top_screen_size_cb(ImGuiSizeCallbackData* data) {
     data->DesiredSize = ImVec2(k * uw + edge_w, k * uh + edge_h);
 }
 
+// SG-0027: the TAS pause. The frontend asks lb_tas_hold_frame once per frame;
+// a frame advance lets exactly one frame through. Online it never holds.
+bool g_tas_paused = false;
+bool g_tas_step = false;
+
+void draw_tas_label() {
+    if (!g_tas_paused) return;
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f,
+                                   vp->WorkPos.y + vp->WorkSize.y - 8.0f),
+                            ImGuiCond_Always, ImVec2(0.5f, 1.0f));
+    ImGui::SetNextWindowBgAlpha(0.8f);
+    const ImGuiWindowFlags f = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                               ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                               ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs;
+    if (ImGui::Begin("##taspause", nullptr, f))
+        ImGui::TextUnformatted("PAUSED  (F5 resume, F6 one frame)");
+    ImGui::End();
+}
+
+// SG-0029: which master server a lobby is on, as the game's own lobby screen
+// cannot say: the owner's two known servers by the names the owner chose, the
+// other player's by its name, and any other by its host name; top right, while
+// this machine is in a lobby (hosting: state 2, joined: 5). The game's "Game
+// Lobby" is ten characters with no room to add the name.
+const char* const kMainServerName = "Vio";                // lb-public-ok (the owner's choice)
+const char* const kFallbackServerName = "Vio fallback";   // lb-public-ok
+std::string server_label(const std::string& h) {
+    if (h.find("lbfallback.viosarcade.xyz") != std::string::npos) return kFallbackServerName;
+    if (h.find("lbserver.viosarcade.xyz") != std::string::npos) return kMainServerName;
+    if (h.find("king.legobattles.win") != std::string::npos) return "King";
+    return h;   // "" when not known
+}
+
+void draw_lobby_server_label() {
+    const int st = lb_net_guest_state();
+    if (st != 2 && st != 5) return;
+    std::string text;
+    if (st == 2) {   // hosting: listed on this machine's server, and the other with Both
+        const std::string a = lb_net_fallback_on() ? std::string(kFallbackServerName)
+                                                   : server_label(g_set.master_host);
+        char xh[128] = "";
+        int xp = 0;
+        const std::string b = lb_net_extra_server(xh, sizeof xh, &xp) ? server_label(xh) : "";
+        if (a.empty()) return;
+        text = "Game Lobby (" + a + (!b.empty() && a != b ? " + " + b : "") + ")";
+    } else {          // joined: the server its Join screen found it on
+        char ph[128] = "";
+        lb_net_peer_server(ph, sizeof ph);
+        std::string a = server_label(ph);
+        if (a.empty()) return;
+        if (lb_net_fallback_on() && a == kMainServerName) a = kFallbackServerName;
+        text = "Game Lobby (" + a + ")";
+    }
+    // Top right, opaque: the game's own title sits top centre in a single-screen
+    // layout and mid-window when the screens are stacked, and a label laid
+    // half over it read as a smudge (sg29a).
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - 8.0f, vp->WorkPos.y + 8.0f),
+                            ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.9f);
+    const ImGuiWindowFlags f = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                               ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                               ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs;
+    if (ImGui::Begin("##lobbyserver", nullptr, f)) ImGui::TextUnformatted(text.c_str());
+    ImGui::End();
+}
+
 // SG-0036: in a LEGO Gold Rush match, each army's bricks against the target,
 // top centre, while "Show every army's bricks in Gold Rush" is on.
 void draw_gold_panel() {
@@ -6114,7 +6724,13 @@ const char* const kBalUnitTips[10] = {
     "Melee damage, the low end.",
     "Melee damage spread: the high end is damage + spread.",
     "Ticks between attacks (30 a second).",
-    "Attack range.",
+    // BR-0009: the reach test (FUN_020519D4) and its peers read range only on
+    // the ranged branch; a unit with no projectile (+0x66 = 0xFFFF) never
+    // reads it. FunLite raises the minikit specials' ranges (Dwarf, Troll,
+    // their kings, Ninja) without a projectile, so the change does nothing.
+    "Attack range. Only units that fire a projectile use it: a melee unit\n"
+    "(Projectile \"Melee\" in Traits) always fights at arm's length, whatever\n"
+    "this says. To make range count, give the unit a projectile in Traits.",
     "Mine: the bricks it pays out. Builder: the bricks per tree chop (0 = the game's 75; "
     "a Mill's bonus and Double LEGO Bricks still apply). Any other unit: does nothing."};
 int g_bal_faction = 0;
@@ -7690,7 +8306,8 @@ const std::vector<MenuHeader>& menu_headers() {
                      {"Ban Units", "Ban Units", tab_ban_units},
                      {"Ban Maps", "Ban Maps", tab_ban_maps},
                      {"Presets", "Balance Presets", tab_balance_presets}}},
-        {"Cheats", {{"Cheats", "Cheats", tab_cheats}}},
+        {"Cheats", {{"Cheats", "Cheats", tab_cheats},
+                    {"Action Replay", "Action Replay", tab_action_replay}}},
         {"Network", {{"Multiplayer", "Multiplayer", tab_multiplayer},
                      {"Scores", "Scores", tab_scores}}},
         {"Maps", {{"Map archive", "Maps", tab_map_archive}}},
@@ -8116,6 +8733,8 @@ extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
     draw_battlefield(renderer);
     draw_notice();   // docs/413
     draw_gold_panel();   // SG-0036
+    draw_lobby_server_label();   // SG-0029
+    draw_tas_label();            // SG-0027
     // SG-0016: while Skip the intro screens fast-forwards the boot logos (they
     // ignore input and run on the game's own timers, so the boot is only run
     // faster), cover the window, so the player sees a short loading screen
@@ -8349,6 +8968,20 @@ extern "C" bool lb_overlay_event(const SDL_Event* event) {
             !lb_chat_is_open() && !ImGui::GetIO().WantTextInput) {
             lb_chat_open();
             g_chat_eat_text = true;   // the "t" this key types is not the message
+            return true;
+        }
+
+        // SG-0027: F5 pause/resume, F6 one frame while paused. Offline only,
+        // and not when the key is bound to a DS button.
+        if (g_set.tas_keys && (k == SDLK_F5 || k == SDLK_F6) &&
+            lb_net_guest_state() <= 0 &&
+            lb_binding_key_bit((int)event->key.keysym.scancode) == 0) {
+            if (k == SDLK_F5) {
+                g_tas_paused = !g_tas_paused;
+                g_tas_step = false;
+            } else if (g_tas_paused) {
+                g_tas_step = true;
+            }
             return true;
         }
 
@@ -8796,6 +9429,41 @@ extern "C" int lb_setting_chat_toasts(void) { return g_set.chat_toasts ? 1 : 0; 
 extern "C" int lb_setting_fetch_maps(void) { return g_set.fetch_maps ? 1 : 0; }   // docs/420
 extern "C" int lb_setting_fast_link(void) { return g_set.fast_link ? 1 : 0; }     // docs/423
 extern "C" int lb_setting_match_picture(void) { return g_set.match_picture ? 1 : 0; }   // docs/428
+// SG-0035: Action Replay. The hash of the enabled codes (0 when none), whether
+// they are in force here, and the per-frame run. OFFLINE ONLY for now: only the
+// host sends rules, so a host cannot tell whether its joiners run the same
+// codes, and a host with codes against a joiner without them would desync the
+// match. The host's hash still travels ('A' page) for a later two-way check.
+extern "C" int lb_rules_host_ar_hash(unsigned* out);   /* src/lb_teams.cpp */
+extern "C" int lb_ar_hash_live(void) {
+    std::lock_guard<std::mutex> lk(g_ar_mu);
+    ar_refresh_locked();
+    return (int)g_ar_live.hash;
+}
+extern "C" int lb_ar_active(void) {
+    unsigned host = 0;
+    const int j = lb_rules_host_ar_hash(&host);
+    if (lb_net_guest_state() > 0) return 0;   // hosting or joined: never
+    std::lock_guard<std::mutex> lk(g_ar_mu);
+    ar_refresh_locked();
+    if (g_ar_live.progs.empty()) return 0;
+    if (j >= 0 && host != g_ar_live.hash) return 0;
+    return 1;
+}
+extern "C" void lb_ar_apply_frame(void) {
+    unsigned host = 0;
+    const int j = lb_rules_host_ar_hash(&host);
+    if (lb_net_guest_state() > 0) return;   // hosting or joined: never
+    std::lock_guard<std::mutex> lk(g_ar_mu);
+    ar_refresh_locked();
+    if (g_ar_live.progs.empty()) return;
+    if (j >= 0 && host != g_ar_live.hash) return;
+    int budget = 20000;
+    for (const ArProg& p : g_ar_live.progs) ar_run(p, &budget);
+}
+// The hash for the rules datagram: this machine's enabled set.
+extern "C" unsigned lb_setting_ar_hash(void) { return (unsigned)lb_ar_hash_live(); }
+
 // SG-0018: LB_SCORES_OPT_OUT=0|1 forces it (a test aid).
 extern "C" int lb_setting_scores_opt_out(void) {
     static const char* v = std::getenv("LB_SCORES_OPT_OUT");
@@ -8869,6 +9537,37 @@ extern "C" int lb_setting_level_palette(void) {
     }();
     const int m = forced >= 0 ? forced : g_set.level_palette;
     return (m < 0 || m > 3) ? 0 : m;
+}
+// SG-0034: the palette file chosen for a world (0 King, 1 Pirate, 2 Mars), or
+// "" for none. LB_CUSTOM_PAL=<file> forces one for every world (test aid).
+// SG-0027: see draw_tas_label. LB_TAS_PAUSE_AT=<frame> pauses at that many
+// frames held (test aid).
+extern "C" int lb_tas_hold_frame(void) {
+    if (lb_net_guest_state() > 0) {   // online: never
+        g_tas_paused = false;
+        g_tas_step = false;
+        return 0;
+    }
+    static long long until = -2;
+    static long long frames = 0;
+    if (until == -2) {
+        const char* v = std::getenv("LB_TAS_PAUSE_AT");
+        until = v ? std::atoll(v) : -1;
+    }
+    ++frames;
+    if (until >= 0 && frames == until) g_tas_paused = true;
+    if (!g_tas_paused) return 0;
+    if (g_tas_step) {
+        g_tas_step = false;
+        return 0;
+    }
+    return 1;
+}
+
+extern "C" const char* lb_setting_custom_palette(int world) {
+    if (const char* v = std::getenv("LB_CUSTOM_PAL")) return v;
+    if (world < 0 || world > 2) return "";
+    return g_set.custom_pal[world];
 }
 extern "C" int lb_setting_force_tileset(void) {
     static const int forced = [] {
