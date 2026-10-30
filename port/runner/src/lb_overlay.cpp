@@ -343,6 +343,13 @@ struct Settings {
     int  ai_opp_army[2] = {2, 3};
     int  ai_opp_colour[2] = {0, 0};   // 0 automatic, else 1 + the colour list's index
     bool ai_opp_teams = false;
+    // SG-0033: the team Computer Player 3 fields when its army is Custom: a
+    // Team Builder preset by name, or "" for the Enemy Team (as before).
+    char ai_opp_team[48] = "";
+    // SG-0036: the Gold Rush target in bricks (0 = the game's 10,000), and
+    // the panel of every army's bricks in a Gold Rush match.
+    int  gold_rush_target = 0;
+    bool gold_rush_view = true;
 
     bool unlock_units = false;
     bool unlock_extras = false;   // the cheat codes (red bricks)
@@ -637,6 +644,9 @@ extern "C" void lb_settings_save(void) {
         o += "],\n";
     }
     json_put_str(o, "team_presets", g_set.team_presets, true);
+    json_put_str(o, "ai_opp_team", g_set.ai_opp_team, true);
+    std::snprintf(buf, sizeof buf, "  \"gold_rush_target\": %d,\n  \"gold_rush_view\": %s,\n",
+                  g_set.gold_rush_target, g_set.gold_rush_view ? "true" : "false"); o += buf;
     json_put_str(o, "team_save_cache", g_set.team_save_cache, true);
     json_put_str(o, "banned_units", g_set.banned_units, true);
     json_put_str(o, "banned_maps", g_set.banned_maps, true);          // docs/429
@@ -867,6 +877,10 @@ extern "C" void lb_settings_load(void) {
     json_get_ints(s, "team_working", g_set.team_working, LB_TEAM_SLOTS);
     json_get_ints(s, "enemy_team", g_set.enemy_team, LB_TEAM_SLOTS);
     json_get_str(s, "team_presets", g_set.team_presets, sizeof g_set.team_presets);
+    json_get_str(s, "ai_opp_team", g_set.ai_opp_team, sizeof g_set.ai_opp_team);
+    json_get_int(s, "gold_rush_target", &g_set.gold_rush_target);
+    if (g_set.gold_rush_target < 0 || g_set.gold_rush_target > 1000000) g_set.gold_rush_target = 0;
+    json_get_bool(s, "gold_rush_view", &g_set.gold_rush_view);
     json_get_str(s, "team_save_cache", g_set.team_save_cache,
                  sizeof g_set.team_save_cache);   // docs/388
     json_get_str(s, "banned_units", g_set.banned_units, sizeof g_set.banned_units);
@@ -1672,6 +1686,31 @@ void tab_enhancements() {
         ImGui::PopTextWrapPos();
     }
 
+
+    ImGui::Separator();
+    // SG-0036: Gold Rush's goal, and every army's bricks on screen.
+    {
+        int goal = g_set.gold_rush_target > 0 ? g_set.gold_rush_target : 10000;
+        ImGui::SetNextItemWidth(220.0f * g_ui_scale);
+        if (ImGui::SliderInt("Gold Rush target", &goal, 1000, 100000, "%d bricks",
+                             ImGuiSliderFlags_AlwaysClamp)) {
+            goal = (goal + 250) / 500 * 500;
+            g_set.gold_rush_target = goal == 10000 ? 0 : goal;
+        }
+        help("The bricks an army needs to win a LEGO Gold Rush match. The game's\n"
+             "own is 10,000. Online, the host's applies (both players need this\n"
+             "version). Ctrl+click to type a number.");
+        badge(WIRED);
+        {
+            const int host = lb_rules_host_gold_target();
+            if (host >= 0)
+                ImGui::TextDisabled("In this lobby, the host's: %d bricks", host > 0 ? host : 10000);
+        }
+        ImGui::Checkbox("Show every army's bricks in Gold Rush", &g_set.gold_rush_view);
+        help("In a LEGO Gold Rush match, a small panel lists each army's bricks\n"
+             "against the target, so you can see who is close to winning.");
+        badge(WIRED);
+    }
 
     ImGui::Separator();
     // docs/404: the packs moved to the Balance menu, beside the player's own
@@ -3258,6 +3297,29 @@ void tab_team_builder() {
         ImGui::Combo("Army##ai3", &g_set.ai_opp_army[0], kArmies, IM_ARRAYSIZE(kArmies));
         help("A faction's army, the Enemy Team below (Custom), or a new\n"
              "random army each match.");
+        // SG-0033: a Custom third player can field one of your saved teams,
+        // so the two computers can have different custom armies.
+        if (g_set.ai_opp_army[0] == 6) {
+            const std::vector<TeamPreset> saved = presets_parse();
+            const bool found = !g_set.ai_opp_team[0] ||
+                std::any_of(saved.begin(), saved.end(), [](const TeamPreset& p) {
+                    return p.name == g_set.ai_opp_team; });
+            const std::string shown = !g_set.ai_opp_team[0] ? "Enemy Team"
+                                    : found ? std::string(g_set.ai_opp_team)
+                                            : std::string(g_set.ai_opp_team) + " (deleted: Enemy Team)";
+            ImGui::SetNextItemWidth(180.0f * g_ui_scale);
+            if (ImGui::BeginCombo("Team##ai3", shown.c_str())) {
+                if (ImGui::Selectable("Enemy Team", !g_set.ai_opp_team[0]))
+                    g_set.ai_opp_team[0] = '\0';
+                for (const TeamPreset& p : saved)
+                    if (ImGui::Selectable((p.name + "##ai3t").c_str(), p.name == g_set.ai_opp_team))
+                        std::snprintf(g_set.ai_opp_team, sizeof g_set.ai_opp_team, "%s", p.name.c_str());
+                ImGui::EndCombo();
+            }
+            help("Which custom army it fields: the Enemy Team (the first\n"
+                 "opponent's Custom army), or one of your saved teams from the\n"
+                 "list below, so each computer can have its own.");
+        }
         ImGui::SetNextItemWidth(180.0f * g_ui_scale);
         ImGui::Combo("Colour##ai3", &g_set.ai_opp_colour[0], kColours, IM_ARRAYSIZE(kColours));
         help("Its team colour. If you or the first opponent already use it,\n"
@@ -4473,6 +4535,37 @@ static void top_screen_size_cb(ImGuiSizeCallbackData* data) {
     if (k < kmin) k = kmin;
 
     data->DesiredSize = ImVec2(k * uw + edge_w, k * uh + edge_h);
+}
+
+// SG-0036: in a LEGO Gold Rush match, each army's bricks against the target,
+// top centre, while "Show every army's bricks in Gold Rush" is on.
+void draw_gold_panel() {
+    if (!g_set.gold_rush_view) return;
+    int goal = 10000;
+    unsigned bricks[4] = {};
+    int owner[4] = {}, defeated[4] = {};
+    const int n = lb_gold_rush_view(&goal, bricks, owner, defeated);
+    if (n <= 0) return;
+    if (goal <= 0) goal = 10000;
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + 6.0f),
+                            ImGuiCond_Always, ImVec2(0.5f, 0.0f));
+    ImGui::SetNextWindowBgAlpha(0.6f);
+    const ImGuiWindowFlags f = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                               ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                               ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoInputs;
+    if (ImGui::Begin("##goldrush", nullptr, f)) {
+        ImGui::Text("Gold Rush: first to %d bricks", goal);
+        for (int i = 0; i < n; ++i) {
+            char label[64];
+            std::snprintf(label, sizeof label, "%u%s", bricks[i], defeated[i] ? " (out)" : "");
+            ImGui::Text("Army %d", owner[i] + 1);
+            ImGui::SameLine(70.0f * g_ui_scale);
+            ImGui::ProgressBar(std::min(1.0f, (float)bricks[i] / (float)goal),
+                               ImVec2(160.0f * g_ui_scale, 0.0f), label);
+        }
+    }
+    ImGui::End();
 }
 
 void draw_top_screen(SDL_Renderer* renderer) {
@@ -6340,8 +6433,15 @@ void tab_balance_traits() {
                     bal_flag(rec, F + k, locked);
                     const int now = lb_balance_custom_get(rec, F + k);
                     if (now >= 0 && (now != was) && wasv >= 0) {
-                        const bool l = lb_balance_value(rec, F) > 0;
-                        const bool w = lb_balance_value(rec, F + 1) > 0;
+                        // BR-0027: the click just stored a custom value, but
+                        // lb_balance_value reads RAM, which only takes it on the
+                        // next patcher tick. Read the stored value first, or
+                        // ticking Water sees Water still off and writes
+                        // Land<->water 0 / Bld collision 1 (no crossing).
+                        const int cl = lb_balance_custom_get(rec, F);
+                        const int cw = lb_balance_custom_get(rec, F + 1);
+                        const bool l = (cl >= 0 ? cl : lb_balance_value(rec, F)) > 0;
+                        const bool w = (cw >= 0 ? cw : lb_balance_value(rec, F + 1)) > 0;
                         bal_set(rec, F + 3, (l && w) ? 0 : 1);
                         bal_set(rec, F + 4, (l && w) ? 1 : 0);
                         // BoatAntiFlag is 0 for a water-only unit, 1 otherwise.
@@ -8015,6 +8115,7 @@ extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
     draw_top_screen(renderer);
     draw_battlefield(renderer);
     draw_notice();   // docs/413
+    draw_gold_panel();   // SG-0036
     // SG-0016: while Skip the intro screens fast-forwards the boot logos (they
     // ignore input and run on the game's own timers, so the boot is only run
     // faster), cover the window, so the player sees a short loading screen
@@ -8883,6 +8984,18 @@ extern "C" int lb_setting_creatures(void) {
 // docs/436: this machine's creature slots, packed 4 bits a creature (Wolf low):
 // 0 the default, else 1 + the slot. LB_CREATURE_SLOTS=w,r,s forces them, each a
 // slot index (0 Hero, 2 Close Combat, 3 Ranged, 4 Mounted, 5-7 Specials) or -1.
+// SG-0036: the Gold Rush target (0 the game's own 10,000). LB_GOLD_TARGET=<n>
+// forces it (test aid).
+extern "C" int lb_setting_gold_rush_target(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_GOLD_TARGET");
+        forced = v ? std::atoi(v) : -1;
+    }
+    const int t = forced >= 0 ? forced : g_set.gold_rush_target;
+    return (t <= 0 || t > 1000000 || t == 10000) ? 0 : t;
+}
+
 extern "C" int lb_setting_creature_slots(void) {
     static int forced = -2;
     if (forced == -2) {
@@ -9057,6 +9170,18 @@ extern "C" int lb_setting_ai_spectate(void) {
 // 7 Randomizer), bit 8 the computers teaming up. LB_AI_OPPONENTS=<1..3>,
 // LB_AI_OPP_ARMY=<a>,<b> and LB_AI_OPP_TEAMS=0|1 force the parts. lb_patches.cpp
 // applies it only offline; recordings carry it as kind 17.
+// SG-0033: the saved team Computer Player 3 fields when its army is Custom;
+// 0 (the Enemy Team) when none is chosen or the preset no longer exists.
+// LB_AI_OPP_TEAM=<preset name> forces it (test aid).
+extern "C" int lb_setting_ai_opp_team(LbTeam* out) {
+    const char* env = std::getenv("LB_AI_OPP_TEAM");
+    const char* want = env && *env ? env : g_set.ai_opp_team;
+    if (!want[0] || !out) return 0;
+    for (const TeamPreset& p : presets_parse())
+        if (p.name == want) { *out = p.team; return 1; }
+    return 0;
+}
+
 extern "C" int lb_setting_ai_opp_packed(void) {
     static int n = -2, a0 = -1, a1 = -1, teams = -1;
     if (n == -2) {

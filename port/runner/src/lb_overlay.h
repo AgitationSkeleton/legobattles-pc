@@ -710,6 +710,9 @@ int          lb_teams_enemy_choice(int frame);
 int          lb_teams_enemy_frame_small(int frame);
 void         lb_teams_portrait_tick(void);
 int          lb_teams_enemy_army(int choice, unsigned char rec[20]);
+// SG-0033: a given team's record, and Computer Player 3's chosen saved team.
+int          lb_teams_team_army(const LbTeam* team, unsigned char rec[20]);
+int          lb_setting_ai_opp_team(LbTeam* out);
 // Bans: this machine's list (a host's), what a host sent (a client's), and
 // the match-start substitution.
 void         lb_teams_set_bans(const unsigned char* bits, int nbytes);
@@ -784,6 +787,15 @@ int          lb_setting_ai_spectate(void);   /* SG-0002 */
 int          lb_setting_ai_opp_packed(void);
 int          lb_demo_play_ai_opp(void);
 int          lb_ai_opp_live(void);           /* lb_patches.cpp: 0 online */
+/* SG-0036: the Gold Rush target in bricks, 0 for the game's own 10,000: this
+   machine's setting, a replay's (kind 18), the host's while joined ('G' page,
+   -1 when not joined), and the one in force. lb_gold_rush_view fills the
+   teams' bricks while a Gold Rush match is up and returns their count. */
+int          lb_setting_gold_rush_target(void);
+int          lb_demo_play_gold_target(void);
+int          lb_rules_host_gold_target(void);
+int          lb_gold_rush_target_live(void);
+int          lb_gold_rush_view(int* goal, unsigned bricks[4], int owner[4], int defeated[4]);
 // docs/408: a hotwired transport leaves its old owner's AI (kind 12).
 int          lb_setting_transport_release(void);
 int          lb_demo_play_transport_release(void);

@@ -925,6 +925,7 @@ bool g_bans_recv_ok = false;               // under g_rules_mu
 unsigned g_bans_recv_from = 0;             // under g_rules_mu
 uint8_t g_flags_recv = 0;                  // docs/406; under g_rules_mu
 int g_cslots_recv = 0;                     // docs/436; under g_rules_mu
+int g_gold_recv = 0;                       // SG-0036; under g_rules_mu
 // docs/413: the host's mod maps as its rules list them (key, content hash,
 // name), and whether its rules carried the list at all (an older build's
 // do not).
@@ -1641,6 +1642,15 @@ extern "C" int lb_teams_enemy_army(int choice, unsigned char rec[20]) {
     return 1;
 }
 
+// SG-0033: the same record for a given team (Computer Player 3's saved team).
+// An invalid team fields King's default, as the Enemy Team does.
+extern "C" int lb_teams_team_army(const LbTeam* team, unsigned char rec[20]) {
+    LbTeam t = *team;
+    if (!lb_teams_valid(&t)) lb_teams_king_default(&t);
+    team_to_record(t, rec);
+    return 1;
+}
+
 // ---- bans ------------------------------------------------------------------
 
 extern "C" void lb_teams_set_bans(const unsigned char* bits, int nbytes) {
@@ -1787,6 +1797,15 @@ extern "C" int lb_rules_outgoing(unsigned char* buf, int cap) {
                 buf[n++] = 'C';
                 buf[n++] = 1;
                 for (int i = 0; i < 4; ++i) buf[n++] = (unsigned char)((packed >> (4 * i)) & 15);
+                // SG-0036: then the 'G' page: 'G', a version (1) and the Gold
+                // Rush target (u32, 0 the game's 10,000). A host without it
+                // plays the stock target.
+                if (n + 6 <= cap) {
+                    const unsigned g = (unsigned)std::max(lb_setting_gold_rush_target(), 0);
+                    buf[n++] = 'G';
+                    buf[n++] = 1;
+                    for (int b = 0; b < 4; ++b) buf[n++] = (unsigned char)(g >> (8 * b));
+                }
             }
         }
     }
@@ -1826,6 +1845,7 @@ extern "C" void lb_rules_on_leave(void) {
     g_bans_recv_from = 0;
     g_flags_recv = 0;
     g_cslots_recv = 0;
+    g_gold_recv = 0;
     g_maps_recv.clear();
     g_maps_recv_has = false;
     g_bal_done = false;
@@ -1894,6 +1914,12 @@ extern "C" int lb_rules_host_flags(void) {
 
 // docs/436: the host's creature slots (packed, see lb_overlay.h): -1 when this
 // machine decides, 0 for a host that sends none.
+extern "C" int lb_rules_host_gold_target(void) {   // SG-0036
+    if (!net_joined(lb_net_guest_state())) return -1;
+    std::lock_guard<std::mutex> lk(g_rules_mu);
+    return g_bans_recv_ok ? g_gold_recv : 0;
+}
+
 extern "C" int lb_rules_host_creature_slots(void) {
     if (!net_joined(lb_net_guest_state())) return -1;
     std::lock_guard<std::mutex> lk(g_rules_mu);
@@ -2061,6 +2087,20 @@ extern "C" void lb_rules_incoming(const unsigned char* buf, int len,
             std::fflush(stderr);
         }
         g_cslots_recv = packed;
+        // SG-0036: the 'G' page after it: the Gold Rush target.
+        int gold = 0;
+        const int g_at = c_at >= 0 ? c_at + 6 : -1;
+        if (g_at >= 0 && g_at + 6 <= len && buf[g_at] == 'G' && buf[g_at + 1] == 1) {
+            const unsigned g = (unsigned)buf[g_at + 2] | ((unsigned)buf[g_at + 3] << 8) |
+                               ((unsigned)buf[g_at + 4] << 16) | ((unsigned)buf[g_at + 5] << 24);
+            gold = g <= 1000000u ? (int)g : 0;
+        }
+        if (!g_bans_recv_ok || gold != g_gold_recv) {
+            std::fprintf(stderr, "[lb_teams] the host's Gold Rush target from instance "
+                         "%u: %d%s\n", sender, gold, gold ? "" : " (the game's)");
+            std::fflush(stderr);
+        }
+        g_gold_recv = gold;
     }
     if (bal_done_now) {
         std::fprintf(stderr, "[lb_teams] the host's balance from instance %u: "

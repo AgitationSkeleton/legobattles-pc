@@ -13601,6 +13601,19 @@ static void ai_cat1_weight_tick(void) {
     }
 }
 
+// SG-0037/SG-0038 (docs/106 + the chooser FUN_0209754C): WHY THE AI BUFFS
+// INSTEAD OF ATTACKING. In a fight the chooser builds an offence node (category
+// 0, weight 0x28, 0x3C or 0x50) and a defence-buff node (category 2, the rows 8
+// and 9 spells, weight 0x50) and takes the highest score, so the buff beats
+// the attack in all but the lopsided case (an AI-vs-AI run: 84 idle buffs, 10
+// defence buffs, 3 Hotwires, no attack spell in 330 s). The two category-2
+// weights are `movs r0,#0x50` at 0x020976F6 (outnumbered) and 0x0209778C
+// (enemy close); they become 0x20, below every category-0 weight and above
+// the 0x14 of the idle buffs. Same option, offline only; stock bytes otherwise.
+// LB_SPELL_OFFENSE=0 (test aid) leaves them stock.
+constexpr uint32_t kSpellCat2WeightWeak = 0x020976F6u, kSpellCat2WeightClose = 0x0209778Cu;
+constexpr uint16_t kSpellCat2WeightStock = 0x2050u, kSpellCat2WeightLow = 0x2020u;
+
 static void apply_ai_tap_spells(void) {
     static int applied = 0;
     static unsigned gen = 0;
@@ -13633,6 +13646,14 @@ static void apply_ai_tap_spells(void) {
     const uint16_t (&arms)[38] = (want && gate) ? kSpellArmsGated : kSpellArmsStock;
     for (uint32_t i = 0; i < 38u; ++i) bus_write_u16(kSpellArms + 2u * i, arms[i]);
     bus_write_u16(kSpellNoTarget, (want && gate) ? kSpellNoTargetGated : kSpellNoTargetStock);
+    // SG-0037/SG-0038: the defensive buff (category 2) no longer outranks attacks.
+    static const bool offense = !(std::getenv("LB_SPELL_OFFENSE") &&
+                                  std::atoi(std::getenv("LB_SPELL_OFFENSE")) == 0);
+    for (uint32_t a : {kSpellCat2WeightWeak, kSpellCat2WeightClose}) {
+        const uint32_t cur = bus_read_u16(a);
+        if (cur == kSpellCat2WeightStock || cur == kSpellCat2WeightLow)
+            bus_write_u16(a, (want && offense) ? kSpellCat2WeightLow : kSpellCat2WeightStock);
+    }
     applied = want;
     std::fprintf(stderr, "[lb_aispell] the AI uses targeted spells: %s\n",
                  want ? "ON" : "off");
@@ -14094,7 +14115,14 @@ void aiopp_prepare_setup() {
         if (custom) {
             const int choice = (packed >> (2 + 3 * k)) & 7;
             if (!(lb_demo_playing() && lb_demo_take_army(rec))) {
-                lb_teams_enemy_army(choice, rec);
+                // SG-0033: Custom may be one of the player's saved teams.
+                LbTeam saved;
+                if (choice == 6 && lb_setting_ai_opp_team(&saved)) {
+                    lb_teams_team_army(&saved, rec);
+                    std::fprintf(stderr, "[lb_aiopp] opponent %d: a saved team\n", k + 2);
+                } else {
+                    lb_teams_enemy_army(choice, rec);
+                }
                 lb_demo_note_army(rec);
             }
             text = aiopp_hero_text((uint32_t)(rec[8] | (rec[9] << 8)));
@@ -14187,6 +14215,68 @@ uint32_t aiopp_team(uint32_t handle) {
     return guest_ptr(t) ? t : 0u;
 }
 }  // namespace
+
+// SG-0036: THE GOLD RUSH TARGET. FUN_02075BBC (the match rules' handler for
+// event 0x3B, a team's bricks changing) ends the match for a team whose bricks
+// (team +0x90) reach the word at 0x02075C0C, 10,000, when the rules' mode
+// (+4) is 2: LEGO Gold Rush. The rules object is built by FUN_020755B4 at
+// match setup (FUN_02083144) and kept at 0x02155164; its vtable is 0x0214A700.
+// The word is the literal its ldr reads, so the target is that one word:
+// a replay's, else the host's while joined, else this machine's.
+constexpr uint32_t kGoldTargetLit = 0x02075C0Cu;
+constexpr uint32_t kGoldStock = 10000u;
+constexpr uint32_t kRulesPtr = 0x02155164u;
+constexpr uint32_t kRulesVtable = 0x0214A700u;
+
+extern "C" int lb_gold_rush_target_live(void) {
+    const int played = lb_demo_play_gold_target();
+    if (played >= 0) return played;
+    const int host = lb_rules_host_gold_target();
+    if (host >= 0) return host;
+    return lb_setting_gold_rush_target();
+}
+
+static void apply_gold_rush_target(void) {
+    static uint32_t written = 0u;   // the value this port last put there
+    static unsigned gen = 0;
+    if (gen != g_boot_gen) { gen = g_boot_gen; written = 0u; }
+    const uint32_t cur = bus_read_u32(kGoldTargetLit);
+    if (cur != kGoldStock && cur != written) return;   // not loaded, or not this build
+    const int t = lb_gold_rush_target_live();
+    const uint32_t want = t > 0 ? (uint32_t)t : kGoldStock;
+    if (cur == want) return;
+    bus_write_u32(kGoldTargetLit, want);
+    written = want;
+    std::fprintf(stderr, "[lb_gold] Gold Rush target %u bricks%s\n", want,
+                 want == kGoldStock ? " (the game's)" : "");
+    std::fflush(stderr);
+}
+
+// The panel's view: while the match rules are a Gold Rush's, each team's
+// bricks (team +0x90) and whether it is defeated (+0x9C). Returns the count.
+extern "C" int lb_gold_rush_view(int* goal, unsigned bricks[4], int owner[4], int defeated[4]) {
+    const uint32_t rules = bus_read_u32(kRulesPtr);
+    if (!guest_ptr(rules) || bus_read_u32(rules) != kRulesVtable ||
+        bus_read_u32(rules + 4u) != 2u)
+        return 0;
+    if (goal) *goal = (int)bus_read_u32(kGoldTargetLit);
+    // The table's slots past the match's teams can hold any word, even a
+    // pointer to something else (seen: "Army 4" from slot 3 of a two-army
+    // match), so a team is a slot whose object shares team 0's vtable.
+    const uint32_t t0 = aiopp_team(0u);
+    if (!t0) return 0;
+    const uint32_t vt = bus_read_u32(t0);
+    int n = 0;
+    for (uint32_t h = 0; h < 4u && n < 4; ++h) {
+        const uint32_t t = aiopp_team(h);
+        if (!t || bus_read_u32(t) != vt) continue;
+        bricks[n] = bus_read_u32(t + 0x90u);
+        owner[n] = (int)h;
+        defeated[n] = bus_read_u32(t + 0x9Cu) ? 1 : 0;
+        ++n;
+    }
+    return n;
+}
 
 extern "C" void ai_opp_v06_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kMissionV06);
@@ -15808,6 +15898,7 @@ extern "C" void lb_patches_on_vblank(void) {
     apply_ai_hero_multi();
     apply_ai_tap_spells();
     apply_two_player_maps();
+    apply_gold_rush_target();   // SG-0036
     apply_ai_spectate();              // SG-0002
     ai_opp_tick();                    // docs/414
     brick_log();
