@@ -102,7 +102,10 @@ constexpr int kRing = 256;                 // host slots kept, a power of two
 constexpr int kMaxL = 30;
 constexpr int kJoinLead = 40;              // datasets between ACCEPT and sharing
 constexpr int kStallKick = 900;            // host steps waiting on one member
-constexpr unsigned long long kSilentMs = 10000ull;
+// BR-0031/32: 20 s, not 10. A relayed link that drops takes up to 6 s to be
+// noticed (lb_relay.cpp kDeadMs) and a few more to reopen; the relay holds
+// the room 15 s. Resends cover what was lost meanwhile.
+constexpr unsigned long long kSilentMs = 20000ull;
 constexpr size_t kDatagramBudget = 1100;
 
 struct Block {

@@ -368,6 +368,23 @@ def apply(runner_dir, imgui_dir):
          indent="    ")
     done.append("frontend.cpp: event forwarding")
 
+    # BR-0029: a player's "crash" left a log ending in an ordinary shutdown
+    # with nothing to say what asked for it. Name the request, so the next
+    # report says whether the window was closed or something sent a quit.
+    replace(front,
+            "            if (event.type == SDL_QUIT) {\n"
+            "                release_relative_mouse();\n",
+            "            if (event.type == SDL_QUIT) {\n"
+            "                std::fprintf(stderr, \"[sdl] quit requested (SDL_QUIT)\\n\");  /* legobattles-decomp */\n"
+            "                release_relative_mouse();\n")
+    replace(front,
+            "                event.window.event == SDL_WINDOWEVENT_CLOSE) {\n"
+            "                release_relative_mouse();\n",
+            "                event.window.event == SDL_WINDOWEVENT_CLOSE) {\n"
+            "                std::fprintf(stderr, \"[sdl] window %u closed\\n\", (unsigned)event.window.windowID);  /* legobattles-decomp */\n"
+            "                release_relative_mouse();\n")
+    done.append("frontend.cpp: quit requests are logged")
+
     # 3. Belt and braces on the guest touch feed. lb_overlay_event already
     #    swallows captured mouse events, but set_touch_from_mouse is reachable
     #    from three call sites and from replay/self-test paths, so gate the

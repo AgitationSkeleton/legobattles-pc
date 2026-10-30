@@ -2309,6 +2309,8 @@ void tab_input() {
          "1-9 (number row or keypad): that item of the red, yellow or\n"
          "white brick's menu -- a builder's building, a hero's spell --\n"
          "counted left to right. The menu opens if it is closed.\n"
+         "Shift+1-9: items 10-18 of that menu (a builder with ships and\n"
+         "specials has more than nine buildings).\n"
          "Each runs the game's own function for that button, without\n"
          "touching the screen, and does nothing when it is not shown.\n"
          "A key bound to a DS button above stays that DS button.");
@@ -6989,6 +6991,7 @@ void tab_general() {
 
 struct ScoreRow {
     std::string name;
+    std::string preset;             // SG-0039: the "All" table's rows only
     int hero = -1, matches = 0, wins = 0, losses = 0;
     int units_built = 0, units_lost = 0, units_killed = 0;
     int buildings_built = 0, buildings_lost = 0, buildings_killed = 0, bricks = 0;
@@ -7085,6 +7088,7 @@ void sc_run(std::string host, int port, std::string query) {
         for (const std::string& o : sc_objects(table, "rows")) {
             ScoreRow row;
             row.name = upd_json_str(o, "name");
+            row.preset = upd_json_str(o, "preset");
             row.hero = o.find("\"hero\":-1") != std::string::npos ? -1 : sc_num(o, "hero");
             row.matches = sc_num(o, "matches");
             row.wins = sc_num(o, "wins");
@@ -7282,6 +7286,26 @@ void sc_unit_popup() {
     ImGui::EndPopup();
 }
 
+// SG-0039: each preset's colour in the "All" table. The known ones are fixed;
+// any other family gets one from its name, the same every time.
+ImVec4 sc_preset_colour(const std::string& p) {
+    static const struct { const char* name; ImVec4 c; } kKnown[] = {
+        {"Vanilla", ImVec4(0.85f, 0.85f, 0.85f, 1.0f)},
+        {"Vanil+", ImVec4(0.55f, 0.80f, 1.00f, 1.0f)},
+        {"FactionWars", ImVec4(1.00f, 0.55f, 0.45f, 1.0f)},
+        {"FunLite", ImVec4(1.00f, 0.85f, 0.35f, 1.0f)},
+        {"Rebalance", ImVec4(0.55f, 0.95f, 0.55f, 1.0f)},
+        {"Custom Rules", ImVec4(0.85f, 0.60f, 1.00f, 1.0f)},
+    };
+    for (const auto& k : kKnown)
+        if (p == k.name) return k.c;
+    unsigned h = 2166136261u;
+    for (char ch : p) h = (h ^ (unsigned char)ch) * 16777619u;
+    float r, g, b;
+    ImGui::ColorConvertHSVtoRGB((float)(h % 360u) / 360.0f, 0.45f, 1.0f, r, g, b);
+    return ImVec4(r, g, b, 1.0f);
+}
+
 void tab_scores() {
     if (!tab_begin("Scores")) return;
     guide("The best players of online matches, kept by the master server: one table per "
@@ -7349,8 +7373,9 @@ void tab_scores() {
     }
     // The tabs: Vanilla, Vanil+, FactionWars, FunLite, Rebalance, Custom Rules, the
     // other presets the game knows, then any other family the server reports.
-    std::vector<std::string> fams = {"Vanilla", "Vanil+", "FactionWars", "FunLite", "Rebalance",
-                                     "Custom Rules"};
+    // SG-0039: "All" first, every preset at once, one row per player and preset.
+    std::vector<std::string> fams = {"All", "Vanilla", "Vanil+", "FactionWars", "FunLite",
+                                     "Rebalance", "Custom Rules"};
     auto add_fam = [&](const std::string& f) {
         if (!f.empty() && std::find(fams.begin(), fams.end(), f) == fams.end()) fams.push_back(f);
     };
@@ -7380,11 +7405,14 @@ void tab_scores() {
         picked_first = true;
         ImGui::EndTabBar();
     }
+    const bool all = g_scp.family == "All";
     // The versions this family has on the server.
     std::vector<const ScRuleset*> versions;
     int family_matches = 0;
-    for (const ScRuleset& r : s.rulesets)
-        if (r.preset == g_scp.family) { versions.push_back(&r); family_matches += r.matches; }
+    for (const ScRuleset& r : s.rulesets) {
+        if (all) family_matches += r.matches;
+        else if (r.preset == g_scp.family) { versions.push_back(&r); family_matches += r.matches; }
+    }
     auto version_label = [&](const std::string& n) {
         const std::string pre = g_scp.family + " ";
         return n.compare(0, pre.size(), pre) == 0 ? n.substr(pre.size()) : n;
@@ -7435,7 +7463,8 @@ void tab_scores() {
         }
     }
 
-    std::string query = "?limit=100&preset=" + sc_url(g_scp.family);
+    std::string query = all ? std::string("?limit=200&by=preset")
+                            : "?limit=100&preset=" + sc_url(g_scp.family);
     if (!g_scp.version.empty()) query += "&ruleset=" + sc_url(g_scp.version);
     query += g_scp.bans == 1 ? "&bans=on" : "&bans=off";
     if (g_scp.bans == 1 && !g_scp.units.empty()) {
@@ -7458,7 +7487,8 @@ void tab_scores() {
     ImGui::SameLine();
     ImGui::TextDisabled("%s", g_set.master_host);
     {   // What the table shows, in a line.
-        std::string cap = g_scp.family;
+        std::string cap = all ? std::string("Every preset, each player's results per preset")
+                              : g_scp.family;
         if (!g_scp.version.empty()) cap += " " + version_label(g_scp.version);
         if (g_scp.bans == 0) cap += " - matches without unit bans";
         else if (g_scp.units.empty()) cap += " - matches with unit bans";
@@ -7470,8 +7500,10 @@ void tab_scores() {
                    (g_scp.units.size() == 1 ? "was" : "were") + " banned" +
                    (g_scp.exact ? " (and nothing else)" : "");
         if (s.state == 2)
-            cap += " - " + std::to_string(s.rows.size()) + (s.rows.size() >= 100 ? "+" : "") +
-                   (s.rows.size() == 1 ? " player" : " players");
+            cap += " - " + std::to_string(s.rows.size()) +
+                   (s.rows.size() >= (all ? 200u : 100u) ? "+" : "") +
+                   (all ? (s.rows.size() == 1 ? " row" : " rows")
+                        : (s.rows.size() == 1 ? " player" : " players"));
         ImGui::TextWrapped("%s", cap.c_str());
     }
     if (s.state == 1 || s.state == 0) ImGui::TextDisabled("Asking the master server...");
@@ -7481,12 +7513,13 @@ void tab_scores() {
                                       ? ("No matches yet for " + g_scp.family + ".").c_str()
                                       : "No matches recorded here yet.");
     if (s.state == 2 && !s.rows.empty() &&
-        ImGui::BeginTable("scores", 11,ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
+        ImGui::BeginTable("scores", all ? 12 : 11, ImGuiTableFlags_RowBg | ImGuiTableFlags_Borders |
                                             ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingFixedFit,
                           ImVec2(0.0f, ImGui::GetContentRegionAvail().y - 4.0f))) {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("#");
         ImGui::TableSetupColumn("Player", ImGuiTableColumnFlags_WidthStretch);
+        if (all) ImGui::TableSetupColumn("Preset");
         for (const char* c : {"Matches", "Wins", "Losses", "Win %", "Units destroyed", "Units lost",
                               "Buildings destroyed", "Buildings lost", "Bricks"})
             ImGui::TableSetupColumn(c);
@@ -7503,6 +7536,11 @@ void tab_scores() {
             ImGui::SameLine();
             ImGui::AlignTextToFramePadding();
             ImGui::TextUnformatted(r.name.c_str());
+            if (all) {
+                ImGui::TableNextColumn();
+                ImGui::TextColored(sc_preset_colour(r.preset), "%s",
+                                   r.preset.empty() ? "?" : r.preset.c_str());
+            }
             ImGui::TableNextColumn(); ImGui::Text("%d", r.matches);
             ImGui::TableNextColumn(); ImGui::Text("%d", r.wins);
             ImGui::TableNextColumn(); ImGui::Text("%d", r.losses);
@@ -7540,8 +7578,9 @@ const std::vector<MenuHeader>& menu_headers() {
                       {"Music", "Music", tab_music},
                       {"Saves", "Saves", tab_saves}}},
         {"Enhancements", {{"Gameplay", "Enhancements", tab_enhancements},
-                          {"Renames", "Renames", tab_renames},
-                          {"Team Builder", "Team Builder", tab_team_builder}}},
+                          {"Renames", "Renames", tab_renames}}},
+        // SG-0040: its own category, not one of Enhancements' pages.
+        {"Team Builder", {{"Team Builder", "Team Builder", tab_team_builder}}},
         {"Balance", {{"Units", "Balance Units", tab_balance_units},
                      {"Heroes", "Balance Heroes", tab_balance_heroes},
                      {"Traits", "Balance Traits", tab_balance_traits},
@@ -7562,7 +7601,7 @@ const std::vector<MenuHeader>& menu_headers() {
 }
 
 int g_menu_header = 0;
-int g_menu_section[8] = {};
+int g_menu_section[16] = {};   // one per header in menu_headers() (8 since SG-0040)
 bool g_quit_ask = false, g_reset_ask = false;
 
 // A header or sidebar entry: a full-width button, coloured when selected.
@@ -7640,8 +7679,22 @@ void draw_panels() {
     const ImGuiStyle& st = ImGui::GetStyle();
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
-    // Header: the categories, then Quit / Reset / Close at the right.
-    ImGui::SetWindowFontScale(1.35f);
+    // Header: the categories, then Quit / Reset / Close at the right. The row
+    // is drawn at 1.35x, smaller when that does not fit the block (eight
+    // categories since SG-0040 ran under Quit in a 1050 px window).
+    float head_scale = 1.35f;
+    {
+        // Text widths at 1x scale with the font; padding and spacing do not.
+        ImGui::SetWindowFontScale(1.0f);
+        float text = ImGui::CalcTextSize("Reset").x + ImGui::CalcTextSize("Quit").x +
+                     ImGui::CalcTextSize("Close").x;
+        for (const MenuHeader& h : hs) text += ImGui::CalcTextSize(h.label).x;
+        const float fixed = 20.0f * (float)hs.size() + 60.0f +
+                            st.ItemSpacing.x * (float)(hs.size() + 3) + st.WindowPadding.x * 2;
+        if (text > 0.0f && text * head_scale + fixed > size.x)
+            head_scale = std::max(0.8f, (size.x - fixed) / text);
+    }
+    ImGui::SetWindowFontScale(head_scale);
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f, 6.0f));
     for (int h = 0; h < (int)hs.size(); ++h) {
         if (h) ImGui::SameLine();
@@ -7706,6 +7759,7 @@ void draw_panels() {
                                ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::TextUnformatted("Are you sure you want to quit?");
         if (menu_red_button("Quit", nullptr)) {
+            std::fprintf(stderr, "[lb_overlay] Quit chosen\n");   // BR-0029
             SDL_Event q{};
             q.type = SDL_QUIT;
             SDL_PushEvent(&q);
@@ -8081,7 +8135,7 @@ extern "C" void lb_quick_request(int action);   /* src/lb_patches.cpp */
 
 namespace {
 enum QuickAction { kQuickNone = -1, kQuickDeselect = 0, kQuickBlue = 1,
-                   kQuickSecond = 2, kQuickItem = 10 };
+                   kQuickSecond = 2, kQuickItem = 10, kQuickItem2 = 30 };
 
 // 1..9 for the number row and the keypad's digits, else 0.
 int quick_digit(SDL_Scancode sc) {
@@ -8110,7 +8164,9 @@ bool quick_event(const SDL_Event* event, const ImGuiIO& io) {
                quick_digit(event->key.keysym.scancode) &&
                !io.WantCaptureKeyboard &&
                lb_binding_key_bit(event->key.keysym.scancode) == 0) {
-        action = kQuickItem + quick_digit(event->key.keysym.scancode);
+        // BR-0033: Shift+N is item 9+N (requests 31..39, lb_patches.cpp).
+        action = ((event->key.keysym.mod & KMOD_SHIFT) ? kQuickItem2 : kQuickItem) +
+                 quick_digit(event->key.keysym.scancode);
     } else if ((event->type == SDL_MOUSEBUTTONDOWN ||
                 event->type == SDL_MOUSEBUTTONUP) && !io.WantCaptureMouse) {
         const int b = event->button.button;

@@ -3,8 +3,8 @@
 //   node test/relay.mjs         (or SERVER=http://lbserver.viosarcade.xyz ...)
 // Announces a lobby, puts a host and two joiners on its room, and checks
 // that batches cross both ways, that 255 reaches every joiner, that a wrong
-// token and an unknown lobby are refused, and that the host's leaving closes
-// the joiners. The lobby is removed at the end (one Discord line against the
+// token and an unknown lobby are refused, that a host that reconnects keeps
+// its joiners, and that the host's leaving closes them after the grace period. The lobby is removed at the end (one Discord line against the
 // live server).
 
 import net from 'node:net';
@@ -138,9 +138,25 @@ check('ping is answered', (await next(j1)) === 'pong');
 j2.ws.close();
 check('the host hears joiner 2 leave', same(await next(host), new Uint8Array([2, 2])));
 
+// BR-0031/32: a host that drops and comes back keeps its joiners, and hears
+// them as open again.
 host.ws.close();
-await next(j1, 3000);
-check('the host leaving closes the joiners', j1.closed && j1.closed.code === 4004, j1.closed);
+await sleep(1000);
+check('a dropped host does not close the joiners at once', !j1.closed, j1.closed);
+const host2 = await open('/relay/' + code + '?role=host&token=' + token);
+check('the host reconnects', host2.ws.readyState === WebSocket.OPEN);
+check('the new host hears joiner 1 open', same(await next(host2), new Uint8Array([1, 1])));
+j1.ws.send(up);
+const again = await next(host2);
+check('a joiner batch reaches the reconnected host', again && again[1] === 1 && same(again.subarray(2), up), again);
+host2.ws.send(new Uint8Array([0, 255, ...batch([5])]));
+check('the reconnected host reaches the joiner', same(await next(j1), batch([5])));
+
+host2.ws.close();
+const t0 = Date.now();
+await next(j1, 20000);
+check('the host leaving closes the joiners after the grace period',
+      j1.closed && j1.closed.code === 4004 && Date.now() - t0 >= 10000, { closed: j1.closed, ms: Date.now() - t0 });
 
 await call('POST', '/remove', { code, token });
 console.log(`${passed} passed, ${failed} failed`);

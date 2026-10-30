@@ -32,8 +32,20 @@ import { DurableObject } from 'cloudflare:workers';
 
 const MAX_PEERS = 8;
 const ALL = 255;
+// BR-0031/32: a host whose connection drops mid-match (a network blip) gets
+// this long to come back before its joiners are closed. The game drops a
+// player after 20 s of silence (lb_vwh.cpp kSilentMs), so a host that comes
+// back inside this keeps its match.
+const HOST_GRACE_MS = 15000;
 
 export class RelayRoom extends DurableObject {
+  constructor(ctx, env) {
+    super(ctx, env);
+    // The games ping every 2 s when they hear nothing (to notice a dead
+    // connection, BR-0031/32); the runtime answers without waking the room.
+    ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
+  }
+
   host() {
     return this.ctx.getWebSockets('host')[0] || null;
   }
@@ -71,12 +83,17 @@ export class RelayRoom extends DurableObject {
 
     if (role === 'host') {
       const [client, server] = Object.values(new WebSocketPair());
-      // A reconnecting host replaces the old socket; the joiners it carried
-      // reconnect too.
-      for (const old of this.ctx.getWebSockets()) {
+      // A reconnecting host replaces the old socket. BR-0031/32: the joiners
+      // stay -- their own connections are fine, and closing them ended the
+      // match -- and the new socket hears each of them open, as if new.
+      for (const old of this.ctx.getWebSockets('host')) {
         try { old.close(4000, 'host reconnected'); } catch { /* gone */ }
       }
       this.ctx.acceptWebSocket(server, ['host']);
+      await this.ctx.storage.deleteAlarm();
+      for (let i = 1; i <= MAX_PEERS; ++i) {
+        if (this.peer(i)) server.send(new Uint8Array([1, i]));
+      }
       return new Response(null, { status: 101, webSocket: client });
     }
 
@@ -104,7 +121,7 @@ export class RelayRoom extends DurableObject {
     if (n > 0) {
       // From a joiner: to the host, tagged.
       const host = this.host();
-      if (!host) { ws.close(4004, 'the host left'); return; }
+      if (!host) return;   // the host is reconnecting (alarm) or gone (closed there)
       const out = new Uint8Array(bytes.length + 2);
       out[0] = 0;
       out[1] = n;
@@ -132,14 +149,14 @@ export class RelayRoom extends DurableObject {
 
   async webSocketClose(ws, code) {
     try { ws.close(code === 1005 ? 1000 : code, 'bye'); } catch { /* answered */ }
-    this.gone(ws);
+    await this.gone(ws);
   }
 
   async webSocketError(ws) {
-    this.gone(ws);
+    await this.gone(ws);
   }
 
-  gone(ws) {
+  async gone(ws) {
     const n = this.peerOf(ws);
     if (n > 0) {
       const host = this.host();
@@ -148,12 +165,18 @@ export class RelayRoom extends DurableObject {
       }
       return;
     }
-    if (this.ctx.getTags(ws).includes('host')) {
-      for (const other of this.ctx.getWebSockets()) {
-        if (other !== ws) {
-          try { other.close(4004, 'the host left'); } catch { /* gone */ }
-        }
-      }
+    // The host's socket: its joiners wait HOST_GRACE_MS for it to come back
+    // (alarm). A replaced socket (a reconnect already in) is not a leaving.
+    if (this.ctx.getTags(ws).includes('host') &&
+        !this.ctx.getWebSockets('host').some((h) => h !== ws)) {
+      if (this.peers().length) await this.ctx.storage.setAlarm(Date.now() + HOST_GRACE_MS);
+    }
+  }
+
+  async alarm() {
+    if (this.host()) return;
+    for (const other of this.ctx.getWebSockets()) {
+      try { other.close(4004, 'the host left'); } catch { /* gone */ }
     }
   }
 }

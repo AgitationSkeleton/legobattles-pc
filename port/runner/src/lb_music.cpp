@@ -93,6 +93,7 @@ extern "C" bool lb_field_entity_blueprint(int index, uint32_t* record);
 extern "C" bool lb_field_camera(int* map_x, int* map_y);
 extern "C" unsigned int lb_patches_blueprint_base(void);
 extern "C" int lb_demo_play_music(void);   /* src/lb_demo.cpp, docs/388 */
+extern "C" int lb_mission_is_free_play(void);   /* src/lb_patches.cpp, BR-0034 */
 
 namespace {
 
@@ -388,6 +389,10 @@ extern "C" int lb_music_wanted_side(void) {
 
     const uint32_t map = bus_read_u32(0x02156CB0u);
     if (!main_ram(map) || !battle_up()) return -1;
+    // BR-0034: the setting chose Imperial music over a King campaign level.
+    // It is the Free Play (and multiplayer) music choice; a campaign mission
+    // plays its own.
+    if (!lb_mission_is_free_play()) return -1;
 
     latch_local_owner(map);
     // docs/387: the music override setting has Wizard/Pirate/Imperial/Earth/

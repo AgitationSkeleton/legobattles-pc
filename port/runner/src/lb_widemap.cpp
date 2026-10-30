@@ -1348,6 +1348,22 @@ unsigned g_interior_n = 0;   // interior holes reported so far
 // Bare-cell reports emitted this frame; see the note at the [lb_bares]
 // print. Reset at the top of each fill so the cap is per frame.
 unsigned g_bare_n = 0;
+// The same reports over the whole session. Four a frame for hours filled a
+// player's log with half a million lines (BR-0029's was 85 MB), so the
+// probe stops after the first few frames' worth.
+unsigned g_bare_total = 0;
+constexpr unsigned kBareSessionCap = 64;
+// [lb_findfog]'s watch / drop / relocate lines, capped per session for the
+// same reason: on some maps the search adopts and drops a grid all game.
+unsigned g_findfog_lines = 0;
+constexpr unsigned kFindfogSessionCap = 300;
+bool findfog_quota() {
+    if (g_findfog_lines < kFindfogSessionCap) { ++g_findfog_lines; return true; }
+    if (g_findfog_lines++ == kFindfogSessionCap)
+        std::fprintf(stderr, "[lb_findfog] %u lines logged; the rest of the "
+                             "session's are not\n", kFindfogSessionCap);
+    return false;
+}
 
 unsigned g_vis_passes = 0;
 unsigned g_vis_last_count = 0;
@@ -2266,7 +2282,7 @@ void scan_shroud(uint32_t dispcnt, uint32_t map, int map_w, int map_h,
         const bool cheating = wrong_revealed * 2u > wrong;
         if (checked >= 32 && wrong * 4 > checked) {
             g_vis_bad_streak += cheating ? 30u : 1u;
-            if (g_vis_bad_streak <= 30u)
+            if (g_vis_bad_streak <= 30u && findfog_quota())
                 std::fprintf(stderr,
                              "[lb_findfog] %08X disagrees %u/%u (%u revealed "
                              "over shrouded, %u shrouded over revealed) -- "
@@ -2279,6 +2295,7 @@ void scan_shroud(uint32_t dispcnt, uint32_t map, int map_w, int map_h,
             g_vis_bad_streak = 0;
         }
         if (g_vis_bad_streak >= 30u) {
+            if (findfog_quota())
             std::fprintf(stderr,
                          "[lb_findfog] DROPPED %08X: %u/%u disagree with the "
                          "guest's own fog, %u frames running\n",
@@ -6235,6 +6252,7 @@ void fill_fog_for(int cam_tx, int cam_ty) {
             // and left 46 counted cells unexplained. That gap is the evidence
             // that the other term is the one doing it.
             if ((!s || !have_fog) && g_bare_n < 4u &&
+                g_bare_total < kBareSessionCap &&
                 (trow < 0 || trow >= 24 || h < 0 || h >= 32)) {
                 const int dmx = floor_div(ac, 3), dmy = floor_div(ar, 2);
                 if (dmx >= 0 && dmy >= 0 && dmx < g_map_w && dmy < g_map_h &&
@@ -6242,6 +6260,7 @@ void fill_fog_for(int cam_tx, int cam_ty) {
                     const bool in_seen = ar >= 0 && ar < g_seen_h &&
                                          ac >= 0 && ac < g_seen_w;
                     ++g_bare_n;
+                    ++g_bare_total;
                     std::fprintf(stderr,
                                  "[lb_bares] map %d,%d abs tile %d,%d "
                                  "trow %d h %d  s=0 yet record hidden: "
@@ -8678,6 +8697,7 @@ extern "C" void lb_widemap_fill(void) {
             const char* off = std::getenv("LB_FOGLOC");
             if (!(off && off[0] == '0') && locate_fog_record(map_w, map_h)) {
                 g_findfog_done = true;
+                if (findfog_quota())
                 std::fprintf(stderr,
                              "[lb_findfog] LOCATED on frame %u (no wait): "
                              "%ux%u bits, rows at %08X, stride %u\n",

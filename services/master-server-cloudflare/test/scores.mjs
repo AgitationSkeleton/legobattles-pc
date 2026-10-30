@@ -108,6 +108,16 @@ check('all rulesets: Tester1 3 matches, a name in any case is one player', a1 &&
 check('all rulesets: Tester1 most-played hero 133', a1 && a1.hero === 133, a1);
 check('sorted by wins', all.every((x, i) => i === 0 || all[i - 1].wins >= x.wins), all);
 
+// SG-0039: the game's "All" table, one row per player and preset.
+r = await call('/scores?by=preset');
+const per = r.data.rows.filter((x) => x.name === 'Tester1');
+const pv = per.find((x) => x.preset === 'Vanilla');
+check('by preset: Tester1 has a row per preset, each tagged',
+      per.length >= 2 && per.every((x) => typeof x.preset === 'string' && x.preset), per);
+check('by preset: Tester1 Vanilla row is the Vanilla table\'s (2 matches)', pv && pv.matches === 2, pv);
+check('by preset: the rows add up to the merged table', per.reduce((n, x) => n + x.matches, 0) === 3, per);
+check('without by=preset no row carries a preset', all.every((x) => x.preset === undefined), all[0]);
+
 r = await call('/scores?bans=on');
 check('bans on: only the banned match', r.data.rows.length === 2 &&
       r.data.rows.every((x) => ['Tester3', 'Tester1'].includes(x.name)), r.data.rows);

@@ -3644,6 +3644,16 @@ constexpr int kQuickItem = 10;
 // none, FUN_020DA6BC). The choice is made here and recorded as made, so a
 // recording replays the same whatever the setting.
 constexpr int kQuickBlueItem = 20;
+// BR-0033: 31..39 are items 10..18 of the second brick's list (Shift+1..9). A
+// builder with ships and specials has more than nine buildings, and the
+// bridges were past the ninth.
+constexpr int kQuickItem2 = 30;
+// The request for item n (1..18) of the second brick's list, and back.
+int quick_item_action(int n) { return n > 9 ? kQuickItem2 + (n - 9) : kQuickItem + n; }
+bool quick_is_item(int a) {
+    return (a > kQuickItem && a <= kQuickItem + 9) || (a > kQuickItem2 && a <= kQuickItem2 + 9);
+}
+int quick_item_n(int a) { return a > kQuickItem2 ? 9 + (a - kQuickItem2) : a - kQuickItem; }
 constexpr int kQuickSettle = 3;   // BR-0026, QuickItem::settle
 
 struct QuickItem {
@@ -3701,8 +3711,7 @@ uint32_t quick_list_item(uint32_t screen, int g, int n) {
 
 // The frontend's request (UI thread). A demo being replayed owns the input.
 extern "C" void lb_quick_request(int action) {
-    const bool ok = (action >= 0 && action <= 2) ||
-                    (action > kQuickItem && action <= kQuickItem + 9) ||
+    const bool ok = (action >= 0 && action <= 2) || quick_is_item(action) ||
                     (action >= kQuickCancel && action < kQuickCancel + 3) ||
                     (action >= kQuickInfo &&
                      action <= kQuickInfo + kInfoLastId - kInfoFirstId) ||
@@ -3735,8 +3744,7 @@ extern "C" void lb_quick_replay(int action) {
         lb_keyboard_type(action);
         return;
     }
-    if ((action >= 0 && action <= 2) ||
-        (action > kQuickItem && action <= kQuickItem + 9) ||
+    if ((action >= 0 && action <= 2) || quick_is_item(action) ||
         (action > kQuickBlueItem && action <= kQuickBlueItem + 9) ||
         (action >= kQuickCancel && action < kQuickCancel + 3) ||
         (action >= kQuickInfo &&
@@ -3889,7 +3897,7 @@ bool quick_item_step(uint32_t screen) {
                      q.n, q.group, why ? "declined, " : "clicked",
                      why ? why : "", id,
                      w ? (unsigned)bus_read_u8(bus_read_u32(w + 4u)) : 0u);
-    const int action = kQuickItem + q.n;
+    const int action = quick_item_action(q.n);
     q.n = 0;
     if (why) return false;
     quick_enter(w, id, screen, action);
@@ -4006,7 +4014,7 @@ void view_update_override(void) {
                             tab);
                 return;
             }
-        } else if (want > kQuickBlueItem) {
+        } else if (want > kQuickBlueItem && want <= kQuickBlueItem + 9) {
             const int n = want - kQuickBlueItem;
             const char* why = quick_screen_gate(vs);
             if (!why && !quick_list_open(vs, 0)) why = "the blue list is closed";
@@ -4024,7 +4032,7 @@ void view_update_override(void) {
                 quick_save();
                 if (quick_item_step(vs)) return;
             }
-        } else if (want > kQuickItem) {
+        } else if (quick_is_item(want)) {
             // docs/385: item N of the second brick's list.
             const uint32_t screen = g_cpu.R[0];
             uint32_t w = 0;
@@ -4035,10 +4043,10 @@ void view_update_override(void) {
             if (why) {
                 if (quick_log())
                     std::fprintf(stderr, "[lb_quick] item %d: declined, %s\n",
-                                 want - kQuickItem, why);
+                                 quick_item_n(want), why);
             } else {
                 lb_demo_note_quick(want);
-                g_qitem.n = want - kQuickItem;
+                g_qitem.n = quick_item_n(want);
                 g_qitem.group = g;
                 g_qitem.screen = screen;
                 g_qitem.updates = 6;
@@ -13741,6 +13749,10 @@ static bool free_play_mission(void) {
     const uint32_t v6 = bus_read_u32(vt + 6u * 4u);
     return v6 == 0x02045BC8u || v6 == 0x02045BC9u;
 }
+
+// BR-0034: the music override is for Free Play and multiplayer matches; a
+// campaign mission keeps the music the cartridge gives it.
+extern "C" int lb_mission_is_free_play(void) { return free_play_mission() ? 1 : 0; }
 
 static void ai_spectate_mirror(void) {
     auto ram = [](uint32_t p) { return p >= 0x02000000u && p < 0x02400000u; };

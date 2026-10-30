@@ -1005,9 +1005,10 @@ extern "C" int lb_mods_map_stats(const unsigned char* data, size_t n, int out[10
 // docs/414: a map's REAL start count. The EVNT players that lb_mods_map_stats
 // counts include players that only appear in other events (The Pond lists 4
 // but places 3 bases, and a team with no base stalls the load). A start is an
-// EVNT record of exactly six conditions (the base and its builders: the
-// layouts build_map.py copies from mp05/mp18/mp20/mp24), its player the byte
-// at +2 of a condition. Returns the distinct players of such records, or -1
+// EVNT record of six or more conditions all for one player (the base and its
+// builders: six in the stock layouts build_map.py copies from
+// mp05/mp18/mp20/mp24, 7-10 in editor-made maps), its player the byte at +2
+// of a condition. Returns the distinct players of such records, or -1
 // when the file is not a map.
 extern "C" int lb_mods_map_starts(const unsigned char* data, size_t n) {
     std::vector<uint8_t> m(data, data + n);
@@ -1036,8 +1037,17 @@ extern "C" int lb_mods_map_starts(const unsigned char* data, size_t n) {
             if (p >= m.size()) return -1;
             const unsigned c = m[p++];
             if (p + (size_t)c * sizes[k] > m.size()) return -1;
-            if (k == 0 && c == 6)
-                for (unsigned i = 0; i < c; ++i) seen[m[p + 9u * i + 2u]] = true;
+            // BR-0028: maps made in the map editor build a base from 7 to
+            // 10 conditions (Forest of Fate, Ground Zero: 7), not the stock
+            // six, and counted no starts at all, so the third computer was
+            // refused. A start is six or more conditions for ONE player; on
+            // all 30 stock maps that counts exactly what "six" did.
+            if (k == 0 && c >= 6) {
+                const uint8_t who = m[p + 2u];
+                bool one = true;
+                for (unsigned i = 1; i < c; ++i) one = one && m[p + 9u * i + 2u] == who;
+                if (one) seen[who] = true;
+            }
             p += (size_t)c * sizes[k];
         }
     }

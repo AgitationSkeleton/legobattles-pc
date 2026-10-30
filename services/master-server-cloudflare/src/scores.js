@@ -166,27 +166,34 @@ export class Scores extends DurableObject {
     }
     const limit = Math.min(Math.max(Number.parseInt(q.get('limit') || '100', 10) || 100, 1), 200);
     const filter = where.length ? 'WHERE ' + where.join(' AND ') : '';
+    // SG-0039: by=preset gives one row per player AND preset (the game's "All"
+    // table, every preset at once, each row tagged with its own).
+    const byPreset = q.get('by') === 'preset';
+    const group = byPreset ? 'r.name_key, m.preset' : 'r.name_key';
+    const presetCol = byPreset ? ', m.preset AS preset' : '';
     // A stat a game could not read is -1: it counts as nothing.
     const sums = STATS.map((k) => `SUM(MAX(r.${k}, 0)) AS ${k}`).join(', ');
     const rows = this.sql.exec(
       `SELECT r.name_key AS name_key, MAX(r.name) AS name, COUNT(*) AS matches,
-              SUM(r.won) AS wins, COUNT(*) - SUM(r.won) AS losses, ${sums}
+              SUM(r.won) AS wins, COUNT(*) - SUM(r.won) AS losses, ${sums}${presetCol}
          FROM results r JOIN matches m ON m.id = r.match_id ${filter}
-        GROUP BY r.name_key ORDER BY wins DESC, losses ASC, matches DESC LIMIT ?`,
+        GROUP BY ${group} ORDER BY wins DESC, losses ASC, matches DESC LIMIT ?`,
       ...args, limit).toArray();
     // Each player's most-played hero in the same matches.
     const heroes = new Map();
+    const hkey = (r) => (byPreset ? r.name_key + '\u0001' + r.preset : r.name_key);
     for (const h of this.sql.exec(
-      `SELECT r.name_key AS name_key, r.hero AS hero, COUNT(*) AS n
+      `SELECT r.name_key AS name_key, r.hero AS hero, COUNT(*) AS n${presetCol}
          FROM results r JOIN matches m ON m.id = r.match_id ${filter}
-        GROUP BY r.name_key, r.hero ORDER BY n DESC`, ...args)) {
-      if (!heroes.has(h.name_key)) heroes.set(h.name_key, h.hero);
+        GROUP BY ${group}, r.hero ORDER BY n DESC`, ...args)) {
+      if (!heroes.has(hkey(h))) heroes.set(hkey(h), h.hero);
     }
     return json(200, {
       ok: true,
       rows: rows.map((r) => {
-        const out = { name: r.name, hero: heroes.has(r.name_key) ? heroes.get(r.name_key) : -1,
+        const out = { name: r.name, hero: heroes.has(hkey(r)) ? heroes.get(hkey(r)) : -1,
                       matches: r.matches, wins: r.wins, losses: r.losses };
+        if (byPreset) out.preset = r.preset || '';
         for (const k of STATS) out[k] = r[k];
         return out;
       }),

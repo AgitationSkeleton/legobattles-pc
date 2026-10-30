@@ -32,6 +32,8 @@
 //
 // LB_TEST_FORCE_RELAY=1 (a test aid): a joiner goes to the relay at once, and
 // neither side uses the direct route, so one machine can test it.
+// LB_TEST_RELAY_STALL=S,D (a test aid): the host's link goes quiet for D s, S s
+// after its room opens, to test the recovery (BR-0031/32).
 
 #include <algorithm>
 #include <atomic>
@@ -71,6 +73,16 @@ namespace {
 
 using Clock = std::chrono::steady_clock;
 constexpr int kKeepaliveMs = 20000;   // Cloudflare closes a WebSocket idle ~100 s
+// BR-0031/32: a connection whose network went away sends no FIN, so recv never
+// reports it closed; a host waited on one through a match and its joiner lost
+// the room. With nothing heard for kQuietMs the side pings (the room answers
+// "pong"); nothing heard for kDeadMs and the connection is taken as dead, and
+// reopened. A match's traffic keeps both well under these.
+constexpr int kQuietMs = 2000;
+constexpr int kDeadMs = 6000;
+// How long a joiner whose room closed mid-match keeps trying to rejoin it: the
+// room keeps a dropped host's joiners 15 s (relay.js HOST_GRACE_MS).
+constexpr int kRejoinMs = 15000;
 constexpr size_t kBatchBytes = 1200;  // flush a batch past this
 constexpr size_t kInQueue = 1024;
 
@@ -275,7 +287,8 @@ struct Session {
     std::atomic<int> peers{0};         // host: relayed joiners
     std::atomic<long long> fd{-1};
     std::atomic<long long> last_send_ms{0};
-    std::mutex send_mu;                // the socket's writes
+    std::atomic<long long> last_recv_ms{0};   // anything from the room, pongs too
+    std::mutex send_mu;               // the socket's writes
     uint32_t rng = 0x9E3779B9u;        // under send_mu
     std::string buf, partial;          // the reader's (its thread only)
     uint8_t partial_op = 0;
@@ -426,6 +439,7 @@ bool ws_receive(Session& s, std::vector<Message>* out) {
     char tmp[16384];
     const int k = ::recv((socket_t)fd, tmp, (int)sizeof tmp, 0);
     if (k <= 0) return false;
+    s.last_recv_ms = now_ms();
     s.buf.append(tmp, (size_t)k);
     std::vector<Message> got;
     if (!ws_parse(s.buf, s.partial, s.partial_op, &got)) return false;
@@ -489,19 +503,58 @@ void handle(Session& s, const Message& m) {
     }
 }
 
+// LB_TEST_RELAY_STALL=S,D (a test aid, BR-0031/32): the host's relay link goes
+// quiet S seconds after its room first opens, for D seconds -- nothing read,
+// nothing sent, the socket left open -- as a network that drops does.
+bool stalled(const Session& s) {
+    static const int start = [] {
+        const char* v = std::getenv("LB_TEST_RELAY_STALL");
+        return v ? std::atoi(v) : 0;
+    }();
+    static const int len = [] {
+        const char* v = std::getenv("LB_TEST_RELAY_STALL");
+        const char* c = v ? std::strchr(v, ',') : nullptr;
+        return c ? std::atoi(c + 1) : 0;
+    }();
+    static long long opened = 0;
+    if (start <= 0 || len <= 0 || s.role != kHost) return false;
+    const long long t = now_ms();
+    if (!opened) opened = t;
+    const bool on = t >= opened + start * 1000LL && t < opened + (start + len) * 1000LL;
+    static bool said = false;
+    if (on && !said) {
+        said = true;
+        std::fprintf(stderr, "[lb_relay] test: the link goes quiet for %d s\n", len);
+    }
+    return on;
+}
+
 // Read until closed or stopped, keeping the connection alive meanwhile.
-void pump(Session& s) {
+// Returns false when the connection was given up as dead (BR-0031/32).
+bool pump(Session& s) {
+    s.last_recv_ms = now_ms();
+    long long last_ping = 0;
     while (!s.stop) {
         const long long fd = s.fd.load();
-        if (fd < 0) return;
-        if (now_ms() - s.last_send_ms.load() > kKeepaliveMs)
+        if (fd < 0) return true;
+        const long long t = now_ms();
+        if (t - s.last_recv_ms.load() > kDeadMs) return false;
+        if (stalled(s)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            continue;
+        }
+        if (t - s.last_send_ms.load() > kKeepaliveMs ||
+            (t - s.last_recv_ms.load() > kQuietMs && t - last_ping > kQuietMs)) {
             send_frame(s, 1, (const uint8_t*)"ping", 4);
+            last_ping = t;
+        }
         if (!wait_readable((socket_t)fd, 200)) continue;
         std::vector<Message> got;
         const bool open = ws_receive(s, &got);
         for (const Message& m : got) handle(s, m);
-        if (!open) return;
+        if (!open) return true;
     }
+    return true;
 }
 
 void nap(Session& s, int ms) {
@@ -530,11 +583,13 @@ void run_host(std::shared_ptr<Session> sp) {
         s.ready = true;
         status(&s, relayed_text(0));
         for (const Message& m : early) handle(s, m);
-        pump(s);
+        const bool closed = pump(s);
         s.ready = false;
         s.peers = 0;
         close_socket(s);
-        if (!s.stop) status(&s, "relay: the connection closed; reopening");
+        if (!s.stop)
+            status(&s, closed ? "relay: the connection closed; reopening"
+                              : "relay: nothing heard for 6 s (the network?); reopening");
     }
     close_socket(s);
     s.done = true;
@@ -555,13 +610,33 @@ void run_join(std::shared_ptr<Session> sp) {
         if (final) break;
         nap(s, 1500);
     }
-    if (s.fd.load() >= 0) {
+    while (s.fd.load() >= 0) {
         s.last_send_ms = now_ms();
         for (const Message& m : early) handle(s, m);
-        pump(s);
+        const bool closed = pump(s);
         const bool was = s.ready.exchange(false);
-        if (!s.stop)
-            status(&s, was ? "relay: the host's room closed" : "relay: could not pair with the host");
+        close_socket(s);
+        if (s.stop) break;
+        if (!was) {
+            status(&s, "relay: could not pair with the host");
+            break;
+        }
+        // BR-0031/32: a paired joiner whose room went away (its own network,
+        // or the room closed) rejoins while the room would still hold it; the
+        // match's own resends cover what was lost meanwhile.
+        status(&s, closed ? "relay: the host's room closed; rejoining"
+                          : "relay: nothing heard for 6 s (the network?); rejoining");
+        const auto t0 = Clock::now();
+        while (!s.stop && ms_since(t0) < kRejoinMs) {
+            early.clear();
+            if (ws_open(s, "/relay/" + s.code + "?role=join", 3000, &early, &why, &final)) break;
+            if (s.stop || final) break;
+            nap(s, 1000);
+        }
+        if (s.fd.load() < 0) {
+            if (!s.stop) status(&s, "relay: the host's room closed");
+            break;
+        }
     }
     close_socket(s);
     s.done = true;   // gone or never paired: the direct route is this player's again
@@ -663,7 +738,7 @@ extern "C" int lb_relay_direct_off(void) {
 namespace {
 void send_batch(std::string batch) {
     const auto s = current();
-    if (!s || !lb_relay_active()) return;
+    if (!s || !lb_relay_active() || stalled(*s)) return;
     std::string msg;
     if (s->role == kHost) msg.assign("\x00\xFF", 2);
     msg += batch;
