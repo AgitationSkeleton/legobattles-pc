@@ -682,6 +682,7 @@ int          lb_teams_slot_unit(int slot, int k);
 void         lb_teams_slot_pos(int slot, int* x, int* y);   // native px
 const char*  lb_teams_slot_label(int slot);
 const char*  lb_teams_unit_name(int blueprint);
+const char*  lb_teams_unit_name_stock(int blueprint);   // the cartridge's, no renames: for RP, webhooks, servers
 int          lb_teams_unit_name_id(int blueprint);   // docs/385: bp+0x06
 int          lb_teams_unit_faction(int blueprint);   // 0 King .. 5 Alien
 int          lb_teams_unit_slot(int blueprint);      // -1 none
@@ -772,6 +773,7 @@ void         lb_rules_incoming(const unsigned char* buf, int len,
 // the host's: bits of the rules datagram's flags byte.
 #define LB_RULE_EMP_TRANSPORTS 0x01
 #define LB_RULE_CREATURES      0x02   /* docs/410 */
+#define LB_RULE_TEAL           0x04   /* docs/412: colour 6 is offered */
 int          lb_rules_local_flags(void);   /* this machine's (lb_overlay) */
 int          lb_rules_host_flags(void);    /* the host's; -1 unless joined */
 int          lb_setting_emp_transports(void);
@@ -817,6 +819,11 @@ int          lb_transport_release_live(void);
 int          lb_setting_creatures(void);
 int          lb_demo_play_creatures(void);
 int          lb_creatures_live(void);
+// docs/412: teal (colour 6) in play: this machine's setting offline or while
+// hosting, the host's rule flag while joined. LB_TEAL=0|1 forces the setting.
+int          lb_setting_teal(void);
+int          lb_setting_teal_style(void);   // 0 the cartridge's (default), 1 the port's ramp
+int          lb_teal_live(void);
 int          lb_creature_slot_allowed(int creature_index, int slot);   /* docs/437, lb_patches.cpp */
 // docs/436: the army slot of each creature, packed 4 bits a creature (Wolf,
 // Robot, Shark; 0 the default, else 1 + the Team Builder slot), carried as the

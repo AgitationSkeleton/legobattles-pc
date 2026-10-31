@@ -328,7 +328,7 @@ extern "C" void lb_discord_tick(void) {
             for (const HeroKey& h : kHeroKey)
                 if (h.bp == bp) {
                     a.small_key = h.key;
-                    const char* nm = lb_teams_unit_name(bp);
+                    const char* nm = lb_teams_unit_name_stock(bp);
                     if (nm && std::strcmp(nm, "?") != 0) a.small_text = nm;
                     break;
                 }

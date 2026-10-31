@@ -4350,6 +4350,106 @@ void opponent_setup_override(void) {
     if (original) original();
 }
 
+// docs/412: TEAL, A SEVENTH TEAM COLOUR, ENABLED BY THE HOST (lb_teal_live()).
+//  * The five colour bars (OpponentSetup's two, the multiplayer faction
+//    select's, HostLobby's, ClientLobby's) are list records in the layout
+//    image the base ScreenType init (0x020E1880, r1 = the file image) turns
+//    into widgets: rect s16 y0,x0,y1,x1 at +4, item count at +0x18, item width
+//    at +0x19. A horizontal list lays item k at x0 + k*width (FUN_020E75BC),
+//    so seven items need count 7 and x0 moved 8 px left to keep the row's
+//    centre. Only while the rule is on; with it off the record is put back.
+//  * Each bar's item builder loops `cmp r4,#6` (a Thumb halfword 0x2C06); it
+//    is 0x2C07 while the rule is on (teal_tick).
+//  * The lobby's auto-assign bound (ARM `cmp r0,#6`, 0x020F5034) likewise.
+//  * The art, the frame remap and the palette are lb_teal_screen_fix, below.
+constexpr uint32_t kScreenInit = 0x020E1880u;       // thumb: ScreenType::virtual_08
+constexpr uint32_t kTealBounds[4] = {0x020C045Eu, 0x020C4892u, 0x020BA598u, 0x020B5CECu};
+constexpr uint32_t kTealAutoCmp = 0x020F5034u;      // arm: cmp r0,#6
+struct TealRow { uint32_t off; uint8_t screen; int16_t y0, x0, y1, x1; };
+constexpr TealRow kTealRows[5] = {
+    {0x16Cu, 0x2Du,  82,  16,  98, 112},   // OpponentSetup, the player's
+    {0x194u, 0x2Du, 106, 144, 122, 240},   // OpponentSetup, the opponent's
+    {0x12Cu, 0xFFu, 149,  80, 165, 176},   // the multiplayer faction select
+    {0x1F0u, 0x17u, 128,  80, 144, 176},   // HostLobby
+    {0x1F4u, 0x0Bu, 128,  80, 144, 176},   // ClientLobby
+};
+void screen_init_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kScreenInit);
+    const uint32_t buf = g_cpu.R[1];
+    if (guest_ptr(buf) && guest_ptr(buf + 0x200u) && bus_read_u8(buf + 2u) > 0u) {
+        const bool live = lb_teal_live() != 0;
+        const uint32_t n = bus_read_u8(buf + 2u);
+        const uint32_t sid = bus_read_u8(buf + 3u);
+        const uint32_t base = buf + 0xCu + 4u * n;
+        for (uint32_t i = 0; i < n; ++i) {
+            const uint32_t r = base + bus_read_u32(buf + 0xCu + 4u * i);
+            if (!guest_ptr(r) || !guest_ptr(r + 0x20u)) continue;
+            for (const TealRow& row : kTealRows) {
+                if (row.screen != sid || r - buf != row.off) continue;
+                const bool stock = (int16_t)bus_read_u16(r + 4u) == row.y0 &&
+                                   (int16_t)bus_read_u16(r + 6u) == row.x0 &&
+                                   (int16_t)bus_read_u16(r + 8u) == row.y1 &&
+                                   (int16_t)bus_read_u16(r + 0xAu) == row.x1 &&
+                                   bus_read_u8(r + 0x18u) == 6u && bus_read_u8(r + 0x19u) == 16u;
+                const bool wide = (int16_t)bus_read_u16(r + 6u) == row.x0 - 8 &&
+                                  (int16_t)bus_read_u16(r + 0xAu) == row.x1 + 8 &&
+                                  bus_read_u8(r + 0x18u) == 7u && bus_read_u8(r + 0x19u) == 16u;
+                if (live && stock) {
+                    bus_write_u8(r + 0x18u, 7u);
+                    bus_write_u16(r + 6u, (uint16_t)(row.x0 - 8));
+                    bus_write_u16(r + 0xAu, (uint16_t)(row.x1 + 8));
+                    std::fprintf(stderr, "[lb_teal] screen 0x%02X record 0x%03X: 7 items, x %d..%d\n",
+                                 sid, row.off, row.x0 - 8, row.x1 + 8);
+                    std::fflush(stderr);
+                } else if (!live && wide) {   // a cached image from while it was on
+                    bus_write_u8(r + 0x18u, 6u);
+                    bus_write_u16(r + 6u, (uint16_t)row.x0);
+                    bus_write_u16(r + 0xAu, (uint16_t)row.x1);
+                }
+            }
+        }
+    }
+    if (original) original();
+}
+
+// docs/412: the clamp. Teal is colour 6; if one reaches the match setup
+// (*0x02154080: the colours are u32 at +0xDC + 4*slot, read live in a match)
+// while the rule is off, it becomes the first colour nobody uses.
+void teal_clamp_setup() {
+    const uint32_t setup = bus_read_u32(0x02154080u);
+    if (!guest_ptr(setup) || !guest_ptr(setup + 0xFCu)) return;
+    for (uint32_t slot = 0; slot < 4u; ++slot) {
+        if (bus_read_u32(setup + 0xDCu + 4u * slot) != 6u) continue;
+        unsigned used = 0;
+        for (uint32_t o = 0; o < 4u; ++o) {
+            const uint32_t c = bus_read_u32(setup + 0xDCu + 4u * o);
+            if (o != slot && c < 6u) used |= 1u << c;
+        }
+        uint32_t pick = 0;
+        while (pick < 5u && (used & (1u << pick))) ++pick;
+        bus_write_u32(setup + 0xDCu + 4u * slot, pick);
+        std::fprintf(stderr, "[lb_teal] slot %u had colour 6 with teal off: colour %u instead\n",
+                     slot, pick);
+        std::fflush(stderr);
+    }
+}
+
+// Per frame: the bounds (code patches while on, restored while off) and the clamp.
+void teal_tick() {
+    const bool live = lb_teal_live() != 0;
+    for (uint32_t a : kTealBounds) {
+        const uint16_t cur = bus_read_u16(a);
+        if (live && cur == 0x2C06u) bus_write_u16(a, 0x2C07u);
+        else if (!live && cur == 0x2C07u) bus_write_u16(a, 0x2C06u);
+    }
+    {
+        const uint32_t cur = bus_read_u32(kTealAutoCmp);
+        if (live && cur == 0xE3500006u) bus_write_u32(kTealAutoCmp, 0xE3500007u);
+        else if (!live && cur == 0xE3500007u) bus_write_u32(kTealAutoCmp, 0xE3500006u);
+    }
+    if (!live) teal_clamp_setup();
+}
+
 // docs/392: put choice `next` (0..7) on the portrait button record `rec`.
 void enemy_set_choice(uint32_t rec, int next) {
     // THE TWO NEW CHOICES ARE 24x24 FRAMES IN A 56x56 BUTTON, and a button
@@ -4757,9 +4857,11 @@ extern "C" int lb_boot_skip_wanted(void) {
     return (g_kb_vblanks - g_skip_from) < 6000u ? 1 : 0;
 }
 
+extern "C" void lb_teal_screen_fix(uint32_t screen);   /* below, docs/412 */
 void screen_update_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kScreenUpdate);
     ++g_kb_vblanks;   // (counts updates; only the difference matters)
+    lb_teal_screen_fix(g_cpu.R[0]);   // docs/412: teal's frames, after the screen's own
     if (!g_title_seen && guest_ptr(g_cpu.R[0]) && bus_read_u32(g_cpu.R[0]) == 0x0214DDF4u) {
         g_title_seen = true;
         if (lb_setting_skip_intro() && !g_skip_logged) {
@@ -6933,87 +7035,306 @@ void billboard_draw_override(void) {
     if (original) original();
 }
 
-// THE SHARK is a model (P_Shark), not a billboard: Building_Draw3D (0203B3AC)
-// sets each material's palette offset (+0x1C, in 16-byte units: the model
-// palette's base, u16 at model+0x62, plus 2 per bank, the bank being the owner's
-// colour slot) and draws it with FUN_020FE824, whose one caller is at 0203B724.
-// P_Shark's palette has no team entries in use, so an owned Shark looks wild
-// too. At that call (lr 0203B728; the model is r0, the entity r11, the material
-// block r9) an owned Shark's materials are pointed at a copy of the colour
-// slot's bank with its body entries (3 the flanks, 4 the back, 2 the lighter
-// grey) in the owner's team shades, in the 16-byte units after the sprite
-// banks. A wild Shark's materials are put back on bank 6, the neutral slot (the
-// same entries 1-11 as the others), since a material keeps the last owner's
-// offset.
-constexpr uint32_t kModelDraw = 0x020FE824u;       // arm
-constexpr uint32_t kModelDrawRet = 0x0203B728u;
-constexpr uint32_t kSharkBp = 155;
-constexpr uint32_t kSharkTintBase = kTintBase + 36u * 0x20u;   // 12 banks, to the end of the 16 KiB
-struct SharkMat { uint32_t mat; uint16_t plain; };
-std::vector<SharkMat> g_shark_mats;
-
-bool entity_owned(uint32_t ent) {
-    const unsigned owner = bus_read_u8(ent + 0xE4u);
-    const uint32_t mgr = bus_read_u32(0x0215540Cu);
-    const uint32_t arr = guest_ptr(mgr) ? bus_read_u32(mgr + 8u) : 0u;
-    return owner != bus_read_u8(kNeutralOwnerByte) && guest_ptr(arr) &&
-           guest_ptr(bus_read_u32(arr + 4u * owner));
-}
-
-void shark_model_tint(uint32_t model, uint32_t ent, uint32_t sb) {
-    static const bool log = std::getenv("LB_TINT_LOG") != nullptr;
-    if (!guest_ptr(ent) || !guest_ptr(model)) return;
-    const uint32_t bp = unit_blueprint(ent);
-    if (!bp || bus_read_u16(bp + 4u) != kSharkBp) return;
-    const uint32_t base = (uint32_t)bus_read_u16(model + 0x62u);
-    const bool active = g_tint_vpal && entity_owned(ent);
-    if (!active) {   // wild, or the tint off: any material we moved goes back
-        for (const SharkMat& m : g_shark_mats) bus_write_u16(m.mat + 0x1Cu, m.plain);
-        return;
+// TEAL, THE SEVENTH TEAM COLOUR, ON A 3D MODEL (docs/412). Every building is a
+// model (Building_Draw3D, 0x0203B3AC). Its material palette offset is
+// `base + 2*slot` with slot = u32[0x02127F20][colour] ({1,0,2,3,4,5}) and then
+// 5 -> 6 (`moveq r0,#6` at 0x0203B6A4). The models are the 12 records of 0x6C
+// at 0x02150BA0 (FUN_0200D114), palette base u16 at +0x62, and each palette has
+// nine 16-colour banks with the team shades at entries 12-14: 0 Blue, 1 Red,
+// 2 Green, 3 Yellow, 4 Purple, 5 unused by any colour (white, or in P_Shark
+// the cartridge's own teal), 6 Grey. So
+// teal takes bank 5: apply_teal points the slot-map literal at a seven-entry
+// map {1,0,2,3,4,6,5}, turns the remap into a no-op, and models_paint
+// makes bank 5 of every loaded model a copy of bank 6 with entries 12-14 teal.
+// (Building_Draw3D and its draw call FUN_020FE824 are reached only by direct
+// calls from lifted code, so an override on either never runs.)
+// Light, mid, dark, by lb_setting_teal_style(): 0 (the default) the
+// cartridge's own unused teal, KingFaction.NCLR banks 10/11, which starts at
+// white and so reads mostly white, as it was drawn; 1 the port's ramp, shaped
+// like the other teams' (Blue: 29/27/22 blue).
+constexpr uint16_t kTealShades[2][3] = {{0x7FFF, 0x6B73, 0x56EA},
+                                        {0x6764, 0x4E80, 0x31A0}};   // (4,27,25) (0,20,19) (0,13,12)
+uint16_t teal_shade(unsigned i) { return kTealShades[lb_setting_teal_style() ? 1 : 0][i]; }
+constexpr unsigned kTealSlot = 5, kTealSrcSlot = 6, kTealEntry = 12;
+bool g_teal_on = false;   // the readers point at the seven-entry tables (apply_teal)
+constexpr uint32_t kTealModels = 0x02150BA0u, kTealModelStride = 0x6Cu;
+// Bank 5's stock entries 12-14: white in the buildings' palettes, the
+// cartridge's own teal in P_Shark's (the slot the developers kept for it).
+constexpr uint16_t kTealBankStock[2][3] = {{0x7FFF, 0x6F7B, 0x6318}, {0x7FFF, 0x6B73, 0x56EA}};
+constexpr uint32_t kModelBanks = 7u * 0x20u;                        // banks 0..6
+// THE SHARK (docs/437) is a model too, the record whose id (+0x64, the
+// blueprint id Building_Draw3D looks it up by) is 155. Its palette has no team
+// entries in use, so an owned Shark looked wild. Its own banks 0..6 are the
+// colour slots, so each gets its body entries (2 and 3 the light grey and the
+// flanks, 4 the back) in that bank's team shades (12 light, 13 mid): an owner
+// then draws tinted through the stock slot lookup. A wild Shark skips the
+// palette loop and keeps the last owner's offset, so it shows that owner's
+// tint; wild Sharks come only from a test aid.
+constexpr uint16_t kSharkModelId = 155u;
+struct ModelPal {
+    uint32_t at = 0;                 // texture-palette offset of bank 0; 0 = not held
+    uint8_t was[kModelBanks];        // the stock banks
+    uint8_t wrote[kModelBanks];      // what this port last put there
+};
+ModelPal g_model_pal[12];
+bool g_model_pal_any = false;
+// Per frame: teal's bank 5 (while teal is on) and the Shark's body entries
+// (while the creature tint is on) in each loaded model, built from its stock
+// banks. A model is only taken while its bank 5 is the stock white one, and
+// only rewritten while it holds what this wrote; with neither feature wanted,
+// the stock banks go back. Off and never on, nothing is read.
+}  // namespace
+extern unsigned g_boot_gen;   // below: bumped by every reset
+namespace {
+void models_paint() {
+    static unsigned gen = 0;
+    if (gen != g_boot_gen) {   // VRAM is new: nothing is held
+        gen = g_boot_gen;
+        for (ModelPal& p : g_model_pal) p.at = 0;
+        g_model_pal_any = false;
     }
-    uint32_t tp_size = 0;
-    uint8_t* e = texpal_flat(&tp_size);
-    if (!e || !guest_ptr(sb) || kSharkTintBase + 12u * 0x20u > tp_size) return;
-    const unsigned count = bus_read_u8(sb + 5u);
-    const uint32_t r5 = sb + 4u, off10 = bus_read_u16(sb + 0xAu);
-    const uint32_t stride = bus_read_u16(r5 + off10);
-    bool changed = false;
-    for (unsigned i = 0; i < count && i < 8u; ++i) {
-        const uint32_t rec = r5 + off10 + 4u + stride * i;
-        const uint32_t mat = sb + bus_read_u32(rec);
-        if (!guest_ptr(mat)) continue;
-        const uint32_t old = bus_read_u16(mat + 0x1Cu);
-        const uint32_t src = old * 16u;
-        if (log)
-            std::fprintf(stderr, "[lb_tint] shark material %08X offset %04X base %04X bank %d\n",
-                         mat, old, base, (int)((src - base * 16u) / 0x20u));
-        if (src < base * 16u || src >= base * 16u + 9u * 0x20u || src + 0x20u > tp_size) continue;
-        const uint32_t slot = (src - base * 16u) / 0x20u;
-        if (slot >= 7u) continue;   // the neutral slot is the plain one
-        uint16_t bank[16];
-        std::memcpy(bank, e + src, sizeof bank);
-        bank[2] = bank[3] = bank[12];
-        bank[4] = bank[13];
-        uint8_t* dst = e + kSharkTintBase + slot * 0x20u;
-        if (std::memcmp(dst, bank, sizeof bank) != 0) {
-            std::memcpy(dst, bank, sizeof bank);
-            std::memcpy(g_tint_shadow + (kSharkTintBase - kTintBase) + slot * 0x20u, bank, sizeof bank);
+    const bool teal = g_teal_on;
+    const bool shark = lb_creatures_live() && lb_setting_creature_tint();
+    if (!teal && !shark && !g_model_pal_any) return;
+    uint32_t size = 0;
+    uint8_t* e = texpal_flat(&size);
+    if (!e) return;
+    bool changed = false, any = false;
+    for (uint32_t k = 0; k < 12u; ++k) {
+        ModelPal& p = g_model_pal[k];
+        const uint32_t m = kTealModels + kTealModelStride * k;
+        const uint32_t base = bus_read_u16(m + 0x62u);
+        const uint32_t at = base * 16u;
+        const bool loaded = bus_read_u32(m + 0x54u) != 0u && base != 0u && at + kModelBanks <= size;
+        const bool is_shark = shark && bus_read_u32(m + 0x64u) == kSharkModelId;
+        const bool want = loaded && (teal || is_shark);
+        if (p.at && (p.at != at || !want)) {
+            // Moved, unloaded or no longer wanted: the stock banks back, if
+            // what this wrote is still there.
+            if (p.at + kModelBanks <= size && std::memcmp(e + p.at, p.wrote, kModelBanks) == 0) {
+                std::memcpy(e + p.at, p.was, kModelBanks);
+                changed = true;
+            }
+            p.at = 0;
+        }
+        if (!want) continue;
+        const uint16_t* bank5 = reinterpret_cast<const uint16_t*>(e + at + kTealSlot * 0x20u);
+        bool white = false;   // bank 5 as the cartridge left it
+        for (const uint16_t* w : kTealBankStock)
+            white = white || (bank5[kTealEntry] == w[0] && bank5[kTealEntry + 1] == w[1] &&
+                              bank5[kTealEntry + 2] == w[2]);
+        if (p.at && std::memcmp(e + at, p.wrote, kModelBanks) != 0) {
+            p.at = 0;              // the game reloaded the palette (or something else wrote it)
+            if (!white) continue;  // not ours to take back
+        }
+        if (!p.at) {
+            if (!white) continue;  // not the layout this expects: leave it
+            std::memcpy(p.was, e + at, kModelBanks);
+            p.at = at;
+            static int said = 0;
+            if (said++ < 16) {
+                std::fprintf(stderr, "[lb_models] model %u (id %u) palette %04X:%s%s\n", k,
+                             bus_read_u32(m + 0x64u), at, teal ? " teal bank 5" : "",
+                             is_shark ? " Shark body entries in team shades" : "");
+                std::fflush(stderr);
+            }
+        }
+        uint16_t b[7][16];
+        std::memcpy(b, p.was, kModelBanks);
+        if (teal) {
+            std::memcpy(b[kTealSlot], b[kTealSrcSlot], 0x20);
+            for (unsigned i = 0; i < 3; ++i) b[kTealSlot][kTealEntry + i] = teal_shade(i);
+        }
+        if (is_shark)
+            for (unsigned s = 0; s < 7u; ++s) {
+                if (s == kTealSlot && !teal) continue;   // bank 5 is no colour's
+                b[s][2] = b[s][3] = b[s][12];
+                b[s][4] = b[s][13];
+            }
+        std::memcpy(p.wrote, b, kModelBanks);
+        any = true;
+        if (std::memcmp(e + at, p.wrote, kModelBanks) != 0) {
+            std::memcpy(e + at, p.wrote, kModelBanks);
             changed = true;
         }
-        bool known = false;
-        for (const SharkMat& m : g_shark_mats) known = known || m.mat == mat;
-        if (!known) g_shark_mats.push_back({mat, (uint16_t)(base + 12u)});
-        bus_write_u16(mat + 0x1Cu, (uint16_t)((kSharkTintBase + slot * 0x20u) / 16u));
     }
+    g_model_pal_any = any;
     if (changed) nds_vram_note_capture_write();
 }
-void model_draw_override(void) {
-    void (*original)(void) = lb_dispatch_original(0, kModelDraw);
-    if ((g_cpu.R[14] & ~1u) == kModelDrawRet && (g_tint_vpal || !g_shark_mats.empty()))
-        shark_model_tint(g_cpu.R[0], g_cpu.R[11], g_cpu.R[9]);
-    if (original) original();
-}
 }  // namespace
+
+// ---- docs/412: TEAL'S ART, FRAME REMAP AND PALETTE ---------------------------
+//
+// Teal is colour 6. The game builds item k of a colour bar with frame 0x62+k
+// (a swatch), and badges the picked ones: in OpponentSetup 0x68+k ("1") and
+// 0x6E+k ("2"); in the lobbies 0x68 + 6*player + k. For k = 6 those are
+// 0x68, 0x6E, 0x74, 0x7A: other colours' frames. They are rewritten here, just
+// before the shared screen update (so after the screen's own writes) to four
+// new UIMgrData records:
+//     0x9C the swatch   0x9D "1"   0x9E "2"   0x9F "3"
+// (0x68 -> 0x9C, 0x6E -> 0x9D, 0x74 -> 0x9E, 0x7A -> 0x9F). The records are
+// empty in the file (resource 0xFFFF). Their frames are copies of Grey's
+// (0x67, 0x6D, 0x73, 0x79: a 9-slice swatch of 0x5C bytes and three single
+// 16x16 rects of 0x1C), with the frame's palette byte +0xF = 8 instead of 15.
+// Grey's art draws with entries 11-14 of bank 15 of the front end's texture
+// palette, so bank 8, which no resource-0 frame uses, becomes bank 15 with
+// those four entries teal. The frame copies live in the file's last, unused
+// records (1250..1256), so the table's reload (after a battle) costs nothing
+// but a re-copy, and nothing is allocated.
+constexpr uint32_t kTealUiPtr = 0x021581C0u;     // the loaded FE UIMgrData
+constexpr uint32_t kTealScratch = 1250u;         // first unused record, the frame copies
+constexpr uint32_t kTealRegistry = 0x02157E3Cu;  // screen objects by screen id
+constexpr uint8_t kTealBank = 8;
+const uint16_t kTealRamp[4] = {0x6B73u, 0x35C1u, 0x1060u, 0x52A3u};   // entries 11..14
+
+uint32_t teal_chain(uint32_t addr) {   // widget = [[[addr]]]
+    uint32_t p = addr;
+    for (int i = 0; i < 3; ++i) {
+        p = bus_read_u32(p);
+        if (!guest_ptr(p)) return 0;
+    }
+    return p;
+}
+uint32_t teal_rec_of(uint32_t widget) {
+    if (!guest_ptr(widget)) return 0;
+    const uint32_t rec = bus_read_u32(widget + 4u);
+    return guest_ptr(rec) ? rec : 0;
+}
+uint32_t teal_frame_to(uint32_t f) {
+    return f == 0x68u ? 0x9Cu : f == 0x6Eu ? 0x9Du : f == 0x74u ? 0x9Eu : f == 0x7Au ? 0x9Fu : 0u;
+}
+// item: 0x68/0x6E/0x74/0x7A all map (a bar's seventh item); else 0x68 only.
+bool teal_set_frame(uint32_t rec, bool item) {
+    if (!rec) return false;
+    const uint32_t f = bus_read_u16(rec + 0x18u);
+    const uint32_t to = (item || f == 0x68u) ? teal_frame_to(f) : 0u;
+    if (!to) return false;
+    bus_write_u16(rec + 0x18u, (uint16_t)to);
+    bus_write_u8(rec, (uint8_t)(bus_read_u8(rec) | 4u));
+    return true;
+}
+
+// Records 0x9C..0x9F and their frames, in the loaded UIMgrData. True when ready.
+bool teal_art_ensure() {
+    const uint32_t base = bus_read_u32(kTealUiPtr);
+    if (!guest_ptr(base) || !guest_ptr(base + 8u + 1277u * 0x1Cu) || bus_read_u16(base) < 1277u)
+        return false;
+    auto rec = [&](uint32_t i) { return base + 8u + i * 0x1Cu; };
+    const uint32_t src_rec[4] = {0x67u, 0x6Du, 0x73u, 0x79u};
+    const uint32_t size[4] = {0x5Cu, 0x1Cu, 0x1Cu, 0x1Cu};
+    const uint32_t at[4] = {0u, 0x5Cu, 0x78u, 0x94u};
+    const uint32_t store = rec(kTealScratch);
+    bool ready = true;
+    for (uint32_t k = 0; k < 4u && ready; ++k) {
+        const uint32_t r = rec(0x9Cu + k);
+        ready = bus_read_u32(r) == store + at[k] && bus_read_u32(r + 24u) == 0u &&
+                bus_read_u8(store + at[k] + 0xFu) == kTealBank;
+    }
+    if (ready) return true;
+    // The source frames must be what this expects.
+    uint32_t src[4];
+    for (uint32_t k = 0; k < 4u; ++k) {
+        const uint32_t r = rec(src_rec[k]);
+        src[k] = bus_read_u32(r);
+        if (!guest_ptr(src[k]) || bus_read_u32(r + 24u) != 0u ||
+            bus_read_u32(src[k]) != src[k] + 0x14u || bus_read_u8(src[k] + 0xFu) != 15u)
+            return false;
+    }
+    // The destination records and the scratch records must be empty (or ours).
+    const bool ours_before = bus_read_u32(rec(0x9Cu)) == store;
+    for (uint32_t i : {0x9Cu, 0x9Du, 0x9Eu, 0x9Fu, kTealScratch, kTealScratch + 1u, kTealScratch + 2u,
+                       kTealScratch + 3u, kTealScratch + 4u, kTealScratch + 5u, kTealScratch + 6u}) {
+        const uint32_t r = rec(i);
+        bool empty = bus_read_u32(r + 24u) == 0xFFFFu;
+        for (uint32_t w = 0; w < 6u && empty; ++w) empty = bus_read_u32(r + 4u * w) == 0u;
+        if (!empty && !ours_before) return false;
+    }
+    for (uint32_t k = 0; k < 4u; ++k) {
+        const uint32_t dst = store + at[k];
+        for (uint32_t b = 0; b < size[k]; b += 4u)
+            bus_write_u32(dst + b, bus_read_u32(src[k] + b));
+        bus_write_u32(dst, dst + 0x14u);              // the cell list follows the header
+        bus_write_u8(dst + 0xFu, kTealBank);
+        const uint32_t r = rec(0x9Cu + k);
+        for (uint32_t w = 0; w < 6u; ++w) bus_write_u32(r + 4u * w, 0u);
+        bus_write_u32(r, dst);
+        bus_write_u32(r + 24u, 0u);                   // resource 0: the front end's sheet
+    }
+    std::fprintf(stderr, "[lb_teal] UIMgrData %08X: records 0x9C-0x9F set (frames at %08X)\n",
+                 base, store);
+    std::fflush(stderr);
+    return true;
+}
+
+// Bank 8 of the front end's texture palette = bank 15 with entries 11-14 teal.
+void teal_palette_ensure() {
+    static uint32_t cached = 0xFFFFFFFFu;
+    uint32_t size = 0;
+    uint8_t* e = texpal_flat(&size);
+    if (!e || size < 0x200u) return;
+    static const uint16_t sig[4] = {0x7C1Fu, 0x0015u, 0x5880u, 0x0220u};   // bank 15's start
+    auto at15 = [&](uint32_t b) {
+        return b + 0x200u <= size && std::memcmp(e + b + 15u * 0x20u, sig, sizeof sig) == 0;
+    };
+    if (cached == 0xFFFFFFFFu || !at15(cached)) {
+        cached = 0xFFFFFFFFu;
+        for (uint32_t b = 0; b + 0x200u <= size; b += 0x20u)
+            if (at15(b)) { cached = b; break; }
+        if (cached == 0xFFFFFFFFu) return;
+    }
+    uint8_t want[0x20];
+    std::memcpy(want, e + cached + 15u * 0x20u, sizeof want);
+    for (int i = 0; i < 4; ++i) {
+        want[(11 + i) * 2] = (uint8_t)(kTealRamp[i] & 0xFFu);
+        want[(11 + i) * 2 + 1] = (uint8_t)(kTealRamp[i] >> 8);
+    }
+    uint8_t* dst = e + cached + (uint32_t)kTealBank * 0x20u;
+    if (std::memcmp(dst, want, sizeof want) == 0) return;
+    std::memcpy(dst, want, sizeof want);
+    nds_vram_note_capture_write();   // the 3D renderer re-reads texture palettes
+    std::fprintf(stderr, "[lb_teal] texture palette bank %u (UI at %04X): bank 15 with teal entries 11-14\n",
+                 (unsigned)kTealBank, (unsigned)cached);
+    std::fflush(stderr);
+}
+
+// From the shared screen update, for the screen it is running (its `this`).
+extern "C" void lb_teal_screen_fix(uint32_t screen) {
+    if (!guest_ptr(screen)) return;
+    struct S { uint32_t id; uint32_t list[2]; uint32_t blk; bool direct; };
+    static const S kS[4] = {
+        {0x2Du, {0x44u, 0x50u}, 0u, false},      // OpponentSetup
+        {0x37u, {0x74u, 0u}, 0u, true},          // the multiplayer faction select
+        {0x17u, {0x68u, 0u}, 0x84u, false},      // HostLobby
+        {0x0Bu, {0x58u, 0u}, 0x80u, false},      // ClientLobby
+    };
+    const S* s = nullptr;
+    for (const S& c : kS)
+        if (bus_read_u32(kTealRegistry + 4u * c.id) == screen) { s = &c; break; }
+    if (!s || !lb_teal_live()) return;
+    teal_palette_ensure();
+    if (!teal_art_ensure()) return;
+    int fixed = 0;
+    for (uint32_t off : s->list) {
+        if (!off) continue;
+        const uint32_t list = bus_read_u32(screen + off);
+        if (!guest_ptr(list)) continue;
+        const uint32_t arr = bus_read_u32(list + 0x20u);
+        if (!guest_ptr(arr) || (bus_read_u32(list + 0x24u) & 0xFFu) < 7u) continue;
+        const uint32_t item = bus_read_u32(arr + 6u * 4u);
+        if (!guest_ptr(item)) continue;
+        fixed += teal_set_frame(teal_rec_of(s->direct ? item : teal_chain(item + 0x10u)), true) ? 1 : 0;
+    }
+    if (s->blk) {   // the three players' colour images: 0x62 + colour
+        for (uint32_t p = 0; p < 3u; ++p)
+            fixed += teal_set_frame(teal_rec_of(teal_chain(screen + s->blk + 0x30u * p)), false) ? 1 : 0;
+    }
+    static int said = 0;
+    if (fixed && said++ < 12) {
+        std::fprintf(stderr, "[lb_teal] screen 0x%02X: %d frame(s) remapped to teal\n", s->id, fixed);
+        std::fflush(stderr);
+    }
+}
+
 
 // MUST BE SORTED ASCENDING BY ADDRESS. This is not a style preference.
 //
@@ -7191,6 +7512,9 @@ const NdsDispatchEntry kOverrideTable[] = {
        pending battle shortcut's button callback in front of it, as a tail
        call that returns here; otherwise a pure tail call. docs/383. */
     {kViewUpdate, 1u, view_update_override, nullptr},      /* 0x020DD708 */
+    /* Thumb. ScreenType::virtual_08: while teal is live (docs/412), widens the five
+       colour bars in the layout image; otherwise a pure tail call. */
+    {kScreenInit, 1u, screen_init_override, nullptr},      /* 0x020E1880 */
     /* Thumb. ScreenType::virtual_09, the shared menu-screen update. On the
        two keyboards, presses a typed key's own button in front of it; a pure
        tail call everywhere else. docs/396. */
@@ -7230,10 +7554,6 @@ const NdsDispatchEntry kOverrideTable[] = {
     /* ARM. A mod map's lobby id, translated to this machine's copy; docs/413. */
     {kLobbyPacket, 0u, lobby_packet_override, nullptr},    /* 0x020F5168 */
     /* ARM. The four WM calls the game makes past WH. docs/423. */
-    /* ARM. The model draw call in Building_Draw3D, from that call only: an owned
-       Shark draws with an owner-tinted palette bank (docs/437). Otherwise a
-       pure tail call. */
-    {kModelDraw, 0u, model_draw_override, nullptr},        /* 0x020FE824 */
     {kWmConnectedAids, 0u, wm_connected_override, nullptr}, /* 0x02118628 */
     {kWmLinkLevel, 0u, wm_link_override, nullptr},         /* 0x021188C4 */
     {kWmSetGameInfo, 0u, wm_game_info_override, nullptr},  /* 0x0211A084 */
@@ -7263,7 +7583,8 @@ static_assert(kRosterBuild < kRegistryFind &&
               kWidgetSetPos < kArmyListable && kArmyListable < kArmyTier &&
               kArmyTier < kPtrAppend && kPtrAppend < kSplitArray &&
               kMarkerPlace < kHeroHud &&
-              kHeroHud < kViewUpdate && kViewUpdate < kScreenUpdate &&
+              kHeroHud < kViewUpdate && kViewUpdate < kScreenInit &&
+              kScreenInit < kScreenUpdate &&
               kScreenUpdate < kWidgetRect &&
               kRegistryFind < kMapLoad && kMapLoad < kFpPost &&
               kFpPost < kFpPaint && kFpPaint < kCommitBGs &&
@@ -7293,7 +7614,7 @@ static_assert(kRosterBuild < kRegistryFind &&
               kWhChildConnect < kWhShared && kWhShared < kWhStep &&
               kWhStep < kWhReset && kWhReset < kWhFinalize &&
               kWhFinalize < kWhEnd && kWhEnd < kLobbyPacket &&
-              kLobbyPacket < kModelDraw && kModelDraw < kWmConnectedAids &&
+              kLobbyPacket < kWmConnectedAids &&
               kWmConnectedAids < kWmLinkLevel && kWmLinkLevel < kWmSetGameInfo &&
               kWmSetGameInfo < kWmSetEntry && kWmSetEntry < kFAdd &&
               kFAdd < kFMul && kFMul < kFSub && kFSub < kDivMod &&
@@ -10948,6 +11269,29 @@ static void apply_plantation_name(void) {
     }
 }
 
+// The cartridge's text for the string at `addr`, if the leader or Plantation
+// option rewrote it in place and that text is still there: what Rich Presence,
+// the match picture and the master server name a unit by, so a client-local
+// rename never leaves this machine. 0 when the string is not ours.
+extern "C" int lb_rename_shipped_text(uint32_t addr, char* out, int cap) {
+    char live[kLeaderMaxText + 1];
+    for (int i = 0; i < g_leader_sites; ++i) {
+        const LeaderSite& s = g_leader_site[i];
+        if (s.addr != addr || !leader_read(addr, live) || std::strcmp(live, s.wrote))
+            continue;
+        std::snprintf(out, (size_t)cap, "%s", s.shipped);
+        return 1;
+    }
+    for (int i = 0; i < g_plant_sites; ++i) {
+        const PlantSite& s = g_plant_site[i];
+        if (s.addr != addr || !plant_read(addr, live, 64) || std::strcmp(live, s.wrote))
+            continue;
+        std::snprintf(out, (size_t)cap, "%s", s.shipped);
+        return 1;
+    }
+    return 0;
+}
+
 // ── docs/394: the map being loaded, by its own name ───────────────────────
 //
 // For the master server's log ("started a match on The Pond"). The stem the
@@ -14185,8 +14529,149 @@ void aiopp_prepare_setup() {
 }
 }  // namespace
 
+// TEAL, THE SEVENTH TEAM COLOUR (docs/412). Seven-entry copies of the colour
+// tables, with entries 0-5 the cartridge's own words and entry 6 teal. Each
+// reader is repointed by its literal-pool word:
+//   0x02038D94  View_SetupLevelBGs: the sprite team palette (6x3 u16 -> 7x3)
+//   0x02034DE8  FUN_02034D84: the level BG team colours (walls, bridges)
+//   0x02026080  FUN_02025F50: the minimap dots (3 worlds x 6 -> x 7); the stride
+//               `mov r0,#0xc` at 0x0202600C becomes #0xe
+// The 3D models: the slot map above and models_paint().
+//
+// ONLY WHILE TEAL IS LIVE (lb_teal_live: the setting offline or hosting, the
+// host's rule joined). Off, nothing is read or written: the cartridge's code.
+// Turned off, the literals are put back and the block is cleared.
+//
+// THE BLOCK, 0x023F9800, is in a 26 KB run of zeros above the heap's top
+// (0x023F9005..0x023FF86B in a running game). Nothing is known to own it, which
+// is not the same as nothing owning it, so it is claimed only while it is all
+// zeros, and from then on compared with what was written: a difference means
+// something else uses it, and teal then stops for this boot (literals back,
+// the block left to its owner) rather than write over it. Everything here is
+// colours, never the simulation, so a peer seeing other colours cannot desync.
+namespace {
+constexpr uint32_t kTealBase = 0x023F9800u;
+constexpr uint32_t kTealSize = 0xCCu;   // sprite +0x00, BG +0x40, minimap +0x80 (3 x 14), model slot map +0xB0 (7 x u32)
+constexpr uint32_t kTealSprite = kTealBase + 0x00u, kTealBg = kTealBase + 0x40u, kTealMini = kTealBase + 0x80u;
+constexpr uint16_t kTealDot = 0x5720;   // the minimap dot: a saturated teal (B21 G25 R0)
+struct TealLit { uint32_t addr, stock, want; };
+const TealLit kTealLits[] = {
+    {0x02038D94u, 0x02127F38u, kTealSprite},
+    {0x02034DE8u, 0x02127DBCu, kTealBg},
+    {0x02026080u, 0x02127A68u, kTealMini},
+    {0x0202600Cu, 0xE3A0000Cu, 0xE3A0000Eu},
+    {0x0203B778u, 0x02127F20u, kTealBase + 0xB0u},   // Building_Draw3D: the model slot map
+    {0x0203B6A4u, 0x03A00006u, 0xE1A00000u},         // its `moveq r0,#6` (5 -> 6): now in the map
+};
+uint8_t g_teal_img[kTealSize];   // what the block holds while it is ours
+bool g_teal_dead = false;        // the block was not ours to take: off for this boot
+
+void teal_put16(uint32_t off, uint16_t v) {
+    g_teal_img[off] = (uint8_t)(v & 0xFFu);
+    g_teal_img[off + 1u] = (uint8_t)(v >> 8);
+}
+void teal_build_image() {
+    std::memset(g_teal_img, 0, sizeof g_teal_img);
+    // The sprite and BG tables: 6 colours x 3 shades, then teal's 3.
+    for (int which = 0; which < 2; ++which) {
+        const uint32_t src = which ? 0x02127DBCu : 0x02127F38u, dst = which ? 0x40u : 0x00u;
+        for (uint32_t i = 0; i < 18u; ++i) teal_put16(dst + 2u * i, (uint16_t)bus_read_u16(src + 2u * i));
+        for (uint32_t s = 0; s < 3u; ++s) teal_put16(dst + 36u + 2u * s, teal_shade(s));
+    }
+    // The minimap: three worlds, 6 colours then teal (a 14-byte stride).
+    for (uint32_t w = 0; w < 3u; ++w) {
+        for (uint32_t c = 0; c < 6u; ++c)
+            teal_put16(0x80u + 14u * w + 2u * c, (uint16_t)bus_read_u16(0x02127A68u + 12u * w + 2u * c));
+        teal_put16(0x80u + 14u * w + 12u, kTealDot);
+    }
+    // The model slot map: the stock {1,0,2,3,4,5} with its 5 -> 6 folded in, then teal's bank 5.
+    static const uint8_t kSlots[7] = {1, 0, 2, 3, 4, 6, 5};
+    for (uint32_t c = 0; c < 7u; ++c) teal_put16(0xB0u + 4u * c, kSlots[c]);
+}
+bool teal_block_holds(const uint8_t* want) {   // nullptr: all zeros
+    for (uint32_t i = 0; i < kTealSize; ++i)
+        if (bus_read_u8(kTealBase + i) != (want ? want[i] : 0u)) return false;
+    return true;
+}
+// Literals back to stock where they still hold ours; the block cleared if it is ours.
+void teal_release(bool clear) {
+    for (const TealLit& l : kTealLits)
+        if (bus_read_u32(l.addr) == l.want) bus_write_u32(l.addr, l.stock);
+    if (clear && teal_block_holds(g_teal_img))
+        for (uint32_t i = 0; i < kTealSize; ++i) bus_write_u8(kTealBase + i, 0u);
+    g_teal_on = false;
+}
+}  // namespace
+
+static void apply_teal(void) {
+    static unsigned gen = 0;   // a reset reloads the image: stock again
+    if (gen != g_boot_gen) {
+        gen = g_boot_gen;
+        g_teal_on = false;
+        g_teal_dead = false;
+    }
+    if (!lb_teal_live() || g_teal_dead) {
+        if (g_teal_on) {
+            teal_release(true);
+            std::fprintf(stderr, "[lb_teal] off: stock tables back\n");
+            std::fflush(stderr);
+        }
+        return;
+    }
+    if (g_teal_on) {
+        if (teal_block_holds(g_teal_img)) {
+            static int style = -1;   // the style the block was built with
+            const int now = lb_setting_teal_style();
+            if (style != now) {
+                if (style >= 0) {
+                    teal_build_image();
+                    for (uint32_t i = 0; i < kTealSize; ++i) bus_write_u8(kTealBase + i, g_teal_img[i]);
+                }
+                style = now;
+            }
+            return;
+        }
+        teal_release(false);
+        g_teal_dead = true;
+        std::fprintf(stderr, "[lb_teal] the block at %08X changed under us: teal off "
+                     "until a reset, block left alone\n", kTealBase);
+        std::fflush(stderr);
+        return;
+    }
+    for (const TealLit& l : kTealLits)
+        if (bus_read_u32(l.addr) != l.stock) return;   // not loaded yet, or not this build
+    if (!teal_block_holds(nullptr)) {
+        g_teal_dead = true;
+        std::fprintf(stderr, "[lb_teal] the block at %08X is in use: teal off until a reset\n",
+                     kTealBase);
+        std::fflush(stderr);
+        return;
+    }
+    teal_build_image();
+    for (uint32_t i = 0; i < kTealSize; ++i) bus_write_u8(kTealBase + i, g_teal_img[i]);
+    for (const TealLit& l : kTealLits) bus_write_u32(l.addr, l.want);
+    g_teal_on = true;
+    std::fprintf(stderr, "[lb_teal] seven-colour tables at %08X; literals %08X %08X %08X, stride %08X\n",
+                 kTealBase, kTealLits[0].addr, kTealLits[1].addr, kTealLits[2].addr, kTealLits[3].addr);
+    std::fflush(stderr);
+}
+
+// Test aid LB_TEST_TEAL_PLAYER=<slot>: the match setup's colour for that slot
+// is made 6 at the Free Play Start handler, before the match is built.
+static void teal_test_colour(uint32_t setup) {
+    static const char* e = std::getenv("LB_TEST_TEAL_PLAYER");
+    if (!e || !guest_ptr(setup)) return;
+    const uint32_t slot = (uint32_t)std::atoi(e);
+    if (slot > 3u) return;
+    bus_write_u32(setup + 0xDCu + 4u * slot, 6u);
+    std::fprintf(stderr, "[lb_teal] test: slot %u colour forced to 6\n", slot);
+    std::fflush(stderr);
+}
+
 extern "C" void ai_opp_setname_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kSetupName);
+    if (!g_aic.active && (g_cpu.R[14] & ~1u) == kSetupNameFromStart && g_cpu.R[1] == 1u)
+        teal_test_colour(g_cpu.R[0]);
     if (g_aic.active && g_aic.carrier == 1 && g_cpu.R[13] == g_aic.sp_call) {
         if (g_aic.qi < g_aic.qn) { aic_issue(kSetupName); return; }
         aic_finish(original);
@@ -15900,6 +16385,8 @@ extern "C" void lb_patches_on_vblank(void) {
     apply_ai_tap_spells();
     apply_two_player_maps();
     apply_gold_rush_target();   // SG-0036
+    apply_teal();                     // docs/412
+    models_paint();                   // docs/412 teal and docs/437 Shark: model palettes
     apply_ai_spectate();              // SG-0002
     ai_opp_tick();                    // docs/414
     brick_log();
@@ -15935,6 +16422,7 @@ extern "C" void lb_patches_on_vblank(void) {
     lb_music_tick();
     lb_vwh_tick();              // docs/423: the host-level WH's deliveries
     lb_teams_portrait_tick();   // docs/390: the Custom/Random portrait records
+    teal_tick();                // docs/412: teal's bounds and clamp
     opponent_open_portrait_tick();   // docs/393: and the opening choice's
     mod_names_tick();           // docs/391: the mod maps' names
     // docs/387: the level palette's colours (a no-op at Per-Mod/Vanilla).
@@ -15968,6 +16456,21 @@ extern "C" void lb_patches_on_vblank(void) {
     // docs/356: cosmetic and this machine's only. Reads nothing while off.
     apply_leader_name();
     apply_plantation_name();   // docs/392
+    // TEST AID: LB_TEST_STOCK_NAME=1 logs, once the renames have landed, what
+    // the screens and what Rich Presence / the servers call the two units.
+    {
+        static const bool on = std::getenv("LB_TEST_STOCK_NAME") != nullptr;
+        static bool done = false;
+        if (on && !done && g_leader_done && g_plant_done &&
+            std::strncmp(lb_teams_unit_name(133), "unit ", 5) != 0) {
+            done = true;
+            std::fprintf(stderr, "[lb_stockname] 133 shown \"%s\" stock \"%s\"; "
+                         "53 shown \"%s\" stock \"%s\"\n",
+                         lb_teams_unit_name(133), lb_teams_unit_name_stock(133),
+                         lb_teams_unit_name(53), lb_teams_unit_name_stock(53));
+            std::fflush(stderr);
+        }
+    }
     // The game's network state and profile name for the
     // master-server client. Before the blueprint check below, which returns
     // early in every menu -- and the menus are where multiplayer happens.

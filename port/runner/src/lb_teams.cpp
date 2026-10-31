@@ -38,6 +38,7 @@ extern "C" {
 
 extern "C" unsigned int lb_patches_blueprint_base(void);   /* lb_patches.cpp */
 extern "C" int lb_patches_blueprint_settled(void);         /* lb_patches.cpp */
+extern "C" int lb_rename_shipped_text(uint32_t addr, char* out, int cap);   /* lb_patches.cpp */
 extern "C" bool lb_field_entity_at(int index, int* owner, int* category,
                                    int* map_x, int* map_y);   /* lb_field.cpp */
 
@@ -454,14 +455,18 @@ uint32_t lang_table() {
 
 // Text id `id` as UTF-8 (the .lng text is 8-bit; bytes past 0x7F are taken
 // as Latin-1). Empty while the table is not settled.
-std::string loc_text(uint32_t id) {
+// With `stock`, the cartridge's text where a rename option rewrote it in place
+// (lb_rename_shipped_text): the name other machines and services are shown.
+std::string loc_text(uint32_t id, bool stock = false) {
     const uint32_t file = lang_table();
     if (!file || id >= kLangIds) return std::string();
     const uint32_t at = bus_read_u32(file + 0x0Cu + id * 4u);
     if (at < file + kLangStrings || at >= file + kLangMaxBytes) return std::string();
+    char shipped[256];
+    const bool from_shipped = stock && lb_rename_shipped_text(at, shipped, sizeof shipped);
     std::string s;
     for (uint32_t i = 0; i < 96u; ++i) {
-        const uint8_t c = bus_read_u8(at + i);
+        const uint8_t c = from_shipped ? (uint8_t)shipped[i] : bus_read_u8(at + i);
         if (c == 0) break;
         if (c < 0x20) { s.push_back(' '); continue; }
         if (c < 0x80) { s.push_back((char)c); continue; }
@@ -1075,6 +1080,33 @@ extern "C" const char* lb_teams_unit_name(int bp) {
         const uint32_t rec = bp_addr(bp);
         if (rec) s = loc_text(bus_read_u16(rec + 0x06u));   // display name id
     }
+    if (s.empty()) {
+        static char buf[24];
+        std::snprintf(buf, sizeof buf, "unit %d", bp);
+        return buf;
+    }
+    return s.c_str();
+}
+
+// The unit's name as the cartridge has it, ignoring the client-local renames
+// (Kranxx/Plisken, Hide-Away/Storehouse): for Rich Presence, the match picture,
+// the master server and anything else that leaves this machine. The renames
+// that rewrite text as it is copied (docs/425) never reach the table, so the
+// table already holds their stock names.
+extern "C" const char* lb_teams_unit_name_stock(int bp) {
+    if (bp < 0 || bp >= 192) return "?";
+    names_refresh();
+    static std::string stock[192];
+    static uint32_t file = 0;
+    if (file != g_names.file) {
+        file = g_names.file;
+        for (std::string& c : stock) c.clear();
+    }
+    std::string& s = stock[bp];
+    // Not cached while a rename is live: the sites settle over a few frames.
+    std::string now;
+    if (const uint32_t rec = bp_addr(bp)) now = loc_text(bus_read_u16(rec + 0x06u), true);
+    if (!now.empty()) s = now;
     if (s.empty()) {
         static char buf[24];
         std::snprintf(buf, sizeof buf, "unit %d", bp);

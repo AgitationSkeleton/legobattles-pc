@@ -307,7 +307,7 @@ constexpr int kMaxPlayers = 8;
 
 // BR-0008: a player's team colour. The lobby record (0x0215B814 + 0x2C per
 // station) keeps the assigned colour in bits 2-4 of byte +0x20 (docs/412): 0 red,
-// 1 blue, 2 green, 3 yellow, 4 purple, 5 grey. The game's own sprite table
+// 1 blue, 2 green, 3 yellow, 4 purple, 5 grey, 6 teal (docs/412). The game's own sprite table
 // (0x02127F38, 6 colours x 3 shades, BGR555) gives the colour; shade 0 is the
 // light one, eased toward white so a name reads on the blue backdrop.
 uint32_t bgr555_to_rgba(unsigned c);
@@ -317,8 +317,12 @@ uint32_t lobby_colour(int player) {
     return team_colour_rgba((bus_read_u8(0x0215B814u + 0x2Cu * (uint32_t)player + 0x20u) >> 2) & 7u);
 }
 uint32_t team_colour_rgba(unsigned c) {
-    if (c > 5u) return 0;
-    const uint32_t v = bgr555_to_rgba(bus_read_u16(0x02127F38u + 6u * c));
+    if (c > 6u) return 0;
+    // docs/412: teal (6) has no row in the cartridge's table. The port's ramp
+    // gives its light shade; the cartridge's light shade is white, so its
+    // pale teal (shade 1) instead.
+    const uint32_t teal = lb_setting_teal_style() ? 0x6764u : 0x6B73u;
+    const uint32_t v = bgr555_to_rgba(c == 6u ? teal : bus_read_u16(0x02127F38u + 6u * c));
     const int r = (int)(v & 255u), g = (int)((v >> 8) & 255u), b = (int)((v >> 16) & 255u);
     return rgba(r + (255 - r) / 4, g + (255 - g) / 4, b + (255 - b) / 4);
 }
@@ -487,7 +491,7 @@ Img render(const Match& m) {
             const int y = kHead + k * kPitch;
             draw_icon(im, x0 + 8, y, p.bp[k]);
             draw_text(im, x0 + 8 + 28, y + (24 - text_height()) / 2,
-                      lb_teams_unit_name(p.bp[k]), rgba(255, 255, 255), colW - 8 - 32 - 4);
+                      lb_teams_unit_name_stock(p.bp[k]), rgba(255, 255, 255), colW - 8 - 32 - 4);
         }
     }
     // The map.

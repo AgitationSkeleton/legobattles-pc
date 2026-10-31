@@ -290,6 +290,12 @@ struct Settings {
     // docs/437: owned creatures are tinted in their owner's team colour
     // (lb_patches.cpp, creature_tint). Needs `creatures`; this machine's own.
     bool creature_tint = true;
+    // docs/412: teal as a seventh team colour (colour 6). The host's rule
+    // online (LB_RULE_TEAL); see lb_teal_live().
+    bool teal_colour = false;
+    // How teal looks: 0 the cartridge's own unused shades (white, pale teal,
+    // teal), the default; 1 the port's saturated ramp. This machine's own.
+    int teal_style = 0;
     // docs/436: the army slot each creature falls under (Wolf, Robot, Shark):
     // 0 the default, else 1 + the Team Builder slot (0 Hero, 2 Close Combat,
     // 3 Ranged, 4 Mounted, 5/6/7 Special One/Two/Three). Online, the host's.
@@ -693,6 +699,9 @@ extern "C" void lb_settings_save(void) {
                   g_set.creatures ? "true" : "false"); o += buf;   // docs/410
     std::snprintf(buf, sizeof buf, "  \"creature_tint\": %s,\n",
                   g_set.creature_tint ? "true" : "false"); o += buf;   // docs/437
+    std::snprintf(buf, sizeof buf, "  \"teal_colour\": %s,\n",
+                  g_set.teal_colour ? "true" : "false"); o += buf;     // docs/412
+    std::snprintf(buf, sizeof buf, "  \"teal_style\": %d,\n", g_set.teal_style); o += buf;
     std::snprintf(buf, sizeof buf, "  \"creature_slots\": [%d, %d, %d, %d],\n",
                   g_set.creature_slot[0], g_set.creature_slot[1],
                   g_set.creature_slot[2], g_set.creature_slot[3]); o += buf;   // docs/436
@@ -924,6 +933,9 @@ extern "C" void lb_settings_load(void) {
     json_get_bool(s, "transport_release", &g_set.transport_release);
     json_get_bool(s, "creatures", &g_set.creatures);   // docs/410
     json_get_bool(s, "creature_tint", &g_set.creature_tint);   // docs/437
+    json_get_bool(s, "teal_colour", &g_set.teal_colour);       // docs/412
+    json_get_int(s, "teal_style", &g_set.teal_style);
+    if (g_set.teal_style < 0 || g_set.teal_style > 1) g_set.teal_style = 0;
     json_get_ints(s, "creature_slots", g_set.creature_slot, 4);   // docs/436
     for (int& c : g_set.creature_slot)
         if (c < 0 || c > 8 || c <= 2) c = 0;   // 1 + slot; Hero (1) and Builder (2) are not offered
@@ -949,7 +961,7 @@ extern "C" void lb_settings_load(void) {
     json_get_ints(s, "ai_opp_army", g_set.ai_opp_army, 2);
     json_get_bool(s, "ai_opp_teams", &g_set.ai_opp_teams);
     json_get_ints(s, "ai_opp_colour", g_set.ai_opp_colour, 2);
-    for (int& c : g_set.ai_opp_colour) if (c < 0 || c > 6) c = 0;
+    for (int& c : g_set.ai_opp_colour) if (c < 0 || c > 7) c = 0;
     if (g_set.ai_opponents < 1) g_set.ai_opponents = 1;
     if (g_set.ai_opponents > 2) g_set.ai_opponents = 2;
     for (int& a : g_set.ai_opp_army) if (a < 0 || a > 7) a = 2;
@@ -3826,7 +3838,9 @@ void tab_team_builder() {
                                               "Earth", "Alien", "Custom (Enemy Team)",
                                               "Randomizer"};
         static const char* const kColours[] = {"Automatic", "Blue", "Red", "Green",
-                                               "Yellow", "Purple", "Grey"};
+                                               "Yellow", "Purple", "Grey", "Teal"};
+        const int n_colours = lb_teal_live() ? 8 : 7;   // docs/412: Teal only while on
+        if (g_set.ai_opp_colour[0] >= n_colours) g_set.ai_opp_colour[0] = 0;
         ImGui::Text("Computer Player 3");
         bool on3 = g_set.ai_opponents >= 2;
         if (ImGui::Checkbox("On##ai3", &on3)) g_set.ai_opponents = on3 ? 2 : 1;
@@ -3863,7 +3877,7 @@ void tab_team_builder() {
                  "list below, so each computer can have its own.");
         }
         ImGui::SetNextItemWidth(180.0f * g_ui_scale);
-        ImGui::Combo("Colour##ai3", &g_set.ai_opp_colour[0], kColours, IM_ARRAYSIZE(kColours));
+        ImGui::Combo("Colour##ai3", &g_set.ai_opp_colour[0], kColours, n_colours);
         help("Its team colour. If you or the first opponent already use it,\n"
              "or it is Automatic, the first colour nobody uses is taken.");
         ImGui::Checkbox("Allied with the other computers##ai3", &g_set.ai_opp_teams);
@@ -3886,6 +3900,27 @@ void tab_team_builder() {
     if (lb_rules_host_flags() >= 0)
         ImGui::TextDisabled("In this lobby, the host's: %s",
                             lb_creatures_live() ? "On" : "Off");
+    // docs/412: teal as a seventh team colour.
+    ImGui::Checkbox("Teal team colour", &g_set.teal_colour);
+    help("Adds Teal as a seventh team colour on the colour screens: Free\n"
+         "Play, the multiplayer faction screen and the lobbies, and as a\n"
+         "choice for Computer Player 3. Off, everything is the stock six.\n"
+         "Online, the host's setting applies.");
+    badge(WIRED);
+    if (lb_rules_host_flags() >= 0)
+        ImGui::TextDisabled("In this lobby, the host's: %s",
+                            lb_teal_live() ? "On" : "Off");
+    {
+        static const char* const kTealStyles[] = {"White/Teal (Original)", "Teal (PC Port)"};
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(190.0f * g_ui_scale);
+        ImGui::Combo("##teal_style", &g_set.teal_style, kTealStyles, IM_ARRAYSIZE(kTealStyles));
+        help("How a teal team's units and buildings look on this machine.\n"
+             "Original is the cartridge's unused teal (white, pale teal,\n"
+             "teal), as it was drawn: mostly white. PC Port is a full teal\n"
+             "ramp like the other teams'. Each player picks their own; it\n"
+             "never changes what others see. A change shows from the next level.");
+    }
     // docs/437: owned creatures take their owner's team colour.
     ImGui::BeginDisabled(!g_set.creatures);
     ImGui::Checkbox("Tint creatures by team", &g_set.creature_tint);
@@ -4127,7 +4162,7 @@ bool bans_export(const char* path, const unsigned char bits[24]) {
     for (int bp = 0; bp < 192; ++bp)
         if ((bits[bp >> 3] >> (bp & 7)) & 1) {
             if (!names.empty()) names += ", ";
-            names += lb_teams_unit_name(bp);
+            names += lb_teams_unit_name_stock(bp);
         }
     std::string o = "{\n  \"lb_bans\": 1,\n";
     json_put_str(o, "banned_units", g_set.banned_units, true);
@@ -4305,7 +4340,7 @@ bool ban_preset_export(const char* path) {
         bans_bits(b);
         if (!((b[bp >> 3] >> (bp & 7)) & 1)) continue;
         std::snprintf(units + std::strlen(units), sizeof units - std::strlen(units),
-                      "%s%s", first ? "" : ", ", lb_teams_unit_name(bp));
+                      "%s%s", first ? "" : ", ", lb_teams_unit_name_stock(bp));
         first = 0;
     }
     lb_maps_names_of(g_set.banned_maps, maps_names, sizeof maps_names);
@@ -4317,7 +4352,7 @@ bool ban_preset_export(const char* path) {
         if (c == std::string::npos) continue;
         lb_maps_names_of(e.c_str() + c + 1, umb_names, sizeof umb_names);
         if (!um.empty()) um += "; ";
-        um += std::string(lb_teams_unit_name(std::atoi(e.c_str()))) + " on " + umb_names;
+        um += std::string(lb_teams_unit_name_stock(std::atoi(e.c_str()))) + " on " + umb_names;
     }
     std::string names = std::string("Units: ") + units + ". Maps: " + maps_names +
                         ". On some maps only: " + um + ".";
@@ -9657,7 +9692,33 @@ extern "C" int lb_setting_ai_hero_rebuild(void) {
 // docs/406: the rule flags a host sends its players (lb_teams.cpp).
 extern "C" int lb_rules_local_flags(void) {
     return (lb_setting_emp_transports() ? LB_RULE_EMP_TRANSPORTS : 0) |
-           (lb_setting_creatures() ? LB_RULE_CREATURES : 0);   // docs/410
+           (lb_setting_creatures() ? LB_RULE_CREATURES : 0) |   // docs/410
+           (lb_setting_teal() ? LB_RULE_TEAL : 0);              // docs/412
+}
+
+// docs/412: Teal team colour. LB_TEAL=0|1 forces it (LB_TEST_TEAL=1 too).
+extern "C" int lb_setting_teal(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_TEAL");
+        forced = v ? (std::atoi(v) ? 1 : 0) : (std::getenv("LB_TEST_TEAL") ? 1 : -1);
+    }
+    return forced >= 0 ? forced : (g_set.teal_colour ? 1 : 0);
+}
+
+// docs/412: 0 the cartridge's teal (default), 1 the port's ramp. LB_TEAL_STYLE=0|1 forces it.
+extern "C" int lb_setting_teal_style(void) {
+    static const char* v = std::getenv("LB_TEAL_STYLE");
+    if (v) return std::atoi(v) == 1 ? 1 : 0;
+    return g_set.teal_style == 1 ? 1 : 0;
+}
+
+// docs/412: whether colour 6 (teal) is in play. Offline or hosting, this
+// machine's setting; joined, the host's rule flag.
+extern "C" int lb_teal_live(void) {
+    const int host = lb_rules_host_flags();
+    if (host >= 0) return (host & LB_RULE_TEAL) ? 1 : 0;
+    return lb_setting_teal();
 }
 
 // docs/437: Tint creatures by team (default on). LB_CREATURE_TINT=0|1 forces it.
@@ -9907,7 +9968,7 @@ extern "C" int lb_setting_ai_opp_packed(void) {
         if (const char* v = std::getenv("LB_AI_OPP_COLOUR")) col0 = std::atoi(v);
     }
     int c0 = col0 >= 0 ? col0 : g_set.ai_opp_colour[0];
-    if (c0 < 0 || c0 > 6) c0 = 0;
+    if (c0 < 0 || c0 > 7 || (c0 == 7 && !lb_teal_live())) c0 = 0;
     // At most one extra whatever the source (file, env, recording): docs/414.
     return (opp - 1) | (x0 << 2) | (x1 << 5) | (t << 8) | (c0 << 9) |
            (g_set.ai_opp_colour[1] << 12);
@@ -10330,7 +10391,7 @@ extern "C" const char* lb_net_lobby_options_json(void) {
         for (const char* p = ids; p && *p;) {
             const int bp = std::atoi(p);
             if (!o.empty()) o += sep;
-            o += lb_teams_unit_name(bp);
+            o += lb_teams_unit_name_stock(bp);
             while (*p && *p != ',') ++p;
             if (*p) ++p;
         }
@@ -10357,7 +10418,7 @@ extern "C" const char* lb_net_lobby_options_json(void) {
             const size_t colon = one.find(':');
             if (colon != std::string::npos) {
                 if (!o.empty()) o += "; ";
-                o += std::string(lb_teams_unit_name(std::atoi(one.c_str()))) + ": " +
+                o += std::string(lb_teams_unit_name_stock(std::atoi(one.c_str()))) + ": " +
                      map_names(one.substr(colon + 1).c_str());
             }
             at = end + 1;
