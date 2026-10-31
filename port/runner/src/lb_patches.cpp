@@ -3674,6 +3674,31 @@ int quick_list_of(int brick_id) {
     return brick_id == 606 ? 3 : brick_id == 608 ? 2 : brick_id == 607 ? 1 : -1;
 }
 
+// BR-0030: IS A DRAWER SLIDING? Each list g has an animator at
+// view+0x270+0x38*g whose first word is its state (FUN_020D8A6C): 3 opening,
+// the items coming in from x 256; 2 closing, each item sliding 256 px left
+// from its slot, past the brick column; FUN_020D8C58 steps both. Off the
+// DS's 256x192 those items are clipped by the screen edge; in the widened
+// view they are drawn, and the HUD pass needs to know they are the drawer's.
+// Published once a frame for the compositor (lb_hud.cpp), which reads no
+// guest memory itself.
+std::atomic<int> g_drawer_anim{0};
+void drawer_anim_tick() {
+    int any = 0;
+    const uint32_t vs = bus_read_u32(kViewSlot);
+    if (check_in_ram(vs))
+        for (uint32_t g = 0; g < 5u && !any; ++g) {
+            const uint32_t st = bus_read_u32(vs + 0x270u + 0x38u * g);
+            any = (st == 2u || st == 3u) ? 1 : 0;
+        }
+    g_drawer_anim.store(any, std::memory_order_relaxed);
+}
+}  // namespace
+extern "C" int lb_drawer_animating(void) {
+    return g_drawer_anim.load(std::memory_order_relaxed);
+}
+namespace {
+
 bool quick_list_open(uint32_t screen, int g) {
     const uint32_t open = bus_read_u32(screen + 0x26Cu);
     return open == (uint32_t)g || (g >= 3 && open - 3u < 2u);
@@ -7227,7 +7252,7 @@ bool teal_art_ensure() {
     bool ready = true;
     for (uint32_t k = 0; k < 4u && ready; ++k) {
         const uint32_t r = rec(0x9Cu + k);
-        ready = bus_read_u32(r) == store + at[k] && bus_read_u32(r + 24u) == 0u &&
+        ready = bus_read_u32(r + 20u) == store + at[k] && bus_read_u32(r + 24u) == 0u &&
                 bus_read_u8(store + at[k] + 0xFu) == kTealBank;
     }
     if (ready) return true;
@@ -7255,9 +7280,12 @@ bool teal_art_ensure() {
             bus_write_u32(dst + b, bus_read_u32(src[k] + b));
         bus_write_u32(dst, dst + 0x14u);              // the cell list follows the header
         bus_write_u8(dst + 0xFu, kTealBank);
+        // A record has six state slots and a widget draws the one for its
+        // state: a colour another slot holds is locked (flags bit 0) and draws
+        // a later one. Grey's records hold the same frame in all six, so these
+        // do too; with only the first set, a locked teal item drew nothing new.
         const uint32_t r = rec(0x9Cu + k);
-        for (uint32_t w = 0; w < 6u; ++w) bus_write_u32(r + 4u * w, 0u);
-        bus_write_u32(r, dst);
+        for (uint32_t w = 0; w < 6u; ++w) bus_write_u32(r + 4u * w, dst);
         bus_write_u32(r + 24u, 0u);                   // resource 0: the front end's sheet
     }
     std::fprintf(stderr, "[lb_teal] UIMgrData %08X: records 0x9C-0x9F set (frames at %08X)\n",
@@ -16423,6 +16451,7 @@ extern "C" void lb_patches_on_vblank(void) {
     lb_vwh_tick();              // docs/423: the host-level WH's deliveries
     lb_teams_portrait_tick();   // docs/390: the Custom/Random portrait records
     teal_tick();                // docs/412: teal's bounds and clamp
+    drawer_anim_tick();         // BR-0030: a drawer sliding, for lb_hud.cpp
     opponent_open_portrait_tick();   // docs/393: and the opening choice's
     mod_names_tick();           // docs/391: the mod maps' names
     // docs/387: the level palette's colours (a no-op at Per-Mod/Vanilla).

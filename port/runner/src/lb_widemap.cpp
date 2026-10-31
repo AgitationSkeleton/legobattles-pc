@@ -5047,9 +5047,13 @@ extern "C" int lb_fp_placement_active(void) {
     return bus_read_u8(view + 0x78u) ? 1 : 0;
 }
 
+// A bridge site is as long as its crossing: mp09's are 2x9. Capping at 8 kept
+// the previous size (the 1x2 bridge ghost), so lb_fp_band_shift2 took a site
+// running below the DS's 24 rows for one that fits, and the band below showed
+// no preview. The bound is the painter's own window, 32 cells x 24 rows.
 extern "C" void lb_fp_set_site_size(int w, int h) {
-    if (w >= 1 && w <= 8) g_fp_site_w = w;
-    if (h >= 1 && h <= 8) g_fp_site_h = h;
+    if (w >= 1 && w <= 32) g_fp_site_w = w;
+    if (h >= 1 && h <= 24) g_fp_site_h = h;
 }
 
 static int fp_floor_div(int a, int b) {

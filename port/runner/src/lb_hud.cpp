@@ -56,6 +56,7 @@ extern "C" int lb_shown_band_x(void);            /* frontend.cpp (apply_hooks) *
 extern "C" int lb_shown_band_y(void);
 
 extern "C" int lb_setting_hud_anchor(void);
+extern "C" int lb_drawer_animating(void);          /* src/lb_patches.cpp, BR-0030 */
 extern "C" float lb_setting_hud_scale(void);
 extern "C" int lb_setting_enhanced(void);
 /* docs/375: the world-only and HUD-only rows behind a 3D row; see
@@ -1174,7 +1175,7 @@ static void lb_hud_scan_boxes(int output_width, int output_height, int band,
     // HUD-depth quads the on-screen test rejected, in raster coordinates:
     // the tutorial's 256-wide text quad is one. Not elements, but they draw
     // into the rows an element stretch repeats from (hud_stretch_multi).
-    struct Rect { int sx0, sx1, sy0, sy1; };
+    struct Rect { int sx0, sx1, sy0, sy1; uint32_t tex; bool cmd; };
     Rect offq[64];
     int offn = 0;
     // docs/348: see g_list_band.
@@ -1224,7 +1225,8 @@ static void lb_hud_scan_boxes(int output_width, int output_height, int band,
         if (!(nx0 >= 0 && nx1 <= 256 && ny0 >= 0 && ny1 <= 192)) {
             if (offn < 64)
                 offq[offn++] = {nx0 + extra, nx1 + extra, ny0 + extra_y,
-                                ny1 + extra_y};
+                                ny1 + extra_y, p.tex_param,
+                                p.min_z == 4275712u};
             ++g_rej_offscreen;
             ++g_rej_off_total;                     /* cumulative twin */
             if (g_off_n < 8) {
@@ -1348,7 +1350,7 @@ static void lb_hud_scan_boxes(int output_width, int output_height, int band,
     // them (the red list's second row), shares a texture with it and holds no
     // command icon (those are world-anchored). The anchor's shift is worked
     // out with the placement loop's own formulas.
-    int dr_root = -1, dr_nx0 = 0, dr_ny0 = 0, dr_ny1 = 0;
+    int dr_root = -1, dr_nx0 = 0, dr_nx1 = 0, dr_ny0 = 0, dr_ny1 = 0;
     int dr_dx = 0, dr_dy = 0;
     if (moving && output_width > 256) {
         for (int r = 0; r < qn; ++r) {
@@ -1384,6 +1386,7 @@ static void lb_hud_scan_boxes(int output_width, int output_height, int band,
             if (dr_root >= 0 && ey1 - ey0 <= dr_ny1 - dr_ny0) continue;
             dr_root = r;
             dr_nx0 = ex0;
+            dr_nx1 = ex1;
             dr_ny0 = ey0;
             dr_ny1 = ey1;
         }
@@ -1419,6 +1422,15 @@ static void lb_hud_scan_boxes(int output_width, int output_height, int band,
             for (int j = 0; j < qn && !shares; ++j)
                 shares = find(j) == dr_root && q[j].tex == q[i].tex;
         }
+        // THE HELD ITEM'S LABEL. Pressing and holding a drawer item shows its
+        // name and price beside it, drawn from the font: no texture shared
+        // with the column, so it stayed where the DS put it (native 20..164 x
+        // 24..40, run br30b) while the drawer went to the corner -- the
+        // label read as top-centre. What starts inside the drawer's span, in
+        // its rows (tested above), was laid out against the drawer, so it goes
+        // with it; a short drawer's label may run past the drawer's end.
+        if (!shares && nx0 >= dr_nx0 && nx0 <= dr_nx1)
+            shares = true;
         return shares;
     };
 
@@ -1867,6 +1879,68 @@ static void lb_hud_scan_boxes(int output_width, int output_height, int band,
             g_boxes[g_count].prev = prev;
         }
         ++g_count;
+        }
+    }
+
+    // BR-0030: A SLIDING DRAWER'S ITEMS OFF THE DS'S SCREEN. The animator
+    // (FUN_020D8A6C) opens a list by sliding its items in from x 256 and
+    // closes it by sliding each 256 px left from its slot, past the brick
+    // column, so for part of either animation they lie outside the native
+    // 256x192, where the cartridge's screen edge clips them. The on-screen
+    // test above rejected those quads, so they were drawn where the DS put
+    // them, in the widened band, without the drawer's move: the closing
+    // animation played below a top-anchored drawer. While a drawer slides
+    // (lb_drawer_animating, read from the animators), a rejected quad in the
+    // drawer's rows that shares the column's texture takes the drawer's move:
+    // past the left edge it leaves the window, as it left the DS's screen.
+    if (dr_root >= 0 && lb_drawer_animating()) {
+        for (int k = 0; k < offn && g_count < kMaxHudQuads; ++k) {
+            const Rect& o = offq[k];
+            if (o.cmd) continue;
+            const int ny0 = o.sy0 - extra_y, ny1 = o.sy1 - extra_y;
+            if (ny0 < dr_ny0 - 1 || ny1 > dr_ny1 + 25) continue;
+            if (o.sx1 - extra < -256 || o.sx0 - extra > 512) continue;
+            bool shares = false;
+            for (int j = 0; j < qn && !shares; ++j)
+                shares = find(j) == dr_root && q[j].tex == o.tex;
+            if (!shares) continue;
+            HudBox& b = g_boxes[g_count];
+            b.sx0 = o.sx0;
+            b.sx1 = o.sx1;
+            b.y0 = o.sy0;
+            b.y1 = o.sy1;
+            b.dx = b.dx1 = dr_dx;
+            b.dy = dr_dy;
+            b.slice5 = 0;
+            b.ty0 = b.ty1 = 0;
+            HudCache& c = g_cache_cur[g_count];
+            c.w = o.sx1 - o.sx0;
+            c.h = o.sy1 - o.sy0;
+            c.x0 = o.sx0;
+            c.y0 = o.sy0;
+            c.px.assign((size_t)c.w * (size_t)c.h, 0u);
+            b.prev = -1;
+            for (int j = 0; j < g_prev_count; ++j) {
+                const HudCache& pc = g_cache_prev[j];
+                if (pc.w == c.w && pc.h == c.h && pc.x0 == c.x0 && pc.y0 == c.y0) {
+                    b.prev = j;
+                    break;
+                }
+            }
+            if (HudElemLog* el = g_elem_n < 32 ? &g_elem_log[g_elem_n++] : nullptr) {
+                el->nx0 = o.sx0 - extra;
+                el->nx1 = o.sx1 - extra;
+                el->ny0 = ny0;
+                el->ny1 = ny1;
+                el->quads = 1;
+                el->ntex = 1;
+                el->tex[0] = o.tex;
+                el->tex[1] = el->tex[2] = 0;
+                el->dx = dr_dx;
+                el->dy = dr_dy;
+                el->dx1 = dr_dx;
+            }
+            ++g_count;
         }
     }
 
