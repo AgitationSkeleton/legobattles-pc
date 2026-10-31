@@ -88,6 +88,8 @@ extern "C" const char* lb_mods_dir(void);   /* lb_mods.cpp */
 #include <mutex>    /* docs/413: the notice, set from the emulation thread */
 #include <thread>   /* docs/430: the update check's own thread */
 void lb_mapbrowser_draw(SDL_Renderer* renderer);   /* docs/431: lb_mapfetch.cpp */
+void lb_leveledit_draw(SDL_Renderer* renderer);    /* the level editor: lb_leveledit.cpp */
+void lb_community_draw(SDL_Renderer* renderer);    /* community levels: lb_leveledit.cpp */
 
 // lb_https.cpp (WinHTTP); defined outside any namespace.
 bool lb_https_request(const std::string& host, int port, const std::string& method,
@@ -8321,6 +8323,23 @@ void tab_map_archive() {
     tab_end();
 }
 
+// Community levels (lb_leveledit.cpp): the master server's approved uploads.
+void tab_community_levels() {
+    if (!tab_begin("Community levels")) return;
+    guide("Levels other players made in the Level Editor and shared, each approved by a moderator. "
+          "Pick one to see it, Download it into your mods/maps folder, then Load new maps now "
+          "(on the Level Editor page) to play it.");
+    lb_community_draw(g_maps_ren);
+    tab_end();
+}
+
+// The level editor (lb_leveledit.cpp): make, open, save and export levels.
+void tab_level_editor() {
+    if (!tab_begin("Level Editor")) return;
+    lb_leveledit_draw(g_maps_ren);
+    tab_end();
+}
+
 const std::vector<MenuHeader>& menu_headers() {
     static const std::vector<MenuHeader> k = {
         {"Settings", {{"General", "General", tab_general},
@@ -8345,7 +8364,9 @@ const std::vector<MenuHeader>& menu_headers() {
                     {"Action Replay", "Action Replay", tab_action_replay}}},
         {"Network", {{"Multiplayer", "Multiplayer", tab_multiplayer},
                      {"Scores", "Scores", tab_scores}}},
-        {"Maps", {{"Map archive", "Maps", tab_map_archive}}},
+        {"Maps", {{"Map archive", "Maps", tab_map_archive},
+                  {"Community levels", "Community levels", tab_community_levels},
+                  {"Level Editor", "Level Editor", tab_level_editor}}},
         {"Tools", {{"Recordings", "Demo", tab_demo},
                    {"Windows", "Windows", section_windows}}},
     };
@@ -9524,6 +9545,13 @@ extern "C" const char* lb_setting_player_key(void) {
 extern "C" int lb_setting_discord_status(void) { return g_set.discord_status ? 1 : 0; }   // docs/430
 extern "C" int lb_setting_discord_hero(void) { return g_set.discord_hero ? 1 : 0; }
 // docs/419. LB_MASTER_HTTPS=0|1 forces it (a test aid).
+// The master server this machine uses (Network > master server), for the
+// level editor's community levels.
+extern "C" void lb_setting_master(char* host, int cap, int* port) {
+    if (host && cap > 0) std::snprintf(host, (size_t)cap, "%s", g_set.master_host);
+    if (port) *port = g_set.master_port;
+}
+
 extern "C" int lb_setting_master_https(void) {
     static int forced = -2;
     if (forced == -2) {

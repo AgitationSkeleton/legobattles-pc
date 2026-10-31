@@ -1135,6 +1135,26 @@ void arc_draw(SDL_Renderer* ren) {
 // docs/431: the Maps page's body (the Maps header in lb_overlay.cpp).
 void lb_mapbrowser_draw(SDL_Renderer* renderer) { arc_draw(renderer); }
 
+// The level editor's .lbz import: the package's map, detail tiles and
+// manifest, each at most 8 MB, by the entry names the map tool writes. Names
+// are only compared, never used as paths. False when there is no map.map.
+bool lb_lbz_unpack(const std::string& zip, std::string* map, std::string* tbp,
+                   std::string* manifest) {
+    std::vector<ZipEnt> ents;
+    if (!zip_list(zip, &ents)) return false;
+    bool got = false;
+    for (const ZipEnt& e : ents) {
+        const std::string n = lower(e.name);
+        std::string* out = n == "map.map" ? map
+                         : (n.rfind("detailtiles/detailtiles_@", 0) == 0 && ends_ci(n, ".tbp")) ? tbp
+                         : n == "manifest.toml" ? manifest : nullptr;
+        if (!out || e.usize == 0) continue;
+        if (!zip_entry(zip, e.local, e.method, e.csize, e.usize, out, 8u << 20)) continue;
+        if (out == map) got = true;
+    }
+    return got;
+}
+
 // A lobby wants `name`, which this machine lacks. Once per name per run.
 extern "C" void lb_mapfetch_request(const char* name) {
     if (!name || !*name || !lb_setting_fetch_maps()) return;

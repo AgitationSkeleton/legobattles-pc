@@ -175,10 +175,16 @@ std::string http_request_once(const std::string& host, int port,
     }
     request += "\r\n" + body;
 
-    if (send(sock, request.data(), (int)request.size(), 0) < 0) {
-        closesocket(sock);
-        *error = "send failed";
-        return {};
+    // ALL OF IT: send() may take part of a large body (a community level's
+    // upload is a few hundred KB) and say how much.
+    for (size_t sent = 0; sent < request.size();) {
+        const int n = send(sock, request.data() + sent, (int)(request.size() - sent), 0);
+        if (n <= 0) {
+            closesocket(sock);
+            *error = "send failed";
+            return {};
+        }
+        sent += (size_t)n;
     }
 
     std::string reply;

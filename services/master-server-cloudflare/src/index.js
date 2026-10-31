@@ -115,6 +115,29 @@ const FORGET_PER_HOUR = 10;
 
 export { RelayRoom } from './relay.js';
 export { Scores } from './scores.js';
+export { Levels } from './levels.js';
+import { MAX_UPLOAD_BODY } from './levels.js';
+
+// Community levels (src/levels.js): every /levels path goes to the Levels
+// object. An upload's size is checked before its body is read, and the
+// caller's address reaches the object only to be hashed there for bans.
+// /levels/admin is the Discord bot's, behind its own key.
+async function levels(request, env, path) {
+  if (!env.LEVELS) return json(503, { ok: false, error: 'levels not configured' });
+  if (request.method === 'POST') {
+    const len = Number.parseInt(request.headers.get('Content-Length') || '', 10);
+    if (!Number.isFinite(len) || len > MAX_UPLOAD_BODY) return json(413, { ok: false, error: 'too large' });
+  }
+  const headers = new Headers();
+  headers.set('Content-Type', 'application/json');
+  const k = request.headers.get('X-Levels-Key');
+  if (k) headers.set('X-Levels-Key', k);
+  headers.set('X-Levels-Addr', request.headers.get('CF-Connecting-IP') || '');
+  const init = { method: request.method, headers };
+  if (request.method === 'POST') init.body = await request.text();
+  const url = new URL(request.url);
+  return env.LEVELS.get(env.LEVELS.idFromName('levels')).fetch('https://levels' + path + url.search, init);
+}
 
 // SG-0018: a checked match report needs at least this long a match, and two
 // players who are counted.
@@ -156,6 +179,7 @@ export default {
     if (m && request.method === 'GET') return relay(request, env, m[1].toUpperCase());
     // Only the Worker itself asks the Directory these.
     if (path.startsWith('/internal/')) return json(404, { ok: false, error: 'no such endpoint' });
+    if (/^\/levels\/(list|get|upload|delete|admin)\/?$/.test(path)) return levels(request, env, path.replace(/\/$/, ''));
     // SG-0018: the tables are read straight from the Scores object.
     if (request.method === 'GET' && /^\/scores(\/rulesets)?\/?$/.test(path)) {
       if (!env.SCORES) return json(503, { ok: false, error: 'scores not configured' });

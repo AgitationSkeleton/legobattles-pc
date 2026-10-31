@@ -84,6 +84,17 @@ extern "C" int lb_pick_json_file(char* buf, int cap, int saving) {
     return pick_file(buf, cap, saving, kJsonFilter, L"json");
 }
 
+// The level editor: saving == 0 a level to open (.lbz or .map), else an .lbz
+// to write.
+extern "C" int lb_pick_level_file(char* buf, int cap, int saving) {
+    static const wchar_t kOpen[] =
+        L"LEGO Battles level (*.lbz;*.map)\0*.lbz;*.map\0"
+        L"All files (*.*)\0*.*\0";
+    static const wchar_t kSave[] =
+        L"LEGO Battles level package (*.lbz)\0*.lbz\0";
+    return pick_file(buf, cap, saving, saving ? kSave : kOpen, L"lbz");
+}
+
 // docs/426: a ROM or an Entities.ebp to import balance values from.
 extern "C" int lb_pick_balance_rom_file(char* buf, int cap) {
     static const wchar_t kFilter[] =
@@ -240,6 +251,11 @@ extern "C" int lb_pick_balance_rom_file(char* buf, int cap) {
 extern "C" int lb_pick_rom_file(char* buf, int cap) {
     (void)buf; (void)cap;
     return 0;   // drag the file onto the window instead
+}
+
+extern "C" int lb_pick_level_file(char* buf, int cap, int saving) {
+    (void)buf; (void)cap; (void)saving;
+    return 0;
 }
 
 extern "C" void lb_open_session_log(void) {}

@@ -71,6 +71,10 @@ cp -p "$W/port/runner/src/lb_chat_words.h" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_https.cpp" "$TREE/runner/src/"
 # A host's mod map from the community archive (docs/420).
 cp -p "$W/port/runner/src/lb_mapfetch.cpp" "$TREE/runner/src/"
+# The level editor (Maps > Level Editor): the map model and the page.
+cp -p "$W/port/runner/src/lb_levelmap.h" "$TREE/runner/src/"
+cp -p "$W/port/runner/src/lb_levelmap.cpp" "$TREE/runner/src/"
+cp -p "$W/port/runner/src/lb_leveledit.cpp" "$TREE/runner/src/"
 # The host-level WH: smooth online play (docs/423).
 cp -p "$W/port/runner/src/lb_vwh.cpp" "$TREE/runner/src/"
 # The master server's relay (docs/424).

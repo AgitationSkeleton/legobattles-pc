@@ -7619,6 +7619,9 @@ def apply(runner_dir, imgui_dir):
           "src/lb_https.cpp",
           # A host's mod map from the community archive (docs/420).
           "src/lb_mapfetch.cpp",
+          # The level editor: the map model and the Maps page.
+          "src/lb_levelmap.cpp",
+          "src/lb_leveledit.cpp",
           # The host-level WH: smooth online play (docs/423).
           "src/lb_vwh.cpp",
           # The master server's relay (docs/424), for <winsock2.h>.

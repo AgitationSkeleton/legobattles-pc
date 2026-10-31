@@ -24,6 +24,10 @@
 			{
 				"name": "SCORES",
 				"class_name": "Scores"
+			},
+			{
+				"name": "LEVELS",
+				"class_name": "Levels"
 			}
 		]
 	},
@@ -44,6 +48,12 @@
 			"tag": "scores-v1",
 			"new_sqlite_classes": [
 				"Scores"
+			]
+		},
+		{
+			"tag": "levels-v1",
+			"new_sqlite_classes": [
+				"Levels"
 			]
 		}
 	],
