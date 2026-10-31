@@ -342,6 +342,65 @@ async function previewPng(A, D, w, h) {
   return png;
 }
 
+// ---------------------------------------------------------------- minimap ----
+//
+// The level's minimap NCGR, as the game's level select shows it: the same
+// bytes the port's level editor writes (lb_levelmap.cpp minimap(), the map
+// tool's rules), trees drawn, tiled layout. The game decodes it for the
+// Community page's thumbnails exactly as it does the map archive's.
+export function miniNcgr(A, D, w, h) {
+  const trees = new Uint8Array(w * h);
+  let at = 0, on = 0;
+  for (const r of D) {
+    for (let k = 0; k < r && at < trees.length; ++k) trees[at++] = on;
+    on ^= 1;
+  }
+  const a = (x, y) => A[y * w + x];
+  const quad = (cx, cy, t) => {
+    const ux = cx === 0 ? 0 : cx - 1, uy = cy === 0 ? 0 : cy - 1;
+    return a(cx, cy) === t && a(cx, uy) === t && a(ux, cy) === t && a(ux, uy) === t;
+  };
+  const pixel = (x, y) => {
+    const xs = x / 96, ys = y / 96;
+    if (xs >= 1 || ys >= 1) return 0;
+    const mx = Math.min(w - 1, Math.max(0, Math.floor(w * xs)));
+    const my = Math.min(h - 1, Math.max(0, Math.floor(h * ys)));
+    if (trees[my * w + mx]) {
+      const off = mx + Math.floor(my / 2) * 2;
+      return my % 2 === 0 ? (off % 3 !== 0 ? 5 : 4) : (off % 3 === 1 ? 5 : 4);
+    }
+    const adj = (t, centre, border) => {
+      if (!quad(mx, my, t)) return 3;
+      const inner = quad(mx, my === 0 ? 0 : my - 1, t) && quad(mx === 0 ? 0 : mx - 1, my, t) &&
+                    quad(mx === w - 1 ? w - 1 : mx + 1, my, t) && quad(mx, my === h - 1 ? h - 1 : my + 1, t);
+      return inner ? centre : border;
+    };
+    switch (a(mx, my)) {
+      case 0: return quad(mx, my, 0) ? 4 : 3;
+      case 3: return adj(3, 7, 6);
+      case 5: return adj(5, 2, 1);
+      default: return 3;
+    }
+  };
+  const out = new Uint8Array(0x30 + 0x2000 + 0x10);
+  const dv = new DataView(out.buffer);
+  const tag = (o, s) => { for (let i = 0; i < 4; ++i) out[o + i] = s.charCodeAt(i); };
+  tag(0, 'RGCN'); dv.setUint16(4, 0xfeff, true); dv.setUint16(6, 0x0101, true);
+  dv.setUint32(8, out.length, true); dv.setUint16(12, 0x10, true); dv.setUint16(14, 2, true);
+  tag(0x10, 'RAHC'); dv.setUint32(0x14, 0x2020, true); dv.setUint16(0x18, 0x10, true); dv.setUint16(0x1a, 0x10, true);
+  dv.setUint32(0x1c, 3, true); dv.setUint32(0x20, 0, true); dv.setUint32(0x24, 0, true);
+  dv.setUint32(0x28, 0x2000, true); dv.setUint32(0x2c, 0x18, true);
+  let p = 0x30;
+  for (let t = 0; t < 256; ++t)
+    for (let r = 0; r < 8; ++r)
+      for (let c = 0; c < 8; c += 2) {
+        const x = (t % 16) * 8 + c, y = ((t / 16) | 0) * 8 + r;
+        out[p++] = pixel(x, y) | (pixel(x + 1, y) << 4);
+      }
+  tag(p, 'SOPC'); dv.setUint32(p + 4, 0x10, true); dv.setUint32(p + 8, 0, true); dv.setUint32(p + 12, 0x100010, true);
+  return out;
+}
+
 // ---------------------------------------------------------------- Discord ----
 const WORLD_NAMES = ['King', 'Pirate', 'Mars'];
 
@@ -427,6 +486,11 @@ export class Levels extends DurableObject {
     this.sql.exec('CREATE INDEX IF NOT EXISTS levels_owner ON levels (owner, created)');
     this.sql.exec('CREATE TABLE IF NOT EXISTS bans (who TEXT PRIMARY KEY, at INTEGER, level INTEGER)');
     this.sql.exec('CREATE TABLE IF NOT EXISTS config (k TEXT PRIMARY KEY, v TEXT)');
+    // Likes: one per player (install-key hash) per level.
+    this.sql.exec('CREATE TABLE IF NOT EXISTS likes (level INTEGER, owner TEXT, PRIMARY KEY (level, owner))');
+    for (const col of ['likes INTEGER DEFAULT 0', 'mini BLOB']) {
+      try { this.sql.exec('ALTER TABLE levels ADD COLUMN ' + col); } catch { /* already there */ }
+    }
   }
 
   cfg() {
@@ -453,6 +517,8 @@ export class Levels extends DurableObject {
     try {
       if (request.method === 'GET' && path === '/levels/list') return this.list(url);
       if (request.method === 'GET' && path === '/levels/get') return this.get(url);
+      if (request.method === 'GET' && path === '/levels/mini') return this.mini(url);
+      if (request.method === 'POST' && path === '/levels/like') return await this.like(request);
       if (request.method === 'POST' && path === '/levels/upload') return await this.upload(request);
       if (request.method === 'POST' && path === '/levels/delete') return await this.remove(request);
       if (request.method === 'POST' && path === '/levels/admin') return await this.admin(request);
@@ -465,10 +531,56 @@ export class Levels extends DurableObject {
   list(url) {
     const offset = Math.max(0, Math.min(100000, Number.parseInt(url.searchParams.get('offset') || '0', 10) || 0));
     const limit = Math.max(1, Math.min(100, Number.parseInt(url.searchParams.get('limit') || '50', 10) || 50));
+    // The order is one of four fixed clauses, never text from the request.
+    const ORDERS = {
+      new: 'id DESC', old: 'id ASC', downloads: 'downloads DESC, id DESC', likes: 'likes DESC, id DESC',
+    };
+    const order = ORDERS[url.searchParams.get('sort') || 'new'] || ORDERS.new;
     const rows = this.sql.exec(
-      `SELECT id, name, author, players, world, width, height, size, downloads, created, hash
-         FROM levels WHERE status = 'approved' ORDER BY id DESC LIMIT ? OFFSET ?`, limit, offset).toArray();
-    return json(200, { ok: true, levels: rows });
+      `SELECT id, name, author, players, world, width, height, size, downloads, likes, created, hash
+         FROM levels WHERE status = 'approved' ORDER BY ${order} LIMIT ? OFFSET ?`, limit, offset).toArray();
+    const total = this.sql.exec("SELECT COUNT(*) AS n FROM levels WHERE status = 'approved'").toArray()[0].n;
+    return json(200, { ok: true, total, levels: rows });
+  }
+
+  // GET /levels/mini?id=N: the level's minimap (NCGR, base64), for the
+  // game's thumbnails. Made at upload; made now for a row from before.
+  mini(url) {
+    const id = Number.parseInt(url.searchParams.get('id') || '', 10);
+    if (!Number.isFinite(id) || id < 1) return json(400, { ok: false, error: 'id' });
+    const r = this.sql.exec(
+      "SELECT id, hash, world, mini, map, tbp FROM levels WHERE id = ? AND status = 'approved'", id).toArray()[0];
+    if (!r) return json(404, { ok: false, error: 'no such level' });
+    let mini = r.mini ? new Uint8Array(r.mini) : null;
+    if (!mini) {
+      const tbp = r.tbp ? new Uint8Array(r.tbp) : new Uint8Array(0);
+      const v = validateMap(new Uint8Array(r.map), validateTbp(tbp).count || 0);
+      if (!v.ok) return json(500, { ok: false, error: 'server error' });
+      mini = miniNcgr(v.map.A, v.map.D, v.map.w, v.map.h);
+      this.sql.exec('UPDATE levels SET mini = ? WHERE id = ?', mini, id);
+    }
+    return new Response(JSON.stringify({ ok: true, id: r.id, hash: r.hash, world: r.world, ncgr: bytesB64(mini) }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=86400' },
+    });
+  }
+
+  // POST /levels/like {key, id, like}: a player's like on an approved level,
+  // set or taken back. One per install key.
+  async like(request) {
+    let b;
+    try { b = JSON.parse(await request.text()); } catch { return json(400, { ok: false, error: 'bad request' }); }
+    if (!b || typeof b !== 'object' || !KEY_OK.test(String(b.key || ''))) return json(400, { ok: false, error: 'bad request' });
+    const owner = await sha256hex(new TextEncoder().encode(String(b.key).toLowerCase()));
+    const id = Number.parseInt(b.id, 10);
+    if (!Number.isFinite(id) || id < 1) return json(400, { ok: false, error: 'id' });
+    if (!this.sql.exec("SELECT 1 FROM levels WHERE id = ? AND status = 'approved'", id).toArray().length)
+      return json(404, { ok: false, error: 'no such level' });
+    if (b.like === false) this.sql.exec('DELETE FROM likes WHERE level = ? AND owner = ?', id, owner);
+    else this.sql.exec('INSERT OR IGNORE INTO likes (level, owner) VALUES (?, ?)', id, owner);
+    const n = this.sql.exec('SELECT COUNT(*) AS n FROM likes WHERE level = ?', id).toArray()[0].n;
+    this.sql.exec('UPDATE levels SET likes = ? WHERE id = ?', n, id);
+    return json(200, { ok: true, id, likes: n, liked: b.like !== false });
   }
 
   get(url) {
@@ -545,6 +657,7 @@ export class Levels extends DurableObject {
       hash, name, author || '', v.map.players, v.map.world, v.map.w, v.map.h, map.length + tbp.length, status,
       owner, addr, now, map, tbp.length ? tbp : null);
     const row = this.sql.exec('SELECT * FROM levels WHERE hash = ?', hash).toArray()[0];
+    this.sql.exec('UPDATE levels SET mini = ? WHERE id = ?', miniNcgr(v.map.A, v.map.D, v.map.w, v.map.h), row.id);
     const png = await previewPng(v.map.A, v.map.D, v.map.w, v.map.h);
     const msg = await this.post(levelEmbed(row, status), levelButtons(row, status), png);
     if (msg) this.sql.exec('UPDATE levels SET message = ? WHERE id = ?', msg, row.id);

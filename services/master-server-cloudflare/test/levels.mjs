@@ -72,6 +72,27 @@ r = await call('/levels/get?id=' + id);
 check('it downloads byte for byte', r.status === 200 && Buffer.from(r.data.map, 'base64').equals(map) &&
       Buffer.from(r.data.tbp, 'base64').equals(tbp), { status: r.status });
 
+// Thumbnails, likes and sorting.
+r = await call('/levels/mini?id=' + id);
+check('the minimap is served', r.status === 200 && Buffer.from(r.data.ncgr, 'base64').length === 0x30 + 0x2000 + 0x10 &&
+      Buffer.from(r.data.ncgr, 'base64').subarray(0, 4).toString() === 'RGCN', r.status);
+const MINI = process.env.MINI || '../../out/eur/plain/mp01mini.NCGR';
+// The stock file was made by the game's tools, so only its layout is compared, not its pixels.
+check('it has the stock minimap\'s CHAR header', Buffer.from(r.data.ncgr, 'base64').subarray(0x10, 0x18)
+      .equals(readFileSync(MINI).subarray(0x10, 0x18)));
+check('a like needs a key', (await call('/levels/like', { id, like: true })).status === 400);
+r = await call('/levels/like', { key: key2, id, like: true });
+check('a like counts once', r.status === 200 && r.data.likes === 1, r);
+r = await call('/levels/like', { key: key2, id, like: true });
+check('...however often it is sent', r.data.likes === 1, r);
+r = await call('/levels/like', { key: key3, id, like: true });
+check('another player adds one', r.data.likes === 2, r);
+r = await call('/levels/like', { key: key3, id, like: false });
+check('and can take it back', r.data.likes === 1, r);
+r = await call('/levels/list?sort=likes');
+check('the list carries likes and sorts by them', r.status === 200 && r.data.levels[0].likes === 1, r);
+check('a sort the server does not know falls back', (await call('/levels/list?sort=id;DROP')).status === 200);
+
 // Settings from the panel.
 r = await admin('lvl:panel');
 check('the panel message is offered', r.status === 200 && r.data.post && r.data.post.components.length === 3, r);

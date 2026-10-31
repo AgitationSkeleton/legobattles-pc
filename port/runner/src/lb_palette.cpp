@@ -151,6 +151,46 @@ int g_random = 0;         // this level's Random draw
 
 }  // namespace
 
+// The level editor: the 256 tileset colours a mods-folder map of `world` (0
+// King, 1 Pirate, 2 Mars) would be drawn in under the current settings, the
+// rule lb_palette_tick applies in a battle: the world's own palette file when
+// one is chosen, else Level Palettes (Per-Mod's choice for a mod map when
+// set); Random shows vanilla, its draw being per level. False when the ROM's
+// palette cannot be read.
+extern "C" int lb_palette_for_editor(int world, uint16_t* out) {
+    if (world < 0 || world > 2 || !out || !build_tables(world)) return 0;
+    int mode = lb_setting_level_palette();
+    const int modpal = lb_setting_mod_palette();
+    if (modpal > 0) mode = modpal - 1;
+    const uint16_t* use = g_table[world][mode == 2 ? 1 : 0];
+    const char* cname = lb_setting_custom_palette(world);
+    if (cname && cname[0]) {
+        const std::string path = std::string(lb_mods_dir()) + "/palettes/" + cname;
+        unsigned char nclr[0x228] = {};
+        std::FILE* f = std::fopen(path.c_str(), "rb");
+        const size_t n = f ? std::fread(nclr, 1, sizeof nclr, f) : 0u;
+        if (f) std::fclose(f);
+        if (n >= 0x28 + 512 && std::memcmp(nclr, "RLCN", 4) == 0) {
+            for (int i = 0; i < 256; ++i) out[i] = (uint16_t)(nclr[0x28 + 2 * i] | (nclr[0x29 + 2 * i] << 8));
+            return 1;
+        }
+    }
+    std::memcpy(out, use, 256 * sizeof(uint16_t));
+    return 1;
+}
+
+// A key that changes when lb_palette_for_editor's answer could: the modes and
+// the chosen files.
+extern "C" unsigned lb_palette_editor_key(int world) {
+    unsigned h = 2166136261u;
+    auto mix = [&](unsigned v) { h = (h ^ v) * 16777619u; };
+    mix((unsigned)lb_setting_level_palette());
+    mix((unsigned)lb_setting_mod_palette());
+    const char* c = (world >= 0 && world <= 2) ? lb_setting_custom_palette(world) : nullptr;
+    for (const char* p = c ? c : ""; *p; ++p) mix((unsigned char)*p);
+    return h;
+}
+
 // Once per frame, from lb_patches_on_vblank.
 extern "C" void lb_palette_tick(void) {
     const uint32_t view = bus_read_u32(kViewPtr);

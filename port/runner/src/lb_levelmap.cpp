@@ -451,7 +451,7 @@ std::vector<uint8_t> minimap(const Map& m, const std::vector<uint8_t>& trees, bo
     puts(o, "RGCN");
     put16(o, 0xFEFF);
     put16(o, 0x0101);
-    put32(o, 0x18 + 0x20 + 0x2000 + 0x10);   // file size
+    put32(o, 0x30 + 0x2000 + 0x10);          // file size: header 0x10, CHAR 0x20 + data, CPOS 0x10
     put16(o, 0x10);
     put16(o, 0x2);
     puts(o, "RAHC");

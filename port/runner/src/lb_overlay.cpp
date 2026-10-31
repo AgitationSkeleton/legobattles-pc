@@ -2295,37 +2295,30 @@ extern "C" int lb_ar_active(void);      // below: codes are enabled AND allowed
 // ── SG-0035: ACTION REPLAY CODES ─────────────────────────────────────────────
 //
 // Codes are lines of two 8-hex-digit words (`02012345 000003E7`). Each named
-// entry is compiled to a list of ops and run once per VBlank on the ARM9 bus
-// (lb_ar_apply_frame, from lb_patches_on_vblank). RECORDINGS DO NOT CARRY AR
-// CODES: a replay played with codes on can diverge from the recording.
+// entry is compiled to its list of words and run once per VBlank on the ARM9
+// bus (lb_ar_apply_frame, from lb_patches_on_vblank). RECORDINGS DO NOT CARRY
+// AR CODES: a replay played with codes on can diverge from the recording.
 //
-// Supported: 0/1/2 write 32/16/8 at X+offset; 3/4/5/6 32-bit if greater /
-// less / equal / not equal (Y compared with the memory word); 7/8/9/A the
-// 16-bit forms with a mask (ZZZZYYYY: (mem & ~Z) against Y); B load offset
-// from [X+offset]; C0 loop N times; D0 end-if, D1 end-loop, D2 end-code,
-// D3 set offset, D4 add to data, D5 set data, D6/D7/D8 store data
-// (32/16/8) at Y+offset and step, DC add to offset; E copy Y bytes of the
-// following lines. Anything else is skipped and shown in the menu.
+// The interpreter is melonDS's (src/AREngine.cpp, AREngine::RunCheat), op for
+// op, so a code behaves here as it does there. The first version was written
+// from the usual AR notes and differed (reported by a player, docs/447): a
+// false condition skipped one line instead of everything up to its D0/D2; D2
+// ended the code instead of resetting and carrying on; D6-D8 stepped the data
+// register instead of the offset; C0 ran b times instead of b+1; a
+// conditional added the offset to its address; E wrote its words big-endian;
+// D4's sub-operations and D9-DB, C5, C6 and F were missing.
 //
-// A conditional covers the NEXT LINE ONLY, unless a D0 follows it in the same
-// code (before a D2), in which case it covers everything up to that D0.
-// Addresses are held to main RAM (0x02000000..0x023FFFFF); others are skipped.
-struct ArOp {
-    uint32_t a = 0, b = 0;
-    uint8_t k = 0;
-    int end = -1;                 // conditionals: the D0 that closes the block
-    std::vector<uint8_t> data;    // E
-};
-enum { AR_W32, AR_W16, AR_W8, AR_C32, AR_C16, AR_PTR, AR_LOOP, AR_ENDIF,
-       AR_ENDLOOP, AR_ENDCODE, AR_SETOFF, AR_ADDOFF, AR_DADD, AR_DSET,
-       AR_ST32, AR_ST16, AR_ST8, AR_PATCH };
-
+// One difference is kept on purpose: memory is main RAM only (0x02000000 and
+// its mirrors up to 0x02FFFFFF); writes elsewhere are dropped and reads give 0.
+// C4 stops the code, as melonDS does; an op melonDS does not know stops it
+// too, and the menu shows it.
 struct ArEntry { std::string name; bool on = true; std::string text; };
 
 struct ArProg {
-    std::vector<ArOp> ops;
-    int unknown = 0;
+    std::vector<uint32_t> w;   // word pairs, as melonDS's ARCode::Code
+    int unknown = 0;           // lines that are not two hex words, or ops melonDS stops on
     std::string unknown_first;
+    int lines() const { return (int)(w.size() / 2); }
 };
 
 std::mutex g_ar_mu;
@@ -2372,63 +2365,42 @@ bool ar_words(const std::string& line, uint32_t* a, uint32_t* b) {
     return true;
 }
 
+// Does melonDS run this op (rather than stop the code on it)?
+bool ar_known(uint32_t a) {
+    const unsigned op = a >> 24;
+    if (op < 0xC0 || op >= 0xE0) return true;
+    switch (op) {
+        case 0xC0: case 0xC5: case 0xC6:
+        case 0xD0: case 0xD1: case 0xD2: case 0xD3: case 0xD4: case 0xD5: case 0xD6:
+        case 0xD7: case 0xD8: case 0xD9: case 0xDA: case 0xDB: case 0xDC:
+            return true;
+        default:
+            return false;
+    }
+}
+
 ArProg ar_compile(const std::string& text) {
     ArProg p;
-    const std::vector<std::string> ls = ar_lines(text);
     auto note = [&](const std::string& l) {
         if (p.unknown++ == 0) p.unknown_first = l;
     };
-    for (size_t li = 0; li < ls.size(); ++li) {
-        const std::string l = ar_trim(ls[li]);
+    // E's data lines are words like any other, so every line is just read.
+    for (const std::string& raw : ar_lines(text)) {
+        const std::string l = ar_trim(raw);
         if (l.empty() || l[0] == '#' || l[0] == ';' || l[0] == '[') continue;
         uint32_t a, b;
         if (!ar_words(l, &a, &b)) { note(l); continue; }
-        ArOp op;
-        op.a = a; op.b = b;
-        const unsigned n = a >> 28;
-        const unsigned sub = (a >> 24) & 0xFu;
-        bool ok = true;
-        if (n == 0) op.k = AR_W32;
-        else if (n == 1) op.k = AR_W16;
-        else if (n == 2) op.k = AR_W8;
-        else if (n >= 3 && n <= 6) op.k = AR_C32;
-        else if (n >= 7 && n <= 10) op.k = AR_C16;
-        else if (n == 11) op.k = AR_PTR;
-        else if (n == 12) { if (sub == 0) op.k = AR_LOOP; else ok = false; }
-        else if (n == 13) {
-            switch (sub) {
-                case 0: op.k = AR_ENDIF; break;
-                case 1: op.k = AR_ENDLOOP; break;
-                case 2: op.k = AR_ENDCODE; break;
-                case 3: op.k = AR_SETOFF; break;
-                case 4: op.k = AR_DADD; break;
-                case 5: op.k = AR_DSET; break;
-                case 6: op.k = AR_ST32; break;
-                case 7: op.k = AR_ST16; break;
-                case 8: op.k = AR_ST8; break;
-                case 12: op.k = AR_ADDOFF; break;
-                default: ok = false;
-            }
-        } else if (n == 14) {
-            op.k = AR_PATCH;
-            const uint32_t len = std::min<uint32_t>(b, 4096u);
-            for (uint32_t got = 0; got < len;) {
-                if (++li >= ls.size()) break;
-                uint32_t x, y;
-                if (!ar_words(ar_trim(ls[li]), &x, &y)) { --li; break; }
-                for (int i = 0; i < 8 && got < len; ++i, ++got)
-                    op.data.push_back((uint8_t)(((i < 4 ? x : y) >> (24 - 8 * (i & 3))) & 0xFF));
-            }
-        } else ok = false;
-        if (!ok) { note(l); continue; }
-        p.ops.push_back(std::move(op));
+        p.w.push_back(a);
+        p.w.push_back(b);
     }
-    for (size_t i = 0; i < p.ops.size(); ++i) {
-        const uint8_t k = p.ops[i].k;
-        if (k != AR_C32 && k != AR_C16) continue;
-        for (size_t j = i + 1; j < p.ops.size(); ++j) {
-            if (p.ops[j].k == AR_ENDCODE) break;
-            if (p.ops[j].k == AR_ENDIF) { p.ops[i].end = (int)j; break; }
+    // Flag an op melonDS would stop on; E's data words are not ops.
+    for (size_t i = 0; i + 1 < p.w.size(); i += 2) {
+        const uint32_t a = p.w[i], b = p.w[i + 1];
+        if ((a >> 28) == 0xEu) { i += 2 * (size_t)((b + 7u) / 8u); continue; }
+        if (!ar_known(a)) {
+            char s[24];
+            std::snprintf(s, sizeof s, "%08X %08X", (unsigned)a, (unsigned)b);
+            note(s);
         }
     }
     return p;
@@ -2515,53 +2487,139 @@ bool ar_sets_write(const std::vector<ArSet>& v) {
 }
 
 // ── running ──
-inline bool ar_ok(uint32_t a, uint32_t n) { return a >= 0x02000000u && a + n <= 0x02400000u; }
+// Main RAM and its mirrors (the DS's 4 MB repeats up to 0x02FFFFFF).
+inline bool ar_ram(uint32_t a, uint32_t n) {
+    return a >= 0x02000000u && a < 0x03000000u && (a & 0x003FFFFFu) + n <= 0x00400000u;
+}
+inline uint32_t ar_fold(uint32_t a) { return 0x02000000u | (a & 0x003FFFFFu); }
+uint32_t ar_r32(uint32_t a) { return ar_ram(a, 4) ? bus_read_u32(ar_fold(a)) : 0u; }
+uint32_t ar_r16(uint32_t a) { return ar_ram(a, 2) ? bus_read_u16(ar_fold(a)) : 0u; }
+uint32_t ar_r8(uint32_t a) { return ar_ram(a, 1) ? bus_read_u8(ar_fold(a)) : 0u; }
+void ar_w32(uint32_t a, uint32_t v) { if (ar_ram(a, 4)) bus_write_u32(ar_fold(a), v); }
+void ar_w16(uint32_t a, uint32_t v) { if (ar_ram(a, 2)) bus_write_u16(ar_fold(a), (uint16_t)v); }
+void ar_w8(uint32_t a, uint32_t v) { if (ar_ram(a, 1)) bus_write_u8(ar_fold(a), (uint8_t)v); }
 
+// melonDS AREngine::RunCheat, with *budget bounding the lines run per frame.
 void ar_run(const ArProg& p, int* budget) {
-    uint32_t off = 0, data = 0;
-    int loop_at = 0;
-    uint32_t loop_n = 0;
-    const int n = (int)p.ops.size();
-    for (int i = 0; i < n && *budget > 0; ++i) {
+    const std::vector<uint32_t>& w = p.w;
+    const size_t n = w.size() & ~(size_t)1;
+    size_t code = 0;
+    uint32_t offset = 0, datareg = 0, cond = 1, condstack = 0;
+    size_t loopstart = 0;
+    uint32_t loopcount = 0, loopcond = 1, loopcondstack = 0;
+    uint32_t c5count = 0;
+    auto push = [&](bool t) {
+        condstack = (condstack << 1) | cond;
+        cond = t ? 1u : 0u;
+    };
+    while (code < n && *budget > 0) {
         --*budget;
-        const ArOp& o = p.ops[(size_t)i];
-        const uint32_t x = (o.a & 0x0FFFFFFFu) + off;
-        switch (o.k) {
-        case AR_W32: if (ar_ok(x & ~3u, 4)) bus_write_u32(x & ~3u, o.b); break;
-        case AR_W16: if (ar_ok(x & ~1u, 2)) bus_write_u16(x & ~1u, (uint16_t)o.b); break;
-        case AR_W8:  if (ar_ok(x, 1)) bus_write_u8(x, (uint8_t)o.b); break;
-        case AR_C32: case AR_C16: {
-            bool t = false;
-            const unsigned ty = o.a >> 28;
-            if (o.k == AR_C32) {
-                if (ar_ok(x & ~3u, 4)) {
-                    const uint32_t m = bus_read_u32(x & ~3u);
-                    t = ty == 3 ? o.b > m : ty == 4 ? o.b < m : ty == 5 ? o.b == m : o.b != m;
-                }
-            } else if (ar_ok(x & ~1u, 2)) {
-                const uint32_t m = bus_read_u16(x & ~1u) & ~(o.b >> 16) & 0xFFFFu;
-                const uint32_t y = o.b & 0xFFFFu;
-                t = ty == 7 ? y > m : ty == 8 ? y < m : ty == 9 ? y == m : y != m;
-            }
-            if (!t) { if (o.end >= 0) i = o.end; else ++i; }
-            break;
+        const uint32_t a = w[code], b = w[code + 1];
+        code += 2;
+        const unsigned op = a >> 24;
+        if (((op < 0xD0 && op != 0xC5) || op > 0xD2) && !cond) {
+            if ((op & 0xF0) == 0xE0)
+                for (uint32_t i = 0; i < b; i += 8) code += 2;
+            continue;
         }
-        case AR_PTR: if (ar_ok(x & ~3u, 4)) off = bus_read_u32(x & ~3u); break;
-        case AR_LOOP: loop_at = i + 1; loop_n = o.b; break;
-        case AR_ENDLOOP: if (loop_n > 1) { --loop_n; i = loop_at - 1; } break;
-        case AR_ENDCODE: i = n; break;
-        case AR_SETOFF: off = o.b; break;
-        case AR_ADDOFF: off += o.b; break;
-        case AR_DADD: data += o.b; break;
-        case AR_DSET: data = o.b; break;
-        case AR_ST32: { const uint32_t t = (o.b + off) & ~3u; if (ar_ok(t, 4)) bus_write_u32(t, data); data += 4; break; }
-        case AR_ST16: { const uint32_t t = (o.b + off) & ~1u; if (ar_ok(t, 2)) bus_write_u16(t, (uint16_t)data); data += 2; break; }
-        case AR_ST8:  { const uint32_t t = o.b + off; if (ar_ok(t, 1)) bus_write_u8(t, (uint8_t)data); data += 1; break; }
-        case AR_PATCH:
-            for (size_t k = 0; k < o.data.size(); ++k)
-                if (ar_ok(x + (uint32_t)k, 1)) bus_write_u8(x + (uint32_t)k, o.data[k]);
-            break;
-        default: break;
+        const uint32_t x = a & 0x0FFFFFFFu;
+        const uint32_t caddr = x ? x : offset;   // a conditional's address
+        switch (op >> 4) {
+            case 0x0: ar_w32(x + offset, b); continue;
+            case 0x1: ar_w16(x + offset, b & 0xFFFFu); continue;
+            case 0x2: ar_w8(x + offset, b & 0xFFu); continue;
+            case 0x3: push(b > ar_r32(caddr)); continue;
+            case 0x4: push(b < ar_r32(caddr)); continue;
+            case 0x5: push(b == ar_r32(caddr)); continue;
+            case 0x6: push(b != ar_r32(caddr)); continue;
+            case 0x7: case 0x8: case 0x9: case 0xA: {
+                const uint32_t chk = ar_r16(caddr) & ~(b >> 16) & 0xFFFFu;
+                const uint32_t y = b & 0xFFFFu;
+                const unsigned t = op >> 4;
+                push(t == 0x7 ? y > chk : t == 0x8 ? y < chk : t == 0x9 ? y == chk : y != chk);
+                continue;
+            }
+            case 0xB: offset = ar_r32(x + offset); continue;
+            case 0xE: {
+                // b bytes from the following words, each word stored as a
+                // little-endian u32 as melonDS stores it.
+                uint32_t dst = x + offset, left = b;
+                while (left >= 8 && code + 1 < n) {
+                    ar_w32(dst, w[code]); dst += 4;
+                    ar_w32(dst, w[code + 1]); dst += 4;
+                    code += 2;
+                    left -= 8;
+                }
+                if (left > 0 && code + 1 < n) {
+                    uint8_t bytes[8];
+                    for (int i = 0; i < 8; ++i)
+                        bytes[i] = (uint8_t)(w[code + (size_t)(i >> 2)] >> (8 * (i & 3)));
+                    int k = 0;
+                    if (left >= 4) { ar_w32(dst, w[code]); dst += 4; k = 4; left -= 4; }
+                    while (left > 0) { ar_w8(dst++, bytes[k++]); --left; }
+                    code += 2;
+                }
+                continue;
+            }
+            case 0xF: {
+                uint32_t src = offset, dst = x, left = b;
+                while (left >= 4) { ar_w32(dst, ar_r32(src)); src += 4; dst += 4; left -= 4; }
+                while (left > 0) { ar_w8(dst++, ar_r8(src++)); --left; }
+                continue;
+            }
+            default: break;
+        }
+        switch (op) {
+            case 0xC0:
+                loopstart = code; loopcount = b; loopcond = cond; loopcondstack = condstack;
+                break;
+            case 0xC5:
+                ++c5count;
+                if (!cond) break;
+                push((c5count & (b & 0xFFFFu)) == (b >> 16));
+                break;
+            case 0xC6: ar_w32(b, offset); break;
+            case 0xD0: cond = condstack & 1u; condstack >>= 1; break;
+            case 0xD1:
+                if (loopcount > 0) { --loopcount; code = loopstart; }
+                else { cond = loopcond; condstack = loopcondstack; }
+                break;
+            case 0xD2:
+                if (loopcount > 0) { --loopcount; code = loopstart; }
+                else { offset = 0; datareg = 0; condstack = 0; cond = 1; }
+                break;
+            case 0xD3: offset = b; break;
+            case 0xD4: {
+                const uint32_t sh = b & 0xFFu;
+                switch (a & 0xFFu) {
+                    case 0x00: datareg += b; break;
+                    case 0x01: datareg |= b; break;
+                    case 0x02: datareg &= b; break;
+                    case 0x03: datareg ^= b; break;
+                    case 0x04: datareg = sh > 31 ? 0u : datareg << sh; break;
+                    case 0x05: datareg = sh > 31 ? 0u : datareg >> sh; break;
+                    case 0x06: {
+                        const unsigned r = b & 0x1Fu;
+                        if (r) datareg = (datareg >> r) | (datareg << (32 - r));
+                        break;
+                    }
+                    case 0x07:
+                        datareg = (uint32_t)(sh > 31 ? ((int32_t)datareg >> 31) : ((int32_t)datareg >> sh));
+                        break;
+                    case 0x08: datareg *= b; break;
+                    default: break;
+                }
+                break;
+            }
+            case 0xD5: datareg = b; break;
+            case 0xD6: ar_w32(b + offset, datareg); offset += 4; break;
+            case 0xD7: ar_w16(b + offset, datareg & 0xFFFFu); offset += 2; break;
+            case 0xD8: ar_w8(b + offset, datareg & 0xFFu); offset += 1; break;
+            case 0xD9: datareg = ar_r32(b + offset); break;
+            case 0xDA: datareg = ar_r16(b + offset); break;
+            case 0xDB: datareg = ar_r8(b + offset); break;
+            case 0xDC: offset += b; break;
+            default: return;   // C4, and anything melonDS does not know: it stops the code
         }
     }
 }
@@ -2582,12 +2640,9 @@ void ar_refresh_locked() {
     for (const ArEntry& e : ar_entries_parse(ar_from_store(g_ar_live.src))) {
         if (!e.on) continue;
         ArProg p = ar_compile(e.text);
-        if (p.ops.empty()) continue;
+        if (p.w.empty()) continue;
         auto mix = [&](uint32_t v) { for (int i = 0; i < 4; ++i) h = (h ^ ((v >> (8 * i)) & 0xFF)) * 16777619u; };
-        for (const ArOp& o : p.ops) {
-            mix(o.a); mix(o.b);
-            for (uint8_t d : o.data) mix(d);
-        }
+        for (uint32_t v : p.w) mix(v);
         g_ar_live.progs.push_back(std::move(p));
     }
     g_ar_live.hash = g_ar_live.progs.empty() ? 0u : (h ? h : 1u);
@@ -2628,8 +2683,8 @@ void tab_action_replay() {
         if (ImGui::Checkbox("##on", &v[(size_t)i].on)) dirty = true;
         ImGui::SameLine();
         const ArProg pr = ar_compile(v[(size_t)i].text);
-        ImGui::Text("%s  (%d op%s)", v[(size_t)i].name.c_str(), (int)pr.ops.size(),
-                    pr.ops.size() == 1 ? "" : "s");
+        ImGui::Text("%s  (%d line%s)", v[(size_t)i].name.c_str(), pr.lines(),
+                    pr.lines() == 1 ? "" : "s");
         ImGui::SameLine();
         if (ImGui::SmallButton("Edit")) {
             editing = i;
@@ -2640,7 +2695,7 @@ void tab_action_replay() {
         if (ImGui::SmallButton("Delete")) del = i;
         if (pr.unknown) {
             ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f),
-                               "    %d line(s) skipped (unknown or malformed), first: %s",
+                               "    %d line(s) malformed, or an op melonDS stops the code on; first: %s",
                                pr.unknown, pr.unknown_first.c_str());
         }
         ImGui::PopID();
@@ -8327,8 +8382,8 @@ void tab_map_archive() {
 void tab_community_levels() {
     if (!tab_begin("Community levels")) return;
     guide("Levels other players made in the Level Editor and shared, each approved by a moderator. "
-          "Pick one to see it, Download it into your mods/maps folder, then Load new maps now "
-          "(on the Level Editor page) to play it.");
+          "Pick one to see it and Subscribe to put it in your mods/maps folder, then Load new maps "
+          "now to play it. Unsubscribe removes it again.");
     lb_community_draw(g_maps_ren);
     tab_end();
 }

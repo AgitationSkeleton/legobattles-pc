@@ -179,7 +179,7 @@ export default {
     if (m && request.method === 'GET') return relay(request, env, m[1].toUpperCase());
     // Only the Worker itself asks the Directory these.
     if (path.startsWith('/internal/')) return json(404, { ok: false, error: 'no such endpoint' });
-    if (/^\/levels\/(list|get|upload|delete|admin)\/?$/.test(path)) return levels(request, env, path.replace(/\/$/, ''));
+    if (/^\/levels\/(list|get|mini|like|upload|delete|admin)\/?$/.test(path)) return levels(request, env, path.replace(/\/$/, ''));
     // SG-0018: the tables are read straight from the Scores object.
     if (request.method === 'GET' && /^\/scores(\/rulesets)?\/?$/.test(path)) {
       if (!env.SCORES) return json(503, { ok: false, error: 'scores not configured' });

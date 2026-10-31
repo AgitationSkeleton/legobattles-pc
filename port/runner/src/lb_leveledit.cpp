@@ -34,6 +34,7 @@
 #include <atomic>
 #include <map>
 #include <mutex>
+#include <set>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -41,7 +42,11 @@
 
 #include <zlib.h>
 
+#include "runtime_arm.h"   // bus_read_*: the tree table lives in the ARM9 image
+
 extern "C" int lb_rom_read_unwrapped(const char* path, unsigned char* out, int cap);   // lb_teams.cpp
+extern "C" int lb_palette_for_editor(int world, uint16_t* out);                      // lb_palette.cpp
+extern "C" unsigned lb_palette_editor_key(int world);
 extern "C" const char* lb_mods_dir(void);                                              // lb_mods.cpp
 extern "C" int lb_mods_request_rebuild(void);                                          // lb_mods.cpp
 extern "C" int lb_pick_level_file(char* buf, int cap, int saving);                     // lb_filedlg.cpp
@@ -100,6 +105,7 @@ struct WorldAssets {
     std::vector<bool> flat;                // drawn as one flat colour
     SDL_Texture* atlas = nullptr;          // the 440 metatiles, 20 a row
     SDL_Renderer* atlas_ren = nullptr;
+    unsigned pal_key = 0;                  // the palette settings `pal` was made under
 };
 WorldAssets g_world[3];
 
@@ -212,11 +218,17 @@ WorldAssets& world_assets(int w) {
         return wa;
     }
     wa.chr.assign(ncgr.begin() + 0x30, ncgr.begin() + 0x30 + 1024 * 64);
+    // The colours a battle on this world would use (Level Palettes, the
+    // player's own palette file), else the ROM's.
+    uint16_t cols[256];
+    if (!lb_palette_for_editor(w, cols))
+        for (int i = 0; i < 256; ++i) cols[i] = (uint16_t)(nclr[0x28 + i * 2] | (nclr[0x29 + i * 2] << 8));
     for (int i = 0; i < 256; ++i) {
-        const uint16_t c = (uint16_t)(nclr[0x28 + i * 2] | (nclr[0x29 + i * 2] << 8));
+        const uint16_t c = cols[i];
         const uint32_t r = (c & 31) * 255 / 31, g = ((c >> 5) & 31) * 255 / 31, b = ((c >> 10) & 31) * 255 / 31;
         wa.pal[i] = 0xFF000000u | (b << 16) | (g << 8) | r;
     }
+    wa.pal_key = lb_palette_editor_key(w);
     // Flat metatiles: all six tiles one colour each, the same colour.
     wa.flat.assign(kTableMetas, false);
     for (int e = 0; e < kTableMetas; ++e) {
@@ -289,6 +301,268 @@ SDL_Texture* world_atlas(int w, SDL_Renderer* ren) {
     return wa.atlas;
 }
 
+// ── Trees, as the game draws them ────────────────────────────────────────────
+//
+// A tree cell's plane E is plain grass in the file; at load the game replaces
+// it (FUN_020A40F0 -> FUN_020A4204) with a forest metatile picked from the
+// cell's 3x3 neighbourhood (FUN_020A3FE0): each of the nine slots is 1 (a tree,
+// the cell itself, or off the map), 0 (a cleared neighbour) or 2 (a
+// neighbour whose bit is set in the cell's plane B byte; bits run over the
+// eight neighbours in reading order). code = sum(slot[i] << 2i); the greatest
+// key <= code in the 230-entry table at 0x02140D98 names a run of bytes
+// (lengths u16 at 0x02140BCC, pointers u32 at 0x02141130) indexed by
+// code - key; past the run's end or 0xFF, the default u16 at 0x0214B9D0.
+struct TreeRule {
+    bool tried = false, ok = false;
+    std::vector<uint32_t> keys, ptrs;
+    std::vector<uint16_t> lens;
+    uint16_t dflt = 0;
+};
+TreeRule g_tree;
+
+bool tree_rule_ready() {
+    TreeRule& t = g_tree;
+    if (t.tried) return t.ok;
+    t.tried = true;
+    constexpr int kN = 230;
+    t.keys.resize(kN);
+    t.lens.resize(kN);
+    t.ptrs.resize(kN);
+    for (int i = 0; i < kN; ++i) {
+        t.keys[(size_t)i] = bus_read_u32(0x02140D98u + 4u * i);
+        t.lens[(size_t)i] = bus_read_u16(0x02140BCCu + 2u * i);
+        t.ptrs[(size_t)i] = bus_read_u32(0x02141130u + 4u * i);
+    }
+    t.dflt = bus_read_u16(0x0214B9D0u);
+    // The cartridge's table is sorted and points into main RAM; anything else
+    // (another region's image) leaves trees as the file has them.
+    bool sorted = true;
+    for (int i = 1; i < kN && sorted; ++i) sorted = t.keys[(size_t)i] > t.keys[(size_t)i - 1];
+    bool ptrs_ok = true;
+    for (uint32_t p : t.ptrs) ptrs_ok = ptrs_ok && p >= 0x02000000u && p < 0x02400000u;
+    t.ok = sorted && ptrs_ok && t.dflt < kTableMetas;
+    return t.ok;
+}
+
+uint16_t tree_lookup(uint32_t code);
+uint16_t tree_meta(const lvl::Map& m, const std::vector<uint8_t>& trees, int x, int y) {
+    const uint8_t bv = m.B[(size_t)y * m.w + x];
+    uint32_t code = 0;
+    int slot = 0, k = 0;
+    for (int dy = -1; dy <= 1; ++dy)
+        for (int dx = -1; dx <= 1; ++dx, ++slot) {
+            uint32_t s = 1;
+            if (dx || dy) {
+                const int nx = x + dx, ny = y + dy;
+                if (((bv >> k) & 1) && ny >= 0 && ny < m.h) s = 2;
+                else if (nx >= 0 && ny >= 0 && nx < m.w && ny < m.h && !trees[(size_t)ny * m.w + nx]) s = 0;
+                ++k;
+            }
+            code |= s << (2 * slot);
+        }
+    return tree_lookup(code);
+}
+
+// The forest metatile for a neighbourhood code (see tree_meta).
+uint16_t tree_lookup(uint32_t code) {
+    const TreeRule& t = g_tree;
+    size_t lo = 0, hi = t.keys.size();
+    while (hi - lo > 1) {
+        const size_t mid = (lo + hi) / 2;
+        if (t.keys[mid] <= code) lo = mid;
+        else hi = mid;
+    }
+    if (t.keys[lo] > code) return t.dflt;
+    const uint32_t off = code - t.keys[lo];
+    if (off >= t.lens[lo]) return t.dflt;
+    const uint8_t v = bus_read_u8(t.ptrs[lo] + off);
+    return v == 0xFF ? t.dflt : v;
+}
+
+// ── Buildings, units and pickups, as the game draws them ─────────────────────
+//
+// Sprite sheets are the cartridge's Sprites/*.NCBR (4bpp, linear), in the
+// shared palette Sprites/KingFaction.NCLR: bank 0's entries 0-11, the team's
+// three shades in 12-14 (View_SetupLevelBGs writes them per player from the
+// table at 0x02127F38), index 0 transparent. Buildings and mounted units sit
+// in <faction>_bld_mtd at the place their blueprint names (BP/Entities.ebp:
+// u16 +0x20 the cell index in the 32-wide sheet, +0x1E/+0x1F the size in
+// cells); builders, melee and ranged units' standing frame facing south is
+// x 96 of <sheet>_0, a hero's is frame 0 of <sheet>_w4, a mounted unit's is
+// (0, 224) at 32x32. Transports and siege units are 3D models and keep a
+// marker. Golden bricks are cell (48,16) of the world's items sheet.
+struct Faction { char letter; const char* name; };
+const Faction kFactions[6] = {{'k', "King"}, {'w', "Wizard"}, {'p', "Pirate"},
+                              {'i', "Imperial"}, {'h', "Space Police"}, {'a', "Alien"}};
+struct Blueprint { char faction; int category; const char* sheet; int ebp; };
+// Each faction's first blueprint of a category: its sprite asset and its
+// record's offset in the decompressed BP/Entities.ebp (docs/data/entities.tsv).
+const Blueprint kBlueprints[] = {
+    {'k', 0, "k_hrm", 4}, {'k', 1, "k_eng", 252}, {'k', 2, "k_mel", 376}, {'k', 3, "k_rgd", 500},
+    {'k', 4, "k_bld_mtd", 624}, {'k', 7, "k_bld_mtd", 1244}, {'k', 8, "k_bld_mtd", 1368},
+    {'k', 9, "k_bld_mtd", 1492}, {'k', 10, "k_bld_mtd", 1616}, {'k', 11, "k_bld_mtd", 1740},
+    {'k', 12, "k_bld_mtd", 1864}, {'k', 13, "k_bld_mtd", 1988}, {'k', 14, "k_bld_mtd", 2112},
+    {'k', 15, "k_bld_mtd", 2236}, {'k', 16, "k_bld_mtd", 2360},
+    {'w', 0, "w_hrm", 2484}, {'w', 1, "w_eng", 2732}, {'w', 2, "w_mel", 2856}, {'w', 3, "w_rgd", 2980},
+    {'w', 4, "w_bld_mtd", 3104}, {'w', 7, "w_bld_mtd", 3724}, {'w', 8, "w_bld_mtd", 3848},
+    {'w', 9, "w_bld_mtd", 3972}, {'w', 10, "w_bld_mtd", 4096}, {'w', 11, "w_bld_mtd", 4220},
+    {'w', 12, "w_bld_mtd", 4344}, {'w', 13, "w_bld_mtd", 4468}, {'w', 14, "w_bld_mtd", 4592},
+    {'w', 15, "w_bld_mtd", 4716}, {'w', 16, "w_bld_mtd", 4840},
+    {'p', 0, "p_hrm", 4964}, {'p', 1, "p_eng", 5212}, {'p', 2, "p_mel", 5336}, {'p', 3, "p_rgd", 5460},
+    {'p', 4, "p_bld_mtd", 5584}, {'p', 7, "p_bld_mtd", 6204}, {'p', 8, "p_bld_mtd", 6328},
+    {'p', 9, "p_bld_mtd", 6452}, {'p', 10, "p_bld_mtd", 6576}, {'p', 11, "p_bld_mtd", 6700},
+    {'p', 12, "p_bld_mtd", 6824}, {'p', 13, "p_bld_mtd", 6948}, {'p', 14, "p_bld_mtd", 7072},
+    {'p', 15, "p_bld_mtd", 7196}, {'p', 16, "p_bld_mtd", 7320},
+    {'i', 0, "i_hrm", 7444}, {'i', 1, "i_eng", 7692}, {'i', 2, "i_mel", 7816}, {'i', 3, "i_rgd", 7940},
+    {'i', 4, "i_bld_mtd", 8064}, {'i', 7, "i_bld_mtd", 8684}, {'i', 8, "i_bld_mtd", 8808},
+    {'i', 9, "i_bld_mtd", 8932}, {'i', 10, "i_bld_mtd", 9056}, {'i', 11, "i_bld_mtd", 9180},
+    {'i', 12, "i_bld_mtd", 9304}, {'i', 13, "i_bld_mtd", 9428}, {'i', 14, "i_bld_mtd", 9552},
+    {'i', 15, "i_bld_mtd", 9676}, {'i', 16, "i_bld_mtd", 9800},
+    {'h', 0, "h_hrm", 9924}, {'h', 1, "h_eng", 10172}, {'h', 2, "h_mel", 10296}, {'h', 3, "h_rgd", 10420},
+    {'h', 4, "h_bld_mtd", 10544}, {'h', 7, "h_bld_mtd", 11164}, {'h', 8, "h_bld_mtd", 11288},
+    {'h', 9, "h_bld_mtd", 11412}, {'h', 10, "h_bld_mtd", 11536}, {'h', 11, "h_bld_mtd", 11660},
+    {'h', 12, "h_bld_mtd", 11784}, {'h', 13, "h_bld_mtd", 11908}, {'h', 14, "h_bld_mtd", 12032},
+    {'h', 15, "h_bld_mtd", 12156}, {'h', 16, "h_bld_mtd", 12280},
+    {'a', 0, "a_hrm", 12404}, {'a', 1, "a_eng", 12652}, {'a', 2, "a_mel", 12776}, {'a', 3, "a_rgd", 12900},
+    {'a', 4, "a_bld_mtd", 13024}, {'a', 7, "a_bld_mtd", 13644}, {'a', 8, "a_bld_mtd", 13768},
+    {'a', 9, "a_bld_mtd", 13892}, {'a', 10, "a_bld_mtd", 14016}, {'a', 11, "a_bld_mtd", 14140},
+    {'a', 12, "a_bld_mtd", 14264}, {'a', 13, "a_bld_mtd", 14388}, {'a', 14, "a_bld_mtd", 14512},
+    {'a', 15, "a_bld_mtd", 14636}, {'a', 16, "a_bld_mtd", 14760},
+};
+// The team shades (0x02127F38): Red, Blue, Green, Yellow, Purple, Grey.
+const uint16_t kTeamShades[6][3] = {{0x113F, 0x005C, 0x0015}, {0x7628, 0x6D60, 0x5880},
+                                    {0x03AF, 0x02A6, 0x01E0}, {0x035F, 0x023F, 0x011D},
+                                    {0x7C1F, 0x4419, 0x1C12}, {0x3D8A, 0x3106, 0x1880}};
+// Editor players 1-4 in the game's colour order: blue, red, green, yellow.
+const int kTeamColourIndex[4] = {1, 0, 2, 3};
+
+uint32_t ds_rgba(uint16_t c) {   // through the 6-bit step the hardware takes
+    auto ch = [](int v) { const int s = v * 2; return (uint32_t)(((s << 2) | (s >> 4)) & 255); };
+    return 0xFF000000u | (ch((c >> 10) & 31) << 16) | (ch((c >> 5) & 31) << 8) | ch(c & 31);
+}
+
+struct Sheet { int w = 0, h = 0; std::vector<uint8_t> px; };
+std::map<std::string, Sheet> g_sheets;
+const Sheet& sprite_sheet(const std::string& name) {
+    auto it = g_sheets.find(name);
+    if (it != g_sheets.end()) return it->second;
+    Sheet s;
+    const std::vector<uint8_t> d = rom_file("Sprites/" + name + ".NCBR");
+    // RGCN header, then the CHAR section: tiles high/wide, depth, data.
+    if (d.size() >= 0x30 && std::memcmp(d.data() + 0x10, "RAHC", 4) == 0) {
+        const size_t off = 0x10;
+        auto u16 = [&](size_t a) { return (uint32_t)(d[a] | (d[a + 1] << 8)); };
+        auto u32 = [&](size_t a) { return u16(a) | (u16(a + 2) << 16); };
+        const uint32_t th = u16(off + 8), tw = u16(off + 10), bpp = u32(off + 12) == 4 ? 8 : 4;
+        const uint32_t dsize = u32(off + 24), doff = u32(off + 28);
+        const size_t base = off + 8 + doff;
+        if (bpp == 4 && base + dsize <= d.size()) {
+            s.w = (tw && tw != 0xFFFF) ? (int)tw * 8 : 256;
+            s.h = (th && th != 0xFFFF) ? (int)th * 8 : (int)(dsize * 2 / (uint32_t)s.w);
+            s.px.assign((size_t)s.w * s.h, 0);
+            for (size_t i = 0; i < dsize && i * 2 + 1 < s.px.size(); ++i) {
+                s.px[i * 2] = d[base + i] & 15;
+                s.px[i * 2 + 1] = d[base + i] >> 4;
+            }
+        }
+    }
+    return g_sheets.emplace(name, std::move(s)).first->second;
+}
+
+uint16_t g_fpal[16] = {};
+bool g_fpal_ok = false;
+void faction_palette() {
+    if (g_fpal_ok) return;
+    const std::vector<uint8_t> d = rom_file("Sprites/KingFaction.NCLR");
+    if (d.size() >= 0x28 + 32) {
+        for (int i = 0; i < 16; ++i) g_fpal[i] = (uint16_t)(d[0x28 + i * 2] | (d[0x29 + i * 2] << 8));
+        g_fpal_ok = true;
+    }
+}
+
+const std::vector<uint8_t>& entities_ebp() {
+    static std::vector<uint8_t> b = rom_file("BP/Entities.ebp");
+    return b;
+}
+
+struct Sprite { SDL_Texture* tex = nullptr; int w = 0, h = 0; };
+std::map<std::string, Sprite> g_sprites;
+SDL_Renderer* g_sprites_ren = nullptr;
+
+Sprite make_sprite(SDL_Renderer* ren, const std::string& sheet, int sx, int sy, int w, int h, int colour) {
+    Sprite out;
+    const Sheet& s = sprite_sheet(sheet);
+    faction_palette();
+    if (s.px.empty() || !g_fpal_ok || w <= 0 || h <= 0 || w > 128 || h > 128) return out;
+    uint32_t pal[16];
+    for (int i = 0; i < 16; ++i) pal[i] = ds_rgba(g_fpal[i]);
+    for (int k = 0; k < 3; ++k) pal[12 + k] = ds_rgba(kTeamShades[colour][k]);
+    std::vector<uint32_t> px((size_t)w * h, 0);
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x) {
+            const int X = sx + x, Y = sy + y;
+            if (X < 0 || Y < 0 || X >= s.w || Y >= s.h) continue;
+            const uint8_t v = s.px[(size_t)Y * s.w + X];
+            if (v) px[(size_t)y * w + x] = pal[v];
+        }
+    out.tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, w, h);
+    if (out.tex) {
+        SDL_UpdateTexture(out.tex, nullptr, px.data(), w * 4);
+        SDL_SetTextureBlendMode(out.tex, SDL_BLENDMODE_BLEND);
+        SDL_SetTextureScaleMode(out.tex, SDL_ScaleModeNearest);
+    }
+    out.w = w;
+    out.h = h;
+    return out;
+}
+
+// The sprite of a placed entity: category `type` of `faction` for player
+// `team` (0-3). Empty for 3D units and anything not found.
+const Sprite* entity_sprite(SDL_Renderer* ren, int faction, uint8_t type, int team) {
+    if (ren != g_sprites_ren) {
+        for (auto& kv : g_sprites)
+            if (kv.second.tex) SDL_DestroyTexture(kv.second.tex);
+        g_sprites.clear();
+        g_sprites_ren = ren;
+    }
+    const int colour = kTeamColourIndex[team & 3];
+    const std::string key = std::string(1, kFactions[faction].letter) + ":" + std::to_string(type) + ":" +
+                            std::to_string(colour);
+    auto it = g_sprites.find(key);
+    if (it != g_sprites.end()) return it->second.tex ? &it->second : nullptr;
+    Sprite sp;
+    const Blueprint* bp = nullptr;
+    for (const Blueprint& b : kBlueprints)
+        if (b.faction == kFactions[faction].letter && b.category == type) bp = &b;
+    if (bp) {
+        if (type == lvl::kHero) {
+            sp = make_sprite(ren, std::string(bp->sheet) + "_w4", 0, 0, 24, 24, colour);
+        } else if (type >= lvl::kBuilder && type <= lvl::kRanged) {
+            sp = make_sprite(ren, std::string(bp->sheet) + "_0", 96, 0, 24, 24, colour);
+        } else if (type == lvl::kMounted) {
+            sp = make_sprite(ren, bp->sheet, 0, 224, 32, 32, colour);
+        } else {
+            const std::vector<uint8_t>& e = entities_ebp();
+            if ((size_t)bp->ebp + 0x22 <= e.size()) {
+                const int pos = e[(size_t)bp->ebp + 0x20] | (e[(size_t)bp->ebp + 0x21] << 8);
+                const int w = e[(size_t)bp->ebp + 0x1E] * 8, h = e[(size_t)bp->ebp + 0x1F] * 8;
+                sp = make_sprite(ren, bp->sheet, (pos & 31) * 8, (pos >> 5) * 8, w, h, colour);
+            }
+        }
+    }
+    auto& slot = g_sprites[key] = sp;
+    return slot.tex ? &slot : nullptr;
+}
+
+const Sprite* brick_sprite(SDL_Renderer* ren, int world) {
+    const std::string key = std::string("brick:") + std::to_string(world);
+    auto it = g_sprites.find(key);
+    if (it != g_sprites.end()) return it->second.tex ? &it->second : nullptr;
+    const char* sheet = world == 1 ? "PiratesItems" : world == 2 ? "MarsItems" : "CastleItems";
+    auto& slot = g_sprites[key] = make_sprite(ren, sheet, 48, 16, 16, 16, 0);
+    return slot.tex ? &slot : nullptr;
+}
+
 // ── The document ─────────────────────────────────────────────────────────────
 enum Tool { kToolBrush, kToolLine, kToolRect, kToolEllipse, kToolFill, kToolPick,
             kToolStart, kToolMine, kToolBridge, kToolMarker, kToolBrick, kToolBuilding, kToolErase,
@@ -350,6 +624,7 @@ struct Doc {
     int dirty_x0 = 0, dirty_y0 = 0, dirty_x1 = -1, dirty_y1 = -1;   // cells, inclusive
 };
 Doc g_doc;
+SDL_Renderer* g_ren = nullptr;   // this frame's, for textures made by the panels
 
 struct Ui {
     int tool = kToolBrush, material = kMatGrass, brush = 2;
@@ -365,6 +640,9 @@ struct Ui {
     // paste in progress (the clipboard follows the pointer until a click).
     int sel_x0 = 0, sel_y0 = 0, sel_x1 = -1, sel_y1 = -1;
     bool pasting = false;
+    // The faction each player's buildings and units are drawn as. A map does
+    // not say: players pick their factions when a match starts.
+    int faction[4] = {0, 5, 2, 1};   // King, Alien, Pirate, Wizard
     int stock_pick = 60;   // mp01
     char status[256] = "";
     bool status_bad = false;
@@ -1580,41 +1858,166 @@ void start_upload() {
     if (net_start(1, "POST", "/levels/upload", body)) say(false, "Uploading...");
 }
 
-struct Row { int id, players, world, w, h, downloads; std::string name, author; };
+struct Row {
+    int id = 0, players = 0, world = 0, w = 0, h = 0, downloads = 0, likes = 0;
+    std::string name, author, hash;
+};
+struct Thumb { SDL_Texture* tex = nullptr; int size = 0; int state = 0; };   // 0 none, 1 asked, 2 ready, 3 failed
 struct Community {
     std::vector<Row> rows;
-    int pick = -1;
+    int pick = -1;            // the selected row's level id, 0 none
     std::string message;
     bool bad = false;
     bool listed = false;
-    // The picked level, fetched for its preview.
+    int sort = 0;             // 0 newest, 1 oldest, 2 most downloaded, 3 most liked
+    char search[48] = "";
+    bool reload = false;      // subscriptions changed since the maps were loaded
+    std::map<int, fs::path> installed;   // level id -> its folder in mods/maps/Community
+    std::set<int> liked;
+    bool liked_loaded = false;
+    // The level fetched for a Subscribe or an Open in editor.
     int shown_id = 0;
     lvl::Map map;
     std::vector<Meta> detail;
     std::vector<uint8_t> raw_map, raw_tbp;
-    SDL_Texture* tex = nullptr;
-    SDL_Renderer* tex_ren = nullptr;
+    std::map<int, Thumb> thumbs;
 };
 Community g_com;
 
-void com_preview_texture(SDL_Renderer* ren) {
+fs::path com_dir() { return fs::u8path(lb_mods_dir()) / "maps" / "Community"; }
+fs::path com_cache() { return fs::u8path(lb_mods_dir()) / "cache" / "levels"; }
+
+// A file name as UTF-8 in a std::string, under C++17 and C++20 alike.
+std::string name_utf8(const fs::path& p) {
+    const auto u = p.filename().u8string();
+    return std::string(u.begin(), u.end());
+}
+
+// The subscribed levels: folders "<name> (<id>)" directly in mods/maps/Community.
+void com_scan_installed() {
     Community& c = g_com;
-    if (c.tex) SDL_DestroyTexture(c.tex);
-    c.tex = nullptr;
-    if (!ren || c.map.w <= 0) return;
-    const std::vector<uint8_t> trees = lvl::trees_decode(c.map.D, c.map.w * c.map.h);
-    std::vector<uint32_t> px((size_t)c.map.w * c.map.h);
-    for (size_t i = 0; i < px.size(); ++i) {
-        const uint8_t a = c.map.A[i];
-        px[i] = trees[i] ? 0xFF1E5F19u : a == lvl::kWater ? 0xFFC86932u : a == lvl::kMountain ? 0xFF3C506Eu
-              : a == lvl::kStone ? 0xFF788C96u : 0xFF3C9646u;
+    c.installed.clear();
+    std::error_code ec;
+    for (const auto& e : fs::directory_iterator(com_dir(), ec)) {
+        if (!e.is_directory(ec)) continue;
+        const std::string n = name_utf8(e.path());
+        const size_t open = n.rfind(" (");
+        if (open == std::string::npos || n.empty() || n.back() != ')') continue;
+        const std::string num = n.substr(open + 2, n.size() - open - 3);
+        if (num.empty() || num.size() > 9 || num.find_first_not_of("0123456789") != std::string::npos) continue;
+        c.installed[std::atoi(num.c_str())] = e.path();
     }
-    c.tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, c.map.w, c.map.h);
-    if (c.tex) {
-        SDL_UpdateTexture(c.tex, nullptr, px.data(), c.map.w * 4);
-        SDL_SetTextureScaleMode(c.tex, SDL_ScaleModeNearest);
+}
+
+void com_load_likes() {
+    Community& c = g_com;
+    if (c.liked_loaded) return;
+    c.liked_loaded = true;
+    const std::vector<uint8_t> b = slurp(com_cache() / "likes.txt", 64u << 10);
+    std::string s(b.begin(), b.end());
+    for (size_t at = 0; at < s.size();) {
+        const size_t nl = s.find('\n', at);
+        const std::string line = s.substr(at, nl == std::string::npos ? std::string::npos : nl - at);
+        if (!line.empty() && line.size() <= 9 && line.find_first_not_of("0123456789") == std::string::npos)
+            c.liked.insert(std::atoi(line.c_str()));
+        if (nl == std::string::npos) break;
+        at = nl + 1;
     }
-    c.tex_ren = ren;
+}
+void com_save_likes() {
+    std::string s;
+    for (int id : g_com.liked) s += std::to_string(id) + "\n";
+    std::error_code ec;
+    fs::create_directories(com_cache(), ec);
+    write_file(com_cache() / "likes.txt", std::vector<uint8_t>(s.begin(), s.end()));
+}
+
+// ── Thumbnails: the server's minimap per level, fetched on a worker thread and
+// kept in mods/cache/levels/<hash>.ncgr; decoded on the UI thread with the
+// map archive's decoder (lb_matchpic_mini_rgba, the game's minimap palette).
+extern "C" int lb_matchpic_mini_rgba(const unsigned char* ncgr, size_t n, int world, unsigned int* out, int* size);
+struct ThumbJob { int id; std::string hash; };
+std::mutex g_th_mu;
+std::vector<ThumbJob> g_th_queue;
+std::vector<std::pair<int, std::vector<uint8_t>>> g_th_done;   // id, NCGR (empty: failed)
+std::atomic<bool> g_th_running{false};
+
+bool hash_ok(const std::string& h) {
+    return h.size() == 64 && h.find_first_not_of("0123456789abcdef") == std::string::npos;
+}
+
+void thumb_worker() {
+    char host[128];
+    int port = 80;
+    lb_setting_master(host, sizeof host, &port);
+    std::vector<char> buf(64u << 10);
+    for (;;) {
+        ThumbJob job;
+        {
+            std::lock_guard<std::mutex> lk(g_th_mu);
+            if (g_th_queue.empty()) {
+                g_th_running = false;
+                return;
+            }
+            job = g_th_queue.back();
+            g_th_queue.pop_back();
+        }
+        std::vector<uint8_t> ncgr;
+        const fs::path cached = hash_ok(job.hash) ? com_cache() / (job.hash + ".ncgr") : fs::path();
+        if (!cached.empty()) ncgr = slurp(cached, 16u << 10);
+        if (ncgr.size() < 0x30) {
+            ncgr.clear();
+            const std::string path = "/levels/mini?id=" + std::to_string(job.id);
+            const int n = lb_net_http_get(host, port, path.c_str(), buf.data(), (int)buf.size());
+            JVal j;
+            if (n > 0 && json_parse(std::string(buf.data(), (size_t)n), &j) && j.flag("ok") &&
+                b64_decode(j.str("ncgr"), &ncgr, 16u << 10) && ncgr.size() >= 0x30 && !cached.empty()) {
+                std::error_code ec;
+                fs::create_directories(com_cache(), ec);
+                write_file(cached, ncgr);
+            }
+        }
+        std::lock_guard<std::mutex> lk(g_th_mu);
+        g_th_done.push_back({job.id, std::move(ncgr)});
+    }
+}
+
+void thumb_want(const Row& r) {
+    Thumb& t = g_com.thumbs[r.id];
+    if (t.state != 0) return;
+    t.state = 1;
+    std::lock_guard<std::mutex> lk(g_th_mu);
+    g_th_queue.push_back({r.id, r.hash});
+    if (!g_th_running.exchange(true)) std::thread(thumb_worker).detach();
+}
+
+void thumb_poll(SDL_Renderer* ren) {
+    std::vector<std::pair<int, std::vector<uint8_t>>> done;
+    {
+        std::lock_guard<std::mutex> lk(g_th_mu);
+        done.swap(g_th_done);
+    }
+    for (auto& d : done) {
+        Thumb& t = g_com.thumbs[d.first];
+        int world = 0;
+        for (const Row& r : g_com.rows)
+            if (r.id == d.first) world = r.world;
+        std::vector<unsigned int> px(128 * 128);
+        int size = 0;
+        if (d.second.empty() || !ren ||
+            !lb_matchpic_mini_rgba(d.second.data(), d.second.size(), world, px.data(), &size)) {
+            t.state = 3;
+            continue;
+        }
+        if (t.tex) SDL_DestroyTexture(t.tex);
+        t.tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, 128, 128);
+        if (t.tex) {
+            SDL_UpdateTexture(t.tex, nullptr, px.data(), 128 * 4);
+            SDL_SetTextureScaleMode(t.tex, SDL_ScaleModeNearest);
+        }
+        t.size = size;
+        t.state = t.tex ? 2 : 3;
+    }
 }
 
 // A fetched level, decoded and checked: true when it may be used.
@@ -1650,8 +2053,7 @@ bool com_take(const JVal& j) {
 // Writes the checked level to mods/maps/Community/<name> (<id>)/.
 bool com_install(const Row& r) {
     Community& c = g_com;
-    const fs::path dir = fs::u8path(lb_mods_dir()) / "maps" / "Community" /
-                         fs::u8path(safe_name(r.name.c_str()) + " (" + std::to_string(r.id) + ")");
+    const fs::path dir = com_dir() / fs::u8path(safe_name(r.name.c_str()) + " (" + std::to_string(r.id) + ")");
     std::error_code ec;
     fs::create_directories(dir, ec);
     const std::vector<uint8_t> trees = lvl::trees_decode(c.map.D, c.map.w * c.map.h);
@@ -1664,7 +2066,32 @@ bool com_install(const Row& r) {
     return ok;
 }
 
+// Unsubscribe: the level's own folder, only when it sits directly in
+// mods/maps/Community and is named for that level.
+bool com_uninstall(int id) {
+    Community& c = g_com;
+    auto it = c.installed.find(id);
+    if (it == c.installed.end()) return false;
+    std::error_code ec;
+    const fs::path dir = it->second;
+    const std::string n = name_utf8(dir);
+    const std::string tail = " (" + std::to_string(id) + ")";
+    if (fs::canonical(dir.parent_path(), ec) != fs::canonical(com_dir(), ec) || n.size() <= tail.size() ||
+        n.compare(n.size() - tail.size(), tail.size(), tail) != 0)
+        return false;
+    fs::remove_all(dir, ec);
+    if (ec) return false;
+    c.installed.erase(it);
+    return true;
+}
+
+const char* const kSorts[4] = {"new", "old", "downloads", "likes"};
+void com_refresh() {
+    net_start(2, "GET", std::string("/levels/list?limit=100&sort=") + kSorts[g_com.sort & 3], "");
+}
+
 void net_poll(SDL_Renderer* ren) {
+    (void)ren;
     std::string reply;
     int kind = 0;
     bool failed = false;
@@ -1708,27 +2135,47 @@ void net_poll(SDL_Renderer* ren) {
                 r.w = (int)v.num("width");
                 r.h = (int)v.num("height");
                 r.downloads = (int)v.num("downloads");
+                r.likes = (int)v.num("likes");
                 r.name = v.str("name").substr(0, 32);
                 r.author = v.str("author").substr(0, 32);
+                r.hash = v.str("hash");
                 if (r.id > 0) c.rows.push_back(r);
             }
         c.listed = true;
-        c.pick = -1;
+        com_scan_installed();
         c.message = c.rows.empty() ? "No community levels yet." : "";
-    } else if (kind == 3 || kind == 4) {
+    } else if (kind == 4 || kind == 5) {   // a Subscribe, an Open in editor
         if (!com_take(j)) return;
-        com_preview_texture(ren);
+        const Row* r = nullptr;
+        for (const Row& x : c.rows)
+            if (x.id == c.shown_id) r = &x;
+        if (!r) return;
         if (kind == 4) {
-            const Row* r = nullptr;
-            for (const Row& x : c.rows)
-                if (x.id == c.shown_id) r = &x;
-            if (r && com_install(*r))
-                c.message = "Downloaded to mods/maps/Community. Load new maps now to play it.";
-            else {
+            if (com_install(*r)) {
+                com_scan_installed();
+                for (Row& x : c.rows)
+                    if (x.id == r->id) ++x.downloads;
+                c.reload = true;
+                c.message = "Subscribed. Load new maps now to play it.";
+            } else {
                 c.message = "Could not write the level to the mods folder.";
                 c.bad = true;
             }
+        } else {
+            lvl::Map m = c.map;
+            std::vector<Meta> d = c.detail;
+            adopt(std::move(m), std::move(d), r->name.c_str());
+            std::snprintf(g_doc.author, sizeof g_doc.author, "%s", r->author.c_str());
+            say(false, "Opened community level #%d. Saving makes your own copy.", r->id);
+            c.message = "Opened in the Level Editor (its own page).";
         }
+    } else if (kind == 6) {   // a like
+        const int id = (int)j.num("id");
+        for (Row& r : c.rows)
+            if (r.id == id) r.likes = (int)j.num("likes");
+        if (j.flag("liked")) c.liked.insert(id);
+        else c.liked.erase(id);
+        com_save_likes();
     }
 }
 
@@ -1751,7 +2198,10 @@ void compose_cells(SDL_Renderer* ren) {
     for (int y = d.dirty_y0; y <= d.dirty_y1; ++y)
         for (int x = d.dirty_x0; x <= d.dirty_x1; ++x) {
             uint32_t* dst = d.px.data() + (size_t)y * kMetaH * tw + (size_t)x * kMetaW;
-            const uint16_t e = d.m.E[at(x, y)];
+            // A tree cell shows the forest metatile the game puts there at
+            // load; the file keeps its grass (the game recomputes it).
+            const bool tree = d.trees[at(x, y)] && tree_rule_ready();
+            const uint16_t e = tree ? tree_meta(d.m, d.trees, x, y) : d.m.E[at(x, y)];
             if (wa.ok && e < kTableMetas) {
                 draw_meta(wa, wa.table[e], dst, tw);
             } else if (wa.ok && e >= kTableMetas && (size_t)(e - kTableMetas) < d.detail.size()) {
@@ -1763,24 +2213,6 @@ void compose_cells(SDL_Renderer* ren) {
                 for (int r = 0; r < kMetaH; ++r)
                     for (int q = 0; q < kMetaW; ++q) dst[(size_t)r * tw + q] = c;
             }
-            // Trees are not in plane E: the game spawns one per masked cell
-            // (FUN_020A30E8) and draws it as a sprite. A canopy stands in.
-            if (d.trees[at(x, y)]) {
-                const uint32_t dark = d.world == 2 ? 0xFF3A6A1Eu : 0xFF1E5A1Eu;
-                const uint32_t mid = d.world == 2 ? 0xFF4E8C2Au : 0xFF2C8030u;
-                const uint32_t lite = d.world == 2 ? 0xFF6CB040u : 0xFF46A848u;
-                for (int r = 0; r < kMetaH; ++r)
-                    for (int q = 0; q < kMetaW; ++q) {
-                        // Two overlapping crowns per cell, lit from the top left.
-                        const float c1 = std::hypot((q - 7.5f) / 7.5f, (r - 7.0f) / 7.0f);
-                        const float c2 = std::hypot((q - 16.5f) / 7.5f, (r - 9.0f) / 7.0f);
-                        const float c = std::min(c1, c2);
-                        if (c > 1.0f) continue;
-                        const float hl = c1 < c2 ? std::hypot((q - 5.5f) / 4.0f, (r - 4.5f) / 3.5f)
-                                                 : std::hypot((q - 14.5f) / 4.0f, (r - 6.5f) / 3.5f);
-                        dst[(size_t)r * tw + q] = c > 0.82f ? dark : hl < 1.0f ? lite : mid;
-                    }
-            }
         }
     SDL_Rect r{d.dirty_x0 * kMetaW, d.dirty_y0 * kMetaH, (d.dirty_x1 - d.dirty_x0 + 1) * kMetaW,
                (d.dirty_y1 - d.dirty_y0 + 1) * kMetaH};
@@ -1788,35 +2220,64 @@ void compose_cells(SDL_Renderer* ren) {
     d.dirty_x1 = d.dirty_x0 - 1;
 }
 
-void draw_ghost_start(ImDrawList* dl, ImVec2 o, float cw, float ch, int sx, int sy, int team, bool ghost) {
-    const ImU32 col = kTeamColours[team & 3];
-    const ImU32 fill = (col & 0x00FFFFFFu) | (ghost ? 0x50000000u : 0x70000000u);
-    for (const lvl::Entity& e : start_layout(sx, sy, team, g_doc.m.h)) {
-        int w, h;
-        footprint(e.type, &w, &h);
-        const ImVec2 a(o.x + e.x * cw, o.y + e.y * ch), b(o.x + (e.x + w) * cw, o.y + (e.y + h) * ch);
-        if (w > 1) {
-            dl->AddRectFilled(a, b, fill, 3.0f);
-            dl->AddRect(a, b, col, 3.0f, 0, 2.0f);
-            const char* label = e.type == lvl::kBase ? "Base" : e.type == lvl::kFarm ? "Farm" : "Barracks";
-            dl->AddText(ImVec2(a.x + 3, a.y + 2), IM_COL32(255, 255, 255, ghost ? 160 : 230), label);
-        } else {
-            dl->AddCircleFilled(ImVec2((a.x + b.x) / 2, (a.y + b.y) / 2), std::max(3.0f, ch * 0.35f), col);
-            dl->AddText(ImVec2(b.x + 1, a.y), IM_COL32(255, 255, 255, ghost ? 140 : 200),
-                        e.type == lvl::kHero ? "Hero" : "Builder");
-        }
+// One sprite to draw, kept so a frame's sprites go back to front (by their
+// feet), as the game layers them.
+struct SpriteDraw {
+    float foot;
+    const Sprite* sp;
+    ImVec2 a, b;
+    ImU32 tint;
+};
+
+// Where the game puts an entity's sprite: a unit stands on the bottom of its
+// cell, centred; a building on the bottom of its footprint, centred.
+void entity_sprite_draw(std::vector<SpriteDraw>* out, ImDrawList* dl, SDL_Renderer* ren, ImVec2 o, float z,
+                        const lvl::Entity& e, bool ghost) {
+    int fw, fh;
+    footprint(e.type, &fw, &fh);
+    const int team = e.team & 3;
+    const Sprite* sp = entity_sprite(ren, g_ui.faction[team], e.type, team);
+    const float cw = kMetaW * z, ch = kMetaH * z;
+    if (!sp) {
+        // A 3D unit (transport, siege): its footprint and name.
+        const ImVec2 a(o.x + e.x * cw, o.y + e.y * ch), b(o.x + (e.x + fw) * cw, o.y + (e.y + fh) * ch);
+        const ImU32 col = kTeamColours[team];
+        dl->AddRectFilled(a, b, (col & 0x00FFFFFFu) | (ghost ? 0x40000000u : 0x60000000u), 2.0f);
+        dl->AddRect(a, b, col, 2.0f, 0, 1.5f);
+        const EntityKind* k = kind_of(e.type);
+        if (cw >= 12) dl->AddText(ImVec2(a.x + 2, a.y + 1), IM_COL32(255, 255, 255, 220), k ? k->name : "?");
+        return;
     }
+    const float left = (kMetaW * e.x + (kMetaW * fw - sp->w) / 2.0f) * z;
+    const float top = (kMetaH * (e.y + fh) - sp->h) * z;
+    SpriteDraw d;
+    d.foot = (float)(e.y + fh);
+    d.sp = sp;
+    d.a = ImVec2(o.x + left, o.y + top);
+    d.b = ImVec2(d.a.x + sp->w * z, d.a.y + sp->h * z);
+    d.tint = ghost ? IM_COL32(255, 255, 255, 150) : IM_COL32(255, 255, 255, 255);
+    out->push_back(d);
 }
 
-void draw_objects(ImDrawList* dl, ImVec2 o, float cw, float ch) {
+void flush_sprites(ImDrawList* dl, std::vector<SpriteDraw>* list) {
+    std::stable_sort(list->begin(), list->end(), [](const SpriteDraw& a, const SpriteDraw& b) { return a.foot < b.foot; });
+    for (const SpriteDraw& d : *list)
+        dl->AddImage((ImTextureID)(intptr_t)d.sp->tex, d.a, d.b, ImVec2(0, 0), ImVec2(1, 1), d.tint);
+    list->clear();
+}
+
+void draw_ghost_start(ImDrawList* dl, SDL_Renderer* ren, ImVec2 o, float z, int sx, int sy, int team, bool ghost) {
+    std::vector<SpriteDraw> list;
+    for (const lvl::Entity& e : start_layout(sx, sy, team, g_doc.m.h))
+        entity_sprite_draw(&list, dl, ren, o, z, e, ghost);
+    flush_sprites(dl, &list);
+}
+
+void draw_objects(ImDrawList* dl, SDL_Renderer* ren, ImVec2 o, float cw, float ch) {
     lvl::Map& m = g_doc.m;
-    // Mines.
-    for (const auto& g : m.mines)
-        for (const lvl::Point& p : g) {
-            const ImVec2 a(o.x + p.x * cw, o.y + p.y * ch), b(o.x + (p.x + 2) * cw, o.y + (p.y + 2) * ch);
-            dl->AddRect(a, b, IM_COL32(255, 215, 0, 255), 2.0f, 0, 2.0f);
-            dl->AddText(ImVec2(a.x + 2, a.y + 1), IM_COL32(255, 215, 0, 255), kWorlds[g_doc.world].mine);
-        }
+    const float z = cw / kMetaW;
+    std::vector<SpriteDraw> sprites;
+    // Mines and well caps are their terrain pads (plane E), drawn already.
     // Markers.
     if (g_ui.show_markers)
         for (const lvl::MarkerGroup& g : m.markers)
@@ -1842,33 +2303,19 @@ void draw_objects(ImDrawList* dl, ImVec2 o, float cw, float ch) {
                 dl->AddQuadFilled(ImVec2(c.x, c.y - r), ImVec2(c.x + r, c.y), ImVec2(c.x, c.y + r),
                                   ImVec2(c.x - r, c.y), col);
             }
-    // Events: starts, buildings, bricks, walls.
+    // Events: buildings and units (starts included), golden bricks, walls.
     for (const lvl::Event& e : m.events) {
-        const bool start = e.ents.size() >= 6 &&
-                           std::any_of(e.ents.begin(), e.ents.end(), [](const lvl::Entity& x) { return x.type == lvl::kBase; });
-        if (start) {
-            draw_ghost_start(dl, o, cw, ch, e.ents[0].x, e.ents[0].y, e.ents[0].team, false);
-            for (size_t k = 6; k < e.ents.size(); ++k) {
-                const lvl::Entity& x = e.ents[k];
-                const ImVec2 c(o.x + (x.x + 0.5f) * cw, o.y + (x.y + 0.5f) * ch);
-                dl->AddCircle(c, std::max(3.0f, ch * 0.35f), kTeamColours[x.team & 3], 0, 2.0f);
-            }
-        } else {
-            for (const lvl::Entity& x : e.ents) {
-                int w, h;
-                footprint(x.type, &w, &h);
-                const ImVec2 a(o.x + x.x * cw, o.y + x.y * ch), b(o.x + (x.x + w) * cw, o.y + (x.y + h) * ch);
-                const ImU32 col = x.team < 4 ? kTeamColours[x.team] : IM_COL32(200, 200, 200, 255);
-                dl->AddRectFilled(a, b, (col & 0x00FFFFFFu) | 0x50000000u, 2.0f);
-                dl->AddRect(a, b, col, 2.0f, 0, 1.5f);
-                const EntityKind* k = kind_of(x.type);
-                if (cw >= 12) dl->AddText(ImVec2(a.x + 2, a.y + 1), IM_COL32(255, 255, 255, 220), k ? k->name : "?");
-            }
-        }
+        for (const lvl::Entity& x : e.ents) entity_sprite_draw(&sprites, dl, ren, o, z, x, false);
         for (const lvl::Pickup& p : e.picks) {
-            const ImVec2 c(o.x + (p.x + 0.5f) * cw, o.y + (p.y + 0.5f) * ch);
-            dl->AddCircleFilled(c, std::max(3.0f, ch * 0.3f), IM_COL32(255, 200, 0, 255));
-            dl->AddCircle(c, std::max(3.0f, ch * 0.3f), IM_COL32(120, 80, 0, 255));
+            if (const Sprite* sp = brick_sprite(ren, g_doc.world)) {
+                SpriteDraw d;
+                d.foot = (float)p.y + 1.0f;
+                d.sp = sp;
+                d.a = ImVec2(o.x + (kMetaW * p.x + (kMetaW - sp->w) / 2.0f) * z, o.y + (kMetaH * (p.y + 1) - sp->h) * z);
+                d.b = ImVec2(d.a.x + sp->w * z, d.a.y + sp->h * z);
+                d.tint = IM_COL32(255, 255, 255, 255);
+                sprites.push_back(d);
+            }
         }
         for (const lvl::Wall& wl : e.walls) {
             const ImVec2 a(o.x + wl.x * cw, o.y + wl.y * ch);
@@ -1886,6 +2333,7 @@ void draw_objects(ImDrawList* dl, ImVec2 o, float cw, float ch) {
         const ImVec2 b(o.x + (t.body[2] + 1) * cw, o.y + (t.body[3] + 1) * ch);
         dl->AddRect(a, b, IM_COL32(255, 0, 255, 140), 0, 0, 1.0f);
     }
+    flush_sprites(dl, &sprites);
 }
 
 void apply_click(int x, int y, bool first) {
@@ -2012,7 +2460,7 @@ void canvas(SDL_Renderer* ren) {
             dl->AddLine(ImVec2(o.x, o.y + y * ch), ImVec2(o.x + d.m.w * cw, o.y + y * ch), IM_COL32(0, 0, 0, 60));
     }
     dl->AddRect(o, ImVec2(o.x + d.m.w * cw, o.y + d.m.h * ch), IM_COL32(255, 255, 255, 120));
-    if (g_ui.show_objects) draw_objects(dl, o, cw, ch);
+    if (g_ui.show_objects) draw_objects(dl, ren, o, cw, ch);
 
     // The cell under the pointer, and what the tool would do there.
     const int mx = (int)std::floor((io.MousePos.x - o.x) / cw), my = (int)std::floor((io.MousePos.y - o.y) / ch);
@@ -2055,15 +2503,15 @@ void canvas(SDL_Renderer* ren) {
     }
     if (on_map) {
         if (g_ui.tool == kToolStart) {
-            draw_ghost_start(dl, o, cw, ch, mx, my, g_ui.team, true);
+            draw_ghost_start(dl, ren, o, g_ui.zoom, mx, my, g_ui.team, true);
         } else if (g_ui.tool == kToolMine) {
             dl->AddRectFilled(ImVec2(o.x + mx * cw, o.y + my * ch), ImVec2(o.x + (mx + 2) * cw, o.y + (my + 2) * ch),
                               IM_COL32(255, 215, 0, 90));
         } else if (g_ui.tool == kToolBuilding) {
-            int w, h;
-            footprint(kBuildings[g_ui.building].type, &w, &h);
-            dl->AddRectFilled(ImVec2(o.x + mx * cw, o.y + my * ch), ImVec2(o.x + (mx + w) * cw, o.y + (my + h) * ch),
-                              (kTeamColours[g_ui.building_team] & 0x00FFFFFFu) | 0x60000000u);
+            std::vector<SpriteDraw> list;
+            entity_sprite_draw(&list, dl, ren, o, g_ui.zoom,
+                               ent(mx, my, g_ui.building_team, kBuildings[g_ui.building].type, 1), true);
+            flush_sprites(dl, &list);
         } else if (!shape || !g_ui.dragging) {
             std::vector<std::pair<int, int>> cells;
             if (g_ui.tool == kToolBrush) brush_cells(mx, my, g_ui.brush, g_ui.round_brush, &cells);
@@ -2254,10 +2702,25 @@ void panel_terrain() {
     if (!ImGui::CollapsingHeader("Terrain tools", ImGuiTreeNodeFlags_DefaultOpen)) return;
     for (int t : {kToolBrush, kToolLine, kToolRect, kToolEllipse, kToolFill, kToolPick}) tool_button(t);
     ImGui::Separator();
+    // Each material as the world draws it: its plain tile in this world's
+    // palette (Level Palettes and palette files included), and a forest for
+    // trees (the game's tree rule with trees all round).
+    SDL_Texture* atlas = world_atlas(g_doc.world, g_ren);
+    const uint16_t forest = tree_rule_ready() ? tree_lookup(0x15555u) : 116;   // all nine slots 1
+    const uint16_t tiles[kMatCount] = {116, 96, 64, 89, forest};
     for (int k = 0; k < kMatCount; ++k) {
         ImGui::PushID(k);
-        ImGui::ColorButton("##m", ImGui::ColorConvertU32ToFloat4(kMatColours[k]), ImGuiColorEditFlags_NoTooltip,
-                           ImVec2(18, 18));
+        const int e = tiles[k] < kTableMetas ? tiles[k] : 116;
+        const float u0 = (e % 20) / 20.0f, v0 = (e / 20) * (float)kMetaH / (22.0f * kMetaH);
+        const float u1 = u0 + 1.0f / 20.0f, v1 = v0 + 1.0f / 22.0f;
+        if (atlas) {
+            if (ImGui::ImageButton("##m", (ImTextureID)(intptr_t)atlas, ImVec2(kMetaW * 1.5f, kMetaH * 1.5f),
+                                   ImVec2(u0, v0), ImVec2(u1, v1)))
+                g_ui.material = k;
+        } else {
+            ImGui::ColorButton("##m", ImGui::ColorConvertU32ToFloat4(kMatColours[k]), ImGuiColorEditFlags_NoTooltip,
+                               ImVec2(18, 18));
+        }
         ImGui::SameLine();
         if (ImGui::RadioButton(kMatNames[k], g_ui.material == k)) g_ui.material = k;
         ImGui::PopID();
@@ -2341,6 +2804,16 @@ void panel_view() {
     ImGui::SetItemTooltip("Tints each region units can walk within; starts in different regions\n"
                           "need a bridge site between them.");
     ImGui::SliderFloat("Zoom", &g_ui.zoom, 0.125f, 4.0f, "%.2f");
+    ImGui::SeparatorText("Draw players as");
+    const char* fn[6] = {kFactions[0].name, kFactions[1].name, kFactions[2].name,
+                         kFactions[3].name, kFactions[4].name, kFactions[5].name};
+    for (int t = 0; t < 4; ++t) {
+        ImGui::PushID(t);
+        ImGui::SetNextItemWidth(140);
+        ImGui::Combo(kTeamNames[t], &g_ui.faction[t], fn, 6);
+        ImGui::PopID();
+    }
+    ImGui::TextDisabled("Only how the editor shows them: players pick\ntheir factions when a match starts.");
 }
 
 void panel_checks() {
@@ -2352,81 +2825,160 @@ void panel_checks() {
 
 }  // namespace
 
-// Maps > Community levels (lb_overlay.cpp's page).
+// Maps > Community levels (lb_overlay.cpp's page): the map archive's layout
+// (docs/431): search and order above, a grid of minimap thumbnails, and the
+// picked level beside it with Subscribe / Unsubscribe and a like.
 void lb_community_draw(SDL_Renderer* ren) {
     net_poll(ren);
+    thumb_poll(ren);
     Community& c = g_com;
+    com_load_likes();
     if (!c.listed && !g_net.busy.load()) {
         c.listed = true;
-        net_start(2, "GET", "/levels/list?limit=100", "");
+        com_refresh();
     }
-    ImGui::BeginDisabled(g_net.busy.load());
-    if (ImGui::Button("Refresh")) net_start(2, "GET", "/levels/list?limit=100", "");
-    ImGui::EndDisabled();
+    ImGui::SetNextItemWidth(260.0f);
+    ImGui::InputTextWithHint("##comsearch", "Search by name or author", c.search, sizeof c.search);
     ImGui::SameLine();
-    ImGui::TextDisabled(g_net.busy.load() ? "Asking the server..." : "%d level(s)", (int)c.rows.size());
+    ImGui::SetNextItemWidth(170.0f);
+    const char* kSortNames[4] = {"Newest first", "Oldest first", "Most downloaded", "Most liked"};
+    if (ImGui::Combo("##comsort", &c.sort, kSortNames, 4)) com_refresh();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(g_net.busy.load());
+    if (ImGui::Button("Refresh")) com_refresh();
+    ImGui::EndDisabled();
+    if (c.reload) {
+        ImGui::SameLine();
+        if (ImGui::Button("Load new maps now")) {
+            if (lb_mods_request_rebuild()) {
+                c.reload = false;
+                c.message = "Loading the new maps: the game resets to the title screen.";
+            } else {
+                c.message = "Restart the game to see the new maps.";
+            }
+        }
+        ImGui::SetItemTooltip("Returns the game to the title screen with your subscribed levels in the\n"
+                              "map lists. A match in progress ends.");
+    }
+    if (g_net.busy.load()) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("Asking the server...");
+    }
     if (!c.message.empty())
         ImGui::TextColored(c.bad ? ImVec4(1, 0.5f, 0.4f, 1) : ImVec4(0.5f, 1, 0.5f, 1), "%s", c.message.c_str());
-    ImGui::BeginChild("##com_list", ImVec2(ImGui::GetContentRegionAvail().x * 0.55f, 0), ImGuiChildFlags_Borders);
-    if (ImGui::BeginTable("##com", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_SizingStretchProp)) {
-        ImGui::TableSetupColumn("Level");
-        ImGui::TableSetupColumn("By");
-        ImGui::TableSetupColumn("Players");
-        ImGui::TableSetupColumn("World");
-        ImGui::TableSetupColumn("Downloads");
-        ImGui::TableHeadersRow();
-        for (int i = 0; i < (int)c.rows.size(); ++i) {
-            const Row& r = c.rows[(size_t)i];
-            ImGui::TableNextRow();
-            ImGui::TableNextColumn();
-            ImGui::PushID(r.id);
-            if (ImGui::Selectable(lb_swear_shown(r.name.c_str()), c.pick == i, ImGuiSelectableFlags_SpanAllColumns)) {
-                c.pick = i;
-                if (r.id != c.shown_id) net_start(3, "GET", "/levels/get?id=" + std::to_string(r.id), "");
-            }
-            ImGui::PopID();
-            ImGui::TableNextColumn();
-            ImGui::TextUnformatted(lb_swear_shown(r.author.c_str()));
-            ImGui::TableNextColumn();
-            ImGui::Text("%d", r.players);
-            ImGui::TableNextColumn();
-            ImGui::TextUnformatted(kWorlds[r.world].name);
-            ImGui::TableNextColumn();
-            ImGui::Text("%d", r.downloads);
+
+    std::string q = c.search;
+    for (char& ch : q) ch = (char)std::tolower((unsigned char)ch);
+    auto lower = [](std::string s) {
+        for (char& ch : s) ch = (char)std::tolower((unsigned char)ch);
+        return s;
+    };
+    const Row* picked = nullptr;
+    for (const Row& r : c.rows)
+        if (r.id == c.pick) picked = &r;
+    const ImVec2 avail = ImGui::GetContentRegionAvail();
+    const float detail_w = picked ? std::max(300.0f, avail.x * 0.34f) : 0.0f;
+    ImGui::BeginChild("##com_grid", ImVec2(picked ? avail.x - detail_w - 8.0f : 0.0f, avail.y), ImGuiChildFlags_Borders);
+    const float tile = 112.0f, pad = 12.0f;
+    const float cell = tile + 2.0f * ImGui::GetStyle().FramePadding.x;
+    const float row_end = ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x;
+    int shown = 0, col = 0;
+    for (const Row& r : c.rows) {
+        if (!q.empty() && lower(r.name).find(q) == std::string::npos && lower(r.author).find(q) == std::string::npos)
+            continue;
+        if (col && ImGui::GetItemRectMax().x + pad + cell <= row_end) ImGui::SameLine(0.0f, pad);
+        else col = 0;
+        ImGui::BeginGroup();
+        ImGui::PushID(r.id);
+        thumb_want(r);
+        const Thumb& t = c.thumbs[r.id];
+        const bool inst = c.installed.count(r.id) != 0;
+        const ImVec4 tint = inst ? ImVec4(0.75f, 1.0f, 0.75f, 1.0f) : ImVec4(1, 1, 1, 1);
+        const ImVec4 bg = c.pick == r.id ? ImVec4(0.95f, 0.75f, 0.15f, 1.0f) : ImVec4(0, 0, 0, 0);
+        bool hit;
+        if (t.tex && t.size > 0) {
+            const float u = (float)t.size / 128.0f;
+            hit = ImGui::ImageButton("##t", (ImTextureID)(intptr_t)t.tex, ImVec2(tile, tile), ImVec2(0, 0), ImVec2(u, u),
+                                     bg, tint);
+        } else {
+            hit = ImGui::Button(t.state == 3 ? "?" : "...", ImVec2(tile + 8.0f, tile + 8.0f));
         }
-        ImGui::EndTable();
+        if (hit) c.pick = c.pick == r.id ? -1 : r.id;
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s\nby %s\n%d players, %s, %d x %d\n%d downloads, %d likes%s",
+                              lb_swear_shown(r.name.c_str()), r.author.empty() ? "unknown" : lb_swear_shown(r.author.c_str()),
+                              r.players, kWorlds[r.world].name, r.w, r.h, r.downloads, r.likes,
+                              inst ? "\nSubscribed" : "");
+        std::string nm = lb_swear_shown(r.name.c_str());
+        while (nm.size() > 3 && ImGui::CalcTextSize(nm.c_str()).x > tile + 8.0f) nm = nm.substr(0, nm.size() - 4) + "..";
+        const float nx = (tile + 8.0f - ImGui::CalcTextSize(nm.c_str()).x) * 0.5f;
+        if (nx > 0) ImGui::SetCursorPosX(ImGui::GetCursorPosX() + nx);
+        if (inst) ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "%s", nm.c_str());
+        else ImGui::TextUnformatted(nm.c_str());
+        ImGui::PopID();
+        ImGui::EndGroup();
+        ++col;
+        ++shown;
     }
+    if (!shown && c.listed && !g_net.busy.load())
+        ImGui::TextDisabled(c.rows.empty() ? "No community levels yet." : "No level matches.");
     ImGui::EndChild();
+    if (!picked) return;
+
     ImGui::SameLine();
-    ImGui::BeginChild("##com_pick", ImVec2(0, 0), ImGuiChildFlags_Borders);
-    if (c.pick >= 0 && c.pick < (int)c.rows.size()) {
-        const Row& r = c.rows[(size_t)c.pick];
-        ImGui::TextUnformatted(lb_swear_shown(r.name.c_str()));
-        ImGui::TextDisabled("by %s - %d players - %s - %d x %d", r.author.empty() ? "unknown" : lb_swear_shown(r.author.c_str()),
-                            r.players, kWorlds[r.world].name, r.w, r.h);
-        if (c.shown_id == r.id && c.tex) {
-            const float s = std::min(ImGui::GetContentRegionAvail().x, 384.0f) / (float)std::max(c.map.w, c.map.h);
-            ImGui::Image((ImTextureID)(intptr_t)c.tex, ImVec2(c.map.w * s, c.map.h * s));
-            ImGui::BeginDisabled(g_net.busy.load());
-            if (ImGui::Button("Download"))
-                net_start(4, "GET", "/levels/get?count=1&id=" + std::to_string(r.id), "");
-            ImGui::SetItemTooltip("Into mods/maps/Community, checked first; Load new maps now (Level Editor\n"
-                                  "page) to play it in Free Play or online.");
-            ImGui::SameLine();
-            if (ImGui::Button("Open in editor")) {
-                lvl::Map m = c.map;
-                std::vector<Meta> d = c.detail;
-                adopt(std::move(m), std::move(d), r.name.c_str());
-                std::snprintf(g_doc.author, sizeof g_doc.author, "%s", r.author.c_str());
-                say(false, "Opened community level #%d. Saving makes your own copy.", r.id);
-            }
-            ImGui::EndDisabled();
-        } else if (g_net.busy.load()) {
-            ImGui::TextDisabled("Fetching the level...");
-        }
+    ImGui::BeginChild("##com_detail", ImVec2(0, avail.y), ImGuiChildFlags_Borders);
+    const Row& r = *picked;
+    ImGui::SetWindowFontScale(1.2f);
+    ImGui::TextUnformatted(lb_swear_shown(r.name.c_str()));
+    ImGui::SetWindowFontScale(1.0f);
+    ImGui::TextDisabled("by %s  /  level #%d", r.author.empty() ? "unknown" : lb_swear_shown(r.author.c_str()), r.id);
+    ImGui::Spacing();
+    const Thumb& t = c.thumbs[r.id];
+    if (t.tex && t.size > 0) {
+        const float u = (float)t.size / 128.0f;
+        ImGui::Image((ImTextureID)(intptr_t)t.tex, ImVec2(192.0f, 192.0f), ImVec2(0, 0), ImVec2(u, u));
     } else {
-        ImGui::TextDisabled("Pick a level to see it.");
+        ImGui::TextDisabled("No preview yet.");
     }
+    ImGui::Text("Size: %d x %d", r.w, r.h);
+    ImGui::Text("Setting: %s", kWorlds[r.world].name);
+    ImGui::Text("Players: %d", r.players);
+    ImGui::Text("Downloads: %d", r.downloads);
+    ImGui::Text("Likes: %d", r.likes);
+    ImGui::Spacing();
+    const bool inst = c.installed.count(r.id) != 0;
+    ImGui::BeginDisabled(g_net.busy.load());
+    if (inst) {
+        ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "Subscribed");
+        ImGui::SameLine();
+        if (ImGui::Button("Unsubscribe")) {
+            if (com_uninstall(r.id)) {
+                c.reload = true;
+                c.bad = false;
+                c.message = "Unsubscribed. Load new maps now to drop it from the lists.";
+            } else {
+                c.bad = true;
+                c.message = "Could not remove that level's folder.";
+            }
+        }
+        ImGui::SetItemTooltip("Removes this level's folder from mods/maps/Community.");
+    } else if (ImGui::Button("Subscribe")) {
+        net_start(4, "GET", "/levels/get?count=1&id=" + std::to_string(r.id), "");
+    }
+    if (!inst) ImGui::SetItemTooltip("Downloads the level (checked first) into mods/maps/Community; Load new\n"
+                                     "maps now to play it in Free Play or online.");
+    ImGui::SameLine();
+    const bool liked = c.liked.count(r.id) != 0;
+    if (ImGui::Button(liked ? "Liked" : "Like")) {
+        const std::string body = std::string("{\"key\":\"") + lb_setting_player_key() + "\",\"id\":" +
+                                 std::to_string(r.id) + ",\"like\":" + (liked ? "false" : "true") + "}";
+        net_start(6, "POST", "/levels/like", body);
+    }
+    ImGui::SetItemTooltip(liked ? "You like this level. Press again to take the like back." : "One like per player.");
+    ImGui::SameLine();
+    if (ImGui::Button("Open in editor")) net_start(5, "GET", "/levels/get?id=" + std::to_string(r.id), "");
+    ImGui::SetItemTooltip("Loads it into the Level Editor page to look at or remix; saving makes your own copy.");
+    ImGui::EndDisabled();
     ImGui::EndChild();
 }
 
@@ -2444,6 +2996,22 @@ void lb_leveledit_draw(SDL_Renderer* ren) {
     if (!wa.ok) {
         ImGui::TextColored(ImVec4(1, 0.75f, 0.3f, 1), "The editor needs the cartridge: %s.", wa.why.c_str());
         return;
+    }
+    g_ren = ren;
+    // Level Palettes or a palette file changed: the tiles follow at once.
+    const unsigned pk = lb_palette_editor_key(g_doc.world);
+    if (pk != wa.pal_key) {
+        uint16_t cols[256];
+        if (lb_palette_for_editor(g_doc.world, cols))
+            for (int i = 0; i < 256; ++i) {
+                const uint16_t c = cols[i];
+                const uint32_t r = (c & 31) * 255 / 31, g = ((c >> 5) & 31) * 255 / 31, b = ((c >> 10) & 31) * 255 / 31;
+                wa.pal[i] = 0xFF000000u | (b << 16) | (g << 8) | r;
+            }
+        wa.pal_key = pk;
+        if (wa.atlas) SDL_DestroyTexture(wa.atlas);
+        wa.atlas = nullptr;
+        canvas_reset();
     }
     // Shortcuts, while the page has the keyboard.
     ImGuiIO& io = ImGui::GetIO();

@@ -6686,6 +6686,18 @@ int band_clamp_on() {
 //   span      how much surface there is beyond the guest's own extent
 //   before    how much map lies between the map's edge and the guest window
 //   after     how much lies beyond the far side of it
+// THE FIELD IS ON SHOW only while engine A is in a text-BG mode. The pause
+// menu puts it in BG mode 3 (DISPCNT 00010D0B against the battle's 00010F08,
+// docs/361) with the battle's view still alive underneath, so the camera and
+// map stay valid and the band kept its edge clamp. The composite draws a
+// mode-3 screen centred, but the menu's 3D bricks were placed by the clamped
+// band: with the surface as wide as the map they sat hundreds of pixels to
+// one side of their labels (docs/447). The mode, not the BG enables: those
+// toggle inside a battle (the note at the DISPCNT bail in lb_widemap_fill).
+bool field_display() {
+    return (nds_io_debug_read(9, 0x04000000u, 32) & 7u) == 0u;
+}
+
 int band_split(int span, int before, int after) {
     if (span <= 0) return 0;
     const int centred = span / 2;
@@ -6738,6 +6750,7 @@ int band_compute_at(int output_width, int camx) {
     // g_cam_px_valid, which lb_widemap_fill() clears on entry and sets only at
     // the very end. Naming the condition is what tells a menu (correct) from a
     // mid-battle bail (not).
+    if (!field_display()) return span / 2;   // docs/447: the pause menu
     if (!g_geom_valid || !g_cam_px_valid || g_map_w <= 0) {
         static int on = -1;
         if (on < 0) {
@@ -6826,7 +6839,7 @@ int band_compute_y_at(int output_height, int camy) {
     const int span = output_height - 192;
     if (span <= 0) return 0;
     if (!band_clamp_on()) return span / 2;
-    if (!g_geom_valid || !g_cam_px_valid || g_map_h <= 0) return span / 2;
+    if (!g_geom_valid || !g_cam_px_valid || g_map_h <= 0 || !field_display()) return span / 2;
     const int map_px = g_map_h * 16;
     // NO BIAS TERM HERE, deliberately. The horizontal one above is there
     // because a 4 px undrawn sliver was MEASURED at the west edge and traced to
