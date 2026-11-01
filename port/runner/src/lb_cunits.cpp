@@ -624,9 +624,32 @@ bool load_unit(const std::string& folder, const std::string& tag, const std::vec
             v = std::clamp(v, 0L, f.max);
             for (int i = 0; i < f.width; ++i) e->rec[(size_t)f.off + (size_t)i] = (uint8_t)((unsigned long)v >> (8 * i));
         }
-    const std::string tasset = pool_str(stock, get32(stock, r + 0x24));
+    std::string tasset = pool_str(stock, get32(stock, r + 0x24));
     const std::string tname = pool_str(stock, get32(stock, r + 0x00));
     e->name = "cu/" + tag;
+    // unit.json's "asset" picks another stock model or sprite set to start
+    // from (e.g. a transport on the Claw Tank's model): a model for a model
+    // template, or a sprite base whose sheets this category's layout finds.
+    // Anything else keeps the template's, and says so.
+    {
+        const std::string want = jstr(j, "asset");
+        if (!want.empty() && want != tasset) {
+            std::vector<uint8_t> probe;
+            bool ok = false;
+            if (tasset.compare(0, 7, "Models/") == 0 && want.compare(0, 7, "Models/") == 0 &&
+                want.find("/cu/") == std::string::npos)
+                ok = read(want + ".nsbmd", &probe);
+            else if (tasset.compare(0, 8, "Sprites/") == 0 && want.compare(0, 8, "Sprites/") == 0 &&
+                     want.find("/cu/") == std::string::npos) {
+                ok = true;
+                for (const std::string& ts : sheets_of(cat, want.substr(8)))
+                    ok = ok && read("Sprites/" + ts + ".NCBR", &probe);
+            }
+            if (ok) tasset = want;
+            std::fprintf(stderr, "[lb_cunits] %s: asset %s %s\n", folder.c_str(), want.c_str(),
+                         ok ? "used in place of the template's" : "is not a stock asset this template can use; the template's kept");
+        }
+    }
     // Sprites: each template sheet, overlaid with the folder's sheet, then its frames.
     if (tasset.compare(0, 8, "Sprites/") == 0) {
         const std::string tbase = tasset.substr(8);

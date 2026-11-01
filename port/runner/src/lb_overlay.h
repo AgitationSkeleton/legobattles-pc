@@ -417,6 +417,11 @@ void lb_patches_on_vblank(void);
 // owned by the bottom renderer rather than the existing one being reused.
 void lb_overlay_set_top_pixels(const void* pixels, int width, int height);
 
+// docs/454: the top screen's pixels with the selection panel's portraits in
+// their owners' team colours (a copy), or `pixels` itself when there is
+// nothing to repaint. lb_patches.cpp.
+const uint32_t* lb_top_postprocess(const uint32_t* pixels, int width);
+
 // The rect, IN WINDOW PIXELS, that the bottom screen was drawn into this frame,
 // and how many guest columns are inside it.
 //
@@ -799,6 +804,9 @@ int          lb_ai_cheats_live(void);      /* lb_patches: offline only */
 int          lb_setting_ai_hero_rebuild(void);
 int          lb_demo_play_ai_hero_rebuild(void);
 int          lb_ai_hero_rebuild_live(void);
+int          lb_setting_ai_more_mines(void);       /* SG-0032 */
+int          lb_demo_play_ai_more_mines(void);
+int          lb_ai_more_mines_live(void);
 // SG-0017: the AI casts single-target spells (Balance > Spells). Offline only.
 int          lb_setting_ai_tap_spells(void);
 int          lb_setting_ai_spectate(void);   /* SG-0002 */

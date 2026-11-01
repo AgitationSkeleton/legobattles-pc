@@ -6969,7 +6969,9 @@ def apply(runner_dir, imgui_dir):
     #     the bottom one. So the raw pixels are handed over and re-uploaded into
     #     a texture the overlay owns.
     edit(front, "    PresentationTicks ticks{};",
-         ["lb_overlay_set_top_pixels(top_pixels, top_width, kScreenHeight);"
+         ["top_pixels = lb_top_postprocess(top_pixels, top_width);"
+          "  /* legobattles-decomp: docs/454, the portraits' team colours */",
+          "lb_overlay_set_top_pixels(top_pixels, top_width, kScreenHeight);"
           "  /* legobattles-decomp */"])
     done.append("frontend.cpp: top-screen framebuffer feed")
 

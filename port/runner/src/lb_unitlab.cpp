@@ -602,6 +602,94 @@ std::string safe(const std::string& s) {
 
 const char* const kDirNames[5] = {"d0", "d1", "d2", "d3", "d4"};
 
+// ── The how-to guide ─────────────────────────────────────────────────────────
+// Written as HOW-TO.txt into mods/units and into every exported unit folder
+// (so a new unit's folder has it too), and shown step by step in the tab.
+struct HowStep { const char* title; const char* body; };
+const HowStep kHowTo[] = {
+    {"Pick a starting unit",
+     "In Balance > Custom units, choose a unit or building in the list at the top. Your\n"
+     "unit starts as a copy of it: its role (hero, builder, melee, ranged, mounted,\n"
+     "transport, siege or building), its stats, art, sounds, head and cards. Use\n"
+     "Action, Direction and Team to look at its animations."},
+    {"Make the custom unit",
+     "Type a name (1-24 letters, digits, spaces or _-'.!?) and press Make a custom\n"
+     "unit from this. The game writes the folder mods/units/<name> and ticks it in\n"
+     "My custom units. Press Open folder to see it. At most 9 custom units can be\n"
+     "loaded at once."},
+    {"Change its stats and name",
+     "Open unit.json in a text editor. \"name\" is what the game calls it. Under\n"
+     "\"fields\" change cost, build_time, health, speed, damage and the rest; values are\n"
+     "kept within what the game can store. \"index\" is the unit it was made from:\n"
+     "leave it. The other entries (sheets, animations, raw_record) are for reference\n"
+     "and are not read back."},
+    {"Pick another model or sprite set (optional)",
+     "\"asset\" names the art it starts from. A transport or siege unit uses a 3D\n"
+     "model: set it to another stock model, e.g. \"Models/E_Clawtank\", to start from\n"
+     "that one. A sprite unit can name another unit's sprite base of the same role,\n"
+     "e.g. \"Sprites/k_mel\". The game's log says whether it was used."},
+    {"Redraw the sprites",
+     "Edit the PNGs in frames/<action>/ (d0 facing away ... d4 facing the camera,\n"
+     "then the frame number), or whole sheets in sheets/. Keep each image's size.\n"
+     "The PNGs use the faction palette: index 0 is transparent and indexes 12-14\n"
+     "(shown red) become the owner's team colour in play. A full-colour PNG also\n"
+     "works; each pixel takes the nearest palette colour. A frame drawn in frames/\n"
+     "is laid over the sheet."},
+    {"Re-skin a model (transports and siege)",
+     "Edit model/texture.png and keep its size. The model's shape stays the stock\n"
+     "one."},
+    {"Portraits",
+     "portraits/head.png is the small round head on the army screen, the Team\n"
+     "Builder and the top screen (any size, fitted to 24x24). portraits/card.png and\n"
+     "card_top_screen.png are the big cards: keep their size, or they are ignored and\n"
+     "the starting unit's cards are used."},
+    {"Sounds",
+     "Put WAV files in sounds/ named for when they play: SELECT, DEATH, STRIKE,\n"
+     "HIT or SPECIAL (a name ending in one of these also counts, e.g.\n"
+     "MyUnit_OnDeath.wav). Any sample rate, mono or stereo, up to 6 seconds. Roles\n"
+     "with no WAV keep the starting unit's sounds."},
+    {"Load and test it",
+     "Back in the game press Load new units now (the game returns to the title\n"
+     "screen), or restart. Under My custom units, Preview shows your art; the line\n"
+     "after Last build says what was loaded or why not. Your unit then appears on\n"
+     "the army screen with the units of its role, and in the Team Builder."},
+    {"Share it (optional)",
+     "Type your name and press Share online. A moderator approves it before it\n"
+     "appears in Community units, where others can subscribe to it. In an online\n"
+     "lobby the host's custom units are sent to everyone who joins."},
+};
+
+std::string how_to_text() {
+    std::string t = "HOW TO MAKE A CUSTOM UNIT (LEGO Battles PC)\n"
+                    "===========================================\n\n"
+                    "This folder holds one unit's files. The game writes this guide; it is also\n"
+                    "in Balance > Custom units > How to make a custom unit.\n\n";
+    int n = 1;
+    for (const HowStep& s : kHowTo) {
+        t += std::to_string(n++) + ". " + s.title + "\n";
+        t += s.body;
+        t += "\n\n";
+    }
+    t += "Files in a unit folder\n"
+         "  unit.json                  name, stats, starting unit, asset\n"
+         "  sheets/                    whole sprite sheets (.png or .NCBR)\n"
+         "  frames/<action>/d<D>_<N>.png  single frames\n"
+         "  model/texture.png          a 3D unit's texture\n"
+         "  portraits/                 head.png, card.png, card_top_screen.png\n"
+         "  sounds/                    WAVs by role\n"
+         "Anything missing is taken from the starting unit.\n";
+#ifdef _WIN32
+    std::string crlf;
+    for (char c : t) {
+        if (c == '\n') crlf += '\r';
+        crlf += c;
+    }
+    return crlf;
+#else
+    return t;
+#endif
+}
+
 // Returns the number of files written, or -1.
 int export_one(const Rec& r, const fs::path& root) {
     std::error_code ec;
@@ -655,6 +743,10 @@ int export_one(const Rec& r, const fs::path& root) {
     j += "\"\n}\n";
     if (!write_file(dir / "unit.json", std::vector<uint8_t>(j.begin(), j.end()))) return -1;
     ++files;
+    {
+        const std::string h = how_to_text();
+        if (write_file(dir / "HOW-TO.txt", std::vector<uint8_t>(h.begin(), h.end()))) ++files;
+    }
     for (const std::string& sh : L.sheets) {
         const Sheet& s = sheet(sh);
         std::vector<uint8_t> png;
@@ -1007,6 +1099,39 @@ std::string safe_name(const std::string& s) {
 void start_share(const Mine& m, const std::vector<Rec>& rs);   // below
 bool share_busy();
 extern char g_author[25];
+
+// The guide in the tab: one step at a time, with the file beside it.
+void draw_how_to() {
+    if (!ImGui::CollapsingHeader("How to make a custom unit")) return;
+    static int step = 0;
+    const int n = (int)(sizeof kHowTo / sizeof kHowTo[0]);
+    step = std::clamp(step, 0, n - 1);
+    ImGui::Text("Step %d of %d: %s", step + 1, n, kHowTo[step].title);
+    ImGui::Indent();
+    ImGui::TextUnformatted(kHowTo[step].body);
+    ImGui::Unindent();
+    ImGui::BeginDisabled(step == 0);
+    if (ImGui::Button("< Back")) --step;
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::BeginDisabled(step == n - 1);
+    if (ImGui::Button("Next >")) ++step;
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Open HOW-TO.txt")) {
+        std::error_code ec;
+        fs::create_directories(units_root(), ec);
+        const fs::path p = units_root() / "HOW-TO.txt";
+        const std::string h = how_to_text();
+        write_file(p, std::vector<uint8_t>(h.begin(), h.end()));
+        std::string url = "file:///" + utf8(p);
+        for (char& c : url) if (c == '\\') c = '/';
+        SDL_OpenURL(url.c_str());
+    }
+    ImGui::SetItemTooltip("The same guide as a text file (mods/units/HOW-TO.txt). Every unit folder\n"
+                          "the game writes has a copy.");
+    ImGui::Spacing();
+}
 
 void draw_mine(const std::vector<Rec>& rs, const fs::path& export_root) {
     State& s = g_st;
@@ -1796,6 +1921,7 @@ void lb_unitlab_draw(SDL_Renderer* ren) {
         ImGui::TextDisabled("The cartridge's BP/Entities.ebp could not be read.");
         return;
     }
+    draw_how_to();
     pick_combo("##unit_a", s.a);
     ImGui::SameLine();
     ImGui::Checkbox("Compare with", &s.compare);

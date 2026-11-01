@@ -3223,7 +3223,56 @@ static int ai_census_every(void) {
     return every;
 }
 
+// SG-0032: with "The AI Builds More Mines And Bridges", a mine point that
+// already holds a mine (any owner's) scores 0x7FFF for the finder. The mine
+// planner calls the finder with threshold 10 and no fallback (r6 = 10, r7 =
+// -1, stacked arg 0), so a score above 10 skips the point and the nearest
+// FREE one is chosen; stock, the nearest point wins whether or not it is taken.
+// A mine's pixel position over 24 x 16 is its point (census: (1056,704) at
+// point (44,44)); the 2x2 footprint is allowed for.
+extern "C" int lb_ai_more_mines_live(void);
+bool mine_ram_ptr(uint32_t p) { return p >= 0x02000000u && p < 0x02400000u; }
+bool mine_point_taken(uint32_t x, uint32_t y) {
+    const uint32_t pool = bus_read_u32(kEntityPoolPtr);
+    if (!mine_ram_ptr(pool)) return false;
+    const uint32_t arr = bus_read_u32(pool + 8u);
+    const int32_t count = (int32_t)bus_read_u32(pool + 0xCu);
+    if (!mine_ram_ptr(arr) || count <= 0 || count > 4096) return false;
+    for (int32_t i = 0; i < count; ++i) {
+        const uint32_t e = bus_read_u32(arr + (uint32_t)i * 4u);
+        if (!mine_ram_ptr(e) || entity_category(e) != 9u) continue;
+        const int ex = (int)(((int32_t)bus_read_u32(e + 0xECu) >> 12) / 24);
+        const int ey = (int)(((int32_t)bus_read_u32(e + 0xF0u) >> 12) / 16);
+        if (std::abs(ex - (int)x) <= 1 && std::abs(ey - (int)y) <= 1) return true;
+    }
+    return false;
+}
 void ai_mine_score_observer(void) {
+    if (g_cpu.R[14] == kAiFinderLr && lb_ai_more_mines_live()) {
+        const uint32_t x = bus_read_u8(g_cpu.R[0] + 4u), y = bus_read_u8(g_cpu.R[0] + 5u);
+        // R2 is the finder's own stack slot: DTCM, not main RAM, so it is not
+        // range-checked (a main-RAM test refused every call).
+        const bool taken = g_cpu.R[2] != 0u && mine_point_taken(x, y);
+        if (ai_census_every() > 0) {   // each (cell, answer) once
+            static uint32_t said[16];
+            static unsigned ns = 0;
+            const uint32_t key = (x << 8) | y | (taken ? 0x10000u : 0u) | 0x80000000u;
+            bool known = false;
+            for (unsigned i = 0; i < ns && !known; ++i) known = said[i] == key;
+            if (!known && ns < 16u) {
+                said[ns++] = key;
+                std::fprintf(stderr, "[lb_aicensus] more mines: cell (%u,%u) %s\n",
+                             (unsigned)x, (unsigned)y, taken ? "taken, skipped" : "free");
+                std::fflush(stderr);
+            }
+        }
+        if (taken) {
+            bus_write_u32(g_cpu.R[2], 0x7FFFu);
+            g_cpu.R[0] = 0x7FFFu;
+            lb_override_return();
+            return;
+        }
+    }
     if (ai_census_every() > 0 && g_cpu.R[14] == kAiFinderLr) {
         // Each distinct (player, cell) once: the finder walks every point on
         // every planner pass, so a line per call would flood the log.
@@ -7443,6 +7492,178 @@ uint32_t sprite_palette_vram() {
     const uint32_t v = bus_read_u32(alloc + 8u);
     return v < 0x10000u - 0x200u ? v : 0;
 }
+// docs/454: THE TOP SCREEN'S UNIT PORTRAITS IN THEIR OWNER'S COLOUR (SG-0041).
+//
+// The selection panel's portraits (InfoTab buttons 713-721, a selected unit
+// each) are background tiles on the sub engine, drawn with
+// UI/WorldViewTop_Back.NCLR loaded into the sub-BG palette. Their team parts
+// use entries 12-14 of banks 2-4 (the Red shades 015F 005C 0015) or bank 5 (the
+// Blue 7228 6920 5880), whoever owns the unit. That palette's 16 banks are all
+// in use on that screen (6, 8 and 9 hold other art), so there is no room for
+// per-team copies there. The recolouring is done on the picture instead: once
+// a frame, each shown portrait's rectangle (the same one the Top Screen panel's
+// clicks use) and its unit's owner's shades -- entries 12-14 of that owner's
+// sprite bank, the unit sprites' own, so teal and its styles come for free --
+// are noted here; the frontend hands the top screen's pixels to
+// lb_top_postprocess, which repaints the head's team colours inside those
+// rectangles in a copy. Nothing in the game is written. LB_PORTRAIT_TINT=0
+// turns it off.
+//
+// WHICH COLOURS ARE TEAM is per head (docs/454): the parts the unit's SPRITE
+// draws with its team entries (12-14 of the faction palette), found by
+// comparing every headshot with its front-facing sprite. The stock Red and
+// Blue triples are team on every head; kHeadRules adds the colours a headshot
+// draws its team parts in otherwise (the aliens' green bodies, Gripley's dome,
+// Agent Chase's jumpsuit) and removes stock reds that are not team there
+// (lips, hair). A rule can be limited to a rectangle of the head or to a
+// pixel mask (the Ninja's cowl). Colours other than the six stock ones take the owner's
+// shades by brightness, against the stock Red ramp's (team_shade_rgb).
+struct PortraitTint { int n = 0; int r[9][4]; int bp[9]; uint16_t sh[9][3]; };
+std::mutex g_ptint_mu;
+PortraitTint g_ptint;
+
+// Head pixel masks for HeadRule region 2: 24 rows, bit x = column x.
+constexpr uint32_t kHeadMasks[1][24] = {
+    {0x000000u, 0x000000u, 0x00FC00u, 0x01FF00u, 0x03FFC0u, 0x03FFC0u, 0x07FFE0u, 0x07FFE0u, 0x07FFE0u, 0x07FFE0u, 0x07FFE0u, 0x040060u, 0x040060u, 0x040060u, 0x040060u, 0x07FFE0u, 0x07FBE0u, 0x0FFBF0u, 0x1FFBF8u, 0x0FF1F0u, 0x07E0C0u, 0x030000u, 0x008000u, 0x000000u},   // ninja_cowl
+};
+
+// {blueprint, kind (0 add, 1 exclude), region (0 all, 1 the rectangle
+// x0,y0..x1,y1 inclusive, 2 kHeadMasks[x0]), x0, y0, x1, y1, shade (0..2
+// that shade, 3 by brightness), colour}.
+struct HeadRule { uint8_t bp, kind, region, x0, y0, x1, y1, shade; uint16_t c; };
+constexpr HeadRule kHeadRules[] = {
+    {41, 1, 1, 0, 0, 23, 17, 3, 0x005Cu},   // Pirate captain (F): lips
+    {42, 0, 0, 0, 0, 0, 0, 3, 0x0209u},   // Pirate builder: bandana
+    {42, 0, 0, 0, 0, 0, 0, 3, 0x02CEu},
+    {42, 0, 0, 0, 0, 0, 0, 3, 0x03B9u},
+    {80, 0, 1, 0, 20, 23, 22, 3, 0x01BBu},   // Biff: torso
+    {80, 0, 1, 0, 20, 23, 22, 3, 0x02FFu},
+    {81, 0, 1, 0, 20, 23, 22, 3, 0x01BBu},   // Gemma: torso, not her hair or lips
+    {81, 0, 1, 0, 20, 23, 22, 3, 0x02FFu},
+    {81, 1, 1, 0, 0, 23, 16, 3, 0x0015u},
+    {81, 1, 1, 0, 0, 23, 16, 3, 0x005Cu},
+    {81, 1, 1, 0, 0, 23, 16, 3, 0x015Fu},
+    {82, 0, 0, 0, 0, 0, 0, 3, 0x01BBu},   // Earth builder robot: the eyes' glow
+    {82, 0, 0, 0, 0, 0, 0, 3, 0x02FFu},
+    {83, 0, 1, 0, 20, 23, 22, 3, 0x01BBu},   // Trooper: torso
+    {83, 0, 1, 0, 20, 23, 22, 3, 0x02FFu},
+    {84, 0, 1, 0, 20, 23, 22, 3, 0x01BBu},   // Commando: torso
+    {84, 0, 1, 0, 20, 23, 22, 3, 0x02FFu},
+    {85, 0, 0, 0, 0, 0, 0, 3, 0x01BBu},   // Gripley: the dome
+    {85, 0, 0, 0, 0, 0, 0, 3, 0x02FFu},
+    {85, 0, 0, 0, 0, 0, 0, 3, 0x03FFu},
+    {100, 0, 0, 0, 0, 0, 0, 3, 0x0209u},   // Alien commander: limbs
+    {100, 0, 0, 0, 0, 0, 0, 3, 0x02CEu},
+    {100, 0, 0, 0, 0, 0, 0, 3, 0x03B9u},
+    {101, 0, 0, 0, 0, 0, 0, 3, 0x0209u},   // Alien queen: limbs
+    {101, 0, 0, 0, 0, 0, 0, 3, 0x02CEu},
+    {101, 0, 0, 0, 0, 0, 0, 3, 0x03B9u},
+    {102, 0, 0, 0, 0, 0, 0, 3, 0x0209u},   // Alien drone: body
+    {102, 0, 0, 0, 0, 0, 0, 3, 0x02CEu},
+    {102, 0, 0, 0, 0, 0, 0, 3, 0x03B9u},
+    {103, 0, 0, 0, 0, 0, 0, 3, 0x0209u},   // Alien melee: body
+    {103, 0, 0, 0, 0, 0, 0, 3, 0x02CEu},
+    {103, 0, 0, 0, 0, 0, 0, 3, 0x03B9u},
+    {104, 0, 0, 0, 0, 0, 0, 3, 0x03B9u},   // Alien ranged: eye
+    {105, 0, 0, 0, 0, 0, 0, 3, 0x03B9u},   // Alien mounted: eyes
+    {129, 0, 1, 0, 17, 23, 23, 3, 0x4880u},   // Space police captain: collar
+    {130, 0, 1, 0, 17, 23, 23, 3, 0x4880u},   // Space police: collar
+    {133, 0, 0, 0, 0, 0, 0, 3, 0x02FFu},   // Space criminal leader: accents
+    {133, 0, 0, 0, 0, 0, 0, 3, 0x03FFu},
+    {145, 0, 0, 0, 0, 0, 0, 3, 0x006Au},   // Islander chief: mask edge
+    {150, 0, 2, 0, 0, 0, 0, 1, 0x0C63u},   // Ninja: the whole cowl (black mid, greys light)
+    {150, 0, 2, 0, 0, 0, 0, 0, 0x294Au},
+    {150, 0, 2, 0, 0, 0, 0, 0, 0x4A52u},
+    {150, 0, 2, 0, 0, 0, 0, 3, 0x5EF7u},
+    {165, 0, 1, 0, 17, 23, 23, 3, 0x01BBu},   // Troll king: tunic
+    {166, 0, 0, 0, 0, 0, 0, 3, 0x0209u},   // Troll: skin, tunic
+    {166, 0, 0, 0, 0, 0, 0, 3, 0x02CEu},
+    {166, 0, 0, 0, 0, 0, 0, 3, 0x03B9u},
+    {166, 0, 1, 0, 17, 23, 23, 3, 0x01BBu},
+    {178, 0, 1, 0, 17, 23, 23, 3, 0x0209u},   // Conquistador: collar
+    {178, 0, 1, 0, 17, 23, 23, 3, 0x02CEu},
+    {178, 0, 1, 0, 17, 23, 23, 3, 0x03B9u},
+    {179, 0, 1, 0, 17, 23, 23, 3, 0x4880u},   // Agent Chase: jumpsuit
+    {179, 0, 1, 0, 17, 23, 23, 3, 0x0209u},
+    {179, 0, 1, 0, 17, 23, 23, 3, 0x02CEu},
+    {179, 0, 1, 0, 17, 23, 23, 3, 0x03B9u},
+};
+
+bool head_rule_region(const HeadRule& r, int x, int y) {
+    if (r.region == 1) return x >= r.x0 && x <= r.x1 && y >= r.y0 && y <= r.y1;
+    if (r.region == 2) return ((kHeadMasks[r.x0][y] >> x) & 1u) != 0u;
+    return true;
+}
+
+// -1 not team; 0..2 that shade (a stock one's own, or a rule's); 3 by brightness.
+int head_team_kind(int bp, uint16_t c, int x, int y) {
+    for (const HeadRule& r : kHeadRules)
+        if (r.bp == bp && r.kind == 1 && r.c == c && head_rule_region(r, x, y)) return -1;
+    switch (c) {
+    case 0x015Fu: case 0x7228u: return 0;
+    case 0x005Cu: case 0x6920u: return 1;
+    case 0x0015u: case 0x5880u: return 2;
+    default: break;
+    }
+    for (const HeadRule& r : kHeadRules)
+        if (r.bp == bp && r.kind == 0 && r.c == c && head_rule_region(r, x, y)) return r.shade;
+    return -1;
+}
+
+// A DS colour as the 2D engine outputs it (gpu2d.cpp rgb6 then to_rgb32).
+uint32_t ds_host_rgb(uint16_t c) {
+    auto ch = [](uint32_t v5) { const uint32_t v6 = v5 << 1; return (v6 << 2) | (v6 >> 4); };
+    return 0xFF000000u | (ch(c & 31u) << 16) | (ch((c >> 5) & 31u) << 8) | ch((c >> 10) & 31u);
+}
+
+void portrait_tint_refresh() {
+    static int on = -1;
+    if (on < 0) {
+        const char* v = std::getenv("LB_PORTRAIT_TINT");
+        on = v ? (std::atoi(v) ? 1 : 0) : 1;
+    }
+    PortraitTint t;
+    const uint32_t view = bus_read_u32(kViewSlot);
+    const uint32_t tab = quick_infotab();
+    uint32_t size = 0;
+    uint8_t* e = texpal_flat(&size);
+    const uint32_t vpal = sprite_palette_vram();
+    if (on && guest_ptr(view) && bus_read_u32(view) == kViewVtable && tab && e && vpal &&
+        vpal + 0x200u <= size) {
+        const uint32_t handles = bus_read_u32(tab + 0x54u);
+        const uint32_t n = bus_read_u32(tab + 0x58u);
+        for (int id = 713; id <= 721 && t.n < 9; ++id) {
+            const uint32_t k = (uint32_t)(id - 713);
+            if (!guest_ptr(handles) || k >= n) break;
+            uint32_t w = 0, tt = 0;
+            int r[4] = {0, 0, 0, 0};
+            if (quick_info_gate(view, id, &w, &tt, r)) continue;   // not shown now
+            const uint32_t ent = unit_resolve(handles + 2u * k);
+            if (!ent) continue;
+            const unsigned o = bus_read_u8(ent + 0xE4u);
+            if (o == bus_read_u8(kNeutralOwnerByte) || o >= (unsigned)kTintPlayers) continue;
+            std::memcpy(t.sh[t.n], e + vpal + (uint32_t)(2u * o) * 0x20u + 12u * 2u, sizeof t.sh[0]);
+            for (int i = 0; i < 4; ++i) t.r[t.n][i] = r[i];
+            const uint32_t bpr = unit_blueprint(ent);
+            t.bp[t.n] = guest_ptr(bpr) ? (int)bus_read_u16(bpr + 4u) : -1;
+            static const bool log = std::getenv("LB_PTINT_LOG") != nullptr;
+            if (log) {
+                static int said[9][5];
+                const int cur[5] = {r[0], r[1], r[2], r[3], t.bp[t.n]};
+                if (std::memcmp(said[k], cur, sizeof cur)) {
+                    std::memcpy(said[k], cur, sizeof cur);
+                    std::fprintf(stderr, "[lb_ptint] slot %u bp %d rect (%d,%d)-(%d,%d) owner %u\n",
+                                 (unsigned)k, cur[4], r[0], r[1], r[2], r[3], o);
+                    std::fflush(stderr);
+                }
+            }
+            ++t.n;
+        }
+    }
+    std::lock_guard<std::mutex> lk(g_ptint_mu);
+    g_ptint = t;
+}
+
 int tint_kind(uint32_t bp) {
     const unsigned idx = bus_read_u16(bp + 4u);
     for (int k = 0; k < 3; ++k)
@@ -14541,6 +14762,38 @@ static void apply_ai_cheats(void) {
 struct HalfWordPatch { uint32_t addr; uint16_t stock, want; };
 constexpr HalfWordPatch kAiHeroRebuild = {0x0208A600u, 0xD125u, 0xD825u};
 
+// SG-0032 (docs/444): THE AI WANTS ONE MINE AND ONE OR TWO BRIDGES. The mine
+// planner (FUN_02094C38) builds a mine while its mine count is below the want
+// (planner +0x34), which starts at 1 and rises only on an incidental failure
+// branch; the bridge planner (FUN_02094524) compares the bridge count with the
+// cap +0x68, set once to 1 or 2. With the setting the mine test compares with
+// the map's mine-point count instead (r6 still holds it: `ldrb r1,[r1]` ->
+// `adds r1,r6,#0`), and the bridge cap reads as 3 (`movs r1,#3`); the want,
+// its clamp and every other gate are the cartridge's. Free Play only (an
+// online match has no AI).
+constexpr HalfWordPatch kAiMoreMines[2] = {{0x02094D2Au, 0x7809u, 0x1C31u},
+                                           {0x020945B8u, 0x7809u, 0x2103u}};
+extern "C" int lb_ai_more_mines_live(void) {
+    if (lb_net_guest_state() > 0) return 0;
+    return lb_setting_ai_more_mines();
+}
+static void apply_ai_more_mines(void) {
+    static int applied = 0;
+    static unsigned gen = 0;
+    if (gen != g_boot_gen) { gen = g_boot_gen; applied = 0; }
+    const int played = lb_demo_play_ai_more_mines();
+    const int want = played >= 0 ? played : lb_ai_more_mines_live();
+    if (want == applied) return;
+    for (const HalfWordPatch& p : kAiMoreMines) {   // both, or neither
+        const uint32_t got = bus_read_u16(p.addr);
+        if (got != p.stock && got != p.want) return;
+    }
+    for (const HalfWordPatch& p : kAiMoreMines) bus_write_u16(p.addr, want ? p.want : p.stock);
+    applied = want;
+    std::fprintf(stderr, "[lb_aimines] the AI builds more mines and bridges: %s\n", want ? "ON" : "off");
+    std::fflush(stderr);
+}
+
 extern "C" int lb_ai_hero_rebuild_live(void) {
     if (lb_net_guest_state() > 0) return 0;
     return lb_setting_ai_hero_rebuild();
@@ -17161,6 +17414,7 @@ extern "C" void lb_patches_on_vblank(void) {
     lb_ar_apply_frame();   // SG-0035: Action Replay codes (recordings do not carry them)
     apply_ai_cheats();
     apply_ai_hero_rebuild();
+    apply_ai_more_mines();            // SG-0032
     apply_ai_hero_multi();
     apply_ai_tap_spells();
     apply_two_player_maps();
@@ -17183,6 +17437,7 @@ extern "C" void lb_patches_on_vblank(void) {
     bp_census();                      // docs/410 test aid
     sprite_dump();                    // mount picture bug test aid
     creature_tint_prepare();          // docs/437
+    portrait_tint_refresh();          // docs/454
     apply_insn_hook_policy();
     // Fill the tilemap columns the guest leaves empty, so the widened field
     // shows terrain rather than black. Off unless LB_WIDEMAP is set.
@@ -17550,7 +17805,7 @@ extern "C" void lsw2_register_dispatch_overrides(const char* rom_sha1) {
                          a == kSplitArray || a == kListFind ||
                          a == kU16IsSet || a == kFAdd || a == kFMul ||
                          a == kFSub)) continue;
-        if ((a == kAiMineScore || a == kAiQueueBuild) && !std::getenv("LB_AI_CENSUS")) continue;
+        if (a == kAiQueueBuild && !std::getenv("LB_AI_CENSUS")) continue;   // kAiMineScore: SG-0032, always
         bool skipped = false;
         for (const char* p = skip; p && *p && !skipped;) {
             char* end = nullptr;
@@ -17578,3 +17833,63 @@ extern "C" void lsw2_register_dispatch_overrides(const char* rom_sha1) {
 
 // docs/423: lb_override_return, for lb_vwh.cpp.
 extern "C" bool lb_vwh_override_return(void) { return lb_override_return(); }
+
+// A team colour in the owner's shades: a stock one (kind 0..2) is that shade;
+// any other (kind 3) is placed by brightness against the stock Red ramp
+// (015F 005C 0015): between two of its shades it blends the owner's two,
+// brighter than the light one it goes toward white, darker than the dark one
+// toward black (at most 60%), so a green body keeps its own highlights.
+uint32_t team_shade_rgb(int kind, uint16_t c, const uint16_t sh[3]) {
+    if (kind >= 0 && kind <= 2) return ds_host_rgb(sh[kind]);
+    auto lum = [](uint32_t p) {
+        return 0.299f * ((p >> 16) & 255u) + 0.587f * ((p >> 8) & 255u) + 0.114f * (p & 255u);
+    };
+    auto mix = [](uint32_t a, uint32_t b, float t) {
+        uint32_t o = 0xFF000000u;
+        for (int s = 0; s < 24; s += 8) {
+            const float x = (float)((a >> s) & 255u), y = (float)((b >> s) & 255u);
+            o |= (uint32_t)(x + (y - x) * t + 0.5f) << s;
+        }
+        return o;
+    };
+    static const float ra[3] = {lum(ds_host_rgb(0x015Fu)), lum(ds_host_rgb(0x005Cu)),
+                                lum(ds_host_rgb(0x0015u))};
+    const uint32_t s0 = ds_host_rgb(sh[0]), s1 = ds_host_rgb(sh[1]), s2 = ds_host_rgb(sh[2]);
+    const float L = lum(ds_host_rgb(c));
+    if (L >= ra[0]) return mix(s0, 0xFFFFFFFFu, std::min(1.0f, (L - ra[0]) / (255.0f - ra[0])) * 0.6f);
+    if (L >= ra[1]) return mix(s0, s1, (ra[0] - L) / (ra[0] - ra[1]));
+    if (L >= ra[2]) return mix(s1, s2, (ra[1] - L) / (ra[1] - ra[2]));
+    return mix(s2, 0xFF000000u, std::min(1.0f, (ra[2] - L) / ra[2]) * 0.6f);
+}
+
+// docs/454: the top screen's pixels with the portraits' team shades repainted
+// (portrait_tint_refresh); the pixels themselves when there is nothing to do.
+extern "C" const uint32_t* lb_top_postprocess(const uint32_t* px, int width) {
+    static std::vector<uint32_t> out;
+    PortraitTint t;
+    {
+        std::lock_guard<std::mutex> lk(g_ptint_mu);
+        t = g_ptint;
+    }
+    if (!px || t.n == 0 || width < 256) return px;
+    const int ox = width > 256 ? (width - 256) / 2 : 0;   // a wider top screen keeps the DS one centred
+    out.assign(px, px + (size_t)width * 192u);
+    for (int k = 0; k < t.n; ++k) {
+        // The 24x24 head: centred across the button, at its top.
+        const int hx = t.r[k][0] + ((t.r[k][2] - t.r[k][0] + 1) - 24) / 2, hy = t.r[k][1];
+        for (int y = 0; y < 24; ++y)
+            for (int x = 0; x < 24; ++x) {
+                const int X = hx + x, Y = hy + y;
+                if (X < 0 || X > 255 || Y < 0 || Y > 191) continue;
+                uint32_t& c = out[(size_t)Y * width + (size_t)(X + ox)];
+                // Back to the DS colour, and only if the 2D engine would draw it
+                // exactly so (a fading screen does not match and is left alone).
+                const uint16_t d = (uint16_t)(((c >> 19) & 31u) | (((c >> 11) & 31u) << 5) |
+                                              (((c >> 3) & 31u) << 10));
+                if (ds_host_rgb(d) != c) continue;
+                const int kind = head_team_kind(t.bp[k], d, x, y);
+                if (kind >= 0) c = team_shade_rgb(kind, d, t.sh[k]);
+            }
+    }
+    return out.data();
+}

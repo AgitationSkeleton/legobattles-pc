@@ -300,6 +300,7 @@ struct Settings {
     // docs/406: the AI rebuilds its hero after every death, not once
     // (lb_patches.cpp, kAiHeroRebuild). Offline only.
     bool ai_hero_rebuild = false;
+    bool ai_more_mines = false;     // SG-0032 (docs/444): the AI builds more mines and bridges
     // docs/408: a hotwired transport stops taking its old owner's orders
     // (lb_patches.cpp, release_stolen_transport).
     bool transport_release = false;
@@ -723,6 +724,8 @@ extern "C" void lb_settings_save(void) {
                   g_set.stun_cast ? "true" : "false"); o += buf;   // docs/453
     std::snprintf(buf, sizeof buf, "  \"ai_hero_rebuild\": %s,\n",
                   g_set.ai_hero_rebuild ? "true" : "false"); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"ai_more_mines\": %s,\n",
+                  g_set.ai_more_mines ? "true" : "false"); o += buf;   // SG-0032
     std::snprintf(buf, sizeof buf, "  \"transport_release\": %s,\n",
                   g_set.transport_release ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"creatures\": %s,\n",
@@ -977,6 +980,7 @@ extern "C" void lb_settings_load(void) {
     json_get_bool(s, "emp_transports", &g_set.emp_transports);   // docs/406
     json_get_bool(s, "stun_cast", &g_set.stun_cast);             // docs/453
     json_get_bool(s, "ai_hero_rebuild", &g_set.ai_hero_rebuild);
+    json_get_bool(s, "ai_more_mines", &g_set.ai_more_mines);   // SG-0032
     json_get_bool(s, "transport_release", &g_set.transport_release);
     json_get_bool(s, "creatures", &g_set.creatures);   // docs/410
     json_get_bool(s, "creature_tint", &g_set.creature_tint);   // docs/437
@@ -1694,6 +1698,12 @@ void tab_enhancements() {
     ImGui::Checkbox("The AI Rebuilds Its Hero Every Time", &g_set.ai_hero_rebuild);
     help("Normally the computer rebuilds its hero only once. On, it\n"
          "rebuilds it after every death. Free Play only.");
+    badge(WIRED);
+    // SG-0032 (docs/444): the AI's mine want never passes 1 and its bridge cap is 1 or 2.
+    ImGui::Checkbox("The AI Builds More Mines And Bridges", &g_set.ai_more_mines);
+    help("Normally the computer builds one mine and one or two bridges.\n"
+         "On, it builds a mine at every free mine spot it can reach and up\n"
+         "to three bridges. Free Play only.");
     badge(WIRED);
     // SG-0002: AI vs AI.
     ImGui::Checkbox("AI Plays My Side (Spectate)", &g_set.ai_spectate);
@@ -9821,6 +9831,16 @@ extern "C" int lb_setting_transport_release(void) {
     return forced >= 0 ? forced : (g_set.transport_release ? 1 : 0);
 }
 
+// SG-0032: LB_AI_MORE_MINES=0|1 forces it.
+extern "C" int lb_setting_ai_more_mines(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_AI_MORE_MINES");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.ai_more_mines ? 1 : 0);
+}
+
 // docs/406: LB_AI_HERO_REBUILD=0|1 forces it.
 extern "C" int lb_setting_ai_hero_rebuild(void) {
     static int forced = -2;
@@ -10509,6 +10529,7 @@ extern "C" const char* lb_net_lobby_options_json(void) {
     kv.push_back({"EMP disables transports", g_set.emp_transports ? "On" : "Off"});
     kv.push_back({"Stunned heroes can cast", g_set.stun_cast ? "On" : "Off"});
     kv.push_back({"AI rebuilds its hero", g_set.ai_hero_rebuild ? "On" : "Off"});
+    kv.push_back({"AI builds more mines", g_set.ai_more_mines ? "On" : "Off"});
     kv.push_back({"Hotwired transports leave", g_set.transport_release ? "On" : "Off"});
     kv.push_back({"Attack boost reaches ranged",
                   g_set.attack_boost_ranged >= 2 ? "On, no blast"
