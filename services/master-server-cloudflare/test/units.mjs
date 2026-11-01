@@ -34,7 +34,7 @@ function files(dir) {
     for (const n of readdirSync(join(dir, 'sheets'))) if (/\.(png|NCBR)$/.test(n)) v.push('sheets/' + n);
   if (existsSync(join(dir, 'sounds')))
     for (const n of readdirSync(join(dir, 'sounds'))) if (n.endsWith('.wav')) v.push('sounds/' + n);
-  for (const f of ['portraits/card.png', 'portraits/card_top_screen.png', 'model/texture.png'])
+  for (const f of ['portraits/card.png', 'portraits/card_top_screen.png', 'portraits/head.png', 'model/texture.png'])
     if (existsSync(join(dir, f))) v.push(f);
   return v.sort();
 }

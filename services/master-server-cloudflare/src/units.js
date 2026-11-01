@@ -30,7 +30,7 @@ const MAX_SOUNDS = 8;
 export const MAX_UNIT_BODY = Math.ceil((MAX_BUNDLE + MAX_SHEET + MAX_THUMB + MAX_SOUNDS * MAX_WAV) * 4 / 3) + 16384;
 const NAME_OK = /^[\w \-'.!?]{1,24}$/u;
 const KEY_OK = /^[0-9a-fA-F]{32}$/;
-const PATH_OK = /^(unit\.json|sheets\/[A-Za-z0-9_-]{1,48}\.(png|NCBR)|frames\/[A-Za-z0-9_-]{1,24}\/[A-Za-z0-9_-]{1,32}\.png|portraits\/card\.png|portraits\/card_top_screen\.png|model\/texture\.png|sounds\/[A-Za-z0-9_-]{1,48}\.wav)$/;
+const PATH_OK = /^(unit\.json|sheets\/[A-Za-z0-9_-]{1,48}\.(png|NCBR)|frames\/[A-Za-z0-9_-]{1,24}\/[A-Za-z0-9_-]{1,32}\.png|portraits\/card\.png|portraits\/card_top_screen\.png|portraits\/head\.png|model\/texture\.png|sounds\/[A-Za-z0-9_-]{1,48}\.wav)$/;
 // The record's category byte (+0x5C), as the game's records use it.
 export const CATEGORY_NAMES = ['Hero', 'Builder', 'Melee', 'Ranged', 'Mounted', 'Transport', 'Special', 'Base',
   'Lumber mill', 'Mine', 'Farm', 'Barracks', 'Factory', 'Tower', 'Tower 2', 'Tower 3', 'Shipyard', 'Bridge',

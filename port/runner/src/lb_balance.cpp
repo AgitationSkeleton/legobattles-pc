@@ -23,6 +23,7 @@
 
 #include "lb_overlay.h"
 #include "lb_balance_data.h"
+#include "lb_levelmap.h"   // lvl::comp_wrap
 
 #include <algorithm>
 #include <cstddef>
@@ -701,6 +702,72 @@ extern "C" int lb_balance_import_file(const char* path, char* msg, int msg_cap) 
     return values;
 }
 
+// ── EXPORT AS Entities.ebp (the reverse of the import above) ───────────────
+//
+// The cartridge's own decompressed blueprint with the player's values written
+// in, in the file's layout. It is the same loop as lb_balance_custom_apply --
+// field_of() for the offset and width, f->mirror as the second copy, a
+// structure's 0xFFFFFFFF speed left alone -- only the target is a byte vector
+// where custom_apply has RAM. A pack's bytes are not in it (they are not the
+// player's values); only g_live is.
+extern "C" int lb_balance_export_ebp(const char* path, char* msg, int msg_cap) {
+    auto say = [&](const std::string& s) {
+        if (msg && msg_cap > 0) std::snprintf(msg, (size_t)msg_cap, "%s", s.c_str());
+    };
+    std::vector<uint8_t> bp;
+    if (!lb_mods_blueprint_own(&bp)) {
+        say("the game's own blueprint is not available yet (is a ROM loaded?)");
+        return -1;
+    }
+    const uint32_t records_end = kFirstRecord + (uint32_t)kUnitRecords * kUnitSize +
+                                 (uint32_t)kAttackRecords * kAttackSize;
+    if (bp.size() < records_end) {
+        say("the game's blueprint is not the size this expects");
+        return -1;
+    }
+    auto get = [&](uint32_t a, int w) {
+        uint32_t v = 0u;
+        for (int k = 0; k < w; ++k) v |= (uint32_t)bp[a + (uint32_t)k] << (8 * k);
+        return v;
+    };
+    auto set = [&](uint32_t a, int w, uint32_t v) {
+        for (int k = 0; k < w; ++k) bp[a + (uint32_t)k] = (uint8_t)(v >> (8 * k));
+    };
+    // docs/438: a spare projectile no unit fires starts as the Arrow in the
+    // game (custom_apply), so a spare the player edited starts as one here too.
+    for (const int rec : kSpareRecords) {
+        bool edited = false, fired = false;
+        for (const Edit& e : g_live) edited = edited || e.rec == rec;
+        for (int u = 0; u < kUnitRecords && !fired; ++u) {
+            const uint32_t ua = record_at(0u, u) + 0x66u;
+            fired = (uint32_t)(bp[ua] | (bp[ua + 1] << 8)) == (uint32_t)rec;
+        }
+        if (!edited || fired) continue;
+        const uint32_t r = record_at(0u, rec), m = record_at(0u, kSpareModel);
+        for (uint32_t o = 0u; o < kAttackSize; ++o)
+            if ((o >= 0x0Cu && o < 0x10u) || o >= 0x5Cu) bp[r + o] = bp[m + o];
+    }
+    int n = 0;
+    for (const Edit& e : g_live) {
+        if (kind_of(e.rec) == LB_BAL_GLOBALS) continue;   // docs/416: in the code, not the file
+        const BalField* f = field_of(e.rec, e.field);
+        if (!f) continue;
+        const uint32_t r = record_at(0u, e.rec);
+        if (f->width == 4 && get(r + f->off, 4) == 0xFFFFFFFFu) continue;   // applies()
+        const uint16_t offs[2] = {f->off, f->mirror};
+        for (const uint16_t off : offs)
+            if (off) set(r + off, f->width, (uint32_t)e.value);
+        ++n;
+    }
+    const std::vector<uint8_t> out = lvl::comp_wrap(bp);
+    FILE* f = path ? std::fopen(path, "wb") : nullptr;
+    const bool ok = f && std::fwrite(out.data(), 1, out.size(), f) == out.size();
+    if (f) std::fclose(f);
+    if (!ok) { say("Could not write that file."); return -1; }
+    say("Exported " + std::to_string(n) + " value(s) into an Entities.ebp.");
+    return n;
+}
+
 extern "C" int lb_balance_custom_dirty(void) { return g_gen != g_written_gen ? 1 : 0; }
 
 extern "C" void lb_balance_custom_revert(unsigned int base) {
@@ -779,6 +846,14 @@ extern "C" int lb_balance_custom_apply(unsigned int base) {
         if (const char* path = std::getenv("LB_BALANCE_IMPORT")) {
             char msg[256];
             lb_balance_import_file(path, msg, (int)sizeof msg);
+        }
+        // Its reverse: LB_BALANCE_EXPORT_EBP=<file> writes the values as an
+        // Entities.ebp once (a round trip: import, export, import the export).
+        if (const char* path = std::getenv("LB_BALANCE_EXPORT_EBP")) {
+            char msg[256];
+            lb_balance_export_ebp(path, msg, (int)sizeof msg);
+            std::fprintf(stderr, "[lb_balance] export: %s\n", msg);
+            std::fflush(stderr);
         }
     }
     int n = 0;

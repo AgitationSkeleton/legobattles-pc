@@ -290,6 +290,7 @@ int lb_setting_fix_hotwired_healing(void);
 int lb_setting_fix_monkey_cage(void);   // docs/385, cosmetic, default on
 int lb_cage_fix_live(void);             // docs/385: that, unless LB_CAGEFIX=0
 int lb_setting_own_hero_spells(void);   // docs/385, default on
+int lb_setting_tabs_stay_open(void);    // docs/451, presentation only, default on
 int lb_setting_patch_hotwire_glitch(void);
 
 // 0 vanilla, 1 destroy the occupants, 2 convert them to the new owner.
@@ -358,6 +359,9 @@ enum { LB_BAL_TRAIT_FIELD0 = 15, LB_BAL_TRAITS = 11, LB_BAL_SPEED_FIELD = 4 };
 // number of values set, or -1 on failure.
 int lb_balance_import_file(const char* path, char* msg, int msg_cap);
 int lb_pick_balance_rom_file(char* buf, int cap);
+// The reverse: the own blueprint with the player's values, as an Entities.ebp.
+int lb_balance_export_ebp(const char* path, char* msg, int msg_cap);
+int lb_pick_ebp_save_file(char* buf, int cap);
 int         lb_balance_field_count(int kind);
 const char* lb_balance_field_name(int kind, int field);
 int         lb_balance_field_max(int kind, int field);   // the field's range

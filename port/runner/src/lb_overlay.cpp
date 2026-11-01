@@ -59,8 +59,11 @@ uint16_t nds_gpu3d_output_height();
 extern "C" {
 int lb_band_left(int output_width);        /* src/lb_widemap.cpp */
 int lb_band_top(int output_height);        /* src/lb_widemap.cpp */
+int lb_teams_army_scroll_info(int* top, int* rows);   /* src/lb_teams.cpp, docs/450 */
+void lb_teams_army_scroll(int rows);
 int lb_widemap_cam_px(int* x, int* y);     /* src/lb_widemap.cpp */
 }
+namespace { void draw_army_scroll(); }   // docs/450, below
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -210,6 +213,10 @@ struct Settings {
     // docs/398: while the blue brick's list is the open one, 1-9 pick from it
     // instead of the second brick's list. On by default.
     bool quick_keys_blue = true;
+    // docs/451: a blue, red or yellow list stays open when a unit of the
+    // selection dies, while the rest of the selection still has items for it.
+    // Presentation only (the HUD's own state). On by default.
+    bool tabs_stay_open = true;
     // SG-0006: click a unit in a building's queue, on the Top Screen panel, to
     // cancel it. The game's own cancel command; safe online. On by default:
     // it only reaches a button the game already has.
@@ -658,6 +665,8 @@ extern "C" void lb_settings_save(void) {
                   g_set.tas_keys ? "true" : "false"); o += buf;   // SG-0027
     std::snprintf(buf, sizeof buf, "  \"quick_keys_blue\": %s,\n",
                   g_set.quick_keys_blue ? "true" : "false"); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"tabs_stay_open\": %s,\n",
+                  g_set.tabs_stay_open ? "true" : "false"); o += buf;   // docs/451
     std::snprintf(buf, sizeof buf, "  \"cancel_queue_click\": %s,\n",
                   g_set.cancel_queue_click ? "true" : "false"); o += buf;   // SG-0006
     // docs/384
@@ -908,6 +917,7 @@ extern "C" void lb_settings_load(void) {
     json_get_bool(s, "quick_keys", &g_set.quick_keys);   // docs/383, default on
     json_get_bool(s, "tas_keys", &g_set.tas_keys);       // SG-0027
     json_get_bool(s, "quick_keys_blue", &g_set.quick_keys_blue);   // docs/398
+    json_get_bool(s, "tabs_stay_open", &g_set.tabs_stay_open);   // docs/451
     json_get_bool(s, "cancel_queue_click", &g_set.cancel_queue_click);   // SG-0006
     // docs/384; a file without them keeps King's team and no presets or bans.
     json_get_ints(s, "team_working", g_set.team_working, LB_TEAM_SLOTS);
@@ -2869,6 +2879,11 @@ void tab_input() {
          "Tab still fast-forwards. Offline only.");
     ImGui::Checkbox("Number keys pick from the open blue menu", &g_set.quick_keys_blue);
     help("When the blue brick menu is open, 1-9 pick from it instead.");
+    ImGui::Checkbox("Keep brick menus open when a unit dies", &g_set.tabs_stay_open);
+    help("An open blue, red or yellow brick menu used to close whenever a\n"
+         "selected unit died. It now stays open while the units left in the\n"
+         "selection still have items in it, and closes if they have none.\n"
+         "Only changes your menu; nothing is sent to other players.");
     ImGui::Checkbox("Clickable top screen", &g_set.cancel_queue_click);
     help("Click the Top Screen panel like a touch screen: cancel a queued\n"
          "unit (bricks back), drop a unit from the selection, or move the\n"
@@ -3720,14 +3735,26 @@ void team_screen(LbTeam* team, int* slot, float s) {
                               lb_teams_unit_name(bp));
     }
     // The grid: the slot's candidates in the game's order, less the one in
-    // the slot, as FUN_020B96FC fills it. A pick swaps in.
+    // the slot, as FUN_020B96FC fills it. A pick swaps in. More than the 25
+    // cells (custom units, docs/450): the grid scrolls by rows.
     int g = 0;
     const int n = lb_teams_slot_count(*slot);
-    for (int k = 0; k < n && g < 25; ++k) {
+    int shown = 0;
+    for (int k = 0; k < n; ++k)
+        if (lb_teams_slot_unit(*slot, k) != team->pick[*slot]) ++shown;
+    const bool scroll = shown > 25;
+    ImVec2 gorigin = origin;
+    if (scroll) {
+        ImGui::SetCursorPos(ImVec2(origin.x + (112 - 20) * s, origin.y));
+        ImGui::BeginChild("##gridscroll", ImVec2(28.0f * 5 * s + ImGui::GetStyle().ScrollbarSize + 4.0f, 28.0f * 5 * s),
+                          ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
+        gorigin = ImVec2(-(112 - 20) * s, 0.0f);
+    }
+    for (int k = 0; k < n; ++k) {
         const int bp = lb_teams_slot_unit(*slot, k);
         if (bp == team->pick[*slot]) continue;
         const float x = (112 - 20 + 28 * (g % 5)) * s, y = (28 * (g / 5)) * s;
-        ImGui::SetCursorPos(ImVec2(origin.x + x, origin.y + y));
+        ImGui::SetCursorPos(ImVec2(gorigin.x + x, gorigin.y + y));
         char id[16];
         std::snprintf(id, sizeof id, "##grid%d", bp);
         const int st = lb_teams_unit_state(bp);
@@ -3739,6 +3766,7 @@ void team_screen(LbTeam* team, int* slot, float s) {
         unit_tooltip(bp, st);
         ++g;
     }
+    if (scroll) ImGui::EndChild();
     ImGui::SetCursorPos(ImVec2(origin.x, origin.y + 146.0f * s));
     ImGui::Dummy(ImVec2(236.0f * s, 1.0f));
 }
@@ -7311,6 +7339,18 @@ void tab_balance_presets() {
     }
     ImGui::SetItemTooltip("Saves the chosen preset and every value you changed.");
     ImGui::SameLine();
+    // The reverse of Import from ROM: this cartridge's own Entities.ebp with
+    // your values written in.
+    if (ImGui::Button("Export as Entities.ebp...")) {
+        if (lb_pick_ebp_save_file(g_bal_path, (int)sizeof g_bal_path)) {
+            char msg[320];
+            g_bal_msg_bad = lb_balance_export_ebp(g_bal_path, msg, (int)sizeof msg) < 0;
+            g_bal_msg = msg;
+        }
+    }
+    ImGui::SetItemTooltip("Saves this cartridge's own Entities.ebp with your values\n"
+                          "in it. Only what the Balance menus cover; presets are not.");
+    ImGui::SameLine();
     ImGui::BeginDisabled(lb_balance_custom_blocked() != nullptr);
     if (ImGui::Button("Import my balance (.json)...")) {
         if (lb_pick_json_file(g_bal_path, (int)sizeof g_bal_path, 0)) {
@@ -8643,6 +8683,7 @@ extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
     ImGui_ImplSDL2_NewFrame();
     ImGui::NewFrame();
     draw_wide_field(renderer);
+    draw_army_scroll();   // docs/450
     draw_top_screen(renderer);
     draw_battlefield(renderer);
     draw_notice();   // docs/413
@@ -9114,6 +9155,112 @@ extern "C" int lb_overlay_field_rect(int* x, int* y, int* w, int* h,
 
 namespace {
 int g_tr_x = 0, g_tr_y = 0, g_tr_w = 0, g_tr_h = 0;   // DS Vanilla's touch screen
+
+// docs/450: a point of the DS bottom screen (256x192, the cartridge's own
+// coordinates) in window pixels, and window pixels per DS pixel. Enhanced draws
+// the bottom screen in the field rect with the DS screen inside its bands;
+// Vanilla in the touch rect.
+bool native_to_window(float nx, float ny, float* wx, float* wy, float* scale) {
+    if (lb_setting_enhanced() && g_field_w > 0 && g_field_h > 0) {
+        const int gw = g_field_guest_w, gh = g_field_guest_h;
+        const float sx = (float)g_field_w / (float)gw, sy = (float)g_field_h / (float)gh;
+        *wx = (float)g_field_x + (nx + (float)lb_band_left(gw)) * sx;
+        *wy = (float)g_field_y + (ny + (float)lb_band_top(gh)) * sy;
+        *scale = sx;
+        return true;
+    }
+    if (g_tr_w > 0 && g_tr_h > 0) {
+        const float sx = (float)g_tr_w / 256.0f, sy = (float)g_tr_h / 192.0f;
+        *wx = (float)g_tr_x + nx * sx;
+        *wy = (float)g_tr_y + ny * sy;
+        *scale = sx;
+        return true;
+    }
+    return false;
+}
+
+// docs/450: the army screen's scroll bar, when a slot's list is longer than its
+// five rows. It sits in the screen's empty strip between the swap button and
+// the magnifier, beside the grid (CustomizeArmy.bin: the grid is x 112-252,
+// y 11-151; the strip x 86-110, y 36-159), in the screen's own blue. Its
+// arrows and the wheel move one row; the track pages; the thumb drags. The
+// cartridge redraws the list itself (lb_teams.cpp).
+void draw_army_scroll() {
+    int top = 0, rows = 0;
+    if (!lb_teams_army_scroll_info(&top, &rows) || rows <= 5) return;
+    float x0, y0, x1, y1, k;
+    if (!native_to_window(89.0f, 38.0f, &x0, &y0, &k) || !native_to_window(107.0f, 157.0f, &x1, &y1, &k)) return;
+    {
+        static int said = 0;
+        if (said < 1) {
+            ++said;
+            std::fprintf(stderr, "[lb_army] scroll bar at %.0f,%.0f-%.0f,%.0f (%.2f px a DS pixel, %s)\n", x0, y0, x1, y1,
+                         k, lb_setting_enhanced() ? "Enhanced" : "Vanilla");
+            std::fflush(stderr);
+        }
+    }
+    const int max_top = rows - 5;
+    ImGuiIO& io = ImGui::GetIO();
+    // The wheel over the grid.
+    float gx0, gy0, gx1, gy1;
+    if (native_to_window(112.0f, 11.0f, &gx0, &gy0, &k) && native_to_window(252.0f, 151.0f, &gx1, &gy1, &k) &&
+        io.MousePos.x >= gx0 && io.MousePos.x < gx1 && io.MousePos.y >= gy0 && io.MousePos.y < gy1 &&
+        io.MouseWheel != 0.0f && !io.WantCaptureMouse)
+        lb_teams_army_scroll(io.MouseWheel > 0.0f ? -1 : 1);
+
+    ImGui::SetNextWindowPos(ImVec2(x0, y0));
+    ImGui::SetNextWindowSize(ImVec2(x1 - x0, y1 - y0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    const ImGuiWindowFlags fl = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoBackground |
+                                ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                                ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
+    if (ImGui::Begin("##army_scroll", nullptr, fl)) {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const float w = x1 - x0, h = y1 - y0, btn = 16.0f * k, r = 3.0f * k;
+        const ImU32 kFill = IM_COL32(32, 72, 190, 255), kHot = IM_COL32(64, 112, 230, 255),
+                    kEdge = IM_COL32(150, 196, 255, 255), kTrack = IM_COL32(12, 28, 90, 220),
+                    kThumb = IM_COL32(96, 156, 255, 255), kGlyph = IM_COL32(255, 255, 255, 255);
+        auto arrow_button = [&](const char* id, float y, bool up) {
+            ImGui::SetCursorScreenPos(ImVec2(x0, y));
+            const bool hit = ImGui::InvisibleButton(id, ImVec2(w, btn));
+            const bool hot = ImGui::IsItemHovered();
+            const bool can = up ? top > 0 : top < max_top;
+            dl->AddRectFilled(ImVec2(x0, y), ImVec2(x0 + w, y + btn), can && hot ? kHot : kFill, r);
+            dl->AddRect(ImVec2(x0, y), ImVec2(x0 + w, y + btn), kEdge, r, 0, 1.0f * k);
+            const float cx = x0 + w * 0.5f, cy = y + btn * 0.5f, a = 4.5f * k;
+            const ImU32 g = can ? kGlyph : IM_COL32(150, 170, 220, 255);
+            if (up) dl->AddTriangleFilled(ImVec2(cx, cy - a * 0.7f), ImVec2(cx + a, cy + a * 0.6f), ImVec2(cx - a, cy + a * 0.6f), g);
+            else dl->AddTriangleFilled(ImVec2(cx - a, cy - a * 0.6f), ImVec2(cx + a, cy - a * 0.6f), ImVec2(cx, cy + a * 0.7f), g);
+            if (hit && can) lb_teams_army_scroll(up ? -1 : 1);
+        };
+        arrow_button("##up", y0, true);
+        arrow_button("##down", y1 - btn, false);
+        // The track and its thumb.
+        const float ty0 = y0 + btn + 2.0f * k, ty1 = y1 - btn - 2.0f * k, th = ty1 - ty0;
+        dl->AddRectFilled(ImVec2(x0 + 3.0f * k, ty0), ImVec2(x1 - 3.0f * k, ty1), kTrack, r);
+        const float hgt = std::max(8.0f * k, th * 5.0f / (float)rows);
+        const float pos = ty0 + (th - hgt) * (float)top / (float)max_top;
+        ImGui::SetCursorScreenPos(ImVec2(x0, ty0));
+        ImGui::InvisibleButton("##track", ImVec2(w, th));
+        static float grab = -1.0f;   // where in the thumb it was taken, or -1
+        if (ImGui::IsItemActivated()) {
+            const float my = io.MousePos.y;
+            if (my >= pos && my < pos + hgt) grab = my - pos;
+            else { grab = -1.0f; lb_teams_army_scroll(my < pos ? -4 : 4); }   // a page
+        }
+        if (ImGui::IsItemActive() && grab >= 0.0f && th > hgt) {
+            const float f = (io.MousePos.y - grab - ty0) / (th - hgt);
+            const int want = std::clamp((int)(f * (float)max_top + 0.5f), 0, max_top);
+            if (want != top) lb_teams_army_scroll(want - top);
+        }
+        if (!ImGui::IsItemActive()) grab = -1.0f;
+        dl->AddRectFilled(ImVec2(x0 + 3.0f * k, pos), ImVec2(x1 - 3.0f * k, pos + hgt), kThumb, r);
+        dl->AddRect(ImVec2(x0 + 3.0f * k, pos), ImVec2(x1 - 3.0f * k, pos + hgt), kEdge, r, 0, 1.0f * k);
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+}
 }  // namespace
 
 extern "C" void lb_overlay_vanilla_layout(int win_w, int win_h, int w0, int w1,
@@ -9324,6 +9471,11 @@ extern "C" int lb_setting_upnp(void) {
 // docs/398: number keys pick from the blue brick's list while it is open.
 extern "C" int lb_setting_quick_blue(void) {
     return g_set.quick_keys_blue ? 1 : 0;
+}
+
+// docs/451: HUD lists stay open when the selection shrinks.
+extern "C" int lb_setting_tabs_stay_open(void) {
+    return g_set.tabs_stay_open ? 1 : 0;
 }
 
 // docs/351: steady 30 Hz game pacing. Read every VBlank by apply_cadence

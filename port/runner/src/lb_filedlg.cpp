@@ -103,6 +103,14 @@ extern "C" int lb_pick_balance_rom_file(char* buf, int cap) {
     return pick_file(buf, cap, 0, kFilter, L"nds");
 }
 
+// A destination for the exported Entities.ebp.
+extern "C" int lb_pick_ebp_save_file(char* buf, int cap) {
+    static const wchar_t kFilter[] =
+        L"Entities.ebp (*.ebp)\0*.ebp\0"
+        L"All files (*.*)\0*.*\0";
+    return pick_file(buf, cap, 1, kFilter, L"ebp");
+}
+
 namespace {
 int pick_file(char* buf, int cap, int saving, const wchar_t* filter,
               const wchar_t* ext) {
@@ -244,6 +252,11 @@ extern "C" int lb_pick_json_file(char* buf, int cap, int saving) {
 }
 
 extern "C" int lb_pick_balance_rom_file(char* buf, int cap) {
+    (void)buf; (void)cap;
+    return 0;
+}
+
+extern "C" int lb_pick_ebp_save_file(char* buf, int cap) {
     (void)buf; (void)cap;
     return 0;
 }

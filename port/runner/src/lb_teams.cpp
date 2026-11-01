@@ -23,6 +23,8 @@
 #include "lb_overlay.h"
 
 #include <algorithm>   // docs/387: std::min in lb_rom_read
+#include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -244,6 +246,8 @@ extern "C" int lb_cunits_template(int k);
 extern "C" const char* lb_cunits_name(int k);
 extern "C" int lb_cunits_battle(int k);
 extern "C" int lb_cunits_of_battle(int bp);
+extern "C" int lb_cunits_of_any(int bp);
+extern "C" int lb_cunits_head(int k, unsigned int out[576]);
 // A custom unit (its battle blueprint, lb_cunits_battle) draws its template's head and HUD icon: those tables
 // are keyed by the stock index (docs/448).
 int art_bp(int bp) {
@@ -533,7 +537,12 @@ void names_refresh() {
 // (FUN_020E0784); its sub-palette is byte +0x0F of the first frame of
 // UI/FE/UIMgrData.bin record 0x252 + position (FUN_020E06FC).
 constexpr int kAtlasW = 384, kAtlasH = 240;
+// docs/450: the Team Builder's texture has one more row, the custom units'
+// own heads (custom unit k at column k).
+constexpr int kTexH = kAtlasH + 24;
 std::vector<uint32_t> g_rgba, g_grey;   // RGBA32, one row after another
+std::vector<uint32_t> g_pal;            // UI/WorldViewTop_Back.NCLR as RGBA32
+int g_sub[160];                         // head position -> its sub-palette, -1 none
 int g_pos[192];                         // blueprint -> head position, -1 none
 int g_atlas_state = 0;                  // 0 not yet, 1 built, -1 failed
 std::string g_atlas_msg = "Waiting for the ROM.";
@@ -596,6 +605,9 @@ bool build_atlas() {
     const unsigned pal_n = pdsz / 2u;
     const unsigned ui_n = rd16(ui.data());
 
+    g_pal.clear();
+    for (unsigned i = 0; i < pal_n; ++i) g_pal.push_back(rgb555_to_rgba(rd16(pal + 2u * i)));
+    for (int& v : g_sub) v = -1;
     for (int& p : g_pos) p = -1;
     for (uint32_t k = 0; k < count && k < 160u; ++k) {
         const uint32_t key = bus_read_u32(kHeadKeys + 4u * k);
@@ -611,6 +623,7 @@ bool build_atlas() {
         const uint32_t res = rd32(ui.data() + 8u + rec * 0x1Cu + 24u);
         if (frame == 0 || res != 0x2Cu || frame + 0x10u > ui.size()) continue;
         const unsigned sub = ui[frame + 0x0Fu];
+        g_sub[h] = (int)sub;
         const int x0 = (int)(h % 16u) * 24, y0 = (int)(h / 16u) * 24;
         for (int y = y0; y < y0 + 24; ++y)
             for (int x = x0; x < x0 + 24; ++x) {
@@ -904,7 +917,9 @@ void cards_sheet(uint32_t army) {
     }
 }
 
+extern "C" void lb_teams_donors_tick(void);   // docs/450, below
 void cards_tick() {
+    lb_teams_donors_tick();
     const uint32_t base = lb_patches_blueprint_base();
     if (base != g_cards_base) {   // a game reset reloaded the blueprints
         g_cards_base = base;
@@ -950,6 +965,64 @@ void cards_tick() {
         return;
     }
     if (const uint32_t army = army_screen()) cards_sheet(army);
+}
+
+
+// ---- docs/450: the army screen's lists scroll ---------------------------------
+//
+// FUN_020B96FC fills the list's 25 cells from every card whose unit passes
+// FUN_020EAC1C (slots 0-4) or matches FUN_020EB21C's tier (slots 5-8), and has
+// no bound: a 26th candidate would be written past the cell array. The two
+// filters' overrides (lb_patches.cpp) ask lb_teams_army_window() for each
+// candidate the cartridge would list, in its own order, and it answers no for
+// those outside a window of five rows. Scrolling moves the window and makes the
+// screen re-open the slot the cartridge's own way: the update's FUN_020B9974
+// re-runs FUN_020B935C(1) then (2) -- rebuild, VRAM upload -- whenever the
+// shown slot (+0x112) differs from the asked one (+0x110).
+//
+// The stock answers, from compiling the decompiled FUN_020EAC1C/FUN_020EAA84
+// and FUN_020EB21C (pure functions of the unit index): '1' listable; the
+// special tier 1-4.
+const char kStockListable[] =
+    "1111111111000000000011111111110000000000111111111100000000001111"
+    "1111110000000000111111111100000000001111111111000000000000000000"
+    "0111011100000000011101110000000001110111000000011111110000000000"
+    "0000000000000000000000000000000000000000000000000000000000000000";
+const char kStockTier[] =
+    "0000001234000000000000000012340000000000000000123400000000000000"
+    "0012340000000000000000123400000000000000001234000000000000000000"
+    "0002000200000000000200020000000000020002000000000000000000000000"
+    "0000000000000000000000000000000000000000000000000000000000000000";
+int stock_listable(int u) { return u >= 0 && u < 256 ? kStockListable[u] - '0' : 0; }
+int stock_tier(int u) { return u >= 0 && u < 256 ? kStockTier[u] - '0' : 0; }
+
+struct ArmyScroll {
+    int top = 0;          // first row shown
+    int rank = 0;         // candidates seen in this walk
+    int total = 0;        // the last walk's
+    bool walked = false;  // a walk ran since the last tick
+    int pick = -1;        // this walk's slot pick (the cartridge leaves it out)
+    int slot = -1;        // the slot the window is for
+    uint32_t screen = 0;
+};
+ArmyScroll g_as;
+std::atomic<int> g_as_req{0};           // rows asked for by the overlay
+std::atomic<int> g_as_info{0};
+int g_as_last_total = -1;          // (top << 16) | (rows << 8) | open, for the overlay
+
+// The unit a card wrapper's card names (+0x60: an index, or the unit
+// record's address), as the filters see it: the unit record's +4.
+int card_unit(uint32_t w) {
+    if (!guest_ptr(w)) return -1;
+    const uint32_t rec = bus_read_u32(w + 4u);
+    if (!guest_ptr(rec)) return -1;
+    const uint32_t u = bus_read_u32(rec + 0x60u);
+    if (guest_ptr(u)) return (int)bus_read_u16(u + 4u);
+    const uint32_t data = bus_read_u32(0x02150948u);   // the blueprint array's data
+    if (!guest_ptr(data) || u > 0x1000u) return -1;
+    const uint32_t uw = bus_read_u32(data + u * 4u);
+    const uint32_t ur = guest_ptr(uw) ? bus_read_u32(uw + 4u) : 0u;
+    return guest_ptr(ur) ? (int)bus_read_u16(ur + 4u) : -1;
 }
 
 // ---- the enemy -------------------------------------------------------------
@@ -1061,7 +1134,160 @@ extern "C" int lb_teams_hud_icon_rgba(int bp, unsigned int out[576]) {
 // docs/448: one blueprint's 24x24 army-screen head (UI/MiniHeads in its own
 // sub-palette) as RGBA32, for the custom-unit export. 0 when the atlas is not
 // built yet or the blueprint has no head.
+// The custom heads' signature, so the texture follows a rebuilt cartridge.
+uint64_t custom_heads_sig() {
+    uint64_t h = 1469598103934665603ull;
+    const int n = lb_cunits_count();
+    unsigned int px[576];
+    for (int k = 0; k < n; ++k) {
+        const int has = lb_cunits_head(k, px);
+        h = (h ^ (uint64_t)(has + 1)) * 1099511628211ull;
+        if (has)
+            for (unsigned int v : px) h = (h ^ v) * 1099511628211ull;
+    }
+    return h ^ (uint64_t)n;
+}
+uint64_t g_tex_sig = 0;
+
+// ---- docs/450: a custom unit's own head on the game's army screen ------------
+//
+// FUN_020E06FC copies a head from the screen's resident copy of UI/MiniHeads
+// (4bpp, tiled, 48 tiles a row) at the blueprint's key position, and copies
+// that position's sub-palette (UIMgrData record 0x252 + position, +0x0F). A
+// custom unit has no key, so it borrows a BUILDING's (the army lists never show
+// a building): its head is encoded in the sub-palette of the 16 that fits it
+// best and written over that building's cell of the resident copy just before
+// the copy, and that cell's record is given that sub-palette while the army
+// screen is up (put back when it closes). The resident copy is the screen's
+// own and is loaded again with the screen.
+struct Donor { int bp = -1; int pos = -1; int sub = -1; };
+std::vector<Donor> g_donor;          // per custom unit
+uint64_t g_donor_sig = 0;
+std::vector<std::array<uint8_t, 288>> g_donor_tiles;
+std::vector<std::pair<uint32_t, uint8_t>> g_sub_restore;   // donor frames' own sub-palettes
+
+// The army screen has closed: the donor cells' records get their own
+// sub-palettes back (a building's head elsewhere draws as the cartridge's).
+extern "C" void lb_teams_donors_tick(void) {
+    if (g_sub_restore.empty() || army_screen()) return;
+    for (const auto& r : g_sub_restore)
+        if (guest_ptr(r.first)) bus_write_u8(r.first + 0x0Fu, r.second);
+    g_sub_restore.clear();
+}
+
+// RGBA (0xAABBGGRR) to the nearest of sub-palette `sub`'s 15 colours; the
+// summed squared error, and the tiles in a head cell's 3x3 order.
+long encode_head(const unsigned int px[576], int sub, uint8_t out[288]) {
+    long err = 0;
+    std::memset(out, 0, 288);
+    for (int y = 0; y < 24; ++y)
+        for (int x = 0; x < 24; ++x) {
+            const uint32_t c = px[y * 24 + x];
+            unsigned v = 0;
+            if ((c >> 24) >= 128u) {
+                long best = -1;
+                for (unsigned i = 1; i < 16; ++i) {
+                    const size_t at = (size_t)sub * 16u + i;
+                    if (at >= g_pal.size()) break;
+                    const uint32_t q = g_pal[at];
+                    const long dr = (long)(c & 0xFF) - (long)(q & 0xFF);
+                    const long dg = (long)((c >> 8) & 0xFF) - (long)((q >> 8) & 0xFF);
+                    const long db = (long)((c >> 16) & 0xFF) - (long)((q >> 16) & 0xFF);
+                    const long d = dr * dr * 3 + dg * dg * 4 + db * db * 2;
+                    if (best < 0 || d < best) { best = d; v = i; }
+                }
+                err += best < 0 ? 1000000 : best;
+            }
+            uint8_t& o = out[((y >> 3) * 3 + (x >> 3)) * 32 + (y & 7) * 4 + ((x & 7) >> 1)];
+            o = (uint8_t)(o | ((x & 1) ? (v << 4) : v));
+        }
+    return err;
+}
+
+void assign_donors() {
+    const uint64_t sig = custom_heads_sig();
+    if (sig == g_donor_sig && !g_donor.empty()) return;
+    g_donor_sig = sig;
+    const int n = lb_cunits_count();
+    g_donor.assign((size_t)n, Donor());
+    g_donor_tiles.assign((size_t)n, {});
+    // The buildings with a head cell (category 7 and up), not the cells
+    // sheet_is_ours compares.
+    std::vector<Donor> pool;
+    for (int b = 0; b < 182; ++b) {
+        const uint32_t r = bp_addr(b);
+        if (!r || bus_read_u8(r + 0x5Cu) < 7u || g_pos[b] < 0 || g_pos[b] >= 160) continue;
+        const int pos = g_pos[b];
+        if (pos == 0 || pos == 40 || pos == 80 || g_sub[pos] < 0) continue;
+        bool dup = false;
+        for (const Donor& d : pool) dup = dup || d.pos == pos;
+        if (!dup) pool.push_back({b, pos, g_sub[pos]});
+    }
+    unsigned int px[576];
+    size_t next = 0;
+    for (int k = 0; k < n; ++k) {
+        if (!lb_cunits_head(k, px) || next >= pool.size()) continue;
+        long best = -1;
+        int sub = 0;
+        uint8_t t[288];
+        for (int sp = 0; sp < 16 && (size_t)(sp + 1) * 16u <= g_pal.size(); ++sp) {
+            const long e = encode_head(px, sp, t);
+            if (best < 0 || e < best) { best = e; sub = sp; }
+        }
+        const size_t pick = next++;
+        pool[pick].sub = sub;
+        g_donor[(size_t)k] = pool[pick];
+        encode_head(px, sub, g_donor_tiles[(size_t)k].data());
+        std::fprintf(stderr, "[lb_teams] custom unit %d's head borrows building %d's cell %d "
+                     "(sub-palette %d)\n", k, pool[(size_t)pick].bp, pool[(size_t)pick].pos,
+                     pool[(size_t)pick].sub);
+        std::fflush(stderr);
+    }
+}
+
+// FUN_020E06FC's override (lb_patches.cpp): r0 the icon set (its +0 the source
+// image, the resident UI/MiniHeads), r1 the blueprint. The blueprint whose key
+// the cartridge should look up instead, or -1 to leave r1 alone.
+extern "C" int lb_teams_army_head(int bp, unsigned int icons) {
+    const int k = lb_cunits_of_any(bp);
+    if (k < 0) return -1;
+    const int tmpl = lb_cunits_template(k);
+    unsigned int px[576];
+    if (!lb_cunits_head(k, px) || !build_atlas()) return tmpl;
+    assign_donors();
+    if (k >= (int)g_donor.size() || g_donor[(size_t)k].bp < 0) return tmpl;
+    const uint32_t o0 = bus_read_u32(icons);
+    if (!guest_ptr(o0)) return tmpl;
+    const uint32_t o1 = bus_read_u32(o0 + 0x38u);
+    const uint32_t o2 = guest_ptr(o1) ? bus_read_u32(o1 + 4u) : 0u;
+    const uint32_t sheet = guest_ptr(o2) ? bus_read_u32(o2 + 0x14u) : 0u;
+    if (!guest_ptr(sheet) || !guest_ptr(sheet + 46079u) || !sheet_is_ours(sheet)) return tmpl;
+    const Donor& d = g_donor[(size_t)k];
+    // The cell's record (FUN_020E3E08: [[0x020E3E28's word] + 0x1C] + id * 0x1C,
+    // frame 0 at +8), id = the icon set's +0x10 + the position; its +0x0F is
+    // the sub-palette the cartridge copies.
+    const uint32_t mgr = bus_read_u32(0x020E3E28u);
+    const uint32_t table = guest_ptr(mgr) ? bus_read_u32(mgr + 0x1Cu) : 0u;
+    const uint32_t id = bus_read_u32(icons + 0x10u) + (uint32_t)d.pos;
+    const uint32_t frame = guest_ptr(table) && id < 0x2000u ? bus_read_u32(table + id * 0x1Cu + 8u) : 0u;
+    if (!guest_ptr(frame)) return tmpl;
+    bool saved = false;
+    for (const auto& r : g_sub_restore) saved = saved || r.first == frame;
+    if (!saved) g_sub_restore.push_back({frame, (uint8_t)bus_read_u8(frame + 0x0Fu)});
+    bus_write_u8(frame + 0x0Fu, (uint8_t)d.sub);
+    const uint8_t* t = g_donor_tiles[(size_t)k].data();
+    for (int i = 0; i < 9; ++i) {
+        const uint32_t off = (uint32_t)(((d.pos / 16) * 3 + i / 3) * 48 + (d.pos % 16) * 3 + i % 3) * 32u;
+        for (uint32_t b = 0; b < 32u; b += 4) bus_write_u32(sheet + off + b, rd32(&t[i * 32 + b]));
+    }
+    return d.bp;
+}
+
 extern "C" int lb_teams_head_rgba(int bp, unsigned int out[576]) {
+    {   // docs/450: a custom unit's own head
+        const int k = lb_cunits_of_any(bp);
+        if (k >= 0 && lb_cunits_head(k, out)) return 1;
+    }
     bp = art_bp(bp);
     if (bp < 0 || bp >= 192 || !build_atlas() || g_pos[bp] < 0) return 0;
     const int p = g_pos[bp];
@@ -1230,8 +1456,15 @@ extern "C" int lb_teams_unit_state(int bp) {
     return bit_get(mgr + 0x34u, bit) ? 2 : 1;
 }
 
+
 extern "C" SDL_Texture* lb_teams_atlas(SDL_Renderer* r, int grey) {
     if (!r || !build_atlas()) return nullptr;
+    const uint64_t sig = custom_heads_sig();
+    if (sig != g_tex_sig) {
+        for (SDL_Texture*& t : g_tex)
+            if (t) { SDL_DestroyTexture(t); t = nullptr; }
+        g_tex_sig = sig;
+    }
     if (g_tex_owner != r) {
         for (SDL_Texture*& t : g_tex)
             if (t) { SDL_DestroyTexture(t); t = nullptr; }
@@ -1241,10 +1474,28 @@ extern "C" SDL_Texture* lb_teams_atlas(SDL_Renderer* r, int grey) {
     if (!g_tex[which]) {
         SDL_Texture* t = SDL_CreateTexture(r, SDL_PIXELFORMAT_RGBA32,
                                            SDL_TEXTUREACCESS_STATIC, kAtlasW,
-                                           kAtlasH);
+                                           kTexH);
         if (!t) return nullptr;
-        SDL_UpdateTexture(t, nullptr, (which ? g_grey : g_rgba).data(),
-                          kAtlasW * 4);
+        std::vector<uint32_t> img(which ? g_grey : g_rgba);
+        img.resize((size_t)kAtlasW * kTexH, 0u);
+        unsigned int px[576];
+        for (int k = 0; k < lb_cunits_count() && k < 16; ++k) {
+            if (!lb_cunits_head(k, px)) continue;
+            for (int y = 0; y < 24; ++y)
+                for (int x = 0; x < 24; ++x) {
+                    uint32_t c = px[y * 24 + x];
+                    if ((c >> 24) < 128u) c = 0u;
+                    else if (which) {
+                        const uint32_t yv = (77u * (c & 0xFFu) + 150u * ((c >> 8) & 0xFFu) +
+                                             29u * ((c >> 16) & 0xFFu)) >> 8;
+                        c = 0xFF000000u | (yv << 16) | (yv << 8) | yv;
+                    } else {
+                        c |= 0xFF000000u;
+                    }
+                    img[(size_t)(kAtlasH + y) * kAtlasW + (size_t)(k * 24 + x)] = c;
+                }
+        }
+        SDL_UpdateTexture(t, nullptr, img.data(), kAtlasW * 4);
         SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
         SDL_SetTextureScaleMode(t, SDL_ScaleModeNearest);
         g_tex[which] = t;
@@ -1254,15 +1505,25 @@ extern "C" SDL_Texture* lb_teams_atlas(SDL_Renderer* r, int grey) {
 
 extern "C" int lb_teams_icon_uv(int bp, float* u0, float* v0, float* u1,
                                 float* v1) {
+    const int k = lb_cunits_of_any(bp);
+    unsigned int px[576];
+    if (g_atlas_state > 0 && k >= 0 && k < 16 && lb_cunits_head(k, px)) {   // docs/450
+        *u0 = (float)(k * 24) / kAtlasW;
+        *v0 = (float)kAtlasH / kTexH;
+        *u1 = *u0 + 24.0f / kAtlasW;
+        *v1 = *v0 + 24.0f / kTexH;
+        return 1;
+    }
     bp = art_bp(bp);
     if (g_atlas_state <= 0 || bp < 0 || bp >= 192 || g_pos[bp] < 0) return 0;
     const int p = g_pos[bp];
     *u0 = (float)((p % 16) * 24) / kAtlasW;
-    *v0 = (float)((p / 16) * 24) / kAtlasH;
+    *v0 = (float)((p / 16) * 24) / kTexH;
     *u1 = *u0 + 24.0f / kAtlasW;
-    *v1 = *v0 + 24.0f / kAtlasH;
+    *v1 = *v0 + 24.0f / kTexH;
     return 1;
 }
+
 
 // docs/408: the battle HUD's icon for a blueprint (build_hud_atlas), as the
 // Balance menu shows them.
@@ -1286,6 +1547,11 @@ extern "C" SDL_Texture* lb_teams_hud_atlas(SDL_Renderer* r) {
 
 extern "C" int lb_teams_hud_icon_uv(int bp, float* u0, float* v0, float* u1,
                                     float* v1) {
+    {   // docs/450: a custom unit with its own head draws that (lb_teams_icon_uv)
+        const int k = lb_cunits_of_any(bp);
+        unsigned int px[576];
+        if (k >= 0 && lb_cunits_head(k, px)) return 0;
+    }
     bp = art_bp(bp);
     if (g_hud_state <= 0 || bp < 0 || bp >= 182 || !g_hud_has[bp]) return 0;
     *u0 = (float)((bp % 16) * 24) / kHudW;
@@ -1614,12 +1880,90 @@ int custom_slot(int unit) {
             if (c.unit == unit) return s;
     return -1;
 }
+// docs/450: a candidate FUN_020B96FC is about to list (it passed the filter):
+// 1 to list it, 0 when it is outside the window. The slot's pick does not
+// count (the cartridge leaves it out after the filter).
+// FUN_020B96FC's entry (lb_patches.cpp): a walk begins. It can run across a
+// VBlank, so the count is reset here, not once a frame.
+extern "C" void lb_teams_army_walk_begin(void) {
+    const uint32_t army = army_screen();
+    g_as.walked = true;
+    g_as.rank = 0;
+    if (army) {
+        const int slot = (int)(int8_t)bus_read_u8(army + 0x110u);
+        const uint32_t a = bus_read_u32(army + 0x9Cu);
+        const uint32_t b = guest_ptr(a) && slot >= 0 && slot < 9 ? bus_read_u32(a + (uint32_t)slot * 4u) : 0u;
+        g_as.pick = guest_ptr(b) ? card_unit(bus_read_u32(b + 4u)) : -1;
+        if (slot != g_as.slot || army != g_as.screen) {   // a new slot or screen: from the top
+            g_as.slot = slot;
+            g_as.screen = army;
+            g_as.top = 0;
+        }
+    }
+}
+extern "C" int lb_teams_army_window(int unit) {
+    if (!army_screen() || !g_as.walked) return 1;
+    if (unit == g_as.pick) return 1;
+    const int r = g_as.rank++;
+    return r >= g_as.top * 5 && r < g_as.top * 5 + 25 ? 1 : 0;
+}
+extern "C" int lb_teams_army_stock(int unit, int tier) {
+    return tier ? stock_tier(unit) : stock_listable(unit);
+}
+// The army screen's slot (+0x110), for the tier filter's window.
+extern "C" int lb_teams_army_slot(void) {
+    const uint32_t army = army_screen();
+    return army ? (int)(int8_t)bus_read_u8(army + 0x110u) : -1;
+}
+
+// Once a frame (lb_teams_portrait_tick): the last walk's count, the overlay's
+// requests, and the re-open that applies them.
+void army_scroll_tick() {
+    const uint32_t army = army_screen();
+    if (!army) {
+        g_as = ArmyScroll();
+        g_as_info.store(0);
+        g_as_req.store(0);
+        return;
+    }
+    if (g_as.walked) g_as.total = g_as.rank;   // the running count (final once the walk ends)
+    const int rows = (g_as.total + 4) / 5;
+    const int max_top = rows > 5 ? rows - 5 : 0;
+    const int state = (int)bus_read_u32(army + 0x40u);
+    const int shown = (int)(int8_t)bus_read_u8(army + 0x112u);
+    const bool open = state == 3 && shown >= 0 && shown == g_as.slot;
+    int want = g_as.top;
+    const int req = g_as_req.exchange(0);
+    if (open && req) want += req;
+    if (want > max_top) want = max_top;
+    if (want < 0) want = 0;
+    if (open && want != g_as.top) {
+        g_as.top = want;
+        bus_write_u8(army + 0x112u, 0xFEu);   // re-open this slot (FUN_020B9974)
+    }
+    const int info = open && rows > 5 ? ((g_as.top << 16) | (rows << 8) | 1) : 0;
+    if (info != g_as_info.load() || (open && g_as.total != g_as_last_total)) {
+        g_as_last_total = g_as.total;
+        std::fprintf(stderr, "[lb_army] slot %d: %d listed, %d rows, top row %d%s\n", g_as.slot,
+                     g_as.total, rows, g_as.top, open ? "" : " (closed)");
+        std::fflush(stderr);
+    }
+    g_as_info.store(info);
+}
+extern "C" int lb_teams_army_scroll_info(int* top, int* rows) {
+    const int v = g_as_info.load();
+    if (!(v & 1)) return 0;
+    if (top) *top = v >> 16;
+    if (rows) *rows = (v >> 8) & 0xFF;
+    return 1;
+}
+extern "C" void lb_teams_army_scroll(int rows) { g_as_req.fetch_add(rows); }
+
 extern "C" int lb_teams_card_listable(int unit) {
     if (unit >= 551) {
         const int s = custom_slot(unit);
         if (s < 0 || s > 4) return -1;
-        if (s == 0 && !g_custom[0].empty() && g_custom[0][0].unit != unit) return 0;
-        return 1;
+        return 1;   // the window (lb_teams_army_window) keeps a list to 25
     }
     if (!g_cards_applied) return -1;
     // docs/436: any creature; the screen has already matched the slot to the
@@ -1637,6 +1981,7 @@ extern "C" int lb_teams_card_tier(int unit) {
 }
 
 extern "C" void lb_teams_portrait_tick(void) {
+    army_scroll_tick();   // docs/450
     cards_tick();   // docs/430: every frame; it does nothing while the option is off
     static int tick = 0;
     if (++tick < 15) return;

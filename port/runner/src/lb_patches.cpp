@@ -46,6 +46,7 @@ extern "C" {
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <mutex>        // docs/394: the map name is read off the emulation thread
 #include <string>       // docs/385: std::to_string
 #include <vector>
 
@@ -3971,6 +3972,134 @@ bool quick_item_step(uint32_t screen) {
 }
 }  // namespace
 
+// ---- docs/451: A HUD LIST STAYS OPEN WHEN THE SELECTION SHRINKS -------------
+//
+// WHAT CLOSES IT. Every change to the selection that goes through FUN_020E3078
+// (the HUD refresh: a unit that dies is taken out of the selection by
+// FUN_020E2AFC / FUN_020E318C, which then call it with 0) calls FUN_020DA890
+// (Thumb; r0 = the battle view) at 020E3084. That function rebuilds the lists
+// for the new selection (FUN_020DE000, FUN_020DD414, FUN_020DE688 -- the last
+// one hides a brick whose list has no item) and ends by hiding the open list
+// (FUN_020DF894 when view+0x26C is 1..3) and storing 5 -- none -- there. With
+// no selection left it closes through FUN_020DA6BC(view, 5) instead.
+// The BL at 020E3084 is a split Thumb BL that the lift dispatches
+// (runtime_dispatch of _blt_020E3086), and nothing else calls 020DA890.
+//
+// WHAT THIS DOES. In front of FUN_020DA890, with a list open (view+0x26C
+// below 5) and a selection that is a strict subset of the one the last view
+// update saw, the open list's number is noted. The view update that follows
+// -- after the refresh has rebuilt the lists and hidden the bricks that no
+// longer apply -- opens that list again with the game's own FUN_020DA6BC, as
+// a tail call returning into the update, if the selection is not empty and
+// the list's brick is shown and enabled (quick_widget_ok: what the player
+// could click). A brick the refresh hid is a list with nothing for the
+// remaining units, and stays closed. FUN_020DA6BC's open path first calls
+// FUN_020A875C (the gesture recogniser's reset and FUN_020A8A24(0), the
+// command mode), so a reopen also cancels an armed command (an attack-move
+// cursor). Declining that call was tried and REMOVED: an override registered
+// on 020A875C, even as a pure tail call, crashed a Free Play battle (replay
+// of lb-session-1793542310: dispatch-miss pc=E3A0C300, lr=02089F8C; clean
+// with that one entry skipped), so it is not a function entry to override. The selection itself, the commands and the simulation are
+// not touched: it is the HUD's own state.
+constexpr uint32_t kSelRefresh = 0x020DA890u;     // thumb
+constexpr uint32_t kTabToggle = 0x020DA6BCu;      // thumb
+constexpr uint32_t kTabSelection = 0x02158024u;   // +4 handles (2 bytes), +8 count
+extern "C" int lb_setting_tabs_stay_open(void);   /* lb_overlay.cpp */
+extern "C" int lb_demo_play_tabs(void);           /* lb_demo.cpp */
+
+namespace {
+struct TabsKeep {
+    bool pending = false;     // a list was open when the selection shrank
+    int group = -1;           // which (view+0x26C)
+    uint32_t screen = 0;
+    int prev_n = -1;          // the selection the last view update saw
+    uint16_t prev[256];
+};
+TabsKeep g_tabs;
+
+bool tabs_keep_wanted() {
+    const int played = lb_demo_play_tabs();   // a replay takes the recorder's
+    return played >= 0 ? played == 1 : lb_setting_tabs_stay_open() != 0;
+}
+
+// The selection's handles; the count, or -1 if it cannot be read.
+int tabs_sel_read(uint16_t* out) {
+    const uint32_t h = bus_read_u32(kTabSelection + 4u);
+    const uint32_t n = bus_read_u32(kTabSelection + 8u);
+    if (n > 256u || (n && !guest_ptr(h))) return -1;
+    for (uint32_t i = 0; i < n; ++i)
+        out[i] = (uint16_t)(bus_read_u8(h + 2u * i) |
+                            (bus_read_u8(h + 2u * i + 1u) << 8));
+    return (int)n;
+}
+
+// Is the selection now a strict, non-empty subset of the last one seen?
+bool tabs_sel_shrank() {
+    uint16_t now[256];
+    const int n = tabs_sel_read(now);
+    if (n <= 0 || g_tabs.prev_n < 0 || n >= g_tabs.prev_n) return false;
+    for (int i = 0; i < n; ++i) {
+        bool found = false;
+        for (int j = 0; j < g_tabs.prev_n && !found; ++j)
+            found = g_tabs.prev[j] == now[i];
+        if (!found) return false;
+    }
+    return true;
+}
+
+// The brick (widget id) that opens list g: 605 blue, 607 upgrades, 608 hero
+// spells, 606 red (lists 3 and 4).
+int tabs_brick_id(int g) {
+    return g == 0 ? 605 : g == 1 ? 607 : g == 2 ? 608 : 606;
+}
+
+// Once per view update (the idle path): the list to open again, or -1; and
+// the selection this update sees, for the next refresh to compare with.
+int tabs_keep_take(uint32_t vs) {
+    int g = -1;
+    if (g_tabs.pending) {
+        g_tabs.pending = false;
+        if (tabs_keep_wanted() && g_tabs.screen == vs &&
+            vs == bus_read_u32(kViewSlot) &&
+            bus_read_u32(vs) == kViewVtable &&
+            bus_read_u32(0x0214BBA8u) == 5u &&
+            bus_read_u32(vs + 0x26Cu) == 5u) {
+            uint16_t now[256];
+            const uint32_t layout = bus_read_u32(vs + 0x1Cu);
+            if (tabs_sel_read(now) > 0 && guest_ptr(layout)) {
+                const uint32_t w = quick_find_widget(layout, tabs_brick_id(g_tabs.group));
+                if (w && !quick_widget_ok(w)) g = g_tabs.group > 3 ? 3 : g_tabs.group;
+            }
+        }
+        if (quick_log())
+            std::fprintf(stderr, "[lb_tabs] list %d after the selection shrank: %s\n",
+                         g_tabs.group, g >= 0 ? "opened again" : "stays closed");
+    }
+    g_tabs.prev_n = tabs_sel_read(g_tabs.prev);
+    return g;
+}
+
+// FUN_020DA6BC(view, group), entered as a tail call that returns into the
+// view update, as quick_enter does for a brick's callback.
+void tabs_keep_enter(uint32_t screen, int group) {
+    quick_save();
+    const uint32_t ev = (g_qc.sp - 0x40u) & ~7u;
+    g_qc.sp_call = ev - 8u;
+    g_qc.screen = screen;
+    g_qc.action = -1;
+    g_qc.id = -1;
+    g_qc.active = true;
+    g_cpu.R[0] = screen;
+    g_cpu.R[1] = (uint32_t)group;
+    g_cpu.R[2] = 0u;
+    g_cpu.R[3] = 0u;
+    g_cpu.R[13] = g_qc.sp_call;
+    g_cpu.R[14] = kViewUpdate | 1u;   // back here, in Thumb
+    g_cpu.R[15] = kTabToggle;
+    runtime_dispatch_with_exchange(kTabToggle | 1u);
+}
+}  // namespace
+
 static int g_mm_log = 0;   // updates until the minimap tap's result is logged
 
 extern "C" int ai_opp_kill_step(void (*original)(void));   // docs/414 test aid
@@ -4023,6 +4152,9 @@ void view_update_override(void) {
     } else {
         int want = g_quick_req.exchange(-1);
         const uint32_t vs = g_cpu.R[0];
+        // docs/451: a list the refresh closed, to open again (or -1), and the
+        // selection this update sees.
+        const int keep_g = tabs_keep_take(vs);
         // docs/398: a live number key with the blue list open picks from it.
         if (want > kQuickItem && want <= kQuickItem + 9 && !lb_demo_playing() &&
             lb_setting_quick_blue() && !quick_screen_gate(vs) &&
@@ -4148,6 +4280,11 @@ void view_update_override(void) {
                 quick_enter(w, id, screen, want);
                 return;
             }
+        } else if (keep_g >= 0) {
+            // docs/451: the selection shrank and the list still has an item
+            // for what is left: the game's own toggle opens it again.
+            tabs_keep_enter(vs, keep_g);
+            return;
         } else if (g_qitem.n) {
             // docs/385: still waiting for the item's list to show it.
             if (g_qitem.settle > 0) {
@@ -4176,6 +4313,23 @@ void view_update_override(void) {
                 runtime_dispatch_with_exchange(kSetOwnerFn);
                 return;
             }
+        }
+    }
+    if (original) original();
+}
+
+// docs/451: FUN_020DA890, the HUD's selection refresh (Thumb, r0 the battle
+// view). Notes the open list when the selection has just shrunk; the game's own
+// function runs unchanged as the tail call.
+void sel_refresh_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kSelRefresh);
+    const uint32_t view = g_cpu.R[0];
+    if (!g_tabs.pending && tabs_keep_wanted() && view == bus_read_u32(kViewSlot)) {
+        const uint32_t open = bus_read_u32(view + 0x26Cu);
+        if (open < 5u && tabs_sel_shrank()) {
+            g_tabs.pending = true;
+            g_tabs.group = (int)open;
+            g_tabs.screen = view;
         }
     }
     if (original) original();
@@ -6758,10 +6912,32 @@ constexpr uint32_t kArmyListableRet = 0x020B9786u;   // FUN_020B96FC's calls
 constexpr uint32_t kArmyTierRet = 0x020B97ACu;
 extern "C" int lb_teams_card_listable(int unit);   /* lb_teams.cpp */
 extern "C" int lb_teams_card_tier(int unit);
+// docs/450: a list longer than its 25 cells scrolls. Each candidate the
+// cartridge would list is ranked; outside the five rows shown it answers no.
+// A list that fits is exactly the cartridge's (a pure tail call).
+extern "C" int lb_teams_army_window(int unit);
+extern "C" void lb_teams_army_walk_begin(void);
+// FUN_020B96FC (Thumb), the list fill: an observer, so the window counts from
+// this walk's first candidate. Its one caller (FUN_020B935C) is dispatched.
+constexpr uint32_t kArmyListFill = 0x020B96FCu;
+void army_list_fill_observer(void) {
+    void (*original)(void) = lb_dispatch_original(0, kArmyListFill);
+    lb_teams_army_walk_begin();
+    if (original) original();
+}
+extern "C" int lb_teams_army_stock(int unit, int tier);
+extern "C" int lb_teams_army_slot(void);
 void army_listable_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kArmyListable);
     if ((g_cpu.R[14] & ~1u) == kArmyListableRet) {
-        const int v = lb_teams_card_listable((int)(g_cpu.R[0] & 0xFFFFu));
+        const int unit = (int)(g_cpu.R[0] & 0xFFFFu);
+        const int v = lb_teams_card_listable(unit);
+        const int ans = v >= 0 ? v : lb_teams_army_stock(unit, 0);
+        if (ans && !lb_teams_army_window(unit)) {
+            g_cpu.R[0] = 0u;
+            lb_override_return();
+            return;
+        }
         if (v >= 0) {
             g_cpu.R[0] = (uint32_t)v;
             lb_override_return();
@@ -6773,7 +6949,15 @@ void army_listable_override(void) {
 void army_tier_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kArmyTier);
     if ((g_cpu.R[14] & ~1u) == kArmyTierRet) {
-        const int v = lb_teams_card_tier((int)(g_cpu.R[0] & 0xFFFFu));
+        const int unit = (int)(g_cpu.R[0] & 0xFFFFu);
+        const int v = lb_teams_card_tier(unit);
+        const int tier = v >= 0 ? v : lb_teams_army_stock(unit, 1);
+        const int slot = lb_teams_army_slot();
+        if (slot > 4 && tier == slot - 4 && !lb_teams_army_window(unit)) {
+            g_cpu.R[0] = 0u;   // no slot's tier is 0
+            lb_override_return();
+            return;
+        }
         if (v >= 0) {
             g_cpu.R[0] = (uint32_t)v;
             lb_override_return();
@@ -6795,19 +6979,15 @@ void army_tier_override(void) {
 // blueprint's position in the head key table (FUN_020E0784, 166 keys) and
 // draws nothing for a blueprint with no key, which every custom one is
 // (551.. its battle record, identity and card). All of its callers are split
-// Thumb BLs, which the lift dispatches, so this is reached. A custom unit is
-// given its template's head, as the Team Builder shows it.
+// Thumb BLs, which the lift dispatches, so this is reached. A custom unit with
+// its own head borrows a building's cell, its head written there first
+// (lb_teams_army_head, docs/450); one without draws its template's.
 constexpr uint32_t kArmyHead = 0x020E06FCu;   // thumb
-extern "C" int lb_cunits_count(void);          // lb_cunits.cpp
-extern "C" int lb_cunits_template(int k);
+extern "C" int lb_teams_army_head(int bp, unsigned int icons);   // lb_teams.cpp
 void army_head_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kArmyHead);
-    const int n = lb_cunits_count();
-    const int bp = (int)g_cpu.R[1];
-    if (n > 0 && bp >= 551 && bp < 551 + 3 * n) {
-        const int t = lb_cunits_template((bp - 551) % n);
-        if (t >= 0) g_cpu.R[1] = (uint32_t)t;
-    }
+    const int use = lb_teams_army_head((int)(g_cpu.R[1] & 0xFFFFu), g_cpu.R[0]);
+    if (use >= 0) g_cpu.R[1] = (uint32_t)use;
     if (original) original();
 }
 constexpr uint32_t kFeCard = 0x02030A70u;   // ARM
@@ -7620,6 +7800,9 @@ const NdsDispatchEntry kOverrideTable[] = {
     /* Thumb. ClientLobby's ready toggle: refused while this joiner lacks
        the host's mod map. docs/413. */
     {kReadyToggle, 1u, ready_toggle_override, nullptr},    /* 0x020B6074 */
+    /* Thumb. The army screen's list fill: an observer that starts the scroll
+       window's count (docs/450); then a pure tail call. */
+    {kArmyListFill, 1u, army_list_fill_observer, nullptr}, /* 0x020B96FC */
     /* Thumb. User::MainMenu::virtual_09: a requested rename is saved by the
        game's own save in front of it; otherwise a pure tail call. docs/397. */
     {kMainMenuUpdate, 1u, main_menu_update_override, nullptr}, /* 0x020BF230 */
@@ -7633,6 +7816,9 @@ const NdsDispatchEntry kOverrideTable[] = {
     {kMapListFill, 1u, map_list_fill_override, nullptr},   /* 0x020C48B0 */
     {kMapConfirm, 1u, map_confirm_override, nullptr},      /* 0x020C53E4 */
     {kMapPreview, 1u, map_preview_override, nullptr},      /* 0x020C5444 */
+    /* Thumb. The HUD's selection refresh: notes an open list when the
+       selection has shrunk (docs/451); a pure tail call. */
+    {kSelRefresh, 1u, sel_refresh_override, nullptr},      /* 0x020DA890 */
     /* Thumb. The map list's fill: a multiplayer list does not offer the mod
        maps (docs/391). */
     {kMarkerPlace, 1u, marker_place_observer, nullptr},    /* 0x020DAAE4 */
@@ -11440,6 +11626,11 @@ char g_map_name[64] = "";
 char g_map_stem[32] = "";   // docs/428: the loader's stem, for the minimap files
 unsigned g_map_gen = 0;
 bool g_map_is_mod = false;   // docs/410: the level is a mods-folder map ("z/NN")
+bool g_map_pending = false;  // the name is still the stem; apply_map_name retries
+std::mutex g_map_mutex;      // guards g_map_name (written here, read off-thread)
+}  // namespace
+static void apply_map_name(bool late);
+namespace {
 
 // (in the unnamed namespace, where the override table's declaration is)
 void map_load_observer(void) {
@@ -11455,32 +11646,14 @@ void map_load_observer(void) {
             }
     }
     if (stem[0]) {
-        std::snprintf(g_map_name, sizeof g_map_name, "%s", stem);
-        std::snprintf(g_map_stem, sizeof g_map_stem, "%s", stem);
-        const int k = lb_mods_stem_index(stem);   // docs/439: "z/NN", "y/NN"
-        g_map_is_mod = k >= 0;   // docs/410
-        if (k >= 0) {
-            if (k < lb_mods_count() && lb_mods_name(k))
-                std::snprintf(g_map_name, sizeof g_map_name, "%s", lb_mods_name(k));
-        } else if (const uint32_t file = leader_table()) {
-            for (uint32_t e = 0; e < 30u; ++e) {
-                const uint32_t ent = kMissionTable + 28u * e;
-                const uint32_t s = bus_read_u32(ent);
-                if (!guest_ptr(s)) continue;
-                bool same = true;
-                for (uint32_t i = 0; i < sizeof stem; ++i) {
-                    const char c = (char)bus_read_u8(s + i);
-                    if (c != stem[i]) { same = false; break; }
-                    if (!c) break;
-                }
-                if (!same) continue;
-                char name[kLeaderMaxText + 1];
-                if (const uint32_t a = leader_string(file, bus_read_u32(ent + 8u)))
-                    if (leader_read(a, name) && name[0])
-                        std::snprintf(g_map_name, sizeof g_map_name, "%s", name);
-                break;
-            }
+        {
+            std::lock_guard<std::mutex> lock(g_map_mutex);
+            std::snprintf(g_map_name, sizeof g_map_name, "%s", stem);
         }
+        std::snprintf(g_map_stem, sizeof g_map_stem, "%s", stem);
+        g_map_is_mod = lb_mods_stem_index(stem) >= 0;   // docs/410, docs/439: "z/NN", "y/NN"
+        g_map_pending = true;
+        apply_map_name(false);   // usually resolves now; else per frame
         ++g_map_gen;
         std::fprintf(stderr, "[lb_net] map loading: %s (\"%s\")\n", stem,
                      g_map_name);
@@ -11490,7 +11663,65 @@ void map_load_observer(void) {
 }
 }  // namespace
 
-extern "C" const char* lb_level_map_name(void) { return g_map_name; }
+// The lookup above, retried. The observer runs when the loader is handed the
+// stem, and the LOC table (leader_table) or the mod list may not be settled
+// then; the name stayed the raw stem ("mp07", "z/NN") for the whole match.
+// Called every frame from the emulation thread (the only one that reads guest
+// RAM here) until it resolves; costs two compares once it has.
+static void apply_map_name(bool late) {
+    if (!g_map_pending) return;
+    char name[kLeaderMaxText + 1] = "";
+    bool done = false;
+    const int k = lb_mods_stem_index(g_map_stem);
+    if (k >= 0) {
+        if (k < lb_mods_count() && lb_mods_name(k)) {
+            std::snprintf(name, sizeof name, "%s", lb_mods_name(k));
+            done = true;
+        }
+    } else if (const uint32_t file = leader_table()) {
+        done = true;   // table settled: a stem not in it (campaign) stays the stem
+        for (uint32_t e = 0; e < 30u; ++e) {
+            const uint32_t ent = kMissionTable + 28u * e;
+            const uint32_t s = bus_read_u32(ent);
+            if (!guest_ptr(s)) continue;
+            bool same = true;
+            for (uint32_t i = 0; i < sizeof g_map_stem; ++i) {
+                const char c = (char)bus_read_u8(s + i);
+                if (c != g_map_stem[i]) { same = false; break; }
+                if (!c) break;
+            }
+            if (!same) continue;
+            const uint32_t a = leader_string(file, bus_read_u32(ent + 8u));
+            if (!a || !leader_read(a, name) || !name[0]) {
+                name[0] = '\0';
+                done = false;   // entry still being fixed up: try again
+            }
+            break;
+        }
+    }
+    if (!done) return;
+    g_map_pending = false;
+    if (!name[0]) return;
+    {
+        std::lock_guard<std::mutex> lock(g_map_mutex);
+        std::snprintf(g_map_name, sizeof g_map_name, "%s", name);
+    }
+    if (late) {
+        std::fprintf(stderr, "[lb_net] map name resolved late: %s (\"%s\")\n",
+                     g_map_stem, name);
+        std::fflush(stderr);
+    }
+}
+
+// Copied out under the lock into a per-thread buffer: the name is rewritten by
+// the emulation thread while the net, Discord and picture threads read it. The
+// pointer is good until the same thread calls again.
+extern "C" const char* lb_level_map_name(void) {
+    static thread_local char copy[sizeof g_map_name];
+    std::lock_guard<std::mutex> lock(g_map_mutex);
+    std::memcpy(copy, g_map_name, sizeof copy);
+    return copy;
+}
 extern "C" const char* lb_level_map_stem(void) { return g_map_stem; }   // docs/428
 extern "C" unsigned lb_level_map_gen(void) { return g_map_gen; }
 extern "C" int lb_level_is_mod(void) { return g_map_is_mod ? 1 : 0; }   // docs/410
@@ -16593,6 +16824,7 @@ extern "C" void lb_patches_on_vblank(void) {
     // docs/356: cosmetic and this machine's only. Reads nothing while off.
     apply_leader_name();
     apply_plantation_name();   // docs/392
+    apply_map_name(true);      // docs/394: re-resolve a name still left as its stem
     // TEST AID: LB_TEST_STOCK_NAME=1 logs, once the renames have landed, what
     // the screens and what Rich Presence / the servers call the two units.
     {
@@ -16893,12 +17125,28 @@ extern "C" void lsw2_register_dispatch_overrides(const char* rom_sha1) {
     static NdsDispatchEntry filtered[kOverrideCount];
     unsigned n = 0u;
     const bool grading = lb_shadow_mode() != kLbShadowGuest;
+    // DIAGNOSTIC: LB_SKIP_OVERRIDES=<hex addr>[,<hex addr>...] leaves those
+    // entries unregistered, so a crash can be bisected by override on one
+    // recording without a rebuild per suspect.
+    const char* skip = std::getenv("LB_SKIP_OVERRIDES");
     for (unsigned i = 0; i < kOverrideCount; ++i) {
         const uint32_t a = kOverrideTable[i].addr;
         if (!grading && (a == kRegistryFind || a == kDivMod ||
                          a == kSplitArray || a == kListFind ||
                          a == kU16IsSet || a == kFAdd || a == kFMul ||
                          a == kFSub)) continue;
+        bool skipped = false;
+        for (const char* p = skip; p && *p && !skipped;) {
+            char* end = nullptr;
+            const unsigned long v = std::strtoul(p, &end, 16);
+            if (end == p) break;
+            skipped = (uint32_t)v == a;
+            p = *end == ',' ? end + 1 : end;
+        }
+        if (skipped) {
+            std::fprintf(stderr, "[lb_patch] override %08X skipped (LB_SKIP_OVERRIDES)\n", (unsigned)a);
+            continue;
+        }
         filtered[n++] = kOverrideTable[i];
     }
     if (grading)

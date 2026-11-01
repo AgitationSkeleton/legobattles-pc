@@ -92,6 +92,7 @@ struct Entity {
     size_t rec_off = 0, wrap_off = 0, name_off = 0, asset_off = 0;   // in the file
     size_t id_off = 0, id_wrap_off = 0, card_off = 0, card_wrap_off = 0;
     std::array<std::shared_ptr<const std::vector<int16_t>>, 5> snd;   // its own sounds, by index
+    std::vector<uint32_t> head;  // portraits/head.png, 24x24 RGBA (0xAABBGGRR), or empty
 };
 size_t g_array_off = 0;    // the larger blueprint array, in the file
 constexpr size_t kColBase = 4 + 182 * 0x7C + 27 * 0x74;   // collectable 209 (docs/11)
@@ -664,6 +665,19 @@ bool load_unit(const std::string& folder, const std::string& tag, const std::vec
         *why = "the template's asset is neither a sprite nor a model";
         return false;
     }
+    // Its head (the army screen's and the Team Builder's): portraits/head.png,
+    // fitted to 24x24 by nearest pixel.
+    {
+        std::vector<uint8_t> hb;
+        Img hi;
+        if (slurp(dir / "portraits" / "head.png", &hb, 1u << 20) && read_png(hb, &hi) && hi.w > 0 && hi.h > 0 &&
+            hi.w <= 512 && hi.h <= 512) {
+            e->head.assign(576, 0u);
+            for (int y = 0; y < 24; ++y)
+                for (int x = 0; x < 24; ++x)
+                    e->head[(size_t)(y * 24 + x)] = hi.rgba[(size_t)(y * hi.h / 24) * (size_t)hi.w + (size_t)(x * hi.w / 24)];
+        }
+    }
     // Cards, found by the internal name. A missing army-screen card hangs the
     // game (docs/436), so the template's is always copied.
     const struct { const char* parent; const char* pic; } kCards[2] = {
@@ -859,6 +873,17 @@ extern "C" int lb_cunits_battle(int k) {
 extern "C" int lb_cunits_of_battle(int bp) {
     const int n = g_built ? (int)g_ents.size() : 0;
     return bp >= kStock + n && bp < kStock + 2 * n ? bp - kStock - n : -1;
+}
+// Custom unit k of any of its three blueprints (identity, battle, card), or -1.
+extern "C" int lb_cunits_of_any(int bp) {
+    const int n = g_built ? (int)g_ents.size() : 0;
+    return n > 0 && bp >= kStock && bp < kStock + 3 * n ? (bp - kStock) % n : -1;
+}
+// Custom unit k's own head (portraits/head.png) as 24x24 RGBA; 0 when it has none.
+extern "C" int lb_cunits_head(int k, unsigned int out[576]) {
+    if (!g_built || k < 0 || k >= (int)g_ents.size() || g_ents[(size_t)k].head.size() != 576u) return 0;
+    for (int i = 0; i < 576; ++i) out[i] = g_ents[(size_t)k].head[(size_t)i];
+    return 1;
 }
 extern "C" int lb_cunits_template(int k) { return g_built && k >= 0 && k < (int)g_ents.size() ? g_ents[(size_t)k].tmpl : -1; }
 extern "C" int lb_cunits_category(int k) {
@@ -1286,7 +1311,7 @@ std::vector<std::string> bundle_files(const fs::path& dir) {
         const std::string n = utf8(e.path().filename());
         if (e.is_regular_file(ec) && n.size() > 4 && n.substr(n.size() - 4) == ".wav") v.push_back("sounds/" + n);
     }
-    for (const char* f : {"portraits/card.png", "portraits/card_top_screen.png", "model/texture.png"})
+    for (const char* f : {"portraits/card.png", "portraits/card_top_screen.png", "portraits/head.png", "model/texture.png"})
         if (fs::exists(dir / f, ec)) v.push_back(f);
     std::sort(v.begin(), v.end());
     return v;
@@ -1320,7 +1345,8 @@ bool bundle_path_ok(const std::string& p) {
     return p == "unit.json" || p.compare(0, 7, "sheets/") == 0 || p.compare(0, 7, "frames/") == 0 ||
            (p.compare(0, 7, "sounds/") == 0 && p.size() > 11 && p.compare(p.size() - 4, 4, ".wav") == 0 &&
             p.find('/', 7) == std::string::npos) ||
-           p == "portraits/card.png" || p == "portraits/card_top_screen.png" || p == "model/texture.png";
+           p == "portraits/card.png" || p == "portraits/card_top_screen.png" || p == "portraits/head.png" ||
+           p == "model/texture.png";
 }
 
 std::string hex16(uint64_t h) {
