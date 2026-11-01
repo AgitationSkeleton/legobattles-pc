@@ -202,6 +202,11 @@ struct Settings {
     bool swear_filter = true;
     int chat_key = SDL_SCANCODE_T;
     int swap_key = 0;             // SG-0012: swap the two screens; 0 = unbound
+    // SG-0049: the battle shortcuts' keys (scancodes; 0 = unbound): items 1-9,
+    // Deselect, the blue menu, the second (red/yellow/white) menu.
+    int quick_bind[12] = {SDL_SCANCODE_1, SDL_SCANCODE_2, SDL_SCANCODE_3, SDL_SCANCODE_4,
+                          SDL_SCANCODE_5, SDL_SCANCODE_6, SDL_SCANCODE_7, SDL_SCANCODE_8,
+                          SDL_SCANCODE_9, SDL_SCANCODE_SPACE, SDL_SCANCODE_B, 0};
     int force_tileset = 0;
     // docs/383: Space and right-click deselect,
     // Mouse 5 opens the blue brick menu and Mouse 4 the red/yellow/white one.
@@ -284,10 +289,14 @@ struct Settings {
     // filter and the other removes it -- so a dropdown states that instead of
     // letting both be ticked and needing a warning about which wins.
     int  hotwire_mode = 0;         // 0 vanilla, 1 specials only, 2 anything
+    bool hotwire_neutrals = false; // SG-0045: also neutral units, in single-player missions
     int  hotwire_transport = 0;    // 0 vanilla, 1 kill occupants, 2 convert them
     // docs/406: the Earth/Alien attack spell's EMP disables transports too
     // (lb_patches.cpp, kEmpTransports). Online, the host's.
     bool emp_transports = false;
+    // docs/453 (SG-0044): a hero stunned by ESP/EMP can still cast spells
+    // (lb_patches.cpp, entity_state_override). Online, the host's.
+    bool stun_cast = false;
     // docs/406: the AI rebuilds its hero after every death, not once
     // (lb_patches.cpp, kAiHeroRebuild). Offline only.
     bool ai_hero_rebuild = false;
@@ -657,6 +666,11 @@ extern "C" void lb_settings_save(void) {
                   g_set.chat_key); o += buf;   // docs/415
     std::snprintf(buf, sizeof buf, "  \"swap_key\": %d,\n",
                   g_set.swap_key); o += buf;   // SG-0012
+    {   // SG-0049
+        std::string q;
+        for (int i = 0; i < 12; ++i) q += (i ? "," : "") + std::to_string(g_set.quick_bind[i]);
+        o += "  \"quick_bind\": \"" + q + "\",\n";
+    }
     std::snprintf(buf, sizeof buf, "  \"force_tileset\": %d,\n",
                   g_set.force_tileset); o += buf;
     std::snprintf(buf, sizeof buf, "  \"quick_keys\": %s,\n",
@@ -699,10 +713,14 @@ extern "C" void lb_settings_save(void) {
                   g_set.balance_patch); o += buf;
     std::snprintf(buf, sizeof buf, "  \"hotwire_mode\": %d,\n",
                   g_set.hotwire_mode); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"hotwire_neutrals\": %s,\n",
+                  g_set.hotwire_neutrals ? "true" : "false"); o += buf;   // SG-0045
     std::snprintf(buf, sizeof buf, "  \"hotwire_transport\": %d,\n",
                   g_set.hotwire_transport); o += buf;
     std::snprintf(buf, sizeof buf, "  \"emp_transports\": %s,\n",
                   g_set.emp_transports ? "true" : "false"); o += buf;   // docs/406
+    std::snprintf(buf, sizeof buf, "  \"stun_cast\": %s,\n",
+                  g_set.stun_cast ? "true" : "false"); o += buf;   // docs/453
     std::snprintf(buf, sizeof buf, "  \"ai_hero_rebuild\": %s,\n",
                   g_set.ai_hero_rebuild ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"transport_release\": %s,\n",
@@ -912,6 +930,20 @@ extern "C" void lb_settings_load(void) {
         g_set.chat_key = SDL_SCANCODE_T;
     json_get_int(s, "swap_key", &g_set.swap_key);              // SG-0012
     if (g_set.swap_key < 0 || g_set.swap_key >= SDL_NUM_SCANCODES) g_set.swap_key = 0;
+    {   // SG-0049: "a,b,c,..." -- twelve scancodes; a short or bad list keeps the defaults
+        char q[160] = "";
+        json_get_str(s, "quick_bind", q, sizeof q);
+        int v[12], n = 0;
+        for (const char* c = q; *c && n < 12;) {
+            char* end = nullptr;
+            const long x = std::strtol(c, &end, 10);
+            if (end == c) break;
+            v[n++] = (x >= 0 && x < SDL_NUM_SCANCODES) ? (int)x : 0;
+            c = *end == ',' ? end + 1 : end;
+        }
+        if (n == 12)
+            for (int i = 0; i < 12; ++i) g_set.quick_bind[i] = v[i];
+    }
     if (g_set.mod_palette < 0 || g_set.mod_palette > 4) g_set.mod_palette = 0;
     if (g_set.force_tileset < 0 || g_set.force_tileset > 4) g_set.force_tileset = 0;
     json_get_bool(s, "quick_keys", &g_set.quick_keys);   // docs/383, default on
@@ -940,8 +972,10 @@ extern "C" void lb_settings_load(void) {
     json_get_bool(s, "tourney_team", &g_set.tourney_team);
     json_get_int(s, "balance_patch", &g_set.balance_patch);
     json_get_int(s, "hotwire_mode", &g_set.hotwire_mode);
+    json_get_bool(s, "hotwire_neutrals", &g_set.hotwire_neutrals);   // SG-0045
     json_get_int(s, "hotwire_transport", &g_set.hotwire_transport);
     json_get_bool(s, "emp_transports", &g_set.emp_transports);   // docs/406
+    json_get_bool(s, "stun_cast", &g_set.stun_cast);             // docs/453
     json_get_bool(s, "ai_hero_rebuild", &g_set.ai_hero_rebuild);
     json_get_bool(s, "transport_release", &g_set.transport_release);
     json_get_bool(s, "creatures", &g_set.creatures);   // docs/410
@@ -1212,6 +1246,7 @@ int g_rebinding = -1;        // action waiting for a KEY, or -1
 int g_rebinding_pad = -1;    // action waiting for a PAD BUTTON, or -1
 bool g_rebinding_chat = false;   // docs/415: the chat key waits for a key
 bool g_rebinding_swap = false;   // SG-0012: the swap key waits for a key
+int g_rebinding_quick = -1;      // SG-0049: the shortcut waiting for a key, or -1
 std::atomic<int> g_screens_swapped{0};   // SG-0012: this session's swap state
 bool g_chat_eat_text = false;    // docs/415: swallow the opening key's text
 
@@ -1803,6 +1838,13 @@ void tab_balance_spells() {
          "whatever is under a special's corner. Specials only: no glitch.\n"
          "Anything (cheat): any enemy unit, hero or building, no farm limit.");
     badge(WIRED);
+    // SG-0045 / docs/452: this machine's, and only ever in a single-player
+    // mission, so no host rule carries it.
+    ImGui::Checkbox("Hotwire Neutral Units In Missions", &g_set.hotwire_neutrals);
+    help("Single-player missions only. Hotwire can also take units and\n"
+         "buildings of a team the computer is not playing. Off: as in the\n"
+         "game. Has no effect with Anything, online or in Free Play.");
+    badge(WIRED);
 
     ImGui::Spacing();
     ImGui::Text("Transport Occupants");
@@ -1846,6 +1888,17 @@ void tab_balance_spells() {
     if (lb_rules_host_flags() >= 0)
         ImGui::TextDisabled("In this lobby, the host's: %s",
                             lb_emp_transports_live() ? "On" : "Off");
+    ImGui::Spacing();
+
+    // docs/453 (SG-0044): the stun is a freeze order in the unit's order
+    // slot; the game refuses spells for it in the HUD and in the AI hero.
+    ImGui::Checkbox("Stunned Heroes Can Cast", &g_set.stun_cast);
+    help("ESP and EMP normally stop a hero casting. On, a stunned hero\n"
+         "can still cast. Online, the host's setting applies.");
+    badge(WIRED);
+    if (lb_rules_host_flags() >= 0)
+        ImGui::TextDisabled("In this lobby, the host's: %s",
+                            lb_stun_cast_live() ? "On" : "Off");
     ImGui::Spacing();
 
     {
@@ -2867,12 +2920,33 @@ void tab_input() {
     // docs/383/385: the battle shortcuts. Each runs the cartridge's own
     // callback for the button (lb_patches.cpp, view_update_override).
     ImGui::Checkbox("Battle shortcuts", &g_set.quick_keys);
-    help("Space or right-click: deselect.\n"
-         "Mouse 5 (forward): blue brick menu.\n"
-         "Mouse 4 (back): red, yellow or white brick menu.\n"
-         "1-9: pick that item from the red, yellow or white brick menu\n"
-         "(a building or spell, left to right). Shift+1-9: items 10-18.\n"
-         "Keys bound to DS buttons keep working as those buttons.");
+    help("Right-click also deselects. Mouse 5 (forward) opens the blue brick\n"
+         "menu and Mouse 4 (back) the red, yellow or white one.\n"
+         "Item keys pick that item from the red, yellow or white brick menu\n"
+         "(a building or spell, left to right); with Shift, items 10-18.\n"
+         "The keypad's digits always work too. Keys bound to DS buttons keep\n"
+         "working as those buttons.");
+    if (ImGui::TreeNode("Shortcut keys")) {   // SG-0049
+        static const char* const kQuickNames[12] = {
+            "Item 1", "Item 2", "Item 3", "Item 4", "Item 5", "Item 6", "Item 7", "Item 8", "Item 9",
+            "Deselect", "Open blue menu", "Open red/yellow menu"};
+        for (int i = 0; i < 12; ++i) {
+            ImGui::PushID(i);
+            const char* name = g_rebinding_quick == i ? "press a key..."
+                               : g_set.quick_bind[i] ? SDL_GetScancodeName((SDL_Scancode)g_set.quick_bind[i])
+                                                     : "(none)";
+            if (ImGui::Button(name, ImVec2(120.0f * g_ui_scale, 0))) g_rebinding_quick = i;
+            ImGui::SameLine();
+            ImGui::TextUnformatted(kQuickNames[i]);
+            ImGui::PopID();
+        }
+        if (ImGui::Button("Default keys")) {
+            const Settings d;
+            for (int i = 0; i < 12; ++i) g_set.quick_bind[i] = d.quick_bind[i];
+        }
+        ImGui::TextDisabled("Click a key to change it; Esc cancels, Delete clears.");
+        ImGui::TreePop();
+    }
     // SG-0027: pause and frame advance, for slow play and tool-assisted runs.
     ImGui::Checkbox("TAS controls", &g_set.tas_keys);
     help("F5: pause or resume. F6 while paused: advance one frame.\n"
@@ -8812,10 +8886,11 @@ namespace {
 enum QuickAction { kQuickNone = -1, kQuickDeselect = 0, kQuickBlue = 1,
                    kQuickSecond = 2, kQuickItem = 10, kQuickItem2 = 30 };
 
-// 1..9 for the number row and the keypad's digits, else 0.
+// 1..9 for the item keys (SG-0049: as bound; the keypad's digits always),
+// else 0.
 int quick_digit(SDL_Scancode sc) {
-    if (sc >= SDL_SCANCODE_1 && sc <= SDL_SCANCODE_9)
-        return 1 + (int)(sc - SDL_SCANCODE_1);
+    for (int i = 0; i < 9; ++i)
+        if (g_set.quick_bind[i] && (int)sc == g_set.quick_bind[i]) return 1 + i;
     if (sc >= SDL_SCANCODE_KP_1 && sc <= SDL_SCANCODE_KP_9)
         return 1 + (int)(sc - SDL_SCANCODE_KP_1);
     return 0;
@@ -8830,11 +8905,15 @@ bool quick_in_battle() {
 bool quick_event(const SDL_Event* event, const ImGuiIO& io) {
     if (!g_set.quick_keys || !lb_setting_enhanced()) return false;
     int action = kQuickNone;
-    if (event->type == SDL_KEYDOWN && event->key.repeat == 0 &&
-        event->key.keysym.scancode == SDL_SCANCODE_SPACE &&
-        !io.WantCaptureKeyboard &&
-        lb_binding_key_bit(SDL_SCANCODE_SPACE) == 0) {   // not a DS button
+    const int sc = event->type == SDL_KEYDOWN ? (int)event->key.keysym.scancode : -1;
+    const bool key = event->type == SDL_KEYDOWN && event->key.repeat == 0 &&
+                     !io.WantCaptureKeyboard && lb_binding_key_bit(sc) == 0;   // not a DS button
+    if (key && g_set.quick_bind[9] && sc == g_set.quick_bind[9]) {
         action = kQuickDeselect;
+    } else if (key && g_set.quick_bind[10] && sc == g_set.quick_bind[10]) {
+        action = kQuickBlue;     // SG-0049
+    } else if (key && g_set.quick_bind[11] && sc == g_set.quick_bind[11]) {
+        action = kQuickSecond;   // SG-0049
     } else if (event->type == SDL_KEYDOWN && event->key.repeat == 0 &&
                quick_digit(event->key.keysym.scancode) &&
                !io.WantCaptureKeyboard &&
@@ -8886,6 +8965,19 @@ extern "C" bool lb_overlay_event(const SDL_Event* event) {
                 g_binding[g_rebinding] = sc;
             }
             g_rebinding = -1;
+            return true;
+        }
+        // SG-0049: a shortcut's rebind. Esc cancels; Delete leaves it unbound.
+        if (g_rebinding_quick >= 0 && g_rebinding_quick < 12) {
+            if (k != SDLK_ESCAPE) {
+                const int sc = (int)event->key.keysym.scancode;
+                const int v = sc == SDL_SCANCODE_DELETE ? 0 : sc;
+                for (int i = 0; i < 12; ++i)
+                    if (i != g_rebinding_quick && v && g_set.quick_bind[i] == v)
+                        g_set.quick_bind[i] = 0;   // one key, one shortcut
+                g_set.quick_bind[g_rebinding_quick] = v;
+            }
+            g_rebinding_quick = -1;
             return true;
         }
         // SG-0012: the swap key's rebind, the same way.
@@ -9706,6 +9798,18 @@ extern "C" int lb_setting_emp_transports(void) {
     return forced >= 0 ? forced : (g_set.emp_transports ? 1 : 0);
 }
 
+// docs/453: this machine's "stunned heroes can cast" choice (LB_STUN_CAST=0|1
+// forces it). The patch runs with lb_stun_cast_live() (lb_patches.cpp): a
+// replay's, else the host's online, else this.
+extern "C" int lb_setting_stun_cast(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_STUN_CAST");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.stun_cast ? 1 : 0);
+}
+
 // docs/408: LB_TRANSPORT_RELEASE=0|1 forces it.
 extern "C" int lb_setting_transport_release(void) {
     { LbHostSettings h; if (lb_rules_host_settings(&h) >= 0) return h.transport_release; }   // BR-0011
@@ -9731,7 +9835,8 @@ extern "C" int lb_setting_ai_hero_rebuild(void) {
 extern "C" int lb_rules_local_flags(void) {
     return (lb_setting_emp_transports() ? LB_RULE_EMP_TRANSPORTS : 0) |
            (lb_setting_creatures() ? LB_RULE_CREATURES : 0) |   // docs/410
-           (lb_setting_teal() ? LB_RULE_TEAL : 0);              // docs/412
+           (lb_setting_teal() ? LB_RULE_TEAL : 0) |             // docs/412
+           (lb_setting_stun_cast() ? LB_RULE_STUN_CAST : 0);    // docs/453
 }
 
 // docs/412: Teal team colour. LB_TEAL=0|1 forces it (LB_TEST_TEAL=1 too).
@@ -9854,6 +9959,13 @@ extern "C" int lb_demo_play_hotwire_mode(void);   /* src/lb_demo.cpp */
 static int hotwire_mode_effective(void) {
     const int played = lb_demo_play_hotwire_mode();
     return played >= 0 ? played : lb_setting_hotwire_mode();
+}
+
+// SG-0045: this machine's. The game's use of it (hotwire_neutrals_live in
+// lb_patches.cpp) takes a replay's value first and only counts in a
+// single-player mission.
+extern "C" int lb_setting_hotwire_neutrals(void) {
+    return g_set.hotwire_neutrals ? 1 : 0;
 }
 
 extern "C" int lb_setting_hotwire_anything(void) {
@@ -10393,7 +10505,9 @@ extern "C" const char* lb_net_lobby_options_json(void) {
                       ? lb_balance_name(g_set.balance_patch) : "?"});
     kv.push_back({"Hotwire targets", pick(kHotwire, 3, g_set.hotwire_mode)});
     kv.push_back({"Transport occupants", pick(kTransport, 3, g_set.hotwire_transport)});
+    kv.push_back({"Hotwire neutrals in missions", g_set.hotwire_neutrals ? "On" : "Off"});
     kv.push_back({"EMP disables transports", g_set.emp_transports ? "On" : "Off"});
+    kv.push_back({"Stunned heroes can cast", g_set.stun_cast ? "On" : "Off"});
     kv.push_back({"AI rebuilds its hero", g_set.ai_hero_rebuild ? "On" : "Off"});
     kv.push_back({"Hotwired transports leave", g_set.transport_release ? "On" : "Off"});
     kv.push_back({"Attack boost reaches ranged",

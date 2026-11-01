@@ -566,11 +566,11 @@ const Sprite* brick_sprite(SDL_Renderer* ren, int world) {
 // ── The document ─────────────────────────────────────────────────────────────
 enum Tool { kToolBrush, kToolLine, kToolRect, kToolEllipse, kToolFill, kToolPick,
             kToolStart, kToolMine, kToolBridge, kToolMarker, kToolBrick, kToolBuilding, kToolErase,
-            kToolSelect, kToolCount };
+            kToolSelect, kToolMove, kToolCount };
 const char* const kToolNames[kToolCount] = {
     "Brush", "Line", "Rectangle", "Ellipse", "Fill", "Eyedropper",
     "Start base", "Mine", "Bridge site", "AI marker", "Golden brick", "Building / unit", "Remove object",
-    "Select (copy / paste)",
+    "Select (copy / paste)", "Move object",
 };
 enum Material { kMatGrass, kMatStone, kMatWater, kMatMountain, kMatTrees, kMatCount };
 const char* const kMatNames[kMatCount] = {"Grass", "Stone", "Water", "Mountain", "Trees"};
@@ -640,6 +640,12 @@ struct Ui {
     // paste in progress (the clipboard follows the pointer until a click).
     int sel_x0 = 0, sel_y0 = 0, sel_x1 = -1, sel_y1 = -1;
     bool pasting = false;
+    // SG-0048: the object the Move tool holds (kind -1 none; 0 AI marker,
+    // 1 mine, 2 golden brick, 3 building or unit), where in its list, and the
+    // grab's offset from the object's own cell.
+    int grab_kind = -1;
+    size_t grab_a = 0, grab_b = 0;
+    int grab_ox = 0, grab_oy = 0, grab_x0 = 0, grab_y0 = 0;
     // The faction each player's buildings and units are drawn as. A map does
     // not say: players pick their factions when a match starts.
     int faction[4] = {0, 5, 2, 1};   // King, Alien, Pirate, Wizard
@@ -1038,6 +1044,74 @@ bool remove_at(int x, int y) {
         }
     }
     return false;
+}
+
+// ── Moving objects (SG-0048) ─────────────────────────────────────────────────
+// The Move tool picks up the object under a cell in remove_at's order -- an AI
+// marker or bridge site, a mine, a golden brick, a building or unit -- and it
+// follows the pointer until the button is released. A starting base's pieces
+// move one at a time (the base, barracks, farm, hero, builders), so a start can
+// be laid out by hand; it stays a start (its record keeps all six).
+struct Grabbed { int kind = -1; size_t a = 0, b = 0; int x = 0, y = 0, w = 1, h = 1; const char* what = ""; };
+
+Grabbed object_at(int x, int y) {
+    lvl::Map& m = g_doc.m;
+    Grabbed g;
+    for (size_t i = 0; i < m.markers.size(); ++i)
+        for (size_t k = 0; k < m.markers[i].m.size(); ++k)
+            if (m.markers[i].m[k].x == x && m.markers[i].m[k].y == y) {
+                const uint8_t id = m.markers[i].id;
+                return {0, i, k, x, y, 1, 1, id == 7 || id == 8 ? "bridge site" : "AI marker"};
+            }
+    for (size_t i = 0; i < m.mines.size(); ++i)
+        for (size_t k = 0; k < m.mines[i].size(); ++k) {
+            const lvl::Point& p = m.mines[i][k];
+            if (x >= p.x && x <= p.x + 1 && y >= p.y && y <= p.y + 1) return {1, i, k, p.x, p.y, 2, 2, "mine"};
+        }
+    for (size_t i = 0; i < m.events.size(); ++i) {
+        const lvl::Event& e = m.events[i];
+        for (size_t k = 0; k < e.picks.size(); ++k)
+            if (e.picks[k].x == x && e.picks[k].y == y) return {2, i, k, x, y, 1, 1, "golden brick"};
+        for (size_t k = 0; k < e.ents.size(); ++k) {
+            int w, h;
+            footprint(e.ents[k].type, &w, &h);
+            if (x < e.ents[k].x || x >= e.ents[k].x + w || y < e.ents[k].y || y >= e.ents[k].y + h) continue;
+            const EntityKind* kd = kind_of(e.ents[k].type);
+            return {3, i, k, e.ents[k].x, e.ents[k].y, w, h, kd ? kd->name : "object"};
+        }
+    }
+    return g;
+}
+
+// Puts the held object's own cell at (x, y), kept inside the map.
+void move_grabbed(int x, int y, int w, int h) {
+    lvl::Map& m = g_doc.m;
+    x = std::clamp(x, 0, std::max(0, m.w - w));
+    y = std::clamp(y, 0, std::max(0, m.h - h));
+    switch (g_ui.grab_kind) {
+    case 0: {
+        lvl::Marker& mk = m.markers[g_ui.grab_a].m[g_ui.grab_b];
+        mk.x = (uint8_t)x; mk.y = (uint8_t)y;
+        break;
+    }
+    case 1: {
+        lvl::Point& p = m.mines[g_ui.grab_a][g_ui.grab_b];
+        p.x = (uint8_t)x; p.y = (uint8_t)y;
+        break;
+    }
+    case 2: {
+        lvl::Pickup& pk = m.events[g_ui.grab_a].picks[g_ui.grab_b];
+        pk.x = (uint8_t)x; pk.y = (uint8_t)y;
+        break;
+    }
+    case 3: {
+        lvl::Entity& e = m.events[g_ui.grab_a].ents[g_ui.grab_b];
+        e.x = (uint8_t)x; e.y = (uint8_t)y;
+        break;
+    }
+    default:
+        break;
+    }
 }
 
 // ── Copy and paste ───────────────────────────────────────────────────────────
@@ -2522,6 +2596,43 @@ void canvas(SDL_Renderer* ren) {
         }
         ImGui::SetTooltip("%d, %d", mx, my);
     }
+    // SG-0048: the Move tool. The object under the pointer is named; a press
+    // picks it up, it follows the pointer, and the release drops it.
+    if (g_ui.tool == kToolMove) {
+        if (g_ui.grab_kind < 0 && on_map) {
+            const Grabbed g = object_at(mx, my);
+            if (g.kind >= 0) {
+                dl->AddRect(ImVec2(o.x + g.x * cw, o.y + g.y * ch), ImVec2(o.x + (g.x + g.w) * cw, o.y + (g.y + g.h) * ch),
+                            IM_COL32(255, 255, 255, 220), 0, 0, 2.0f);
+                ImGui::SetTooltip("%d, %d: drag to move the %s", mx, my, g.what);
+                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    push_undo();
+                    g_ui.grab_kind = g.kind;
+                    g_ui.grab_a = g.a;
+                    g_ui.grab_b = g.b;
+                    g_ui.grab_ox = mx - g.x;
+                    g_ui.grab_oy = my - g.y;
+                    g_ui.grab_x0 = g.x;
+                    g_ui.grab_y0 = g.y;
+                }
+            }
+        }
+        if (g_ui.grab_kind >= 0) {
+            int w = 1, h = 1;
+            if (g_ui.grab_kind == 1) w = h = 2;
+            if (g_ui.grab_kind == 3) footprint(d.m.events[g_ui.grab_a].ents[g_ui.grab_b].type, &w, &h);
+            move_grabbed(mx - g_ui.grab_ox, my - g_ui.grab_oy, w, h);
+            if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                if (g_ui.grab_kind == 1) {   // the pads go with the mine
+                    retile(g_ui.grab_x0 - 1, g_ui.grab_y0 - 1, g_ui.grab_x0 + 2, g_ui.grab_y0 + 2);
+                    stamp_mines();
+                }
+                g_ui.grab_kind = -1;
+            }
+        }
+        dl->PopClipRect();
+        return;
+    }
     // Clicks and drags.
     if (on_map && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         if (shape) {
@@ -2791,6 +2902,9 @@ void panel_objects() {
         ImGui::TreePop();
     }
     tool_button(kToolErase);
+    tool_button(kToolMove);
+    ImGui::SetItemTooltip("Drag an object to a new place: a building, unit, mine, AI marker,\n"
+                          "bridge site or golden brick, or one piece of a starting base.");
 }
 
 void panel_view() {

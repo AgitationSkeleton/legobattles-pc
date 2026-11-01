@@ -250,6 +250,8 @@ int g_rec_cslot = 0, g_demo_cslot = 0;     // kind 16, docs/436: their slots
 int g_rec_aiopp = 0, g_demo_aiopp = 0;     // kind 17, docs/414: extra AI opponents
 int g_rec_gold = 0, g_demo_gold = 0;       // kind 18, SG-0036: the Gold Rush target (0 stock)
 int g_rec_tabs = 0, g_demo_tabs = 0;       // kind 19, docs/451: HUD lists stay open (0 stock)
+int g_rec_hwneut = 0, g_demo_hwneut = 0;   // kind 20, SG-0045: hotwire neutrals in missions (0 stock)
+int g_rec_stun = 0, g_demo_stun = 0;       // kind 21, docs/453: stunned heroes can cast (0 stock)
 // BR-0011: kinds 14 and 15, the attack boost and the healing fix, from
 // `sets=4`; a recording before it leaves them to this machine (-1).
 int g_rec_atk = 0, g_demo_atk = -1;
@@ -316,6 +318,8 @@ bool load(const char* path) {
     g_demo_aiopp = 0;             // and one computer opponent (docs/414)
     g_demo_gold = 0;              // and the stock Gold Rush target (SG-0036)
     g_demo_tabs = 0;              // and HUD lists that close (docs/451)
+    g_demo_hwneut = 0;            // and no hotwire of neutrals (SG-0045)
+    g_demo_stun = 0;              // and stunned heroes that cannot cast (docs/453)
     g_demo_atk = g_demo_heal = -1;   // BR-0011: and this machine's
     g_demo_fw = g_demo_fh = 0;    // docs/409: and the window's own field
     g_demo_has_rtc = false;       // and the clock the replaying run has
@@ -603,6 +607,12 @@ extern "C" int lb_demo_play_gold_target(void) {   // SG-0036
 extern "C" int lb_demo_play_tabs(void) {   // docs/451
     return g_mode == Mode::Play ? g_demo_tabs : -1;
 }
+extern "C" int lb_demo_play_hotwire_neutrals(void) {   // SG-0045
+    return (g_mode == Mode::Play || g_replay_done) ? g_demo_hwneut : -1;
+}
+extern "C" int lb_demo_play_stun_cast(void) {   // docs/453
+    return (g_mode == Mode::Play || g_replay_done) ? g_demo_stun : -1;
+}
 extern "C" int lb_demo_play_ai_opp(void) {   // docs/414
     return (g_mode == Mode::Play || g_replay_done) ? g_demo_aiopp : -1;
 }
@@ -665,6 +675,8 @@ extern "C" void lb_demo_start_record(const char* path) {
     g_rec_aiopp = 0;
     g_rec_gold = 0;
     g_rec_tabs = 0;
+    g_rec_hwneut = 0;
+    g_rec_stun = 0;               // docs/453
     g_rec_atk = g_rec_heal = 0;
     g_rec_fw = g_rec_fh = 0;      // docs/409: the first frame writes the size
     // docs/396: a session on the PC's clock records the guest clock as it
@@ -850,7 +862,7 @@ extern "C" void lb_demo_tick(void) {
             emit(e);
         }
         // docs/388: and the settings a replay takes from the recording.
-        const int now[20] = {lb_setting_force_tileset(),
+        const int now[22] = {lb_setting_force_tileset(),
                             lb_setting_level_palette(),
                             lb_setting_music_mode(),
                             lb_cage_fix_live() ? 1 : 0,
@@ -869,15 +881,17 @@ extern "C" void lb_demo_tick(void) {
                             lb_creature_slots_live(),          // docs/436
                             lb_ai_opp_live(),                  // docs/414
                             lb_gold_rush_target_live(),        // SG-0036
-                            lb_setting_tabs_stay_open() ? 1 : 0};   // docs/451
-        int* const was[20] = {&g_rec_tileset, &g_rec_palette, &g_rec_music,
+                            lb_setting_tabs_stay_open() ? 1 : 0,    // docs/451
+                            lb_setting_hotwire_neutrals(),          // SG-0045
+                            lb_stun_cast_live()};                   // docs/453
+        int* const was[22] = {&g_rec_tileset, &g_rec_palette, &g_rec_music,
                               &g_rec_cage, &g_rec_ownhero, &g_rec_oppdef,
                               &g_rec_hwtransport, &g_rec_hwmode, &g_rec_emp,
                               &g_rec_cheats, &g_rec_aicheats, &g_rec_aihero,
                               &g_rec_trel, &g_rec_crea, &g_rec_atk, &g_rec_heal,
                               &g_rec_cslot, &g_rec_aiopp, &g_rec_gold,
-                              &g_rec_tabs};
-        for (int k = 0; k < 20; ++k) {
+                              &g_rec_tabs, &g_rec_hwneut, &g_rec_stun};
+        for (int k = 0; k < 22; ++k) {
             if (now[k] == *was[k]) continue;
             *was[k] = now[k];
             const Event e{g_frame, 's', k, now[k], 0, 0};
@@ -936,6 +950,8 @@ extern "C" void lb_demo_tick(void) {
             else if (e.a == 16) g_demo_cslot = e.b & 0xFFFF;   // docs/436
             else if (e.a == 18) g_demo_gold = (e.b >= 0 && e.b <= 1000000) ? e.b : 0;   // SG-0036
             else if (e.a == 19) g_demo_tabs = e.b ? 1 : 0;   // docs/451
+            else if (e.a == 20) g_demo_hwneut = e.b ? 1 : 0;   // SG-0045
+            else if (e.a == 21) g_demo_stun = e.b ? 1 : 0;   // docs/453
             else if (e.a == 17) g_demo_aiopp = (e.b & 0x7FFC) | ((e.b & 3) > 1 ? 1 : (e.b & 3));   // at most one extra (docs/414)   // docs/414
         } else if (e.kind == 'b') {   /* docs/404: a Balance tab value */
             lb_balance_custom_play_set(e.a, e.b, e.c);

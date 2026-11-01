@@ -296,6 +296,7 @@ int lb_setting_patch_hotwire_glitch(void);
 // 0 vanilla, 1 destroy the occupants, 2 convert them to the new owner.
 int lb_setting_hotwire_transport(void);
 int lb_setting_hotwire_mode(void);   // docs/392: this machine's, as recorded
+int lb_setting_hotwire_neutrals(void);   // SG-0045 / docs/452: single-player missions only
 
 // 0 vanilla, 1 the attack boost also reaches ranged units.
 int lb_setting_attack_boost_ranged(void);
@@ -778,10 +779,15 @@ void         lb_rules_incoming(const unsigned char* buf, int len,
 #define LB_RULE_EMP_TRANSPORTS 0x01
 #define LB_RULE_CREATURES      0x02   /* docs/410 */
 #define LB_RULE_TEAL           0x04   /* docs/412: colour 6 is offered */
+#define LB_RULE_STUN_CAST      0x08   /* docs/453: a stunned hero can cast */
 int          lb_rules_local_flags(void);   /* this machine's (lb_overlay) */
 int          lb_rules_host_flags(void);    /* the host's; -1 unless joined */
 int          lb_setting_emp_transports(void);
 int          lb_emp_transports_live(void); /* the host's or this machine's */
+// docs/453: a hero stunned by ESP/EMP can still cast (SG-0044). Kind 20.
+int          lb_setting_stun_cast(void);
+int          lb_demo_play_stun_cast(void);
+int          lb_stun_cast_live(void);      /* a replay's, the host's, or this machine's */
 // docs/406: the red-brick cheats as a mask (bit i = flags[i]); a replay's
 // (-1 when not replaying one from sets=3), and the AI-gets-them option.
 int          lb_demo_play_cheats(void);

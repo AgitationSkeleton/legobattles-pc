@@ -3191,6 +3191,157 @@ void tile_gather_observer(void) {
     if (original) original();
 }
 
+// SG-0032 / docs/444: LB_AI_CENSUS=<frames> -- HOW MANY BRIDGES AND MINES DOES
+// EACH AI HAVE, AND WHERE DOES IT TRY TO BUILD THE NEXT ONE? Observer only.
+//
+// Three lines of evidence, all off unless the variable is set (the two
+// overrides are not even registered then):
+//   * every <frames> VBlank-ish ticks: each AI's planner caps (+0x34 mine
+//     want, +0x68 bridge cap, +0x88 failures) and every mine (category 9) and
+//     bridge (category 0x11) entity per owner, with its position in pixels
+//     (entity +0xEC/+0xF0 >> 12) and whether it is finished (+0x22E == 100);
+//   * once per map: the map's mine points (map+0x258, 8-byte entries, x and y
+//     at +4 and +5, count at +0x2C0) and its bridge-spot count (+0x2CC);
+//   * the mine-site finder's tests (FUN_02092B8C calls FUN_020881B0 once per
+//     mine point; the cell is x,y at arg0+4,+5, the player is the byte at
+//     arg3) and every build request for a mine or bridge (FUN_02097374:
+//     planner, kind 9 or 0x11, site x,y at arg2+4,+5).
+// Comparing the requested mine sites with the points that already hold a mine
+// says whether the finder keeps choosing a taken point (docs/444). The
+// census also gives the point-to-pixel relation the fix needs.
+constexpr uint32_t kAiMineScore  = 0x020881B0u;   // ARM: occupancy score of one cell
+constexpr uint32_t kAiQueueBuild = 0x02097374u;   // thumb: queue a build (planner, kind, site, prio)
+constexpr uint32_t kAiFinderLr   = 0x02092C0Du;   // the finder's call to kAiMineScore returns here
+
+static int ai_census_every(void) {
+    static const int every = [] {
+        const char* v = std::getenv("LB_AI_CENSUS");
+        if (!v) return 0;
+        const int n = std::atoi(v);
+        return n > 0 ? n : 600;
+    }();
+    return every;
+}
+
+void ai_mine_score_observer(void) {
+    if (ai_census_every() > 0 && g_cpu.R[14] == kAiFinderLr) {
+        // Each distinct (player, cell) once: the finder walks every point on
+        // every planner pass, so a line per call would flood the log.
+        static uint32_t seen[48];
+        static unsigned n = 0;
+        const uint32_t x = bus_read_u8(g_cpu.R[0] + 4u), y = bus_read_u8(g_cpu.R[0] + 5u);
+        const uint32_t who = bus_read_u8(g_cpu.R[3]);
+        const uint32_t key = (who << 16) | (x << 8) | y | 0x80000000u;
+        bool known = false;
+        for (unsigned i = 0; i < n && !known; ++i) known = seen[i] == key;
+        if (!known && n < 48u) {
+            seen[n++] = key;
+            std::fprintf(stderr, "[lb_aicensus] mine-site test: player byte %u, "
+                         "cell (%u,%u)\n", (unsigned)who, (unsigned)x, (unsigned)y);
+            std::fflush(stderr);
+        }
+    }
+    void (*original)(void) = lb_dispatch_original(0, kAiMineScore);
+    if (original) original();
+}
+
+void ai_queue_build_observer(void) {
+    const uint32_t kind = g_cpu.R[1];
+    if (ai_census_every() > 0 && (kind == 9u || kind == 0x11u)) {
+        // A queue call can be re-entered after a slice yield, so a repeated
+        // line with the same planner and site is not a second request.
+        static unsigned said = 0;
+        if (said < 400u) {
+            ++said;
+            const uint32_t pl = g_cpu.R[0];
+            std::fprintf(stderr, "[lb_aicensus] build request: vb %u planner %08X "
+                         "owner %u kind %u site (%u,%u) prio %u\n",
+                         (unsigned)bus_read_u32(kVBlankCounter), (unsigned)pl,
+                         (unsigned)bus_read_u8(pl + 0x21u), (unsigned)kind,
+                         (unsigned)bus_read_u8(g_cpu.R[2] + 4u),
+                         (unsigned)bus_read_u8(g_cpu.R[2] + 5u), (unsigned)g_cpu.R[3]);
+            std::fflush(stderr);
+        }
+    }
+    void (*original)(void) = lb_dispatch_original(0, kAiQueueBuild);
+    if (original) original();
+}
+
+static void ai_census_tick(void) {
+    const int every = ai_census_every();
+    if (every <= 0) return;
+    static unsigned tick = 0;
+    if ((++tick % (unsigned)every) != 0u) return;
+    auto ram = [](uint32_t p) { return p >= 0x02000000u && p < 0x02400000u; };
+    const uint32_t pool = bus_read_u32(kEntityPoolPtr);
+    if (!ram(pool)) return;
+    const uint32_t arr = bus_read_u32(pool + 8u);
+    const int32_t count = (int32_t)bus_read_u32(pool + 0xCu);
+    if (!ram(arr) || count <= 0 || count > 4096) return;
+
+    // The map's own spots, once per map object.
+    static uint32_t said_map = 0;
+    const uint32_t mapp = bus_read_u32(0x02092CC4u);   // the finder's literal: a pointer to the map pointer
+    const uint32_t map = ram(mapp) ? bus_read_u32(mapp) : 0u;
+    if (ram(map) && map != said_map) {
+        said_map = map;
+        const unsigned np = bus_read_u8(map + 0x2C0u);
+        char buf[256];
+        int k = std::snprintf(buf, sizeof buf, "[lb_aicensus] map %08X: %u mine points:", (unsigned)map, np);
+        for (unsigned i = 0; i < np && i < 16u && k < (int)sizeof buf - 16; ++i)
+            k += std::snprintf(buf + k, sizeof buf - (size_t)k, " (%u,%u)",
+                               (unsigned)bus_read_u8(map + 600u + 8u * i + 4u),
+                               (unsigned)bus_read_u8(map + 600u + 8u * i + 5u));
+        std::fprintf(stderr, "%s; bridge spots (+0x2CC): %u\n", buf, (unsigned)bus_read_u8(map + 0x2CCu));
+    }
+
+    // Each AI's planner caps. The AI list is [[0x02156974]+8]... per docs/444:
+    // V = [0x0215697C], array [V+4], count [V+8], owner +0x24, planner [AI+0x4C].
+    const uint32_t V = bus_read_u32(0x0215697Cu);
+    if (ram(V)) {
+        const uint32_t ar = bus_read_u32(V + 4u);
+        const int32_t n = (int32_t)bus_read_u32(V + 8u);
+        for (int32_t i = 0; ram(ar) && i < n && i < 8; ++i) {
+            const uint32_t ai = bus_read_u32(ar + 4u * (uint32_t)i);
+            const uint32_t pl = ram(ai) ? bus_read_u32(ai + 0x4Cu) : 0u;
+            if (!ram(pl)) continue;
+            std::fprintf(stderr, "[lb_aicensus] vb %u AI owner %u: mine want %u, "
+                         "bridge cap %u, failures %u\n",
+                         (unsigned)bus_read_u32(kVBlankCounter),
+                         (unsigned)bus_read_u8(ai + 0x24u), (unsigned)bus_read_u8(pl + 0x34u),
+                         (unsigned)bus_read_u8(pl + 0x68u), (unsigned)bus_read_u8(pl + 0x88u));
+        }
+    }
+
+    unsigned mines[8] = {0}, mines_done[8] = {0}, bridges[8] = {0}, bridges_done[8] = {0};
+    for (int32_t i = 0; i < count; ++i) {
+        const uint32_t e = bus_read_u32(arr + (uint32_t)i * 4u);
+        if (!ram(e)) continue;
+        const uint8_t cat = entity_category(e);
+        if (cat != 9u && cat != 0x11u) continue;
+        const unsigned o = bus_read_u8(e + 0xE4u);
+        const bool done = bus_read_u8(e + 0x22Eu) == 100u;
+        if (o < 8u) {
+            if (cat == 9u) { ++mines[o]; mines_done[o] += done; }
+            else           { ++bridges[o]; bridges_done[o] += done; }
+        }
+        std::fprintf(stderr, "[lb_aicensus]   owner %u %s px (%d,%d) %s\n", o,
+                     cat == 9u ? "mine  " : "bridge",
+                     (int)((int32_t)bus_read_u32(e + 0xECu) >> 12),
+                     (int)((int32_t)bus_read_u32(e + 0xF0u) >> 12),
+                     done ? "done" : "building");
+    }
+    char line[200];
+    int k = std::snprintf(line, sizeof line, "[lb_aicensus] vb %u:", (unsigned)bus_read_u32(kVBlankCounter));
+    for (unsigned o = 0; o < 8u && k < (int)sizeof line - 48; ++o)
+        if (mines[o] || bridges[o])
+            k += std::snprintf(line + k, sizeof line - (size_t)k,
+                               " owner%u mines %u(%u done) bridges %u(%u done);", o,
+                               mines[o], mines_done[o], bridges[o], bridges_done[o]);
+    std::fprintf(stderr, "%s\n", line);
+    std::fflush(stderr);
+}
+
 // LB_MARKERLOG=1: WHEN DOES THE MISSION MARKER FIRE?
 //
 // The marker function, thumb, (owner, x, y): a four-second marker for a point
@@ -4455,6 +4606,65 @@ void hero_hud_override(void) {
                              idx, own,
                              pick ? "selected too: it drives the HUD"
                                   : "not selected (or not eligible)");
+        }
+    }
+    if (original) original();
+}
+
+// ---- docs/453: STUNNED HEROES CAN CAST (SG-0044) -----------------------------
+//
+// ESP (spell 0x1D) and EMP (0x1B) are both EAttackSpell; its tick
+// (FUN_02077510) puts each victim under a FreezeEntityCommand (vtable
+// 0x02149C18, id 0xB) in the unit's order slot [e+0xF8]. The sim never asks
+// whether a caster is frozen: CastSpellCommand's executor (0x020843AC) goes
+// straight to FUN_0207B9C0 / FUN_0207B90C / FUN_0207BA60 with no state test.
+// What refuses a stunned hero is three callers of FUN_0205A118(e, 0xB), all
+// Thumb, all dispatched (split BLX, lr set):
+//   * 0x020DA29C in FUN_020DA274, the HUD's "may this spell button be used"
+//     test (mana at least the cost, and not frozen): lr 0x020DA2A1;
+//   * 0x020DE07C in FUN_020DE000, which picks the unit that drives the HUD
+//     and skips frozen ones, so a lone frozen hero shows an empty card:
+//     lr 0x020DE081;
+//   * 0x020986BA in FUN_02098670, the AI hero's cast wrapper: lr 0x020986BF.
+// FUN_0205A118 (ARM, a true entry: bl target of many) is the one place the
+// three meet. With the option on, a query for state 0xB from those three
+// return addresses, about a hero (blueprint category 0), answers 0. Every other
+// caller -- EMP's own re-hit check at 0x020775B8 included -- and every other
+// state id take the cartridge's code. A pure tail call otherwise.
+constexpr uint32_t kEntityState = 0x0205A118u;      // arm
+constexpr uint32_t kStunSiteButton = 0x020DA2A0u;   // return addresses, thumb bit off
+constexpr uint32_t kStunSitePick   = 0x020DE080u;
+constexpr uint32_t kStunSiteAi     = 0x020986BEu;
+
+extern "C" int lb_demo_play_stun_cast(void);   /* src/lb_demo.cpp */
+extern "C" int lb_stun_cast_live(void) {
+    const int played = lb_demo_play_stun_cast();
+    if (played >= 0) return played;
+    const int host = lb_rules_host_flags();
+    if (host >= 0) return (host & LB_RULE_STUN_CAST) ? 1 : 0;
+    return lb_setting_stun_cast();
+}
+
+void entity_state_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kEntityState);
+    if (g_cpu.R[1] == 0xBu) {
+        const uint32_t lr = g_cpu.R[14] & ~1u;
+        if ((lr == kStunSiteButton || lr == kStunSitePick || lr == kStunSiteAi) &&
+            lb_stun_cast_live()) {
+            const uint32_t e = g_cpu.R[0];
+            const uint32_t bp = guest_ptr(e) ? unit_blueprint(e) : 0u;
+            if (bp && bus_read_u8(bp + 0x5Cu) == 0u) {
+                static int said = 0;
+                if (lb_trace_dispatch() && said < 6) {
+                    ++said;
+                    std::fprintf(stderr, "[lb_stun] hero %08X: not stunned for %08X\n",
+                                 (unsigned)e, (unsigned)lr);
+                    std::fflush(stderr);
+                }
+                g_cpu.R[0] = 0u;
+                lb_override_return();
+                return;
+            }
         }
     }
     if (original) original();
@@ -6368,11 +6578,76 @@ void cast_ground_override(void) {
     if (original) original();
 }
 
+// ---- SG-0045 / docs/452: "HOTWIRE NEUTRALS IN MISSIONS" -----------------------
+//
+// The tap's second filter tag is given to categories 5 and 6 only (docs/392),
+// and the option widens the tap to tag 0x2B the way Anything does
+// (apply_hotwire_neutrals). So the cast is where it is narrowed again: a
+// human caster's hotwire on a target that is not a transport, not a special
+// and not NEUTRAL is refused, exactly as "specials only" refuses it. Neutral
+// here is the game's own notion and nothing finer: an owner that is not the
+// caster's and that no computer player plays (the list at *0x0215697C, team
+// byte at +0x36, as ai_spectate_mirror reads it). The game keeps one relation
+// list per team, the allies (team+0x4C, FUN_02085CC8), so every non-ally is
+// "enemy" to the tap; nothing in it tells a neutral from a foe.
+bool single_player_mission(void);               /* below free_play_mission */
+extern "C" int lb_setting_hotwire_neutrals(void);   /* lb_overlay.cpp */
+extern "C" int lb_demo_play_hotwire_neutrals(void); /* lb_demo.cpp */
+
+static bool hotwire_neutrals_live(void) {
+    const int played = lb_demo_play_hotwire_neutrals();   // a replay takes the recorder's
+    const int want = played >= 0 ? played : lb_setting_hotwire_neutrals();
+    // Anything already takes every non-ally; online is never a campaign mission.
+    return want && !lb_setting_hotwire_anything() && lb_net_guest_state() <= 0 &&
+           single_player_mission();
+}
+
+static bool owner_has_ai(uint32_t owner) {
+    const uint32_t ais = bus_read_u32(0x0215697Cu);
+    if (ais < 0x02000000u || ais >= 0x02400000u) return false;
+    const uint32_t data = bus_read_u32(ais + 4u);
+    const uint32_t n = bus_read_u32(ais + 8u);
+    if (data < 0x02000000u || data >= 0x02400000u || n > 16u) return false;
+    for (uint32_t i = 0; i < n; ++i) {
+        const uint32_t a = bus_read_u32(data + 4u * i);
+        if (a >= 0x02000000u && a < 0x02400000u && bus_read_u8(a + 0x36u) == owner)
+            return true;
+    }
+    return false;
+}
+
+// The entity a handle names (func_0205C9B4's rule: pool index h[0], generation
+// h[1] == entity+0xDD). `h` is either a pointer to the two bytes or the two
+// bytes themselves, as cast_log reads the caster.
+static uint32_t cast_handle_entity(uint32_t h) {
+    uint32_t idx, gen;
+    if (check_in_ram(h)) { idx = bus_read_u8(h); gen = bus_read_u8(h + 1u); }
+    else { idx = h & 0xFFu; gen = (h >> 8) & 0xFFu; }
+    const uint32_t pool = bus_read_u32(kEntityPoolPtr);
+    if (pool < 0x02000000u || pool >= 0x02400000u || idx >= bus_read_u32(pool + 0xCu))
+        return 0u;
+    const uint32_t e = bus_read_u32(bus_read_u32(pool + 8u) + 4u * idx);
+    return (e && check_in_ram(e) && bus_read_u8(e + 0xDDu) == gen) ? e : 0u;
+}
+
 void cast_spell_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kCastSpell);
     const uint32_t out = g_cpu.R[0], order = g_cpu.R[3];
     cast_log("entity");
-    if (lb_setting_patch_hotwire_glitch() && out && order &&
+    // SG-0045: in a mission, the option's own caster is the human (no computer
+    // player); the computer's hotwires are left as they were.
+    const bool neutrals = out && order && bus_read_u8(order) == 0x20u &&
+                          hotwire_neutrals_live();
+    uint32_t caster_owner = 0xFFu;
+    bool human = false;
+    if (neutrals) {
+        const uint32_t c = cast_handle_entity(g_cpu.R[2]);
+        if (c) {
+            caster_owner = bus_read_u8(c + 0xE4u);
+            human = !owner_has_ai(caster_owner);
+        }
+    }
+    if ((lb_setting_patch_hotwire_glitch() || human) && out && order &&
         bus_read_u8(order) == 0x20u) {
         const uint32_t target = bus_read_u32(g_cpu.R[13]);   // the 5th argument
         const uint32_t pool = bus_read_u32(kEntityPoolPtr);
@@ -6385,7 +6660,12 @@ void cast_spell_override(void) {
         }
         const uint8_t cat = e ? entity_category(e) : 0xFFu;
         const uint32_t nul = bus_read_u32(kNullHandleLit);
-        if (e && cat != kCategoryTransport && cat != 6u && check_in_ram(nul)) {
+        // SG-0045: a neutral target is spared the refusal.
+        const bool neutral_ok = human && e &&
+                                bus_read_u8(e + 0xE4u) != caster_owner &&
+                                !owner_has_ai(bus_read_u8(e + 0xE4u));
+        if (e && cat != kCategoryTransport && cat != 6u && !neutral_ok &&
+            check_in_ram(nul)) {
             static int said = 0;
             if (said < 5) {
                 ++said;
@@ -6838,6 +7118,71 @@ void lobby_packet_override(void) {
                 }
             }
         }
+    }
+    if (original) original();
+}
+
+// docs/455: THE LOBBY SHOWS THE PREVIOUS MAP. The lobby's map label is drawn
+// by two screens from the lobby's current mission (the pointer at 0x0215B7B8,
+// set by FUN_020F5DA8 on a host and by FUN_020F5168 on a joiner), and the game
+// redraws it only when a one-tick flag (0x0214FE49) is up or on a screen's
+// first tick after it is shown:
+//   * LobbySettings::virtual_09 (0x020BE228) calls FUN_020BE26C, which writes
+//     the name id (mission +0xF0) to the label, and keeps the mission it drew
+//     in the screen's +0x54. v12 zeroes that on a show, so the redraw happens
+//     once -- with whatever the pointer holds THEN. The pointer is left over
+//     from the last match until this lobby's host has chosen, and the flag is
+//     up for one packet only, so a screen shown before the choice (a joiner in
+//     a fresh lobby, a host before the map pick) keeps the old map's name.
+//   * ClientLobby::virtual_09 (0x020B64B4) likewise fills the joiner's text
+//     box (mission +0x1C) only while the flag is up.
+// Presentation only: the match is built from the mission pointer itself. The
+// first is redrawn by forgetting the drawn mission when it is not the current
+// one; the second by raising the flag once per (screen, mission, show).
+constexpr uint32_t kLobbySettingsTick = 0x020BE228u;   // thumb
+constexpr uint32_t kClientLobbyShow = 0x020B61A8u;     // thumb (virtual_12)
+constexpr uint32_t kClientLobbyTick = 0x020B64B4u;     // thumb (virtual_09)
+constexpr uint32_t kLobbyMission = 0x0215B7B8u;        // the current mission
+constexpr uint32_t kLobbyRedrawFlag = 0x0214FE49u;
+namespace {
+uint32_t g_cl_seen_screen = 0, g_cl_seen_mission = 0;
+}  // namespace
+
+void lobby_settings_tick_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kLobbySettingsTick);
+    const uint32_t self = g_cpu.R[0];
+    const uint32_t cur = bus_read_u32(kLobbyMission);
+    if (guest_ptr(self) && guest_ptr(cur)) {
+        const uint32_t drawn = bus_read_u32(self + 0x54u);
+        if (drawn != 0u && drawn != cur) {
+            // The original sees "not drawn yet" and redraws from the current.
+            bus_write_u32(self + 0x54u, 0u);
+            static unsigned said = 0;
+            if (said++ < 8) {
+                std::fprintf(stderr, "[lb_lobby] map label redrawn: mission %08X "
+                             "-> %08X\n", (unsigned)drawn, (unsigned)cur);
+                std::fflush(stderr);
+            }
+        }
+    }
+    if (original) original();
+}
+
+void client_lobby_show_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kClientLobbyShow);
+    if (g_cpu.R[1] != 0u) g_cl_seen_mission = 0;   // shown: its box is empty
+    if (original) original();
+}
+
+void client_lobby_tick_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kClientLobbyTick);
+    const uint32_t self = g_cpu.R[0];
+    const uint32_t cur = bus_read_u32(kLobbyMission);
+    if (guest_ptr(self) && guest_ptr(cur) &&
+        (self != g_cl_seen_screen || cur != g_cl_seen_mission)) {
+        g_cl_seen_screen = self;
+        g_cl_seen_mission = cur;
+        bus_write_u8(kLobbyRedrawFlag, 1u);   // the game's own refresh path
     }
     if (original) original();
 }
@@ -7742,6 +8087,10 @@ const NdsDispatchEntry kOverrideTable[] = {
        call. */
     {kImageXfer, 0u, image_xfer_override, nullptr},        /* 0x0204E1D0 */
     {kSetOwner, 0u, set_owner_override, nullptr},          /* 0x020598C4 */
+    /* ARM. "Is this unit in state N": with Stunned Heroes Can Cast, a hero
+       asked about state 0xB by the HUD or the AI hero answers no (docs/453).
+       Otherwise a pure tail call. */
+    {kEntityState, 0u, entity_state_override, nullptr},    /* 0x0205A118 */
     /* GRADED, NOT PATCHED. docs/333. */
     {kU16IsSet, 0u, u16_is_set_shadow, nullptr},           /* 0x0205E638 */
     {kSetHp, 0u, set_hp_override, nullptr},                /* 0x0205E7F4 */
@@ -7766,12 +8115,19 @@ const NdsDispatchEntry kOverrideTable[] = {
     /* ARM. A team's bricks: a Gold Brick's worth, else a pure tail call.
        docs/416. */
     {kTeamAddBricks, 0u, team_add_bricks_override, nullptr}, /* 0x020866E0 */
+    /* ARM. Observer only (LB_AI_CENSUS): the mine-site finder's cell tests,
+       from its one call (LR 0x02092C0D). Registered only with the variable.
+       SG-0032 / docs/444. */
+    {kAiMineScore, 0u, ai_mine_score_observer, nullptr},   /* 0x020881B0 */
     /* Substitutes the faction-aligned side at MATCH LOAD, before the
        music starts, so freeplay opens on the right calm/battle pair. */
     {kSetMusicSide, 1u, set_music_side_override, nullptr}, /* 0x02088980 */
     /* Thumb. An entity's own sound: a custom unit's WAV instead of its
        template's sequence (docs/448); otherwise a pure tail call. */
     {kEntitySound, 1u, entity_sound_override, nullptr},    /* 0x02089270 */
+    /* Thumb. Observer only (LB_AI_CENSUS): the AI's mine and bridge build
+       requests. Registered only with the variable. SG-0032 / docs/444. */
+    {kAiQueueBuild, 1u, ai_queue_build_observer, nullptr}, /* 0x02097374 */
     /* Thumb. The map parser: Force Tileset's name, and each level's world;
        otherwise a pure tail call. docs/387. */
     /* Thumb. Terrain_FillWindow: a forced level's detail cells and blank
@@ -7800,9 +8156,17 @@ const NdsDispatchEntry kOverrideTable[] = {
     /* Thumb. ClientLobby's ready toggle: refused while this joiner lacks
        the host's mod map. docs/413. */
     {kReadyToggle, 1u, ready_toggle_override, nullptr},    /* 0x020B6074 */
+    /* Thumb. ClientLobby::virtual_12 (shown) and virtual_09 (update): the
+       joiner's map text is redrawn once per show and mission; then a tail
+       call. docs/455. */
+    {kClientLobbyShow, 1u, client_lobby_show_override, nullptr}, /* 0x020B61A8 */
+    {kClientLobbyTick, 1u, client_lobby_tick_override, nullptr}, /* 0x020B64B4 */
     /* Thumb. The army screen's list fill: an observer that starts the scroll
        window's count (docs/450); then a pure tail call. */
     {kArmyListFill, 1u, army_list_fill_observer, nullptr}, /* 0x020B96FC */
+    /* Thumb. LobbySettings::virtual_09: the map label is redrawn when the
+       lobby's mission is not the one drawn; then a tail call. docs/455. */
+    {kLobbySettingsTick, 1u, lobby_settings_tick_override, nullptr}, /* 0x020BE228 */
     /* Thumb. User::MainMenu::virtual_09: a requested rename is saved by the
        game's own save in front of it; otherwise a pure tail call. docs/397. */
     {kMainMenuUpdate, 1u, main_menu_update_override, nullptr}, /* 0x020BF230 */
@@ -7896,6 +8260,11 @@ const NdsDispatchEntry kOverrideTable[] = {
 static_assert(kRosterBuild < kEbpLoaded && kEbpLoaded < kRegistryFind &&
               kRegistryFind < kBillboardDraw && kBillboardDraw < kFeCard &&
               kSelRect < kReadyToggle && kReadyToggle < kMainMenuUpdate &&
+              kReadyToggle < kClientLobbyShow &&
+              kClientLobbyShow < kClientLobbyTick &&
+              kClientLobbyTick < kArmyListFill &&
+              kArmyListFill < kLobbySettingsTick &&
+              kLobbySettingsTick < kMainMenuUpdate &&
               kSelRect < kMainMenuUpdate && kMainMenuUpdate < kEnemyMap &&
               kEnemyMap < kOppSetupLabel &&
               kOppSetupLabel < kEnemyCycle &&
@@ -7919,8 +8288,8 @@ static_assert(kRosterBuild < kEbpLoaded && kEbpLoaded < kRegistryFind &&
               kApplyDamage < kHealTick && kHealTick < kHotWireTick &&
               kHotWireTick < kCastGround && kCastGround < kCastSpell &&
               kCastSpell < kTileGather &&
-              kTileGather < kTeamAddBricks && kTeamAddBricks < kSetMusicSide &&
-              kSetMusicSide < kFillWindow && kFillWindow < kMapParse &&
+              kTileGather < kTeamAddBricks && kTeamAddBricks < kAiMineScore && kAiMineScore < kSetMusicSide &&
+              kSetMusicSide < kAiQueueBuild && kAiQueueBuild < kFillWindow && kFillWindow < kMapParse &&
               kMapParse < kFloatNumber && kFloatNumber < kTouchRect &&
               kTouchRect < kMoveIssue &&
               kMoveIssue < kClickDispatch && kClickDispatch < kSelRect &&
@@ -7939,6 +8308,7 @@ static_assert(kRosterBuild < kEbpLoaded && kEbpLoaded < kRegistryFind &&
               kWmConnectedAids < kWmLinkLevel && kWmLinkLevel < kWmSetGameInfo &&
               kWmSetGameInfo < kWmSetEntry && kWmSetEntry < kFAdd &&
               kFAdd < kFMul && kFMul < kFSub && kFSub < kDivMod &&
+              kSetOwner < kEntityState && kEntityState < kU16IsSet &&
               kSetOwner < kU16IsSet && kU16IsSet < kSetHp &&
               kSetHp < kListFind && kListFind < kApplyDamage &&
               kFeCard < kCreatureSprLoad && kCreatureSprLoad < kMapLoad &&
@@ -13922,6 +14292,36 @@ static void apply_hotwire_specials_only(void) {
     std::fflush(stderr);
 }
 
+// SG-0045 / docs/452: Hotwire Neutrals in missions. The tap word of
+// kHotwireAnything on its own (0x3B -> 0x2B, so a tap takes any non-ally);
+// cast_spell_override narrows it back to transports, specials and neutrals.
+// Written only in a single-player mission with the option on, and put back
+// when that stops being true. Anything (mode 2) owns the same word, so this
+// never writes or restores it while Anything is on.
+static void apply_hotwire_neutrals(void) {
+    constexpr uint32_t kTap = 0x020A9458u, kStock = 0x213BA802u, kWant = 0x212BA802u;
+    static int applied = 0;
+    static unsigned gen = 0;          // a reset restores stock
+    if (gen != g_boot_gen) { gen = g_boot_gen; applied = 0; }
+    const bool want = hotwire_neutrals_live();
+    const uint32_t got = bus_read_u32(kTap);
+    if (want && !applied) {
+        if (got != kStock) return;    // not loaded yet, or not this build
+        bus_write_u32(kTap, kWant);
+        applied = 1;
+        std::fprintf(stderr, "[lb_hotwire] neutrals ON: the tap takes any "
+                     "non-ally (%08X), a human's cast is held to transports, "
+                     "specials and neutrals\n", kTap);
+        std::fflush(stderr);
+    } else if (!want && applied) {
+        if (got == kWant && !lb_setting_hotwire_anything())
+            bus_write_u32(kTap, kStock);
+        applied = 0;
+        std::fprintf(stderr, "[lb_hotwire] neutrals off\n");
+        std::fflush(stderr);
+    }
+}
+
 // ── docs/406: EMP disables transports (player suggestion 7) ──────────────
 //
 // Battles::Sim::EAttackSpell::virtual_03 (0x0207731C) moves the spell and,
@@ -14484,6 +14884,19 @@ static bool free_play_mission(void) {
 // BR-0034: the music override is for Free Play and multiplayer matches; a
 // campaign mission keeps the music the cartridge gives it.
 extern "C" int lb_mission_is_free_play(void) { return free_play_mission() ? 1 : 0; }
+
+// SG-0045: a single-player mission is one that is loaded and is not the
+// multiplayer base class. Free Play, every online match and the mod maps all
+// register through FUN_02045E50 as MultiplayerMissionBase (docs/391), so they
+// are all "free play" above; a campaign or story mission has its own v06.
+// (In the unnamed namespace, where its declaration above is.)
+namespace {
+bool single_player_mission(void) {
+    auto ram = [](uint32_t p) { return p >= 0x02000000u && p < 0x02400000u; };
+    const uint32_t m = bus_read_u32(0x02154078u + 8u);   // FUN_02045AE8
+    return ram(m) && ram(bus_read_u32(m)) && !free_play_mission();
+}
+}  // namespace
 
 static void ai_spectate_mirror(void) {
     auto ram = [](uint32_t p) { return p >= 0x02000000u && p < 0x02400000u; };
@@ -16743,6 +17156,7 @@ extern "C" void lb_patches_on_vblank(void) {
     // accessor and no caller until the vanilla rule above was located.
     apply_hotwire_anything();
     apply_hotwire_specials_only();
+    apply_hotwire_neutrals();         // SG-0045
     apply_emp_transports();           // docs/406
     lb_ar_apply_frame();   // SG-0035: Action Replay codes (recordings do not carry them)
     apply_ai_cheats();
@@ -16756,7 +17170,8 @@ extern "C" void lb_patches_on_vblank(void) {
     apply_ai_spectate();              // SG-0002
     ai_opp_tick();                    // docs/414
     brick_log();
-    lb_scores_tick();                 // SG-0018: match statistics, read only
+    ai_census_tick();                 // SG-0032: LB_AI_CENSUS, test aid
+    lb_scores_tick();                // SG-0018: match statistics, read only
     cam_rest_log();                   // docs/408 test aid
     // Move the order path off the cartridge's byte touch
     // fields. Gated on LB_ORDERFIX; a no-op unless it is set. docs/238.
@@ -17135,6 +17550,7 @@ extern "C" void lsw2_register_dispatch_overrides(const char* rom_sha1) {
                          a == kSplitArray || a == kListFind ||
                          a == kU16IsSet || a == kFAdd || a == kFMul ||
                          a == kFSub)) continue;
+        if ((a == kAiMineScore || a == kAiQueueBuild) && !std::getenv("LB_AI_CENSUS")) continue;
         bool skipped = false;
         for (const char* p = skip; p && *p && !skipped;) {
             char* end = nullptr;
