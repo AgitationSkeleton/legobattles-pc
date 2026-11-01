@@ -39,6 +39,8 @@
 
 #include <SDL.h>
 
+#include "lb_cunits.h"   // docs/448: custom units
+
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -758,7 +760,28 @@ extern "C" int lb_mods_build(std::vector<uint8_t>* rom_p) {
     Nitro fs;
     if (!fs.parse(&rom[fo], fs_n, &rom[ao], as_n)) return 0;
     scan(rom, fs);
-    if (g_maps.empty()) {
+    // docs/448: custom units append records to BP/Entities.ebp and add their
+    // sheets, cards and models in new "cu" directories (lb_cunits.cpp).
+    std::vector<CuFile> cu_files;
+    std::vector<std::string> cu_names;
+    bool cu = false;
+    const int ebp_id = fs.find("BP/Entities.ebp");
+    if (ebp_id >= 0 && (size_t)ebp_id < fs.fat.size()) {
+        const auto se = fs.fat[(size_t)ebp_id];
+        if (se.second > se.first && se.second <= rom.size()) {
+            std::vector<uint8_t> e(rom.begin() + se.first, rom.begin() + se.second);
+            const CuReader reader = [&](const std::string& path, std::vector<uint8_t>* out) {
+                const int id = fs.find(path);
+                if (id < 0 || (size_t)id >= fs.fat.size()) return false;
+                const auto fe = fs.fat[(size_t)id];
+                if (fe.second <= fe.first || fe.second > rom.size()) return false;
+                out->assign(rom.begin() + fe.first, rom.begin() + fe.second);
+                return comp_unwrap(out);
+            };
+            cu = comp_unwrap(&e) && lb_cunits_prepare(e, reader, &cu_files, &cu_names);
+        }
+    }
+    if (g_maps.empty() && !cu) {
         std::fprintf(stderr, "[lb_mods] %s: no mod maps\n", g_status.c_str());
         std::fflush(stderr);
         return 0;
@@ -825,9 +848,11 @@ extern "C" int lb_mods_build(std::vector<uint8_t>* rom_p) {
     // same ids in each (they all hold 3,064 in the retail ROM).
     std::vector<std::string> strings;
     for (const ModMap& m : g_maps) { strings.push_back(m.name); strings.push_back(m.desc); }
+    const size_t cu_first_string = strings.size();   // docs/448: one name per custom unit
+    for (const std::string& nm : cu_names) strings.push_back(nm);
     uint32_t first_new = 0;
     bool first_set = false;
-    {
+    if (!strings.empty()) {
         int id = fs.dirs[(size_t)loc].first;
         for (const Entry& e : fs.dirs[(size_t)loc].entries) {
             if (e.dir) continue;
@@ -851,9 +876,35 @@ extern "C" int lb_mods_build(std::vector<uint8_t>* rom_p) {
             fs.fat[(size_t)this_id] = place(x);
         }
     }
-    if (!first_set) {
+    if (!first_set && !g_maps.empty()) {
         g_maps.clear();
-        return 0;
+        if (!cu) return 0;
+    }
+    if (cu) {
+        // The extended blueprint file, its names at the ids just appended.
+        std::vector<uint8_t> ebp;
+        if (lb_cunits_finish(first_set ? (int)(first_new + cu_first_string) : -1, &ebp))
+            fs.fat[(size_t)ebp_id] = place(ebp);
+        // One "cu" directory per parent, its files in id order.
+        std::vector<std::string> parents;
+        for (const CuFile& f : cu_files)
+            if (std::find(parents.begin(), parents.end(), f.parent) == parents.end()) parents.push_back(f.parent);
+        for (const std::string& par : parents) {
+            int pd = 0;
+            size_t at = 0;
+            while (pd >= 0 && at < par.size()) {
+                const size_t sl = par.find('/', at);
+                pd = fs.child(pd, par.substr(at, sl == std::string::npos ? std::string::npos : sl - at).c_str());
+                at = sl == std::string::npos ? par.size() : sl + 1;
+            }
+            if (pd < 0) continue;
+            const int cud = add_dir(pd, "cu");
+            for (const CuFile& f : cu_files) {
+                if (f.parent != par) continue;
+                fs.dirs[(size_t)cud].entries.push_back(Entry{false, f.name, -1});
+                fs.fat.push_back(place(f.data));
+            }
+        }
     }
     for (size_t k = 0; k < n; ++k) {
         g_maps[k].name_id = first_new + 2u * (uint32_t)k;

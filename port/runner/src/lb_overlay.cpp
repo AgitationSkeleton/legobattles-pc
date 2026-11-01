@@ -89,6 +89,7 @@ extern "C" const char* lb_mods_dir(void);   /* lb_mods.cpp */
 #include <thread>   /* docs/430: the update check's own thread */
 void lb_mapbrowser_draw(SDL_Renderer* renderer);   /* docs/431: lb_mapfetch.cpp */
 void lb_leveledit_draw(SDL_Renderer* renderer);    /* the level editor: lb_leveledit.cpp */
+void lb_unitlab_draw(SDL_Renderer* renderer);      /* Balance > Custom units: lb_unitlab.cpp */
 void lb_community_draw(SDL_Renderer* renderer);    /* community levels: lb_leveledit.cpp */
 
 // lb_https.cpp (WinHTTP); defined outside any namespace.
@@ -1131,16 +1132,14 @@ void badge(Status s) {
     if (s == READ) {
         ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.25f, 1.0f), "[read, not wired]");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("The ROM location is known and cited in docs/,\n"
-                              "but this control does not affect the game yet.");
+            ImGui::SetTooltip("Found in the ROM, but this control does\n"
+                              "not affect the game yet.");
     } else if (s == UNSEEN) {
         ImGui::TextColored(ImVec4(0.55f, 0.80f, 0.95f, 1.0f),
                            "[wired, not yet seen firing]");
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("The whole chain is present and traced, but this\n"
-                              "has never been watched taking effect, because\n"
-                              "the test harness cannot stage the situation it\n"
-                              "needs. It is untested, not known-broken.");
+            ImGui::SetTooltip("Hooked up but never seen working: the tests\n"
+                              "can't set up the situation. Untested, not broken.");
     } else {
         // BLOCKED, and the only state left: WIRED returned above and the enum
         // has four members. The trailing branch that used to be here drew
@@ -1158,9 +1157,7 @@ void badge(Status s) {
             // Saying otherwise in the UI repeated a wrong conclusion at the
             // player.
             ImGui::SetTooltip(
-                "Understood but not applicable.\n"
-                "What this needs is not reachable in the way the port would\n"
-                "have to hook it. Needs more coverage, not more research.");
+                "Understood, but the port can't hook it yet.");
     }
 }
 
@@ -1324,13 +1321,13 @@ void host_lock_end(bool l) { if (l) ImGui::EndDisabled(); }
 void host_lock_note(bool l) {
     if (l) {
         ImGui::PushTextWrapPos(0.0f);
-        ImGui::TextDisabled("This is the host's setting, in force while you are in its lobby or match. Yours returns when you leave.");
+        ImGui::TextDisabled("The host's setting applies in its lobby and match. Yours returns when you leave.");
         ImGui::PopTextWrapPos();
     }
 }
 
 void host_note() {
-    ImGui::TextDisabled("Host-decided; joining clients conform.");
+    ImGui::TextDisabled("Online, the host decides.");
     ImGui::Separator();
 }
 
@@ -1405,9 +1402,8 @@ void tab_display() {
     // docs/411: the 3D models (ships, siege, specials) without the outline
     // and with smoothed edges. Off is the game's own look.
     ImGui::Checkbox("Smooth 3D Models", &g_set.smooth_models);
-    help("The game draws its ships, siege and special units with a dark\n"
-         "outline and no edge smoothing. On, they keep the smoothing and\n"
-         "lose the outline. Only this machine sees it.");
+    help("Draws ships, siege and special units with smooth edges and no\n"
+         "dark outline. Only you see it.");
     badge(WIRED);
 
     // docs/434 (BR-0003): the 3D layer drawn at a higher resolution, so the
@@ -1416,13 +1412,9 @@ void tab_display() {
         const char* res[] = {"Native", "2x", "3x", "4x"};
         slider_width();
         ImGui::Combo("3D resolution", &g_set.res3d, res, IM_ARRAYSIZE(res));
-        help("Draws the special units' 3D models (ships, siege, the\n"
-             "other specials) at 2, 3 or 4 times the game's own\n"
-             "resolution, so their outlines and shapes are sharp in a\n"
-             "large window. Everything else is drawn exactly as the game\n"
-             "does, and the models' textures stay as the game stores them.\n"
-             "2x is free; higher costs speed. Needs Enhanced mode. Only\n"
-             "this machine sees it; it does not affect online play.");
+        help("Draws the 3D models (ships, siege, specials) at a higher\n"
+             "resolution so they stay sharp in a large window.\n"
+             "2x is free; higher costs speed. Needs Enhanced mode. Only you see it.");
         badge(WIRED);
     }
 
@@ -1434,7 +1426,7 @@ void tab_display() {
     // the label legible.
     slider_width();
     ImGui::SliderFloat("UI scale", &g_ui_scale, 0.75f, 3.0f, "%.2fx");
-    help("Size of this panel. Does not touch the game.");
+    help("Size of this panel.");
     // THE ONE MUTATING CONTROL IN THE PANEL WITH NO badge() CALL, on purpose.
     // The badge vocabulary is about whether a control reaches the SIMULATION,
     // and this one is not trying to: it scales the settings panel itself.
@@ -1462,9 +1454,8 @@ void tab_display() {
     //     whatever does fit. At the old default of 4.0 that made several window
     //     sizes show the SAME field at different zooms -- the fault,
     //     and the reason the field-of-view readout below sits beside this.
-    help("Guest pixel size. Field = window / this, so a bigger window\n"
-         "shows MORE field rather than the same view blown up.\n"
-         "Capped: 1024x512 guest pixels max, and 256x192 must fit.");
+    help("How big each game pixel is drawn. A bigger window shows more\n"
+         "of the map. Limits: 1024x512 game pixels max, 256x192 min.");
     badge(WIRED);
     // SHOW THE THREE NUMBERS THE SETTING ACTUALLY CONTROLS.
     //
@@ -1478,14 +1469,13 @@ void tab_display() {
         int fx = 0, fy = 0, fw = 0, fh = 0, gw = 0, gh = 0;
         if (lb_overlay_field_rect(&fx, &fy, &fw, &fh, &gw, &gh) && gw > 0 &&
             gh > 0) {
-            ImGui::Text("  now: %dx%d guest pixels, %.2fx magnification, "
-                        "%.2fx / %.2fx the DS's field",
+            ImGui::Text("  now: %dx%d game pixels, %.2fx magnification, "
+                        "%.2fx / %.2fx the DS's view",
                         gw, gh, (double)fw / (double)gw,
                         (double)gw / 256.0, (double)gh / 192.0);
             if (gw >= 1024 || gh >= 512)
-                ImGui::TextDisabled("  at the 1024x512 ceiling: a larger "
-                                    "window now scales up instead of showing "
-                                    "more.");
+                ImGui::TextDisabled("  at the 1024x512 limit: a larger "
+                                    "window now just scales up.");
         }
     }
     ImGui::Spacing();
@@ -1496,8 +1486,7 @@ void tab_display() {
     // they look tiny on a big one. Kept separate from Enhanced on purpose:
     // how big you want the buttons is a taste, not part of making the window
     // size work.
-    help("The in-field buttons are drawn for a 256-px screen.\n"
-         "Scaling pins the anchored corner and grows inward.");
+    help("Size of the on-screen game buttons.");
     badge(WIRED);
 
     if (!g_set.enhanced) {   // SG-0011: DS Vanilla's two screens
@@ -1525,11 +1514,9 @@ void tab_display() {
             ImGui::PopID();
             if (*r.v < 0.25f) *r.v = 0.25f;
             if (*r.v > 2.0f) *r.v = 2.0f;
-            help("How big this screen is next to the other, in DS Vanilla. 100%\n"
-                 "each is the DS's own equal screens; the pair always fits the\n"
-                 "window, and clicks follow the bottom screen. Ctrl+click a\n"
-                 "slider, or use the box beside it, to type a value.\n"
-                 "This machine only; no effect online.");
+            help("Size of this screen in DS Vanilla. 100% each matches the DS.\n"
+                 "Both screens always fit the window. Ctrl+click or use the box\n"
+                 "to type a value. Only you see it.");
         }
         if (ImGui::Button("Reset screen sizes")) g_set.top_scale = g_set.bottom_scale = 1.0f;
         badge(WIRED);
@@ -1544,9 +1531,8 @@ void tab_display() {
     // settings.json -> lb_setting_steady_cadence -> lb_cadence_effective ->
     // get_ms_override (lb_patches.cpp), consulted on every pass. A replay
     // plays at the pacing it was recorded with, whatever this says.
-    help("Even steps instead of the uneven 1-2-1-2 the cartridge takes\n"
-         "at this port's CPU speed. The game runs ~19% fewer steps a\n"
-         "second -- probably the DS's own pace. Off: the cartridge's.");
+    help("Smooth, even game steps instead of the cartridge's uneven ones.\n"
+         "The game runs about 19% slower, likely the DS's real pace.");
     badge(WIRED);
 
     // docs/387: a Level Palettes option (Per-Mod/Vanilla/FactionWars/Random,
@@ -1556,19 +1542,14 @@ void tab_display() {
     // during a battle; lb_patches.cpp's map_parse_override renames the map's
     // tileset as it loads, so that one applies from the next battle.
     ImGui::Separator();
-    guide("Level Palettes: the colours the maps are drawn in. Pick one and start a "
-          "battle. This is local only: other players do not see it.");
+    guide("Level Palettes: the colours maps are drawn in. Only you see them.");
     const char* palettes[] = {"Per-Mod", "Vanilla", "FactionWars / FunLite2", "Random"};
     ImGui::Combo("Level Palettes", &g_set.level_palette, palettes,
                  IM_ARRAYSIZE(palettes));
-    help("FunLite2's Pirate and Mars palettes are these exactly; its King\n"
-         "palette is the same except that its water colours are black,\n"
-         "which this does not copy.\n"
-         "The terrain's colours. FactionWars is that romhack's recolour of\n"
-         "the three tilesets (REbalance ships the same); Random picks one\n"
-         "per level. Per-Mod is the ROM's own palettes for now: a mod map\n"
-         "found in several mods has no single palette of its own.\n"
-         "Changes at once, even mid-battle. Only this machine sees it.");
+    help("Terrain colours. FactionWars is that romhack's recolour (also used\n"
+         "by REbalance and FunLite2, minus FunLite2's black King water).\n"
+         "Random picks one per level. Per-Mod uses the ROM's own palettes.\n"
+         "Changes at once, even mid-battle. Only you see it.");
     badge(WIRED);
     // SG-0034: the player's own palette files, one per world.
     {
@@ -1605,10 +1586,8 @@ void tab_display() {
                 ImGui::EndCombo();
             }
         }
-        help("Your own palette files: put .nclr files (the format of the game's\n"
-             "KingTileset.NCLR, PirateTileset.NCLR and MarsTileset.NCLR) in the\n"
-             "mods/palettes folder and pick one for each world. It replaces\n"
-             "Level Palettes for that world's maps. Only this machine sees it.");
+        help("Put .nclr palette files in mods/palettes and pick one per world.\n"
+             "It overrides Level Palettes for that world. Only you see it.");
         badge(WIRED);
         if (files.empty())
             ImGui::TextDisabled("  No .nclr files in %s/palettes yet.", lb_mods_dir());
@@ -1618,35 +1597,26 @@ void tab_display() {
                              "FactionWars / FunLite2", "Random"};
     ImGui::Combo("Mod Map Palettes", &g_set.mod_palette, modpals,
                  IM_ARRAYSIZE(modpals));
-    help("The colours of the maps from the mods folder. Same as Level\n"
-         "Palettes follows the choice above; any other keeps mod maps on\n"
-         "their own choice, so FactionWars colours on the stock maps can\n"
-         "leave the mods' maps as they were.");
+    help("Colours for maps from the mods folder, if you want them\n"
+         "different from the stock maps.");
     badge(WIRED);
     const char* tilesets[] = {"Off", "Castle", "Pirates", "Mars", "Random"};
     ImGui::Combo("Force Tileset", &g_set.force_tileset, tilesets,
                  IM_ARRAYSIZE(tilesets));
-    help("Draws every map with this world's tileset (Random: one per\n"
-         "level). Gameplay is unchanged -- terrain, water and cliffs come\n"
-         "from the map. Applies from the next battle, single player only.");
+    help("Draws every map with this world's tileset. Looks only; gameplay\n"
+         "is unchanged. From the next battle, single player only.");
     badge(WIRED);
     // docs/391: what the mods folder gave, read once at launch.
     ImGui::Separator();
     ImGui::TextDisabled("Mod maps: %s", lb_mods_status());
-    help("Put mod ROMs (.nds) in a folder named \"mods\" beside the game.\n"
-         "Every multiplayer map a mod replaced is added after the 30 stock\n"
-         "maps in Free Play's map list, with its own name, preview and\n"
-         "player count. Maps several mods share are listed once. Read when\n"
-         "the game starts. Not offered when hosting a multiplayer game yet:\n"
-         "every player would need the same maps.");
+    help("Put mod ROMs (.nds) in a \"mods\" folder beside the game. Their\n"
+         "multiplayer maps are added to Free Play's map list. Read at startup.");
     badge(WIRED);
     ImGui::Separator();
     // SG-0016: the logos run on the game's own clock and cannot be tapped
     // through, so the boot is simply run at full speed until the title shows.
     ImGui::Checkbox("Skip the intro screens", &g_set.skip_intro);
-    help("Runs the opening logos at full speed so the game reaches its title\n"
-         "screen at once. Applies at start-up and after Reset. Local to this\n"
-         "machine; online play is unaffected.");
+    help("Fast-forwards the opening logos to the title screen.");
     badge(WIRED);
     tab_end();
 }
@@ -1668,26 +1638,23 @@ void tab_enhancements() {
                                "Earth", "Alien", "Custom", "Randomizer"};
     ImGui::Combo("##default_opponent", &g_set.default_opponent, opponents,
                  IM_ARRAYSIZE(opponents));
-    help("The opponent Free Play's opponent screen opens on. The arrows\n"
-         "still cycle as before. Wizard is the game's own default; Custom\n"
-         "is the Team Builder's enemy team, Randomizer a new army each\n"
-         "match.");
+    help("The opponent Free Play starts on. The game's default is Wizard.\n"
+         "Custom is the Team Builder's enemy team; Randomizer is a new\n"
+         "army each match.");
     badge(WIRED);
     ImGui::Separator();
 
     // docs/406: FUN_0208A5C0 freed a dead hero's build record from the army
     // list instead of the hero's, so the AI's second hero was its last.
     ImGui::Checkbox("The AI Rebuilds Its Hero Every Time", &g_set.ai_hero_rebuild);
-    help("The computer rebuilds its hero once, then never again: the game\n"
-         "loses track of the second one. On, it rebuilds after every death.\n"
-         "Free Play only.");
+    help("Normally the computer rebuilds its hero only once. On, it\n"
+         "rebuilds it after every death. Free Play only.");
     badge(WIRED);
     // SG-0002: AI vs AI.
     ImGui::Checkbox("AI Plays My Side (Spectate)", &g_set.ai_spectate);
-    help("Free Play only: the computer plays your side as well, so two\n"
-         "computer players fight and you watch. The map is revealed.\n"
-         "You can still give orders to your units. Takes effect when a\n"
-         "battle starts. Not online.");
+    help("The computer plays your side too, and you watch with the map\n"
+         "revealed. You can still give orders. From the next battle.\n"
+         "Free Play only, not online.");
     badge(WIRED);
     ImGui::Spacing();
     ImGui::Text("Attack Boost Reaches Ranged Units");
@@ -1705,13 +1672,9 @@ void tab_enhancements() {
         host_lock_end(lk);
         host_lock_note(lk);
     }
-    help("Vanilla buffs melee damage only; ranged keeps the projectile's own.\n"
-         "On lets Attack Boost raise every shot that lands on its target:\n"
-         "a shooter with melee damage gets the same bonus, one without\n"
-         "(archers, riflemen, most ranged heroes) does double damage, as\n"
-         "the boost does to a melee blow. Never the splash of a boulder,\n"
-         "fireball or cannonball. Online, the host's setting applies to\n"
-         "everyone.");
+    help("Vanilla Attack Boost only buffs melee. On, it also boosts shots\n"
+         "that hit their target (pure ranged units do double damage), but\n"
+         "not splash damage. Online, the host's setting applies.");
     badge(UNSEEN);
     // The reasoning behind this setting lived in TEN TextDisabled lines, which
     // the panel then followed with a two-line summary of the same thing.
@@ -1754,11 +1717,11 @@ void tab_enhancements() {
     // With a balance patch active this equalises to the PATCHED builder,
     // because the patch is applied first. See apply_same_builders.
     help(g_set.balance_patch != 0
-         ? "Every builder takes the chosen one's 14 stats, as patched.\n"
-           "Takes effect at once outside a battle or lobby; Off undoes it."
-         : "Every builder takes the chosen one's 14 stats (speed, cost,\n"
-           "build time, health, damage, yield, range...).\n"
-           "Takes effect at once outside a battle or lobby; Off undoes it.");
+         ? "Every builder gets the chosen one's stats, as patched.\n"
+           "Applies outside a battle or lobby; Off undoes it."
+         : "Every builder gets the chosen one's stats (speed, cost,\n"
+           "health, damage, yield and so on).\n"
+           "Applies outside a battle or lobby; Off undoes it.");
     badge(WIRED);
     // docs/386: a change made in a battle or lobby waits; say so.
     if (lb_patches_blueprint_base() &&
@@ -1780,9 +1743,8 @@ void tab_enhancements() {
             goal = (goal + 250) / 500 * 500;
             g_set.gold_rush_target = goal == 10000 ? 0 : goal;
         }
-        help("The bricks an army needs to win a LEGO Gold Rush match. The game's\n"
-             "own is 10,000. Online, the host's applies (both players need this\n"
-             "version). Ctrl+click to type a number.");
+        help("Bricks needed to win a Gold Rush match. Default 10,000.\n"
+             "Online, the host's applies. Ctrl+click to type a number.");
         badge(WIRED);
         {
             const int host = lb_rules_host_gold_target();
@@ -1790,8 +1752,7 @@ void tab_enhancements() {
                 ImGui::TextDisabled("In this lobby, the host's: %d bricks", host > 0 ? host : 10000);
         }
         ImGui::Checkbox("Show every army's bricks in Gold Rush", &g_set.gold_rush_view);
-        help("In a LEGO Gold Rush match, a small panel lists each army's bricks\n"
-             "against the target, so you can see who is close to winning.");
+        help("Shows each army's bricks against the target in Gold Rush.");
         badge(WIRED);
     }
 
@@ -1800,7 +1761,7 @@ void tab_enhancements() {
     // values (draw_balance_pack).
     ImGui::Text("Balance Patch: %s", lb_balance_name(g_set.balance_patch));
     ImGui::SameLine();
-    ImGui::TextDisabled("(set it, and every unit's values, in the Balance menu)");
+    ImGui::TextDisabled("(change it in the Balance menu)");
 
     // COSMETIC AND THIS MACHINE'S ONLY -- see below.
     draw_after_balance_pack();
@@ -1809,7 +1770,7 @@ void tab_enhancements() {
 // SG-0001: the hotwire, EMP and healing options, in Balance > Spells.
 void tab_balance_spells() {
     if (!tab_begin("Balance Spells")) return;
-    guide("Rules for the Hotwire, EMP and Heal spells. Online, the host's choices apply to everyone.");
+    guide("Rules for the Hotwire, EMP and Heal spells. Online, the host's choices apply.");
     ImGui::Text("Hotwire targets");
     const char* hotwire_modes[] = {
         "Vanilla",
@@ -1828,10 +1789,9 @@ void tab_balance_spells() {
     // twice, so a tap takes any enemy, and also drops the farm cap; Specials
     // only refuses, as the validator's 0 would, a hotwire whose target is not
     // category 5 or 6, which is exactly the glitch (cast_spell_override).
-    help("Vanilla aims Hotwire at enemy transports and specials; the glitch\n"
-         "steals whatever is under a special's corner. Specials only refuses\n"
-         "that glitch. Anything (cheat) lets Hotwire target any enemy unit,\n"
-         "hero or building directly, and drops the farm limit.");
+    help("Vanilla: enemy transports and specials, plus a glitch that steals\n"
+         "whatever is under a special's corner. Specials only: no glitch.\n"
+         "Anything (cheat): any enemy unit, hero or building, no farm limit.");
     badge(WIRED);
 
     ImGui::Spacing();
@@ -1854,8 +1814,8 @@ void tab_balance_spells() {
                      IM_ARRAYSIZE(transport_modes));
         if (!hw_lock) g_set.hotwire_transport = ht;
     }
-    help("What happens to the units inside a transport when it is hotwired.\n"
-         "Off leaves them the old owner's, as the game does.");
+    help("What happens to units inside a hotwired transport.\n"
+         "Off: they stay with the old owner, as in the game.");
     badge(WIRED);
     // docs/408: the computer player that owned it kept ordering it about.
     {
@@ -1863,17 +1823,15 @@ void tab_balance_spells() {
         ImGui::Checkbox("Hotwired Transports Leave Their Old Owner", &tr);
         if (!hw_lock) g_set.transport_release = tr;
     }
-    help("In the game, a transport stolen from the computer still sails\n"
-         "where its old owner sends it, and is let go when that order\n"
-         "ends. On, the old owner forgets it the moment it is hotwired.");
+    help("Normally a transport stolen from the computer keeps following\n"
+         "its old owner's orders for a while. On, it stops at once.");
     badge(WIRED);
     ImGui::Spacing();
     // docs/406: FUN_020775F0 collects the EMP's victims by category 6 only;
     // the patch lets category 5 (transports) in as well.
     ImGui::Checkbox("EMP Disables Transports", &g_set.emp_transports);
-    help("The EMP spell disables special units only.\n"
-         "On, it disables transports caught in it too. Online, the host's\n"
-         "setting applies to everyone.");
+    help("EMP normally hits special units only. On, it hits transports too.\n"
+         "Online, the host's setting applies.");
     badge(WIRED);
     if (lb_rules_host_flags() >= 0)
         ImGui::TextDisabled("In this lobby, the host's: %s",
@@ -1885,8 +1843,8 @@ void tab_balance_spells() {
         ImGui::Checkbox("Fix Hotwired Healing", &fh);
         if (!hw_lock) g_set.fix_hotwired_healing = fh;
     }
-    help("HealSpell skips hotwired units; On removes that filter.\n"
-         "Online, the host's setting applies to everyone.");
+    help("Heal normally skips hotwired units. On, it heals them too.\n"
+         "Online, the host's setting applies.");
     badge(WIRED);
     host_lock_end(hw_lock);
     host_lock_note(hw_lock);
@@ -1894,10 +1852,8 @@ void tab_balance_spells() {
     // SG-0017 step 1: the AI's single-target spells.
     ImGui::Spacing();
     ImGui::Checkbox("AI Uses Targeted Spells", &g_set.ai_tap_spells);
-    help("The computer's heroes also cast the spells you aim at one unit\n"
-         "(damage spells, unit boosts), and Hotwire and EMP, which the game's\n"
-         "AI never chooses. In the game they only cast spells that hit the\n"
-         "ground or themselves. Not online.");
+    help("Computer heroes also cast spells aimed at a unit (damage, boosts,\n"
+         "Hotwire, EMP), not just area and self spells. Not online.");
     badge(WIRED);
     tab_end();
 }
@@ -1905,13 +1861,12 @@ void tab_balance_spells() {
 // SG-0001: the build limits, in Balance > Unit Caps.
 void tab_balance_caps() {
     if (!tab_begin("Balance Caps")) return;
-    guide("How many heroes, units, towers and buildings each player may have. Online, the host's limits apply to everyone.");
+    guide("How many heroes, units, towers and buildings each player can have. Online, the host's limits apply.");
     ImGui::Text("Build limits");
     // The allowance table at 0x02126D94 is one byte per build-limit CLASS,
     // not per unit type, which is why the names below are classes.
-    help("0 keeps the cartridge's own value; max 255.\n"
-         "One limit per build class, not per unit type.\n"
-         "Live and reversible: clearing a box restores the shipped byte.");
+    help("0 keeps the game's value; max 255. Each limit covers a whole\n"
+         "class, not one unit type. Takes effect at once.");
     // THE THREE UNNAMED CLASSES, SETTLED BY READING func_020860A8.
     //
     // docs/58 and docs/68 left 4, 5 and 9 unnamed, and the boxes went out
@@ -1975,8 +1930,7 @@ void tab_balance_caps() {
         }
         if (i == 4)
             help("Mill, Mine, Farm, Barracks, Vehicle Center and Shipyard.\n"
-                 "Towers, Walls and Bridges have their own limits below;\n"
-                 "the Base and all units are counted elsewhere.");
+                 "Towers, Walls and Bridges have their own limits.");
         ImGui::SameLine();
         ImGui::TextDisabled("(shipped %d)", kShippedCap[i]);
         ImGui::PopID();
@@ -1995,10 +1949,8 @@ void draw_balance_pack() {
     // tilesets -- REbalance ships 14 custom maps -- and those are not
     // distributed here; see docs/101 for what each pack contains.
     // docs/386: live outside a battle and a lobby (it used to need a restart).
-    help("Stat changes only; the packs' custom maps are not bundled.\n"
-         "Takes effect at once outside a battle or lobby, including\n"
-         "switching packs or back to Off; a change made during a battle\n"
-         "or in a lobby waits until you leave it.");
+    help("Stat changes only; the packs' custom maps aren't included.\n"
+         "A change made in a battle or lobby waits until you leave it.");
     // WIRED, and measured rather than read off the code. The badge said READ,
     // "the ROM location is known but not hooked up", which understated it: the
     // chain is this combo -> lb_setting_balance_patch -> lb_patches.cpp:3195 at
@@ -2026,7 +1978,7 @@ void draw_balance_pack() {
     // docs/386: what is in the game now, and why a change is not yet.
     if (!lb_patches_blueprint_base()) {
         if (g_set.balance_patch > 0)
-            ImGui::TextDisabled("  %d bytes, pending the blueprint load",
+            ImGui::TextDisabled("  %d bytes, applied when the game loads",
                                 lb_balance_byte_count(g_set.balance_patch));
     } else if (lb_balance_applied_slot() != g_set.balance_patch) {
         const char* why = lb_blueprint_edit_blocked();
@@ -2064,10 +2016,8 @@ void draw_after_balance_pack() {
     ImGui::Checkbox("Fix the Monkey Cage", &g_set.fix_monkey_cage);
     ImGui::SameLine();
     ImGui::TextDisabled("(this machine only)");
-    help("Caught monkeys (Monkey Business) show the game's own monkey\n"
-         "cage instead of the Space Criminal's. The game ships that picture\n"
-         "but its check reads the wrong field, so it never appears.\n"
-         "Cosmetic: nothing reaches other players; gameplay is unchanged.");
+    help("Caught monkeys (Monkey Business) show the monkey cage the game\n"
+         "has but never uses, instead of the Space Criminal's. Looks only.");
     badge(WIRED);
 
     // docs/385: the spells of the menu vary when several heroes are
@@ -2075,12 +2025,9 @@ void draw_after_balance_pack() {
     // matching the one picked for Free Play.
     ImGui::Separator();
     ImGui::Checkbox("Prioritize Own Hero Spells", &g_set.own_hero_spells);
-    help("With several heroes selected -- your own and one you hotwired,\n"
-         "say -- the yellow brick shows YOUR hero's spells: the hero of\n"
-         "the army on your Customize Army screen. The game otherwise shows\n"
-         "whichever hero came first in the selection, which depends on\n"
-         "where the box was dragged.\n"
-         "Only this player's menu changes; no rule of the match does.");
+    help("With several heroes selected (say, yours and a hotwired one), the\n"
+         "yellow brick shows your own hero's spells instead of whichever\n"
+         "hero was picked first. Only changes your menu.");
     badge(WIRED);
     tab_end();
 }
@@ -2093,9 +2040,8 @@ void draw_after_balance_pack() {
 // lb_patches.cpp supplies the rewritten text as it is fetched.
 void tab_renames() {
     if (!tab_begin("Renames")) return;
-    guide("Change the names the game shows for some characters and places. Pick a name "
-          "below. This is local only: it changes text on your screens, other players "
-          "do not see it, and gameplay is unchanged.");
+    guide("Change the names of some characters, units and buildings. Only you see "
+          "them, and gameplay is unchanged. An open screen updates when reopened.");
 
     // docs/356: apply_leader_name; seen with LB_LEADER_NAME=2 (9 strings).
     ImGui::Separator();
@@ -2105,9 +2051,7 @@ void tab_renames() {
     const char* leader_names[] = {"Off", "Kranxx", "Plisken"};
     ImGui::Combo("##criminal_leader_name", &g_set.criminal_leader_name,
                  leader_names, IM_ARRAYSIZE(leader_names));
-    help("Cosmetic and local: renames him in this game's text only.\n"
-         "Nothing reaches other players; gameplay is unchanged.\n"
-         "A screen already open shows the new name once reopened.");
+    help("Renames the Space Criminal Leader.");
     badge(WIRED);
 
     // docs/392: "Plantation" -> "Hide-Away" or "Storehouse" (string 445, the
@@ -2118,9 +2062,7 @@ void tab_renames() {
     const char* plantation_names[] = {"Off", "Hide-Away", "Storehouse"};
     ImGui::Combo("##plantation_name", &g_set.plantation_name,
                  plantation_names, IM_ARRAYSIZE(plantation_names));
-    help("Cosmetic and local: renames the Pirates' farm building in this\n"
-         "game's text only (each language gets its own word). Gameplay is\n"
-         "unchanged. A screen already open shows it once reopened.");
+    help("Renames the Pirates' farm building (translated in each language).");
     badge(WIRED);
 
     // docs/425: the three whole-word renames.
@@ -2131,9 +2073,7 @@ void tab_renames() {
     const char* claw_names[] = {"Off", "Crystal Reaper"};
     ImGui::Combo("##rename_claw_tank", &g_set.rename_claw_tank,
                  claw_names, IM_ARRAYSIZE(claw_names));
-    help("Cosmetic and local: \"Claw Tank\" reads \"Crystal Reaper\" in this\n"
-         "game's text only. Gameplay and other players are unaffected.\n"
-         "A screen already open shows it once reopened.");
+    help("\"Claw Tank\" becomes \"Crystal Reaper\".");
     badge(WIRED);
 
     ImGui::Text("Rename Gemma");
@@ -2142,10 +2082,7 @@ void tab_renames() {
     const char* gemma_names[] = {"Off", "Doctor Kelvin"};
     ImGui::Combo("##rename_gemma", &g_set.rename_gemma,
                  gemma_names, IM_ARRAYSIZE(gemma_names));
-    help("Cosmetic and local: \"Gemma\" reads \"Doctor Kelvin\" in this\n"
-         "game's text only (the credits keep her full name). Gameplay and\n"
-         "other players are unaffected. A screen already open shows it once\n"
-         "reopened.");
+    help("\"Gemma\" becomes \"Doctor Kelvin\" (the credits are unchanged).");
     badge(WIRED);
 
     ImGui::Text("Rename Broadside");
@@ -2154,10 +2091,8 @@ void tab_renames() {
     const char* broadside_names[] = {"Off", "Governor Tyranny"};
     ImGui::Combo("##rename_broadside", &g_set.rename_broadside,
                  broadside_names, IM_ARRAYSIZE(broadside_names));
-    help("Cosmetic and local: \"Broadside\" reads \"Governor Tyranny\" in this\n"
-         "game's text only (\"Governor Broadside\" becomes \"Governor\n"
-         "Tyranny\"; the ship Lady Broadside is unchanged). Gameplay and other\n"
-         "players are unaffected. A screen already open shows it once reopened.");
+    help("\"Broadside\" becomes \"Governor Tyranny\". The ship Lady Broadside\n"
+         "keeps its name.");
     badge(WIRED);
 
     ImGui::Separator();
@@ -2167,9 +2102,7 @@ void tab_renames() {
     const char* rename_assault_ship_names[] = {"Off", "Dragon Cruiser"};
     ImGui::Combo("##rename_assault_ship", &g_set.rename_assault_ship,
                  rename_assault_ship_names, IM_ARRAYSIZE(rename_assault_ship_names));
-    help("Cosmetic and local: Alien Assault Ship reads \"Dragon Cruiser\" in this\n"
-         "game's text only. Gameplay and other players are unaffected.\n"
-         "A screen already open shows it once reopened.");
+    help("\"Alien Assault Ship\" becomes \"Dragon Cruiser\".");
     badge(WIRED);
 
     ImGui::Text("Rename Alien Attack Ship");
@@ -2178,9 +2111,7 @@ void tab_renames() {
     const char* rename_attack_ship_names[] = {"Off", "Crystal Extractor"};
     ImGui::Combo("##rename_attack_ship", &g_set.rename_attack_ship,
                  rename_attack_ship_names, IM_ARRAYSIZE(rename_attack_ship_names));
-    help("Cosmetic and local: Alien Attack Ship reads \"Crystal Extractor\" in this\n"
-         "game's text only. Gameplay and other players are unaffected.\n"
-         "A screen already open shows it once reopened.");
+    help("\"Alien Attack Ship\" becomes \"Crystal Extractor\".");
     badge(WIRED);
 
     ImGui::Text("Rename Earth Transport Ship");
@@ -2189,9 +2120,7 @@ void tab_renames() {
     const char* rename_earth_transport_names[] = {"Off", "Recon Dropship"};
     ImGui::Combo("##rename_earth_transport", &g_set.rename_earth_transport,
                  rename_earth_transport_names, IM_ARRAYSIZE(rename_earth_transport_names));
-    help("Cosmetic and local: the Earth Transport Ship reads \"Recon Dropship\" in this\n"
-         "game's text only. Gameplay and other players are unaffected.\n"
-         "A screen already open shows it once reopened.");
+    help("\"Earth Transport Ship\" becomes \"Recon Dropship\".");
     badge(WIRED);
 
     ImGui::Text("Rename Alien Transport Ship");
@@ -2200,9 +2129,7 @@ void tab_renames() {
     const char* rename_alien_transport_names[] = {"Off", "Hyper Carrier"};
     ImGui::Combo("##rename_alien_transport", &g_set.rename_alien_transport,
                  rename_alien_transport_names, IM_ARRAYSIZE(rename_alien_transport_names));
-    help("Cosmetic and local: the Alien Transport Ship reads \"Hyper Carrier\" in this\n"
-         "game's text only. Gameplay and other players are unaffected.\n"
-         "A screen already open shows it once reopened.");
+    help("\"Alien Transport Ship\" becomes \"Hyper Carrier\".");
     badge(WIRED);
 
     ImGui::Text("Rename Starfighter");
@@ -2211,9 +2138,7 @@ void tab_renames() {
     const char* rename_starfighter_names[] = {"Off", "Switch Fighter"};
     ImGui::Combo("##rename_starfighter", &g_set.rename_starfighter,
                  rename_starfighter_names, IM_ARRAYSIZE(rename_starfighter_names));
-    help("Cosmetic and local: Starfighter reads \"Switch Fighter\" in this\n"
-         "game's text only. Gameplay and other players are unaffected.\n"
-         "A screen already open shows it once reopened.");
+    help("\"Starfighter\" becomes \"Switch Fighter\".");
     badge(WIRED);
 
     ImGui::Text("Rename Starship 1");
@@ -2222,9 +2147,7 @@ void tab_renames() {
     const char* rename_starship1_names[] = {"Off", "Rocket"};
     ImGui::Combo("##rename_starship1", &g_set.rename_starship1,
                  rename_starship1_names, IM_ARRAYSIZE(rename_starship1_names));
-    help("Cosmetic and local: Starship 1 reads \"Rocket\" in this\n"
-         "game's text only. Gameplay and other players are unaffected.\n"
-         "A screen already open shows it once reopened.");
+    help("\"Starship 1\" becomes \"Rocket\".");
     badge(WIRED);
 
     // SG-0021: the names the Pirate buildings had in the game's prototypes,
@@ -2236,10 +2159,9 @@ void tab_renames() {
     const char* rename_pirate_buildings_names[] = {"Off", "Tavern and Shanty Shack"};
     ImGui::Combo("##rename_pirate_buildings", &g_set.rename_pirate_buildings,
                  rename_pirate_buildings_names, IM_ARRAYSIZE(rename_pirate_buildings_names));
-    help("Cosmetic and local, from the Pirate prototypes: the barracks (Shanty\n"
-         "Shack) reads \"Tavern\" and the Plantation reads \"Shanty Shack\". The\n"
-         "Plantation name option above, when set, wins over this one.\n"
-         "A screen already open shows it once reopened.");
+    help("Names from the Pirate prototypes: the Shanty Shack becomes \"Tavern\"\n"
+         "and the Plantation becomes \"Shanty Shack\". The Plantation name\n"
+         "option above wins if set.");
     badge(WIRED);
 
     ImGui::Text("Rename Brickbeard's Bounty");
@@ -2248,9 +2170,8 @@ void tab_renames() {
     const char* rename_bounty_names[] = {"Off", "Flying Dutchman"};
     ImGui::Combo("##rename_bounty", &g_set.rename_bounty, rename_bounty_names,
                  IM_ARRAYSIZE(rename_bounty_names));
-    help("Cosmetic and local, from the Pirate prototypes: Brickbeard's Bounty\n"
-         "reads \"Flying Dutchman\" in this game's text only.\n"
-         "A screen already open shows it once reopened.");
+    help("From the Pirate prototypes: \"Brickbeard's Bounty\" becomes\n"
+         "\"Flying Dutchman\".");
     badge(WIRED);
     tab_end();
 }
@@ -2650,11 +2571,8 @@ void ar_refresh_locked() {
 
 void tab_action_replay() {
     if (!tab_begin("Action Replay")) return;
-    guide("Action Replay cheat codes. They run every frame, offline only: online they are "
-          "held off (the game cannot yet check that every player has the same codes, and "
-          "different codes would split the match). While any code is on, scores are not "
-          "reported. Recordings don't include codes, so a replay played with codes on may "
-          "not match what was recorded.");
+    guide("Action Replay cheat codes. Offline only. While a code is on, scores aren't "
+          "reported. Recordings don't save codes, so a replay may not match.");
     static char name_buf[48] = "";
     static char text_buf[2048] = "";
     static int editing = -1;
@@ -2667,10 +2585,10 @@ void tab_action_replay() {
     if (lb_ar_hash_live() != 0) {
         if (lb_ar_active())
             ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f),
-                               "Codes are ACTIVE: scores will not be reported.");
+                               "Codes are on: scores won't be reported.");
         else
             ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f),
-                               "Codes are ticked but held off: they run offline only.");
+                               "Codes are ticked but paused: offline only.");
     } else {
         ImGui::TextDisabled("No code is ticked.");
     }
@@ -2695,7 +2613,7 @@ void tab_action_replay() {
         if (ImGui::SmallButton("Delete")) del = i;
         if (pr.unknown) {
             ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.3f, 1.0f),
-                               "    %d line(s) malformed, or an op melonDS stops the code on; first: %s",
+                               "    %d bad or unsupported line(s); first: %s",
                                pr.unknown, pr.unknown_first.c_str());
         }
         ImGui::PopID();
@@ -2760,8 +2678,8 @@ void tab_action_replay() {
             status = "Exported " + std::to_string(v.size()) + " code(s) to " + file;
         }
     }
-    help("A text file in the game folder: [Name] on its own line, then the code\n"
-         "lines. The usual Action Replay layout.");
+    help("A text file in the game folder in the usual Action Replay layout:\n"
+         "[Name] on its own line, then the code lines.");
 
     ImGui::Separator();
     ImGui::TextUnformatted("Code sets");
@@ -2883,13 +2801,9 @@ void tab_cheats() {
         g_set.ai_cheats = w != 0;
         g_set.ai_cheats_only = w == 2;
     }
-    help("Who the gameplay cheats ticked above (faster building, harvesting\n"
-         "and mining, magic, health, double bricks, the unit cap, towers,\n"
-         "explosions, the hero's invincibility and one hit kills) help.\n"
-         "Me and the AI: the computer's armies get them as well.\n"
-         "The AI only: they stop helping you, for a harder game. Super\n"
-         "Magic and Long Range Magic always help every army, and the\n"
-         "reveal cheats stay yours. Not online.");
+    help("Who gets the gameplay cheats ticked above. \"The AI only\" makes\n"
+         "the game harder. Super Magic and Long Range Magic always help\n"
+         "everyone; reveal cheats are always yours. Not online.");
     badge(WIRED);
 
     ImGui::Separator();
@@ -2902,27 +2816,23 @@ void tab_cheats() {
     // apply_unlocks in lb_patches.cpp; only ever SETS, so unticking a box
     // locks nothing again.
     ImGui::Text("Unlocks");
-    help("Unlocks things on the current profile the way earning them would,\n"
-         "and the game saves them at its next save. Unticking a box does\n"
-         "not lock anything again.");
+    help("Unlocks on the current profile, saved at the game's next save.\n"
+         "Unticking doesn't lock anything again.");
     ImGui::Checkbox("Unlock All Units", &g_set.unlock_units);
-    help("All 85 minifigures and vehicles in the Character Collection,\n"
-         "bought, so every unit can go in a Custom Army (Santa too).");
+    help("All 85 characters and vehicles, so every unit can go in a\n"
+         "Custom Army (Santa too).");
     badge(WIRED);
     ImGui::Checkbox("Unlock All Maps", &g_set.unlock_maps);
-    help("All 30 Free Play and multiplayer maps, as if bought in\n"
-         "Extras > Maps.");
+    help("All 30 Free Play and multiplayer maps.");
     badge(WIRED);
     ImGui::Checkbox("Unlock All Cheat Codes", &g_set.unlock_extras);
-    help("The 18 red-brick cheats, found and bought, so the game's own\n"
-         "Extras > Cheat Codes screen can switch them.");
+    help("All 18 red-brick cheats, ready in Extras > Cheat Codes.");
     badge(WIRED);
     ImGui::Checkbox("Unlock All Concept Art", &g_set.unlock_art);
-    help("All 66 pieces in Extras > Concept Art, bought.");
+    help("All 66 pieces in Extras > Concept Art.");
     badge(WIRED);
     ImGui::Checkbox("Complete Every Campaign", &g_set.unlock_campaigns);
-    help("Marks all 90 story missions done: every mission is open and\n"
-         "every cutscene shows in Extras > Cutscenes.");
+    help("Marks all 90 story missions done and unlocks every cutscene.");
     badge(WIRED);
 
     ImGui::Spacing();
@@ -2930,8 +2840,8 @@ void tab_cheats() {
         g_set.unlock_units = g_set.unlock_extras = g_set.unlock_maps =
             g_set.unlock_art = g_set.unlock_campaigns = true;
     }
-    help("Ticks every box above, so a new profile is ready for online\n"
-         "play: every unit for a Custom Army and every map to host on.");
+    help("Ticks every box above. Handy for getting a new profile ready\n"
+         "for online play.");
     badge(WIRED);
     tab_end();
 }
@@ -2947,34 +2857,22 @@ void tab_input() {
     // docs/383/385: the battle shortcuts. Each runs the cartridge's own
     // callback for the button (lb_patches.cpp, view_update_override).
     ImGui::Checkbox("Battle shortcuts", &g_set.quick_keys);
-    help("Space or right-click: Deselect.\n"
-         "Mouse 5 (forward side button): the blue brick menu.\n"
-         "Mouse 4 (back side button): the red, yellow or white brick\n"
-         "menu, whichever is shown.\n"
-         "1-9 (number row or keypad): that item of the red, yellow or\n"
-         "white brick's menu -- a builder's building, a hero's spell --\n"
-         "counted left to right. The menu opens if it is closed.\n"
-         "Shift+1-9: items 10-18 of that menu (a builder with ships and\n"
-         "specials has more than nine buildings).\n"
-         "Each runs the game's own function for that button, without\n"
-         "touching the screen, and does nothing when it is not shown.\n"
-         "A key bound to a DS button above stays that DS button.");
+    help("Space or right-click: deselect.\n"
+         "Mouse 5 (forward): blue brick menu.\n"
+         "Mouse 4 (back): red, yellow or white brick menu.\n"
+         "1-9: pick that item from the red, yellow or white brick menu\n"
+         "(a building or spell, left to right). Shift+1-9: items 10-18.\n"
+         "Keys bound to DS buttons keep working as those buttons.");
     // SG-0027: pause and frame advance, for slow play and tool-assisted runs.
     ImGui::Checkbox("TAS controls", &g_set.tas_keys);
-    help("F5: pause or resume the game. F6, while paused: advance one frame.\n"
-         "Hold Tab to fast-forward, as always. Offline only: online the game\n"
-         "never pauses. A session recording replays exactly as played.");
+    help("F5: pause or resume. F6 while paused: advance one frame.\n"
+         "Tab still fast-forwards. Offline only.");
     ImGui::Checkbox("Number keys pick from the open blue menu", &g_set.quick_keys_blue);
-    help("While the blue brick's menu is the open one, 1-9 pick from it\n"
-         "instead of the red, yellow or white brick's. Off: 1-9 always\n"
-         "pick from the red, yellow or white brick's menu.");
+    help("When the blue brick menu is open, 1-9 pick from it instead.");
     ImGui::Checkbox("Clickable top screen", &g_set.cancel_queue_click);
-    help("Click the Top Screen panel as if it were a touch screen:\n"
-         "a unit in a building's queue cancels it (bricks back), a\n"
-         "unit's portrait in a group takes it out of the selection,\n"
-         "and the minimap moves the camera (click or drag). Each runs\n"
-         "the game's own handler for that spot, so it is safe in online\n"
-         "play: the camera is only your view. Needs the Top Screen panel.");
+    help("Click the Top Screen panel like a touch screen: cancel a queued\n"
+         "unit (bricks back), drop a unit from the selection, or move the\n"
+         "camera on the minimap. Safe online. Needs the Top Screen panel.");
     ImGui::Separator();
     {   // SG-0012: swap the two screens, from a key or this button.
         const char* key = g_rebinding_swap
@@ -2992,14 +2890,12 @@ void tab_input() {
             if (ImGui::Button("Swap screens")) lb_request_swap_screens();
             if (enh) ImGui::EndDisabled();
             if (enh && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                ImGui::SetTooltip("Swapping the screens works in DS Vanilla only.\n"
-                                  "Enhanced shows one field, which does not swap.");
+                ImGui::SetTooltip("Only in DS Vanilla. Enhanced has one screen.");
         }
         ImGui::SameLine();
         if (ImGui::Button("Clear key")) g_set.swap_key = 0;
-        help("DS Vanilla only: the two screens change places, and the touch\n"
-             "follows the one that is the touch screen. Press again to swap\n"
-             "back. Local to this machine; the key is unbound until you set it.");
+        help("DS Vanilla only: swaps the two screens. Press again to swap back.\n"
+             "No key is set by default.");
         badge(WIRED);
     }
     ImGui::Separator();
@@ -3065,7 +2961,7 @@ void tab_input() {
     // The touch screen is the mouse and is not rebindable: the main window is
     // the stylus by design.
     help("Bindings save only when you press this.\n"
-         "Every OTHER setting autosaves a second or two after it moves.");
+         "All other settings save automatically.");
     badge(WIRED);
     ImGui::SameLine();
     ImGui::TextDisabled("to %s", kSettingsFile);
@@ -3074,10 +2970,9 @@ void tab_input() {
 
 void tab_multiplayer() {
     if (!tab_begin("Multiplayer")) return;
-    guide("Choose the server and how you connect. To play online, one player hosts and "
-          "the others join from the game's own menu. Keep Both servers and the fast "
-          "online link the same as the host's; the relay starts by itself if a direct "
-          "link fails.");
+    guide("Pick a server and how you connect. One player hosts; the others join from "
+          "the game's menu. Match the host's Both servers and fast link settings. "
+          "The relay kicks in if a direct link fails.");
 
     // docs/400: the known servers by name; Custom shows the fields.
     {
@@ -3123,12 +3018,9 @@ void tab_multiplayer() {
             }
             ImGui::EndCombo();
         }
-        help("Where lobbies are listed. It lists them and introduces a\n"
-             "joining player to the host so both routers let the game's\n"
-             "traffic through; no port forwarding is needed on most home\n"
-             "routers. king.legobattles.win is another player's server and\n"
-             "may be offline. Both lists a hosted lobby on both servers and\n"
-             "shows the lobbies of both.");
+        help("Where lobbies are listed. It also connects players, so most\n"
+             "routers need no port forwarding. king.legobattles.win is run by\n"
+             "another player and may be offline. Both uses both servers.");
         badge(WIRED);
 
         // docs/425 item 7: a ping per server -- one /health round trip each,
@@ -3166,8 +3058,7 @@ void tab_multiplayer() {
                     busy = false;
                 }).detach();
             }
-            help("Times one request to each server: lower is better. A server that\n"
-                 "does not answer may be offline.");
+            help("Lower is better. No answer means the server may be offline.");
             std::lock_guard<std::mutex> lk(mu);
             for (const Ping& p : pings) {
                 ImGui::SameLine();
@@ -3183,28 +3074,22 @@ void tab_multiplayer() {
             ImGui::InputInt("Port", &g_set.master_port);
         }
         ImGui::Checkbox("Use HTTPS with the master server", &g_set.master_https);
-        help("Talks to the master server over an encrypted connection when\n"
-             "it offers one (port 443 for a server on port 80), and over\n"
-             "plain HTTP when it does not.");
+        help("Uses an encrypted connection when the server supports it.");
         ImGui::Checkbox("Share Match Telemetry", &g_set.match_picture);
-        help("When you host, a picture of the match (teams, units, map and\n"
-             "banned units) is sent to the master server for its Discord log.");
+        help("When you host, sends a match summary (teams, units, map, bans)\n"
+             "to the server's Discord log.");
         ImGui::Checkbox("Fetch a host's mod map I don't have", &g_set.fetch_maps);
-        help("When a host picks a mod map that is not in your mods folder,\n"
-             "look for it by name in the community map archive (GitHub) and\n"
-             "put it in mods/maps/_archive. Restart the game to use it.");
+        help("Downloads a host's mod map you're missing from the community\n"
+             "archive into mods/maps/_archive. Restart the game to use it.");
         ImGui::Checkbox("Fast online link", &g_set.fast_link);
-        help("Carries the game's wireless traffic in a pipeline instead of\n"
-             "one network round trip per step, so an online match keeps\n"
-             "its frame rate. Every player in a game needs the same\n"
-             "setting; it takes effect the next time you host or join.\n"
-             "Off is the original DS wireless protocol.");
+        help("Keeps online matches at full speed. Every player needs the same\n"
+             "setting. Applies the next time you host or join.\n"
+             "Off uses the original DS wireless protocol.");
     }
 
     ImGui::Separator();
     ImGui::Checkbox("Use the save's profile name", &g_set.name_from_save);
-    help("The name the game itself shows in its lobby.\n"
-         "Untick to advertise a different one.");
+    help("Untick to use a different name online.");
     badge(WIRED);   // docs/396: seen in the host lobby
     if (g_set.name_from_save) {
         // Read-only mirror of the loaded profile. Not g_set.player_name, which
@@ -3219,15 +3104,13 @@ void tab_multiplayer() {
     } else {
         // docs/396: up to 10 characters, as the game's own name entry.
         ImGui::InputText("Player name", g_set.player_name, 11);
-        help("The name the other players see in the game's lobby and in\n"
-             "the match. Your save keeps its own name unless you write\n"
-             "this one into it below.");
+        help("The name other players see. Your save keeps its own name\n"
+             "unless you write this one into it.");
         if (ImGui::Button("Write this name into the save")) {
             lb_request_profile_rename(g_set.player_name);
             g_set.name_from_save = true;   // the profile now carries it
         }
-        help("Renames the loaded profile. The game shows it at once and\n"
-             "saves it the next time its main menu is up.");
+        help("Renames the loaded profile. Saved next time you reach the main menu.");
     }
     ImGui::InputText("Room code", g_set.room_code, IM_ARRAYSIZE(g_set.room_code));
     help("Name is how an advertised lobby is listed.\n"
@@ -3237,12 +3120,11 @@ void tab_multiplayer() {
     // docs/415: chat.
     ImGui::SeparatorText("Chat");
     ImGui::Checkbox("Chat toasts", &g_set.chat_toasts);
-    help("Shows a message from another player for a few seconds, led by\n"
-         "their hero's icon, while the chat box is closed.");
+    help("Pops up other players' messages for a few seconds while the\n"
+         "chat box is closed.");
     ImGui::Checkbox("Swear filter", &g_set.swear_filter);
-    help("Shows swear words in chat and in players' names as \"ziff\"\n"
-         "(\"ziffing\" for -ing words). Switching it off shows them as\n"
-         "written, at once; nothing sent or stored is changed.");
+    help("Replaces swear words in chat and player names with \"ziff\".\n"
+         "Only changes what you see.");
     {
         const char* key = g_rebinding_chat
                               ? "press a key..."
@@ -3251,23 +3133,20 @@ void tab_multiplayer() {
         std::snprintf(label, sizeof label, "Chat key: %s###chatkey",
                       (key && *key) ? key : "(none)");
         if (ImGui::Button(label)) g_rebinding_chat = !g_rebinding_chat;
-        help("Opens the chat box while you are in an online lobby or match\n"
-             "(and does nothing otherwise). Enter sends, Esc closes.");
+        help("Opens chat in an online lobby or match. Enter sends, Esc closes.");
     }
     badge(WIRED);   // docs/415: runs ch415a/b
 
     // The game's own screens drive the master server.
     ImGui::SeparatorText("Master server");
     ImGui::Checkbox("Advertise when the game hosts", &g_set.auto_advertise);
-    help("Opening a lobby from the game's Multiplayer > Host lists it\n"
-         "on the master server; Start or leaving takes it off.");
+    help("Lists your lobby on the master server when you host from the\n"
+         "game's menu. It comes off when the match starts or you leave.");
     badge(WIRED);   // docs/400: run t400b
     // docs/405
     ImGui::Checkbox("Open the port on my router when hosting (UPnP)", &g_set.upnp);
-    help("Asks your router to forward the game's UDP port to this PC while\n"
-         "you host, and closes it again when the lobby or match ends. Most\n"
-         "home routers allow it; some have UPnP switched off in their own\n"
-         "settings. Without it, joining still works on most routers.");
+    help("Asks your router to open the game's port while you host. Some\n"
+         "routers have UPnP off. Most connections work without it.");
     badge(WIRED);
     if (const char* u = lb_net_upnp_text())
         if (*u) ImGui::TextDisabled("  %s", u);
@@ -3278,9 +3157,7 @@ void tab_multiplayer() {
     }
     ImGui::Checkbox("Game's Join screen uses the master server",
                     &g_set.auto_browse);
-    help("While the game's Join screen is open the list is fetched every\n"
-         "few seconds and the newest host (or the one you picked) is made\n"
-         "reachable, so the game lists it.");
+    help("The game's Join screen shows online lobbies from the master server.");
     badge(WIRED);   // docs/400: run t400b
     ImGui::TextDisabled("Game network: %s", lb_net_guest_state_text());
 
@@ -3352,8 +3229,7 @@ void tab_multiplayer() {
     }
     // Three players maximum, which the ROM confirms: Play3PlayerMP is in the
     // achievement table (docs/97).
-    help("Puts the lobby on the master server and keeps it alive\n"
-         "with a heartbeat. Three players maximum.");
+    help("Lists a lobby on the master server. Three players max.");
     badge(WIRED);
     ImGui::SameLine();
     ImGui::TextDisabled("%s", lb_net_host_status());
@@ -3364,9 +3240,7 @@ void tab_multiplayer() {
         lb_net_join_by_code(g_set.master_host, g_set.master_port,
                             g_set.room_code);
     ImGui::EndDisabled();
-    help("Looks the code up and points this machine's wireless bridge\n"
-         "at the host it names. Once the bridge has somewhere to send,\n"
-         "a host on another machine looks like one in the same room.");
+    help("Finds the host with this code and connects you to it.");
     badge(WIRED);
     ImGui::TextDisabled("  then join from the game's own Multiplayer > Join "
                         "screen");
@@ -3377,29 +3251,26 @@ void tab_multiplayer() {
             ImGui::Text("This machine listens on UDP %u", (unsigned)wp);
         else
             ImGui::TextDisabled(
-                "Local wireless is OFF -- start with --local-wireless on "
+                "Local wireless is off: start with --local-wireless on "
                 "(play.bat does)");
         const char* peer = lb_net_peer_text();
         if (peer && *peer)
             ImGui::Text("Peer: %s", peer);
         else
-            ImGui::TextDisabled("No peer set. Hosting learns one from the "
-                                "first datagram; joining sets it from the code.");
+            ImGui::TextDisabled("Not connected to another player yet.");
         // docs/400: what the router gave this machine, and whether anything
         // has come back -- a dead link must not look like a slow one.
         char pub[40];
         if (lb_net_public_text(pub, (int)sizeof pub))
             ImGui::Text("Public address: %s", pub);
         else
-            ImGui::TextDisabled("Public address: not known yet (found when "
-                                "hosting or joining)");
+            ImGui::TextDisabled("Public address: found when you host or join");
         unsigned sent = 0, recvd = 0;
         lb_net_link_stats(&sent, &recvd);
         if (peer && *peer) {
             if (recvd)
                 ImGui::TextColored(ImVec4(0.45f, 0.85f, 0.45f, 1.0f),
-                                   "Connected: %u datagram(s) from the other "
-                                   "player", recvd);
+                                   "Connected: %u packet(s) received", recvd);
             else
                 ImGui::TextColored(ImVec4(0.95f, 0.65f, 0.3f, 1.0f),
                                    "Nothing from the other player yet "
@@ -3468,14 +3339,12 @@ void tab_demo() {
     ImGui::TextDisabled("Record your play, then replay it exactly.");
     ImGui::Separator();
     ImGui::Checkbox("Record every session", &g_set.record_sessions);
-    help("Each time the game starts, record it to a new lb-session-*.lbdemo\n"
-         "beside the game, so a bug can be replayed exactly. Takes effect the\n"
-         "next time the game starts. Off by default.");
+    help("Records each session to a new lb-session-*.lbdemo beside the game,\n"
+         "so bugs can be replayed. From the next start. Off by default.");
     ImGui::Separator();
     ImGui::InputText("File", g_demo_path, IM_ARRAYSIZE(g_demo_path));
-    help("Written as you play, one line per input, so closing the\n"
-         "window loses nothing. LB_DEMO_REC / LB_DEMO_PLAY do the\n"
-         "same from the command line.");
+    help("Saved as you play, so closing the window loses nothing.\n"
+         "LB_DEMO_REC / LB_DEMO_PLAY do the same from the command line.");
     const int st = lb_demo_state();
     ImGui::BeginDisabled(st != 0);
     if (ImGui::Button("Record")) lb_demo_start_record(g_demo_path);
@@ -3489,16 +3358,15 @@ void tab_demo() {
     badge(WIRED);
     ImGui::Text("%s -- frame %u, %u event(s)",
                 lb_demo_status(), lb_demo_frame(), lb_demo_event_count());
-    ImGui::TextDisabled("  start from the title screen to reproduce a whole "
+    ImGui::TextDisabled("  start from the title screen to capture a whole "
                         "session");
     tab_end();
 }
 
 void tab_saves() {
     if (!tab_begin("Saves")) return;
-    guide("Import brings in a save from a cartridge or another emulator (any region); "
-          "Export keeps a copy of yours. Pick the file with Browse, then press the "
-          "button. Saves are local only: they never go online.");
+    guide("Import a save from a cartridge or another emulator (any region), or export "
+          "a copy of yours. Pick the file with Browse, then press the button.");
 
     uint32_t live_size = 0;
     const uint8_t* live = live_save(&live_size);
@@ -3637,7 +3505,7 @@ void tab_saves() {
                                          "press Reset to load it."
                                        : "The game restarts to load it.");
                 } else {
-                    g_save_msg = "The runner refused the image.";
+                    g_save_msg = "Import failed: the save was refused.";
                     g_save_msg_bad = true;
                 }
             }
@@ -3664,10 +3532,9 @@ void tab_saves() {
     // deleted" and does exactly that (docs/207). Importing a whole save is the
     // safe way to change unlocks; the checksum travels with its own data.
     // docs/401
-    ImGui::TextDisabled("Any region's save, from a cartridge or an emulator, "
-                        "imports; the game restarts to load it.");
+    ImGui::TextDisabled("The game restarts to load an imported save.");
     ImGui::TextDisabled("Your save is saves\\LEGO Battles.sav, whatever your "
-                        "ROM file is called.");
+                        "ROM is called.");
     tab_end();
 }
 
@@ -3889,7 +3756,7 @@ void tab_team_builder() {
     // beside the armies, because the game's opponent screen has room for one
     // opponent only (a third row of faction and colour widgets would be new UI
     // records, as the Custom portraits were in docs/390).
-    guide("A third army for Free Play: a second computer opponent. Offline only; read when the battle starts.");
+    guide("Add a second computer opponent to Free Play. Offline only.");
     {
         static const char* const kArmies[] = {"King", "Wizard", "Pirate", "Imperial",
                                               "Earth", "Alien", "Custom (Enemy Team)",
@@ -3901,9 +3768,9 @@ void tab_team_builder() {
         ImGui::Text("Computer Player 3");
         bool on3 = g_set.ai_opponents >= 2;
         if (ImGui::Checkbox("On##ai3", &on3)) g_set.ai_opponents = on3 ? 2 : 1;
-        help("Adds a second computer opponent to Free Play, on its own start,\n"
-             "with its own base and builders. The first is still the opponent\n"
-             "screen's pick. The map needs a start for it. Offline only.");
+        help("A second computer opponent with its own base. The first is still\n"
+             "chosen on the opponent screen. The map needs a free start spot.\n"
+             "Applies when the battle starts.");
         badge(WIRED);
         ImGui::BeginDisabled(!on3);
         ImGui::SetNextItemWidth(180.0f * g_ui_scale);
@@ -3929,39 +3796,31 @@ void tab_team_builder() {
                         std::snprintf(g_set.ai_opp_team, sizeof g_set.ai_opp_team, "%s", p.name.c_str());
                 ImGui::EndCombo();
             }
-            help("Which custom army it fields: the Enemy Team (the first\n"
-                 "opponent's Custom army), or one of your saved teams from the\n"
-                 "list below, so each computer can have its own.");
+            help("The Enemy Team, or one of your saved teams, so each computer\n"
+                 "can have its own custom army.");
         }
         ImGui::SetNextItemWidth(180.0f * g_ui_scale);
         ImGui::Combo("Colour##ai3", &g_set.ai_opp_colour[0], kColours, n_colours);
-        help("Its team colour. If you or the first opponent already use it,\n"
-             "or it is Automatic, the first colour nobody uses is taken.");
+        help("If the colour is taken, or Automatic, it gets the first free one.");
         ImGui::Checkbox("Allied with the other computers##ai3", &g_set.ai_opp_teams);
-        help("Off, it fights everyone, the other computers included. On, the\n"
-             "computers are allied and only attack you.");
+        help("On: the computers team up against you. Off: free-for-all.");
         ImGui::EndDisabled();
     }
     ImGui::Separator();
 
     // docs/410: the neutral creatures as army units, at real prices.
     ImGui::Checkbox("Neutral Creatures in Armies", &g_set.creatures);
-    help("Offers the Wolf, the Robot and the Monkey as Close Combat units and the\n"
-         "Shark as Special Two, for your army and the Custom opponent.\n"
-         "They are in the game's own army screen too, with their heads.\n"
-         "The game gives them a price of 1 brick; on, they cost:\n"
-         "Wolf 200 (build 420), Robot 80 (270), Shark 400 (660).\n"
-         "The Shark swims: only a Shipyard builds it, so it is for water\n"
-         "maps. Online, the host's setting applies.");
+    help("Adds the Wolf, Robot and Monkey (Close Combat) and the Shark\n"
+         "(Special Two) to armies. Costs: Wolf 200 (build 420), Robot 80\n"
+         "(270), Shark 400 (660). The Shark is built at a Shipyard.\n"
+         "Online, the host's setting applies.");
     badge(WIRED);
     if (lb_rules_host_flags() >= 0)
         ImGui::TextDisabled("In this lobby, the host's: %s",
                             lb_creatures_live() ? "On" : "Off");
     // docs/412: teal as a seventh team colour.
     ImGui::Checkbox("Teal team colour", &g_set.teal_colour);
-    help("Adds Teal as a seventh team colour on the colour screens: Free\n"
-         "Play, the multiplayer faction screen and the lobbies, and as a\n"
-         "choice for Computer Player 3. Off, everything is the stock six.\n"
+    help("Adds Teal as a seventh team colour.\n"
          "Online, the host's setting applies.");
     badge(WIRED);
     if (lb_rules_host_flags() >= 0)
@@ -3972,21 +3831,15 @@ void tab_team_builder() {
         ImGui::SameLine();
         ImGui::SetNextItemWidth(190.0f * g_ui_scale);
         ImGui::Combo("##teal_style", &g_set.teal_style, kTealStyles, IM_ARRAYSIZE(kTealStyles));
-        help("How a teal team's units and buildings look on this machine.\n"
-             "Original is the cartridge's unused teal (white, pale teal,\n"
-             "teal), as it was drawn: mostly white. PC Port is a full teal\n"
-             "ramp like the other teams'. Each player picks their own; it\n"
-             "never changes what others see. A change shows from the next level.");
+        help("Original is the game's unused, mostly white teal. PC Port is a\n"
+             "full teal like the other colours. Only you see it. From the next level.");
     }
     // docs/437: owned creatures take their owner's team colour.
     ImGui::BeginDisabled(!g_set.creatures);
     ImGui::Checkbox("Tint creatures by team", &g_set.creature_tint);
     ImGui::EndDisabled();
-    help("Colours an owned creature in its owner's team colour, so you can\n"
-         "tell whose it is: the Wolf's and the Monkey's body, the Robot's\n"
-         "wheels, the Shark's back. A wild creature keeps its own colours.\n"
-         "Needs the option above. Looks only: this machine alone, and it\n"
-         "changes nothing online (every player sees their own setting).");
+    help("Owned creatures show their owner's team colour. Wild ones don't.\n"
+         "Needs the option above. Only you see it.");
     badge(WIRED);
     // docs/436: which army slot each creature falls under.
     {
@@ -4018,13 +3871,9 @@ void tab_team_builder() {
             }
         }
         ImGui::EndDisabled();
-        help("Which army slot each creature takes, in the Team Builder and\n"
-             "the game's army screen. The Wolf, Robot and Monkey can be Close\n"
-             "Combat, Ranged or Mounted (trained at the Barracks); the Shark\n"
-             "can only be a Special (the Shipyard). Hero and the Specials for\n"
-             "the others are not offered: the game cannot load them (they have\n"
-             "no model for that kind). Needs the option above. Online,\n"
-             "the host's setting applies.");
+        help("Which army slot each creature uses. The Wolf, Robot and Monkey\n"
+             "can be Close Combat, Ranged or Mounted; the Shark only a Special.\n"
+             "Needs the option above. Online, the host's setting applies.");
         badge(WIRED);
     }
     ImGui::Separator();
@@ -4080,13 +3929,10 @@ void tab_team_builder() {
         msg = "Each slot drawn at random.";
         msg_bad = false;
     }
-    help("Choosing a team in the list puts it in the grid. Randomize draws\n"
-         "each slot independently from the units this save can field (all\n"
-         "units before a profile is loaded).\n\n"
-         "\"Recent save team\" entries are the last five armies read from the\n"
-         "save, newest first, with the time each was read: a way back if Set\n"
-         "Team, or the game's own army screen, replaced one. They are kept\n"
-         "automatically and cannot be saved over or deleted here.");
+    help("Pick a team from the list to load it. Randomize picks each slot\n"
+         "from the units your save has.\n\n"
+         "\"Recent save team\" entries are your save's last five armies, kept\n"
+         "automatically in case one gets replaced. They can't be deleted.");
     ImGui::SetNextItemWidth(170.0f * g_ui_scale);
     ImGui::InputTextWithHint("##name", "preset name", name, sizeof name);
     ImGui::SameLine();
@@ -4158,14 +4004,9 @@ void tab_team_builder() {
         msg = "Free Play's Custom opponent is now this team.";
         msg_bad = false;
     }
-    help("Set Team makes this your army (the save's own army record), as the\n"
-         "game's army screen would, and only with units this save has\n"
-         "unlocked and bought. It applies only outside battles (the pause\n"
-         "menu counts as a battle), and never while hosting, in a lobby or\n"
-         "browsing games.\n\n"
-         "Set Enemy Team is what Free Play's opponent selector fields when\n"
-         "set to Custom (the crown), after the six factions. Random (the ?)\n"
-         "draws every slot at random each match.");
+    help("Set Team saves this as your army. Only units you've unlocked and\n"
+         "bought; not in a battle (or paused), lobby, or while hosting.\n\n"
+         "Set Enemy Team is Free Play's Custom opponent (the crown).");
     if (blocked) ImGui::TextDisabled("Set Team: %s", blocked);
     if (!msg.empty()) {
         if (msg_bad)
@@ -4480,10 +4321,8 @@ bool ban_preset_apply(int i, std::string* msg) {
 void draw_ban_presets(bool idle) {
     ImGui::Separator();
     ImGui::TextUnformatted("Presets");
-    guide("A preset fills the unit bans, the map bans and the unit bans on some maps in "
-          "one go; you can change them after. Export and Import keep a set as a file. "
-          "Online, the host's bans apply to everyone, so the host's preset is the "
-          "players'.");
+    guide("A preset sets all unit and map bans at once; you can tweak them after. "
+          "Export and Import save bans to a file. Online, the host's bans apply.");
     ImGui::BeginDisabled(!idle);
     const int n = lb_maps_preset_count();
     ImGui::SetNextItemWidth(360.0f * g_ui_scale);
@@ -4504,7 +4343,7 @@ void draw_ban_presets(bool idle) {
         g_bp_msg_bad = !ban_preset_export(g_bp_path);
         g_bp_msg = g_bp_msg_bad ? "Could not write that file." : "Exported the bans.";
     }
-    ImGui::SetItemTooltip("Saves the unit bans, the map bans and the bans on some maps.");
+    ImGui::SetItemTooltip("Saves all unit and map bans to a file.");
     ImGui::SameLine();
     if (ImGui::Button("Import bans (.json)...") &&
         lb_pick_json_file(g_bp_path, (int)sizeof g_bp_path, 0)) {
@@ -4515,10 +4354,9 @@ void draw_ban_presets(bool idle) {
     ImGui::SetItemTooltip("Loads a file made by Export. It replaces your bans.");
     ImGui::Spacing();
     ImGui::Checkbox("Random team (tourney)", &g_set.tourney_team);
-    help("Every player in a game you host, and the Random opponent in Free Play, fields\n"
-         "a random army drawn from a seed, skipping every banned unit (on this match's\n"
-         "map too). Players are not limited to what their save has bought.\n"
-         "Online, the host sends the seed and every machine builds the same teams.");
+    help("Everyone in a game you host, and Free Play's Random opponent, gets\n"
+         "a random army with no banned units. Any unit can be drawn, bought\n"
+         "or not. Online, every player gets the same teams.");
     if (g_set.tourney_team) {
         ImGui::SameLine();
         ImGui::TextDisabled("Seed: %u", lb_maps_current_seed());
@@ -4588,11 +4426,10 @@ void tab_ban_units() {
     const int net = lb_net_guest_state();
     const bool idle = (net == 0 || net == -1);
     const bool joined = net == 9 || net == 6 || net == 7 || net == 5 || net == 12;
-    guide("Units greyed out here are not allowed in online games you host: a player who "
-          "brings one is switched to King as the match starts. Click a unit to ban it "
-          "everywhere; right-click it to ban it only on the maps you pick. Online, the "
-          "host's bans apply to everyone.");
-    ImGui::TextDisabled("The King team cannot be banned, as it is the default.");
+    guide("Banned units can't be used in games you host; a player who brings one gets "
+          "King's unit instead. Click a unit to ban it everywhere, right-click to ban it "
+          "on some maps. Online, the host's bans apply.");
+    ImGui::TextDisabled("The King team is the default and can't be banned.");
     unsigned char bits[24];
     bans_bits(bits);
     unsigned char shown[24];
@@ -4647,8 +4484,7 @@ void tab_ban_units() {
                 if (on_maps) lb_maps_names_of(toks, where, sizeof where);
                 ImGui::SetTooltip("%s (%s)%s%s%s", lb_teams_unit_name(bp),
                                   faction_name(lb_teams_unit_faction(bp)),
-                                  king ? "\nThe King team cannot be banned, as "
-                                         "it is the default."
+                                  king ? "\nThe King team can't be banned."
                                        : banned ? "\nBanned everywhere" : "",
                                   on_maps ? "\nBanned on: " : "", where);
             }
@@ -4660,7 +4496,7 @@ void tab_ban_units() {
         g_set.unit_map_bans[0] = '\0';
         changed = true;
     }
-    ImGui::SetItemTooltip("Clears the unit bans, on every map and on some maps only.");
+    ImGui::SetItemTooltip("Clears all unit bans, including per-map ones.");
     // docs/410: the list as a file, like the Balance values: the blueprint
     // numbers, with the names beside them for a reader (ignored on import).
     static char path[512] = "bans.json";
@@ -4741,9 +4577,8 @@ void tab_ban_maps() {
     const int net = lb_net_guest_state();
     const bool idle = (net == 0 || net == -1);
     const bool joined = net == 9 || net == 6 || net == 7 || net == 5 || net == 12;
-    guide("Maps ticked here are left out of the map list in Free Play and in games you "
-          "host. Online, the host's list applies to everyone. The box under this text adds "
-          "a Random entry to the map lists, which picks one of the maps left.");
+    guide("Ticked maps are removed from the map list in Free Play and games you host. "
+          "Online, the host's list applies.");
     char rmaps[512] = "", rumb[768] = "";
     const bool got = joined && lb_maps_received(rmaps, sizeof rmaps, rumb, sizeof rumb);
     const char* list = joined ? (got ? rmaps : "") : g_set.banned_maps;
@@ -4757,10 +4592,8 @@ void tab_ban_maps() {
                            "They are fixed until you leave.");
     ImGui::BeginDisabled(!idle);
     ImGui::Checkbox("Add Random to the map lists", &g_set.random_maps);
-    help("Puts \"Random\" first in the Free Play and multiplayer map lists. It picks one\n"
-         "of the maps that are not banned. With a ban preset in force there is also\n"
-         "\"Random (tourney)\", which picks only from that preset's allowed maps.\n"
-         "In a game you host, you draw it and the lobby shows the result.");
+    help("Adds \"Random\" to the map lists; it picks a map that isn't banned.\n"
+         "With a ban preset on, \"Random (tourney)\" picks from that preset's maps.");
     ImGui::EndDisabled();
     ImGui::Separator();
     const int count = lb_maps_count();
@@ -4794,8 +4627,8 @@ void tab_music() {
     if (!tab_begin("Music")) return;
     // Measured: on a castle map with an EARTH builder on the field, the
     // game's own side word reads 0 (King).
-    ImGui::TextDisabled("Stock, Free Play and multiplayer always use the King "
-                        "tracks.");
+    ImGui::TextDisabled("The stock game always plays the King tracks in Free Play "
+                        "and multiplayer.");
     ImGui::Separator();
     // docs/387: 4..9 always play one faction's music, whatever the map.
     const char* modes[] = {"Vanilla (King tracks)", "Random",
@@ -4808,13 +4641,10 @@ void tab_music() {
     // works in a campaign mission that starts without a hero. Map-specific
     // reads the tileset the level actually loaded -- King, Pirate or Mars --
     // which is what "castle / pirate / space" means to the cartridge.
-    help("Vanilla overrides nothing.\n"
-         "Faction-aligned follows your builder. Map-specific plays one of\n"
-         "the map's two factions, picked each match: King or Wizard on a\n"
-         "castle map, Pirate or Imperial on a pirate map, Earth or Alien on\n"
-         "Mars. Random picks any faction once per match.\n"
-         "Always <faction> plays that faction's music in every battle,\n"
-         "whatever the map (menus keep their own theme).");
+    help("Faction-aligned: your faction's music.\n"
+         "Map-specific: one of the map's two factions, picked each match.\n"
+         "Random: any faction, picked each match.\n"
+         "Always <faction>: that faction's music in every battle.");
     badge(WIRED);
     ImGui::Spacing();
     // WHAT IS ACTUALLY PLAYING, read back from the game rather than from what
@@ -4842,15 +4672,14 @@ void tab_music() {
     ImGui::Spacing();
     // docs/427: the notification sound -- local only, its own audio device.
     ImGui::Separator();
-    guide("Notification sound: a short sound when another player's chat message or a "
-          "notice arrives. Local only: it plays on your computer, never online.");
+    guide("Notification sound: plays when a chat message or notice arrives.");
     {
         const char* items[9];
         for (int i = 0; i < 9; ++i) items[i] = lb_sfx_choice_name(i);
         ImGui::Combo("Notification sound", &g_set.notify_sound, items, 9);
         ImGui::SliderInt("Volume##notify", &g_set.notify_volume, 0, 100, "%d%%");
         if (ImGui::Button("Play")) lb_sfx_preview();
-        ImGui::SetItemTooltip("Plays the chosen sound once (it is read from your own ROM).");
+        ImGui::SetItemTooltip("Plays the chosen sound.");
     }
     ImGui::Spacing();
     // HOW IT WORKS, kept here rather than printed at the player.
@@ -6624,8 +6453,7 @@ void draw_battlefield(SDL_Renderer* renderer) {
         ImGui::TextDisabled("Locating the level grid...");
         if (ImGui::Button("Locate now") || ImGui::GetFrameCount() % 120 == 0)
             g_field_located = lb_field_locate(&g_field_info);
-        ImGui::TextDisabled("Scans main RAM, so this runs once per level "
-                            "rather than per frame.");
+        ImGui::TextDisabled("This runs once per level.");
         ImGui::End();
         return;
     }
@@ -6784,9 +6612,8 @@ void section_windows() {
         // how "map viewer doesn't fetch properly" went unnoticed.
         ImGui::Checkbox("Show the whole battlefield (panel)", &g_field_visible);
         badge(WIRED);   // g_field_visible gates draw_battlefield
-        help("Draws the entire level from the grid in RAM, not just the\n"
-             "256x192 the DS can show. The white box is what the game\n"
-             "window covers, so it grows as the window widens.");
+        help("Shows the whole level in a panel. The white box is what the\n"
+             "game window shows.");
     tab_end();
 }
 
@@ -6809,22 +6636,21 @@ const char* const kBalUnitCols[10] = {"Cost", "Build", "Health", "Mana",
                                       "Range", "Yield"};
 const char* const kBalUnitTips[10] = {
     "Bricks to build it.",
-    "Build time (the construction's divisor; larger is slower).",
+    "Build time (higher is slower).",
     "Hit points.",
     "A hero's mana.",
-    "Tiles per second (with \"Speed as stored value\", the Entities Editor's number).",
+    "Tiles per second, or the Entities Editor's number with \"Speed as stored value\".",
     "Melee damage, the low end.",
-    "Melee damage spread: the high end is damage + spread.",
+    "Melee damage spread: max damage is damage + spread.",
     "Ticks between attacks (30 a second).",
     // BR-0009: the reach test (FUN_020519D4) and its peers read range only on
     // the ranged branch; a unit with no projectile (+0x66 = 0xFFFF) never
     // reads it. FunLite raises the minikit specials' ranges (Dwarf, Troll,
     // their kings, Ninja) without a projectile, so the change does nothing.
-    "Attack range. Only units that fire a projectile use it: a melee unit\n"
-    "(Projectile \"Melee\" in Traits) always fights at arm's length, whatever\n"
-    "this says. To make range count, give the unit a projectile in Traits.",
-    "Mine: the bricks it pays out. Builder: the bricks per tree chop (0 = the game's 75; "
-    "a Mill's bonus and Double LEGO Bricks still apply). Any other unit: does nothing."};
+    "Attack range. Only used by units with a projectile; melee units\n"
+    "ignore it. Set a projectile in Traits to make it count.",
+    "Mine: bricks it pays out. Builder: bricks per tree chop (0 = the game's 75; "
+    "Mill bonus and Double LEGO Bricks still apply). Other units: unused."};
 int g_bal_faction = 0;
 int g_bal_filter = 0;   // 0 all, 1 units, 2 buildings
 bool g_bal_speed_raw = false;   // docs/425 item 3: Speed as the stored value
@@ -6912,13 +6738,13 @@ void bal_cell(int kind, int rec, int field, bool locked) {
         if (ImGui::IsItemHovered()) {
             const int b = lb_balance_base(rec, field);
             if (speed)
-                ImGui::SetTooltip("Yours: %.2f tiles per second, stored value %d. Beneath "
-                                  "it: %.2f (%d). Right-click to put that back.",
+                ImGui::SetTooltip("Yours: %.2f tiles per second (stored %d). Original: "
+                                  "%.2f (%d). Right-click to restore.",
                                   (float)live * 30.0f / 4096.0f, live,
                                   (float)b * 30.0f / 4096.0f, b);
             else
-                ImGui::SetTooltip("Yours. Beneath it: %d. Right-click to put "
-                                  "that back.", b);
+                ImGui::SetTooltip("Yours. Original: %d. Right-click to "
+                                  "restore.", b);
         }
         if (!locked && ImGui::IsItemClicked(ImGuiMouseButton_Right))
             bal_set(rec, field, -1);
@@ -6940,8 +6766,8 @@ void bal_flag(int rec, int field, bool locked) {
     if (custom >= 0) {
         ImGui::PopStyleColor();
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("Yours. Beneath it: %s. Right-click to put that "
-                              "back.", lb_balance_base(rec, field) ? "on" : "off");
+            ImGui::SetTooltip("Yours. Original: %s. Right-click to "
+                              "restore.", lb_balance_base(rec, field) ? "on" : "off");
         if (!locked && ImGui::IsItemClicked(ImGuiMouseButton_Right))
             bal_set(rec, field, -1);
     }
@@ -6951,8 +6777,8 @@ void bal_flag(int rec, int field, bool locked) {
 // The lock and the hint, above each table.
 bool bal_header(bool picks = false) {
     if (!lb_patches_blueprint_base()) {
-        ImGui::TextDisabled("The values are read from the game's own "
-                            "blueprints, which load at its title screen.");
+        ImGui::TextDisabled("Values appear once the game reaches its "
+                            "title screen.");
         return false;
     }
     if (const char* why = lb_balance_custom_blocked()) {
@@ -6960,35 +6786,33 @@ bool bal_header(bool picks = false) {
         // docs/418: online, whose numbers are in force, named by the seed
         // both machines compare.
         if (lb_balance_host_on()) {
-            ImGui::TextDisabled("The host's balance is in force here: %s, %d value(s) "
+            ImGui::TextDisabled("Using the host's balance: %s, %d value(s) "
                                 "(seed %016llX)%s.",
                                 lb_balance_name(lb_balance_host_slot()),
                                 lb_balance_host_size(), lb_balance_host_seed(),
                                 lb_balance_host_set_current() ? "" : ", being applied");
         } else {
             const int s = lb_balance_effective_slot(), b = lb_balance_effective_builders();
-            ImGui::TextDisabled("Yours go to the players who join: %s, %d value(s) "
+            ImGui::TextDisabled("Players who join get yours: %s, %d value(s) "
                                 "(seed %016llX).", lb_balance_name(s),
                                 lb_balance_custom_size(), lb_balance_local_seed(s, b));
         }
         return true;
     }
     ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextDisabled(picks ? "Pick a spell. It applies at once, in a battle "
-                                "too; recordings carry it. Yellow choices are "
-                                "yours: right-click one to put it back."
+    ImGui::TextDisabled(picks ? "Pick a spell. It applies at once, even mid-battle. "
+                                "Yellow = changed; right-click to restore."
                               : "Type a value and press Enter. It applies at once, "
-                                "in a battle too; recordings carry it. Yellow "
-                                "values are yours: right-click one to put it back.");
+                                "even mid-battle. Yellow = changed; right-click "
+                                "to restore.");
     ImGui::PopTextWrapPos();
     return true;
 }
 
 void tab_balance_units() {
     if (!tab_begin("Balance Units")) return;
-    guide("Change a unit's cost, health, damage and speed. Click a value to edit it; "
-          "yellow means you changed it, and right-click puts it back. Online, the "
-          "host's balance applies to everyone.");
+    guide("Change a unit's cost, health, damage and speed. Online, the host's "
+          "balance applies.");
     static bool faction_env = false;   // LB_BAL_FACTION=0..7, a test aid
     if (!faction_env) {
         faction_env = true;
@@ -7005,9 +6829,8 @@ void tab_balance_units() {
         ImGui::Combo("Show", &g_bal_filter, filters, 3);
         ImGui::SameLine();
         ImGui::Checkbox("Speed as stored value", &g_bal_speed_raw);   // docs/425 item 3
-        help("Shows and edits Speed as the number the Entities Editor stores (a\n"
-             "distance per tick, x4096), so values can be typed across. Off:\n"
-             "tiles per second. Hover a speed to see both.");
+        help("Shows Speed as the Entities Editor's number instead of tiles\n"
+             "per second. Hover a speed to see both.");
         // The stat columns; the spell fields after them have their own
         // section (tab_balance_heroes).
         const int nf = LB_BAL_SPELL_FIELD0;
@@ -7067,42 +6890,34 @@ void tab_balance_units() {
 // docs/426: the Entities Editor's other unit fields, in their own section.
 void tab_balance_traits() {
     if (!tab_begin("Balance Traits")) return;
-    guide("Change where a unit can go, its size, its shot and its sight. Click a value "
-          "to edit it. Online, the host's balance applies to everyone.");
+    guide("Change where a unit can go, its size, its shot and its sight. Online, the "
+          "host's balance applies.");
     if (bal_header()) {
         const bool locked = lb_balance_custom_blocked() != nullptr;
-        ImGui::PushTextWrapPos(0.0f);
-        ImGui::TextDisabled("Where a unit can go, how big it is, what shot it uses "
-                            "and how far it sees. Yellow = yours; right-click to put back.");
-        ImGui::PopTextWrapPos();
         SDL_Texture* atlas = lb_teams_hud_atlas(g_team_renderer);
         static const char* const kCols[] = {
             "Land", "Water", "Trees", "Bld collision", "Land<->water", "Not water-only",
             "Hitbox", "Uninteract.", "Speed: none", "Projectile", "AI priority",
             "Defogged"};
         static const char* const kTips[] = {
-            "The unit can walk on land. (Read by FUN_0205079C.)",
-            "The unit can enter water. Ticking Land or Water also sets Building "
-            "collision, Land<->water and Not water-only the way the Entities Editor does.",
-            "The unit can walk through trees. (Read by FUN_02001510.)",
-            "Collides with buildings: the editor sets 0 for a unit that has Land and "
-            "Water, else 1. (FUN_0205079C.)",
-            "Crosses between land and water: the editor sets 1 with Land and Water.",
-            "The editor's BoatAntiFlag: ticked for every unit except water-only ones "
-            "(ships) and Shipyards. Ticking Water without Land clears it.",
-            "Hitbox size. (FUN_02001170.)",
-            "Uninteractable. UNCONFIRMED: the reader at +0x21 was not traced to the "
-            "blueprint, so this may do nothing.",
-            "No speed: writes 0x0000FFFF, as the Entities Editor's NONE does.",
-            "The projectile record a ranged unit fires, or Melee. A unit that "
-            "fires one has Melee damage 0. Spare projectile 1-4 are free shots that "
-            "start as a copy of the Arrow (a balance pack that uses one keeps its own "
-            "values and name): give one its own damage, speed and Sprite "
-            "in Balance Attacks and point a unit at it.",
-            "AI priority: accumulated in the combat path (docs/25).",
-            "Defogged area: how far the unit clears the fog; FF clears the map. "
-            "A unit auto-attacks only within it, so raise it with Range "
-            "(Range above it is not used for auto-attack)."};
+            "Can walk on land.",
+            "Can enter water. Ticking Land or Water also sets the next three "
+            "columns, as the Entities Editor does.",
+            "Can walk through trees.",
+            "Collides with buildings. The editor sets 0 for units with Land and "
+            "Water, else 1.",
+            "Can cross between land and water. The editor sets 1 with Land and Water.",
+            "The editor's BoatAntiFlag: on for everything except ships and "
+            "Shipyards. Ticking Water without Land clears it.",
+            "Hitbox size.",
+            "Uninteractable. Unconfirmed: may do nothing.",
+            "No speed, like the Entities Editor's NONE.",
+            "The projectile a ranged unit fires, or Melee. Units that fire one "
+            "have Melee damage 0. Spare projectiles 1-4 start as copies of the "
+            "Arrow: edit one in Balance Attacks and point a unit at it.",
+            "AI priority in combat.",
+            "How far the unit clears the fog; FF clears the map. Units only "
+            "auto-attack within this, so raise it along with Range."};
         const int nc = 12;
         if (ImGui::BeginTable("baltraits", 2 + nc,
                               ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
@@ -7225,15 +7040,13 @@ void tab_balance_attacks() {
     if (!tab_begin("Balance Attacks")) return;
     if (bal_header()) {
         const bool locked = lb_balance_custom_blocked() != nullptr;
-        ImGui::TextDisabled("A ranged unit's or a special's attack. Damage is "
-                            "a range: each hit deals between the two. The "
-                            "ticks are on/off.");
+        ImGui::TextDisabled("Ranged and special attacks. Each hit deals damage "
+                            "between the two values.");
         // docs/408: what each field does, from the code that reads it.
         static const char* const kTips[] = {
-            "Damage to what it touches on the way or hits (FUN_0206E408).",
+            "Damage to what it touches or hits on the way.",
             "",
-            "Damage where it lands: the target, and the blast if it explodes\n"
-            "(FUN_0206E450, FUN_0206E60C).",
+            "Damage where it lands, including the blast if it explodes.",
             "",
             "Flight speed, tiles per second. Applies from the next shot.",
             "Its contact damage reaches buildings.",
@@ -7241,8 +7054,8 @@ void tab_balance_attacks() {
             "It can touch ground units, bridges and gates.",
             "Its contact damage reaches walls.",
             "Its contact damage hurts its own side too.",
-            "It damages enemies it passes over, not only its target. With\n"
-            "Stopped by enemies off, it pierces.",
+            "It damages enemies it passes over, not just its target.\n"
+            "With Stopped by enemies off, it pierces.",
             "Impassable ground (cliffs, deep water) stops it.",
             "Buildings stop it; off, it flies over them.",
             "Its own side's units stop it.",
@@ -7251,9 +7064,8 @@ void tab_balance_attacks() {
             "It explodes where it lands, hitting what is near.",
             "Shots fly over trees instead of stopping at them.",
             "What the shot looks like. Ninja star, Flaming cannonball and Large arrow are "
-            "drawings the game ships but no shot uses. Applies at once; the explosion "
-            "drawn where it lands is separate. Several units can share a shot: point a "
-            "unit at a Spare projectile (Balance Traits) to change only its look."};
+            "unused in the game. Shots are shared between units: to change one unit's "
+            "look only, give it a Spare projectile (Balance Traits)."};
         static const char* const kSprites[14] = {
             "None (invisible)", "Arrow", "Bullet", "Ballista bolt", "Cannonball",
             "Plasma ball", "Ninja star", "Gift", "Tower fireball", "Flaming cannonball",
@@ -7373,8 +7185,8 @@ void tab_balance_heroes() {
     if (!tab_begin("Balance Heroes")) return;
     if (bal_header(true)) {
         const bool locked = lb_balance_custom_blocked() != nullptr;
-        ImGui::TextDisabled("Each hero's five spell slots, in the order the "
-                            "yellow brick lists them. Empty slots show nothing.");
+        ImGui::TextDisabled("Each hero's five spell slots, in yellow brick "
+                            "order.");
         SDL_Texture* atlas = lb_teams_hud_atlas(g_team_renderer)   /* docs/408 */;
         if (ImGui::BeginTable("balheroes", 2 + LB_BAL_SPELLS,
                               ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
@@ -7424,8 +7236,8 @@ void tab_balance_heroes() {
                             // spell button (spell record +1 = 0), so a hero
                             // holding both shows only the later slot's.
                             if ((id == 1 || id == 2) && ImGui::IsItemHovered())
-                                ImGui::SetTooltip("Both Unit Heals share one button: "
-                                                  "a hero shows only the later slot's.\n"
+                                ImGui::SetTooltip("Both Unit Heals share a button; a hero "
+                                                  "with both shows only the later one.\n"
                                                   "Unit Heal needs a target; the "
                                                   "instant one heals around the hero.");
                         }
@@ -7435,8 +7247,8 @@ void tab_balance_heroes() {
                     if (custom >= 0) {
                         ImGui::PopStyleColor();
                         if (ImGui::IsItemHovered())
-                            ImGui::SetTooltip("Yours. Beneath it: %s. Right-click "
-                                              "to put that back.",
+                            ImGui::SetTooltip("Yours. Original: %s. Right-click "
+                                              "to restore.",
                                               lb_spell_name(lb_balance_base(rec, field)));
                         if (!locked && ImGui::IsItemClicked(ImGuiMouseButton_Right))
                             lb_balance_custom_set(rec, field, -1);
@@ -7452,14 +7264,13 @@ void tab_balance_heroes() {
 
 void tab_balance_presets() {
     if (!tab_begin("Balance Presets")) return;
-    guide("Pick a mod's balance below, or use Import from ROM to take it from a mod's "
-          ".nds. Your own changes from the Balance pages are kept on top. Online, "
-          "the host's balance applies to everyone.");
+    guide("Pick a mod's balance, or import one from a mod's .nds. Your own changes "
+          "stay on top. Online, the host's balance applies.");
     draw_balance_pack();
     ImGui::Separator();
     ImGui::Text("Your values: %d", lb_balance_custom_size());
-    help("Kept in settings.json, on top of the pack above. They apply at\n"
-         "once, in a battle too, except online; recordings carry them.");
+    help("Your changes, applied on top of the pack. They apply at once,\n"
+         "even mid-battle (not online).");
     ImGui::SameLine();
     ImGui::BeginDisabled(lb_balance_custom_size() == 0 ||
                          lb_balance_custom_blocked() != nullptr);
@@ -7474,9 +7285,8 @@ void tab_balance_presets() {
         ImGui::TextUnformatted("Gold Brick value");
         ImGui::SameLine();
         bal_cell(LB_BAL_GLOBALS, rec, 0, locked);
-        help("Bricks a hero's team gets for a Gold Brick: 1000 in the game\n"
-             "(150 where the game gives 150, which takes the same share).\n"
-             "Offline only, like every value here; recordings carry it.");
+        help("Bricks a team gets for a Gold Brick. Default 1000 (smaller\n"
+             "rewards scale to match). Offline only.");
     }
     ImGui::Spacing();
     ImGui::InputText("File", g_bal_path, sizeof g_bal_path);
@@ -7530,7 +7340,7 @@ void tab_balance_presets() {
             }
         }
     }
-    ImGui::SetItemTooltip("Loads a file made by Export: the preset and the values in it.");
+    ImGui::SetItemTooltip("Loads a file made by Export.");
     ImGui::SameLine();
     // docs/426: every byte of a ROM's or Entities.ebp's blueprint that differs
     // from the game's own and falls in a menu field becomes your value, on Vanilla.
@@ -7544,12 +7354,8 @@ void tab_balance_presets() {
         }
     }
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Reads a mod's balance from its .nds or an Entities.ebp; it "
-                          "replaces your changed values.\n"
-                          "A .nds or an Entities.ebp (raw or compressed): its numbers "
-                          "that differ from the game's own become your values,\n"
-                          "with the pack set to Vanilla. Changes outside the menu's "
-                          "fields are counted, not applied.");
+        ImGui::SetTooltip("Reads a mod's balance from its .nds or Entities.ebp.\n"
+                          "It replaces your changed values and sets the pack to Vanilla.");
     ImGui::EndDisabled();
     if (!g_bal_msg.empty())
         ImGui::TextColored(g_bal_msg_bad ? ImVec4(1.0f, 0.5f, 0.4f, 1.0f)
@@ -7715,8 +7521,7 @@ void upd_startup_tick() {
 
 void tab_general() {
     if (!tab_begin("General")) return;
-    guide("Version, updates and the Discord status. These stay on this machine and do "
-          "not affect online play.");
+    guide("Version, updates and Discord status.");
     ImGui::Text("Version: %s", lb_port_version());
     ImGui::Spacing();
     UpdateInfo u;
@@ -7727,8 +7532,7 @@ void tab_general() {
     ImGui::BeginDisabled(u.state == 1);
     if (ImGui::Button("Check for updates")) upd_start(false);
     ImGui::EndDisabled();
-    ImGui::SetItemTooltip("Asks GitHub for the newest release. Nothing is downloaded or "
-                          "installed.");
+    ImGui::SetItemTooltip("Checks GitHub for a newer release. Doesn't download anything.");
     if (u.state == 1) ImGui::TextUnformatted("Checking...");
     else if (u.state == 3) ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.4f, 1.0f), "%s", u.error.c_str());
     else if (u.state == 2 && u.tag.empty()) ImGui::TextUnformatted(u.error.c_str());
@@ -7737,7 +7541,7 @@ void tab_general() {
                     u.name.c_str());
         ImGui::TextColored(u.newer ? ImVec4(0.5f, 1.0f, 0.5f, 1.0f) : ImVec4(0.8f, 0.8f, 0.8f, 1.0f),
                            "%s", u.newer ? "A newer version is available." :
-                                           "You have the newest version (or newer).");
+                                           "You're up to date.");
         if (!u.notes.empty()) {
             ImGui::BeginChild("lb_upd_notes", ImVec2(0, 150), ImGuiChildFlags_Borders);
             ImGui::PushTextWrapPos(0.0f);
@@ -7755,10 +7559,10 @@ void tab_general() {
             ImGui::BeginDisabled(!can || us == 1 || us == 2 || us == 3);
             if (ImGui::Button("Install update")) lb_update_start(u.asset.c_str(), u.tag.c_str());
             ImGui::EndDisabled();
-            ImGui::SetItemTooltip("Downloads the new version from GitHub and installs it over\n"
-                                  "this one. Your settings, saves, ROM and mods are kept.");
+            ImGui::SetItemTooltip("Downloads and installs the new version.\n"
+                                  "Your settings, saves, ROM and mods are kept.");
             if (!can)
-                ImGui::TextDisabled("Installing here works in the downloaded game only.");
+                ImGui::TextDisabled("Only works in the downloaded release.");
         }
     }
     {
@@ -7772,23 +7576,21 @@ void tab_general() {
         }
     }
     ImGui::Checkbox("Check for updates at startup", &g_set.update_check);
-    help("Looks for a newer release a few seconds after the game starts, and says so\n"
-         "only when there is one.");
+    help("Tells you at startup if a newer release is out.");
     ImGui::BeginDisabled(!g_set.update_check);
     ImGui::Checkbox("Install updates automatically", &g_set.auto_update);
-    help("With the check at startup on: a newer release is downloaded and installed\n"
-         "by itself, and runs from the next start. Your settings, saves, ROM and mods\n"
-         "are kept.");
+    help("Downloads and installs new releases at startup; they run from the\n"
+         "next start. Your settings, saves, ROM and mods are kept.");
     ImGui::EndDisabled();
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::TextDisabled("Discord");
     ImGui::Checkbox("Discord status", &g_set.discord_status);
-    help("Shows what you are doing (menus, a mission, a lobby, a match) in the Discord\n"
-         "desktop app, if it is running. Nothing happens when it is not.");
+    help("Shows what you're doing in your Discord status, if the Discord\n"
+         "app is running.");
     ImGui::BeginDisabled(!g_set.discord_status);
     ImGui::Checkbox("Show my hero in Discord status", &g_set.discord_hero);
-    help("Adds the hero you play as a small picture on your Discord status.");
+    help("Adds your hero's picture to your Discord status.");
     ImGui::EndDisabled();
     tab_end();
 }
@@ -8027,7 +7829,7 @@ void sc_unit_popup() {
     ImGui::SetNextWindowSize(ImVec2(620.0f * g_ui_scale, 520.0f * g_ui_scale), ImGuiCond_Appearing);
     if (!ImGui::BeginPopup("Choose banned units")) return;
     ImGui::TextUnformatted("Units that were banned");
-    guide("Tick the units. The table then shows matches where all of them were banned.");
+    guide("Tick units to show matches where all of them were banned.");
     {   // Apply preset
         static int choice = 0;
         const int n = lb_maps_preset_count();
@@ -8039,8 +7841,7 @@ void sc_unit_popup() {
         }
         ImGui::SameLine();
         if (ImGui::Button("Apply preset")) sc_apply_ban_preset(choice);
-        ImGui::SetItemTooltip("Sets the units to a ban preset's (the ones on Balance > Ban Units >\n"
-                              "Presets), and ticks \"Exactly this ban list\".");
+        ImGui::SetItemTooltip("Uses a ban preset's units and ticks \"Exactly this ban list\".");
     }
     if (ImGui::Button("Use my current ban list")) {
         g_scp.units.clear();
@@ -8058,8 +7859,8 @@ void sc_unit_popup() {
     if (ImGui::Button("Clear")) { g_scp.units.clear(); g_scp.preset_name.clear(); g_scp.note.clear(); }
     ImGui::SameLine();
     ImGui::Checkbox("Exactly this ban list", &g_scp.exact);
-    ImGui::SetItemTooltip("Off: matches where these were banned, and maybe others too.\n"
-                          "On: matches where these units, and no others, were banned.");
+    ImGui::SetItemTooltip("Off: these units were banned, maybe with others.\n"
+                          "On: only these units were banned.");
     if (!g_scp.note.empty()) { ImGui::SameLine(); ImGui::TextDisabled("%s", g_scp.note.c_str()); }
     ImGui::Separator();
     // (A popup sizes itself to its content, so the list has a size of its own.)
@@ -8116,24 +7917,18 @@ ImVec4 sc_preset_colour(const std::string& p) {
 
 void tab_scores() {
     if (!tab_begin("Scores")) return;
-    guide("The best players of online matches, kept by the master server: one table per "
-          "balance preset (Vanilla, Vanil+, FactionWars, FunLite, Rebalance and so on), "
-          "for matches played without or with unit bans. The host reports each match "
-          "when it ends. Matches with cheats on do not count.");
+    guide("Top online players, with one table per balance preset, with or without unit "
+          "bans. Matches with cheats on don't count.");
     ImGui::Checkbox("Keep me out of the score tables", &g_set.scores_opt_out);
-    help("Your matches are not added to the tables from the next lobby you host or\n"
-         "join. Matches already counted stay.");
+    help("Stops your future matches being counted. Past results stay.");
     ImGui::SameLine();
     if (ImGui::Button("Remove me from the scores table")) ImGui::OpenPopup("Remove my results");
-    ImGui::SetItemTooltip("Removes the results you have on the master server (and on the second\n"
-                          "server with \"Both\"). They are found by a private ID this game made\n"
-                          "for you the first time you hosted or joined; it is never shown. Results\n"
-                          "from before this version have no ID, so only the server's operator can\n"
-                          "remove those.");
+    ImGui::SetItemTooltip("Deletes your results from the master server(s). Results from\n"
+                          "older versions can only be removed by the server's operator.");
     if (ImGui::BeginPopupModal("Remove my results", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::TextUnformatted("Remove every result you have in the online score tables?");
-        ImGui::TextDisabled("This cannot be undone. To keep future matches out as well, tick\n"
-                            "\"Keep me out of the score tables\" too.");
+        ImGui::TextDisabled("This can't be undone. To keep future matches out too, tick\n"
+                            "\"Keep me out of the score tables\".");
         if (ImGui::Button("Remove my results") && !g_scf_busy.exchange(true)) {
             {
                 std::lock_guard<std::mutex> lk(g_scf_mu);
@@ -8248,8 +8043,8 @@ void tab_scores() {
         if (ImGui::Button("Clear##scclear")) { g_scp.units.clear(); g_scp.preset_name.clear(); g_scp.note.clear(); }
         ImGui::SameLine();
         ImGui::Checkbox("Exactly this ban list", &g_scp.exact);
-        ImGui::SetItemTooltip("Off: matches where the chosen units were banned, maybe with others.\n"
-                              "On: matches where those units, and no others, were banned.");
+        ImGui::SetItemTooltip("Off: these units were banned, maybe with others.\n"
+                              "On: only these units were banned.");
         if (!g_scp.units.empty()) {
             int shown = 0;
             for (int bp : g_scp.units) {
@@ -8370,10 +8165,8 @@ SDL_Renderer* g_maps_ren = nullptr;   // set by lb_overlay_draw, for the thumbna
 
 void tab_map_archive() {
     if (!tab_begin("Maps")) return;
-    guide("Free Play maps from the community map archive and the port's own (beta and "
-          "prototype maps). Pick a map to see its picture and facts, Download it into "
-          "your mods/maps folder, then Load new maps now. In a lobby, a map you lack "
-          "is fetched for you.");
+    guide("Community Free Play maps, plus beta and prototype maps. Download a map, then "
+          "press Load new maps now. In a lobby, a map you're missing is fetched for you.");
     lb_mapbrowser_draw(g_maps_ren);
     tab_end();
 }
@@ -8381,14 +8174,23 @@ void tab_map_archive() {
 // Community levels (lb_leveledit.cpp): the master server's approved uploads.
 void tab_community_levels() {
     if (!tab_begin("Community levels")) return;
-    guide("Levels other players made in the Level Editor and shared, each approved by a moderator. "
-          "Pick one to see it and Subscribe to put it in your mods/maps folder, then Load new maps "
-          "now to play it. Unsubscribe removes it again.");
+    guide("Levels shared by other players, approved by a moderator. Subscribe to one, then "
+          "press Load new maps now to play it. Unsubscribe removes it.");
     lb_community_draw(g_maps_ren);
     tab_end();
 }
 
 // The level editor (lb_leveledit.cpp): make, open, save and export levels.
+// Balance > Custom units (lb_unitlab.cpp, docs/448).
+void tab_custom_units() {
+    if (!tab_begin("Custom units")) return;
+    guide("View every unit and building animated; Compare shows a second one beside it. "
+          "Export saves a template to mods/units/export; make your own unit from it below, "
+          "share it online, or get other players' units under Community units.");
+    lb_unitlab_draw(g_maps_ren);
+    tab_end();
+}
+
 void tab_level_editor() {
     if (!tab_begin("Level Editor")) return;
     lb_leveledit_draw(g_maps_ren);
@@ -8414,7 +8216,8 @@ const std::vector<MenuHeader>& menu_headers() {
                      {"Unit Caps", "Balance Caps", tab_balance_caps},
                      {"Ban Units", "Ban Units", tab_ban_units},
                      {"Ban Maps", "Ban Maps", tab_ban_maps},
-                     {"Presets", "Balance Presets", tab_balance_presets}}},
+                     {"Presets", "Balance Presets", tab_balance_presets},
+                     {"Custom units", "Custom units", tab_custom_units}}},
         {"Cheats", {{"Cheats", "Cheats", tab_cheats},
                     {"Action Replay", "Action Replay", tab_action_replay}}},
         {"Network", {{"Multiplayer", "Multiplayer", tab_multiplayer},

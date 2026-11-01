@@ -31,6 +31,7 @@
 
 import { DurableObject } from 'cloudflare:workers';
 import { hasSwear } from './swear.js';
+import { unitsSetup, unitsFetch, unitsAdmin } from './units.js';
 
 const MAX_MAP_BYTES = 200 * 1024;
 const MAX_TBP_ENTRIES = 4096;
@@ -448,7 +449,9 @@ function panelMessage(cfg, counts) {
         `Per uploader per day: **${cfg.per_owner_day || 'no limit'}**\n` +
         `Per hour from everyone: **${cfg.per_hour || 'no limit'}**\n` +
         `Pending at most: **${cfg.max_pending}**\n\n` +
-        `Pending ${counts.pending}, published ${counts.approved}, banned uploaders ${counts.bans}.`,
+        `Levels: pending ${counts.pending}, published ${counts.approved}.\n` +
+        `Units: pending ${counts.unitsPending}, published ${counts.unitsApproved}.\n` +
+        `Banned uploaders ${counts.bans}.`,
     }],
     components: [
       { type: 1, components: [
@@ -491,7 +494,9 @@ export class Levels extends DurableObject {
     for (const col of ['likes INTEGER DEFAULT 0', 'mini BLOB']) {
       try { this.sql.exec('ALTER TABLE levels ADD COLUMN ' + col); } catch { /* already there */ }
     }
+    unitsSetup(this.sql);
   }
+  swear(s) { return hasSwear(s, this.env.SWEAR_TEST_WORDS); }
 
   cfg() {
     const c = { ...DEFAULTS };
@@ -507,6 +512,8 @@ export class Levels extends DurableObject {
     return {
       pending: one("SELECT COUNT(*) AS n FROM levels WHERE status = 'pending'"),
       approved: one("SELECT COUNT(*) AS n FROM levels WHERE status = 'approved'"),
+      unitsPending: one("SELECT COUNT(*) AS n FROM units WHERE status = 'pending'"),
+      unitsApproved: one("SELECT COUNT(*) AS n FROM units WHERE status = 'approved'"),
       bans: one('SELECT COUNT(*) AS n FROM bans'),
     };
   }
@@ -522,6 +529,7 @@ export class Levels extends DurableObject {
       if (request.method === 'POST' && path === '/levels/upload') return await this.upload(request);
       if (request.method === 'POST' && path === '/levels/delete') return await this.remove(request);
       if (request.method === 'POST' && path === '/levels/admin') return await this.admin(request);
+      if (path.startsWith('/units/')) return await unitsFetch(this, request, url, path);
     } catch (e) {
       return json(500, { ok: false, error: 'server error' });
     }
@@ -724,6 +732,7 @@ export class Levels extends DurableObject {
       if (k === 'hour0') this.setCfg('per_hour', 0);
       return json(200, { ok: true, update: panelMessage(this.cfg(), this.counts()) });
     }
+    if (id.startsWith('lvl:unit:')) return unitsAdmin(this, id);
     m = /^lvl:(approve|reject|ban):(\d{1,9})$/.exec(id);
     if (!m) return json(200, { ok: true, reply: 'Unknown button.' });
     const row = this.sql.exec('SELECT * FROM levels WHERE id = ?', Number.parseInt(m[2], 10)).toArray()[0];
@@ -737,6 +746,7 @@ export class Levels extends DurableObject {
       if (row.addr) this.sql.exec('INSERT OR REPLACE INTO bans (who, at, level) VALUES (?, ?, ?)', row.addr, Date.now(), row.id);
       // Everything that uploader sent comes down.
       this.sql.exec("UPDATE levels SET status = 'banned', decided = ? WHERE owner = ?", Date.now(), row.owner);
+      this.sql.exec("UPDATE units SET status = 'banned', decided = ? WHERE owner = ?", Date.now(), row.owner);
     } else {
       this.sql.exec('UPDATE levels SET status = ?, decided = ? WHERE id = ?', status, Date.now(), row.id);
     }

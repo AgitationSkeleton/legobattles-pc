@@ -40,6 +40,8 @@
 bool lb_mods_bundle(unsigned long long hash, std::vector<uint8_t>* map,
                     std::vector<uint8_t>* detail, std::vector<uint8_t> mini[4]);
 extern "C" const char* lb_mods_dir(void);
+bool lb_cunits_bundle(uint64_t hash, std::vector<uint8_t>* out);                 // lb_cunits.cpp, docs/448
+bool lb_cunits_received(uint64_t hash, const std::vector<uint8_t>& bundle);
 extern "C" int lb_mods_request_rebuild(void);
 extern "C" int lb_setting_fetch_maps(void);   /* lb_overlay.cpp */
 
@@ -85,13 +87,16 @@ struct Want {
     uint64_t next_ask = 0, started = 0;
     bool asking = false;                       // the archive had none: ask the host
     bool done = false;
+    bool unit = false;                         // docs/448: a custom unit's bundle, not a map
 };
 Want g_want;
 std::map<uint64_t, int> g_finished;            // hash -> 1 written, -1 refused
 
 bool build_bundle(uint64_t hash, std::vector<uint8_t>* out) {
     std::vector<uint8_t> map, detail, mini[4];
-    if (!lb_mods_bundle(hash, &map, &detail, mini)) return false;
+    // docs/448: a custom unit of this host's build, by the same kind of identity.
+    if (!lb_mods_bundle(hash, &map, &detail, mini))
+        return lb_cunits_bundle(hash, out) && out->size() <= kMaxBundle;
     out->clear();
     out->insert(out->end(), {'L', 'B', 'M', 'B', 1});
     put32(out, (uint32_t)map.size());
@@ -222,6 +227,16 @@ std::string loaded_text(const std::string& name, const char* from, int how) {
 
 void finish_locked() {
     Want& w = g_want;
+    if (w.unit) {   // docs/448: checked against its identity and unpacked (lb_cunits.cpp)
+        const bool ok = lb_cunits_received(w.hash, w.data);
+        g_finished[w.hash] = ok ? 1 : -1;
+        w.done = true;
+        std::fprintf(stderr, "[lb_maptx] custom unit %016llX: %zu bytes received, %s\n",
+                     (unsigned long long)w.hash, w.data.size(), ok ? "written" : "REFUSED");
+        std::fflush(stderr);
+        if (!ok) lb_overlay_notice("A custom unit from the host could not be received.");
+        return;
+    }
     std::vector<std::vector<uint8_t>> parts;
     std::string where;
     const bool good = open_bundle(w.data, w.hash, &parts);
@@ -298,6 +313,28 @@ extern "C" void lb_maptx_want(unsigned long long hash, const char* name) {
         return;
     }
     std::thread([hash, n = g_want.name]() { archive_then_host(hash, n); }).detach();
+}
+
+// docs/448: a lobby's custom unit this machine lacks: ask the host for its
+// bundle (there is no archive for units). Once per unit per run.
+extern "C" void lb_maptx_want_unit(unsigned long long hash) {
+    if (!hash) return;
+    std::lock_guard<std::mutex> lk(g_mu);
+    if (g_finished.count(hash) || (g_want.hash == hash && !g_want.done)) return;
+    g_want = Want();
+    g_want.hash = hash;
+    g_want.name = "custom unit";
+    g_want.unit = true;
+    g_want.asking = true;
+    g_want.started = SDL_GetTicks64();
+    std::fprintf(stderr, "[lb_maptx] asking the host for custom unit %016llX\n", (unsigned long long)hash);
+    std::fflush(stderr);
+}
+
+// Nothing is being received (a new request may start).
+extern "C" int lb_maptx_idle(void) {
+    std::lock_guard<std::mutex> lk(g_mu);
+    return (!g_want.hash || g_want.done) ? 1 : 0;
 }
 
 // The lobby was left: stop asking.

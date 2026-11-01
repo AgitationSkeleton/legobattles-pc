@@ -368,6 +368,20 @@ def apply(runner_dir, imgui_dir):
          indent="    ")
     done.append("frontend.cpp: event forwarding")
 
+    # Custom units' own sounds (docs/448): the host's voices are added to the
+    # game's audio as the device takes it, after the queue's samples are
+    # copied out, so they follow the game's output and device exactly.
+    replace(front,
+            "    queue->read = (queue->read + take) % kAudioCapacityFrames;\n"
+            "    queue->count -= take;\n",
+            "    queue->read = (queue->read + take) % kAudioCapacityFrames;\n"
+            "    queue->count -= take;\n"
+            "    lb_cunits_audio_mix(output, requested);   /* legobattles-decomp: docs/448 */\n")
+    replace(front, "void SDLCALL audio_callback(void* userdata, Uint8* stream, int len) {",
+            "extern \"C\" void lb_cunits_audio_mix(int16_t* stereo, unsigned frames);   /* legobattles-decomp */\n"
+            "void SDLCALL audio_callback(void* userdata, Uint8* stream, int len) {")
+    done.append("frontend.cpp: custom units' sounds mixed into the game's audio")
+
     # BR-0029: a player's "crash" left a log ending in an ordinary shutdown
     # with nothing to say what asked for it. Name the request, so the next
     # report says whether the window was closed or something sent a quit.
@@ -7622,6 +7636,10 @@ def apply(runner_dir, imgui_dir):
           # The level editor: the map model and the Maps page.
           "src/lb_levelmap.cpp",
           "src/lb_leveledit.cpp",
+          # Balance > Custom units: export and preview (docs/448).
+          "src/lb_unitlab.cpp",
+          # Custom units: appended blueprints (docs/448).
+          "src/lb_cunits.cpp",
           # The host-level WH: smooth online play (docs/423).
           "src/lb_vwh.cpp",
           # The master server's relay (docs/424), for <winsock2.h>.

@@ -87,11 +87,14 @@ console.log(`[lb-fallback] the Worker runs at ${url} (this machine only), data i
 //   * CF-Connecting-IP is set from the socket, never taken from the request,
 //     as Cloudflare does (the Worker reads the asker's address from it);
 //   * bodies over 64 KiB are refused (the Worker's largest request, a match
-//     picture post, is far below that), and so are connections that send
-//     nothing for 15 s.
+//     picture post, is far below that), except a community level or unit
+//     upload, up to 4 MiB (the Worker checks its own, tighter cap), and so
+//     are connections that send nothing for 15 s.
 // WebSocket upgrades (the relay) are spliced through as raw sockets.
 const inner = new URL(url);
 const MAX_BODY = 64 * 1024;
+const MAX_UPLOAD = 4 * 1024 * 1024;
+const capFor = (req) => (/^\/(levels|units)\/upload\/?(\?|$)/.test(req.url || '') ? MAX_UPLOAD : MAX_BODY);
 function clientIp(sock) {
   const a = sock.remoteAddress || '';
   return a.startsWith('::ffff:') ? a.slice(7) : a;
@@ -106,7 +109,8 @@ function forwardHeaders(req) {
 }
 const front = http.createServer((req, res) => {
   const len = Number(req.headers['content-length'] || 0);
-  if (len > MAX_BODY) { res.writeHead(413).end(); req.destroy(); return; }
+  const cap = capFor(req);
+  if (len > cap) { res.writeHead(413).end(); req.destroy(); return; }
   let seen = 0;
   const up = http.request({ host: inner.hostname, port: inner.port, method: req.method,
                             path: req.url, headers: forwardHeaders(req) }, (r) => {
@@ -116,7 +120,7 @@ const front = http.createServer((req, res) => {
   up.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end(); });
   req.on('data', (c) => {
     seen += c.length;
-    if (seen > MAX_BODY) { up.destroy(); res.writeHead(413).end(); req.destroy(); }
+    if (seen > cap) { up.destroy(); res.writeHead(413).end(); req.destroy(); }
   });
   req.pipe(up);
 });

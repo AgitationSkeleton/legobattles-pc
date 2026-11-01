@@ -1353,6 +1353,10 @@ def main():
     # A run records its own session (lb-session-*.lbdemo), which the game
     # no longer does by default: a crashed run replays from it.
     env.setdefault("LB_DEMO_RECORD", "1")
+    # A dev build is older than the latest release, so the startup update
+    # check opens a notice over the menus and swallows the route's taps
+    # (docs/449: every run stalled at step 1 once v0.4.1 was published).
+    env.setdefault("LB_UPDATE_CHECK", "0")
     # THE DIAGNOSTICS THE SELECTION PROBES PARSE, armed automatically.
     #
     # --click-sweep reads the player's base position out of the port's own
@@ -1786,6 +1790,39 @@ def main():
                 capture(os.path.join(stepdir, "dismiss-%02d.png" % i))
 
         for i, spec in enumerate(args.game_tap):
+            # "k:MASK[,WAIT]" presses DS buttons, as --tap does: Start (8)
+            # in a story mission opens its pause menu (docs/449).
+            # "w:X,Y[,WAIT]" clicks the WINDOW at client pixel X,Y, as a hand
+            # does, for a button the HUD mover has carried out of the guest's
+            # own 256 columns (docs/449). Hover first: a press on a stale
+            # hover is swallowed.
+            # "m:X,Y[,WAIT]" only moves the mouse there (no press).
+            if spec.startswith("m:"):
+                q = spec[2:].split(",")
+                d.cmd("frontend_input", action="moveto", x=int(q[0]), y=int(q[1]))
+                time.sleep(float(q[2]) if len(q) > 2 else 1.5)
+                capture(os.path.join(stepdir, "gametap-%02d-m%s-%s.png" % (i, q[0], q[1])))
+                continue
+            if spec.startswith("w:"):
+                q = spec[2:].split(",")
+                x, y = int(q[0]), int(q[1])
+                d.cmd("frontend_input", action="moveto", x=x, y=y)
+                time.sleep(0.2)
+                d.cmd("frontend_input", action="click", x=x, y=y, down=True)
+                time.sleep(0.25)
+                d.cmd("frontend_input", action="click", x=x, y=y, down=False)
+                time.sleep(float(q[2]) if len(q) > 2 else 2.5)
+                capture(os.path.join(stepdir, "gametap-%02d-w%d-%d.png" % (i, x, y)))
+                continue
+            if spec.startswith("k:"):
+                q = spec[2:].split(",")
+                mask = int(q[0], 0)
+                d.cmd("keys", mask=0x3FF & ~mask)
+                time.sleep(0.25)
+                d.cmd("keys", mask=0x3FF)
+                time.sleep(float(q[1]) if len(q) > 1 else 2.5)
+                capture(os.path.join(stepdir, "gametap-%02d-key%02X.png" % (i, mask)))
+                continue
             q = spec.split(",")
             tap(d, int(q[0]), int(q[1]), float(q[2]) if len(q) > 2 else 2.0)
             capture(os.path.join(stepdir, "gametap-%02d-%s-%s.png"

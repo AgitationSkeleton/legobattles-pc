@@ -237,6 +237,20 @@ long section(const std::vector<uint8_t>& b, const char* magic) {
 // checked at run time against the minifig record in guest RAM (+0x60 the unit,
 // +0x6C its unlock bit), so a table that disagreed with the cartridge would
 // say so instead of mislabelling.
+extern "C" int lb_cunits_count(void);              // lb_cunits.cpp, docs/448
+extern "C" int lb_cunits_hashes(unsigned long long* out, int cap);
+extern "C" void lb_cunits_lobby_set(const unsigned long long* hashes, int n);
+extern "C" int lb_cunits_template(int k);
+extern "C" const char* lb_cunits_name(int k);
+extern "C" int lb_cunits_battle(int k);
+extern "C" int lb_cunits_of_battle(int bp);
+// A custom unit (its battle blueprint, lb_cunits_battle) draws its template's head and HUD icon: those tables
+// are keyed by the stock index (docs/448).
+int art_bp(int bp) {
+    const int k = lb_cunits_of_battle(bp);
+    return k >= 0 ? lb_cunits_template(k) : bp;
+}
+
 struct Cand {
     uint16_t unit;      // blueprint index
     uint16_t minifig;   // blueprint index of its minifig collectable
@@ -327,16 +341,37 @@ const Cand kCreatures[4] = {{169, 0, 6}, {138, 0, 6}, {155, 0, 6}, {153, 0, 6}};
 int creature_slot_of(int i) { return lb_creature_slot(kCreatures[i].unit); }
 // How many candidates slot `s` has before the option is looked at, and the
 // k-th of them: the static ones, then the creatures that chose this slot.
+// docs/448: THE CUSTOM UNITS (lb_cunits.cpp, blueprints 551 + k), each in
+// its TEMPLATE's slot with its template's faction and minifig -- so it is
+// unlocked when its template is, and needs no unlock bit of its own. Rebuilt
+// when the set changes (a cartridge rebuild).
+std::vector<Cand> g_custom[LB_TEAM_SLOTS];
+int g_custom_n = -1;
+void custom_refresh() {
+    const int n = lb_cunits_count();
+    if (n == g_custom_n) return;
+    g_custom_n = n;
+    for (auto& v : g_custom) v.clear();
+    for (int k = 0; k < n; ++k) {
+        const int t = lb_cunits_template(k);
+        for (int s = 0; s < LB_TEAM_SLOTS; ++s)
+            for (int i = 0; i < kSlots[s].n; ++i)
+                if (kSlots[s].c[i].unit == t)
+                    g_custom[s].push_back({(uint16_t)lb_cunits_battle(k), kSlots[s].c[i].minifig, kSlots[s].c[i].faction});
+    }
+}
 int slot_total(int s) {
+    custom_refresh();
     int n = kSlots[s].n;
     for (int i = 0; i < 4; ++i) n += creature_slot_of(i) == s;
-    return n;
+    return n + (int)g_custom[s].size();
 }
 const Cand& slot_item(int s, int k) {
     if (k < kSlots[s].n) return kSlots[s].c[k];
     k -= kSlots[s].n;
     for (int i = 0; i < 4; ++i)
         if (creature_slot_of(i) == s && k-- == 0) return kCreatures[i];
+    if (k >= 0 && k < (int)g_custom[s].size()) return g_custom[s][(size_t)k];
     return kCreatures[0];   // not reached for k < slot_total(s)
 }
 
@@ -1014,11 +1049,26 @@ extern "C" int lb_rom_read_unwrapped(const char* path, unsigned char* out, int c
 // docs/428: one blueprint's 24x24 battle-HUD icon as RGBA32 (0 = clear), for
 // the match picture. 0 when the atlas is not built yet or has no such icon.
 extern "C" int lb_teams_hud_icon_rgba(int bp, unsigned int out[576]) {
+    bp = art_bp(bp);
     if (bp < 0 || bp >= 182 || !build_hud_atlas() || !g_hud_has[bp]) return 0;
     const int x0 = (bp % 16) * 24, y0 = (bp / 16) * 24;
     for (int y = 0; y < 24; ++y)
         for (int x = 0; x < 24; ++x)
             out[y * 24 + x] = g_hud_rgba[(size_t)(y0 + y) * kHudW + (x0 + x)];
+    return 1;
+}
+
+// docs/448: one blueprint's 24x24 army-screen head (UI/MiniHeads in its own
+// sub-palette) as RGBA32, for the custom-unit export. 0 when the atlas is not
+// built yet or the blueprint has no head.
+extern "C" int lb_teams_head_rgba(int bp, unsigned int out[576]) {
+    bp = art_bp(bp);
+    if (bp < 0 || bp >= 192 || !build_atlas() || g_pos[bp] < 0) return 0;
+    const int p = g_pos[bp];
+    const int x0 = (p % 16) * 24, y0 = (p / 16) * 24;
+    for (int y = 0; y < 24; ++y)
+        for (int x = 0; x < 24; ++x)
+            out[y * 24 + x] = g_rgba[(size_t)(y0 + y) * kAtlasW + (x0 + x)];
     return 1;
 }
 
@@ -1073,6 +1123,7 @@ extern "C" const char* lb_teams_slot_label(int slot) {
 }
 
 extern "C" const char* lb_teams_unit_name(int bp) {
+    if (lb_cunits_of_battle(bp) >= 0) return lb_cunits_name(lb_cunits_of_battle(bp));   // docs/448
     if (bp < 0 || bp >= 192) return "?";
     names_refresh();
     std::string& s = g_names.unit[bp];
@@ -1094,6 +1145,7 @@ extern "C" const char* lb_teams_unit_name(int bp) {
 // that rewrite text as it is copied (docs/425) never reach the table, so the
 // table already holds their stock names.
 extern "C" const char* lb_teams_unit_name_stock(int bp) {
+    if (lb_cunits_of_battle(bp) >= 0) return lb_cunits_name(lb_cunits_of_battle(bp));   // docs/448
     if (bp < 0 || bp >= 192) return "?";
     names_refresh();
     static std::string stock[192];
@@ -1202,6 +1254,7 @@ extern "C" SDL_Texture* lb_teams_atlas(SDL_Renderer* r, int grey) {
 
 extern "C" int lb_teams_icon_uv(int bp, float* u0, float* v0, float* u1,
                                 float* v1) {
+    bp = art_bp(bp);
     if (g_atlas_state <= 0 || bp < 0 || bp >= 192 || g_pos[bp] < 0) return 0;
     const int p = g_pos[bp];
     *u0 = (float)((p % 16) * 24) / kAtlasW;
@@ -1233,6 +1286,7 @@ extern "C" SDL_Texture* lb_teams_hud_atlas(SDL_Renderer* r) {
 
 extern "C" int lb_teams_hud_icon_uv(int bp, float* u0, float* v0, float* u1,
                                     float* v1) {
+    bp = art_bp(bp);
     if (g_hud_state <= 0 || bp < 0 || bp >= 182 || !g_hud_has[bp]) return 0;
     *u0 = (float)((bp % 16) * 24) / kHudW;
     *v0 = (float)((bp / 16) * 24) / kHudH;
@@ -1549,13 +1603,34 @@ extern "C" int lb_teams_question_rgba(unsigned int out[56 * 56]) {
 // docs/430: the army screen's two filters, for a creature, while its card is
 // in (lb_patches.cpp's overrides of FUN_020EAC1C and FUN_020EB21C, from the
 // army screen's list call only). -1: not ours, ask the game.
+// docs/448: a custom unit (551 + k) is asked about by its own index, which the
+// game's switch tables do not know: it answers as its template's slot does.
+// The hero list holds 25 cells and the stock heroes fill 24 of them beside the
+// current pick, so only the first custom hero is listed.
+int custom_slot(int unit) {
+    custom_refresh();
+    for (int s = 0; s < LB_TEAM_SLOTS; ++s)
+        for (const Cand& c : g_custom[s])
+            if (c.unit == unit) return s;
+    return -1;
+}
 extern "C" int lb_teams_card_listable(int unit) {
+    if (unit >= 551) {
+        const int s = custom_slot(unit);
+        if (s < 0 || s > 4) return -1;
+        if (s == 0 && !g_custom[0].empty() && g_custom[0][0].unit != unit) return 0;
+        return 1;
+    }
     if (!g_cards_applied) return -1;
     // docs/436: any creature; the screen has already matched the slot to the
     // unit's own category, which the creature layer set from the slot.
     return unit == 169 || unit == 138 || unit == 155 || unit == 153 ? 1 : -1;
 }
 extern "C" int lb_teams_card_tier(int unit) {
+    if (unit >= 551) {   // docs/448: Special One/Two/Three 1..3, Transport 4 (FUN_020EB21C)
+        const int s = custom_slot(unit);
+        return s >= 5 && s <= 8 ? s - 4 : -1;
+    }
     if (!g_cards_applied) return -1;
     const int s = lb_creature_slot(unit);   // Special One/Two/Three = 5/6/7
     return s >= 5 && s <= 7 ? s - 4 : -1;
@@ -1847,6 +1922,19 @@ extern "C" int lb_rules_outgoing(unsigned char* buf, int cap) {
                         buf[n++] = 'A';
                         buf[n++] = 1;
                         for (int b = 0; b < 4; ++b) buf[n++] = (unsigned char)(ah >> (8 * b));
+                        // docs/448: then the 'U' page: 'U', a version (1), a
+                        // count and that many u64 custom-unit identities, in
+                        // build order (their indices). A host without it has
+                        // none.
+                        unsigned long long cu[16];
+                        const int cn = lb_cunits_hashes(cu, 16);
+                        if (n + 3 + 8 * cn <= cap) {
+                            buf[n++] = 'U';
+                            buf[n++] = 1;
+                            buf[n++] = (unsigned char)cn;
+                            for (int i = 0; i < cn; ++i)
+                                for (int b = 0; b < 8; ++b) buf[n++] = (unsigned char)(cu[i] >> (8 * b));
+                        }
                     }
                 }
             }
@@ -2162,6 +2250,22 @@ extern "C" void lb_rules_incoming(const unsigned char* buf, int len,
             ah = (unsigned)buf[a_at + 2] | ((unsigned)buf[a_at + 3] << 8) |
                  ((unsigned)buf[a_at + 4] << 16) | ((unsigned)buf[a_at + 5] << 24);
         g_ar_recv = ah;
+        // docs/448: the 'U' page after it: the host's custom units, in order.
+        // A joiner builds exactly that set (lb_cunits_lobby_set fetches what it
+        // lacks and rebuilds); no page from an older host is none.
+        const int u_at = a_at >= 0 ? a_at + 6 : -1;
+        unsigned long long cu[16];
+        int cn = 0;
+        if (u_at >= 0 && u_at + 3 <= len && buf[u_at] == 'U' && buf[u_at + 1] == 1) {
+            const int c = buf[u_at + 2];
+            if (c <= 16 && u_at + 3 + 8 * c <= len)
+                for (int i = 0; i < c; ++i) {
+                    unsigned long long h = 0;
+                    for (int b = 0; b < 8; ++b) h |= (unsigned long long)buf[u_at + 3 + 8 * i + b] << (8 * b);
+                    cu[cn++] = h;
+                }
+        }
+        lb_cunits_lobby_set(cu, cn);
     }
     if (bal_done_now) {
         std::fprintf(stderr, "[lb_teams] the host's balance from instance %u: "

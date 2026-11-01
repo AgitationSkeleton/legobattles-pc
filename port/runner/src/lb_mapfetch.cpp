@@ -484,9 +484,8 @@ void fetch(std::string name) {
     char text[256];
     if (files > 0) {
         std::snprintf(text, sizeof text,
-                      "\"%s\" was downloaded from the map archive into "
-                      "mods/maps/_archive. Restart the game to use it, then join "
-                      "again.", name.c_str());
+                      "Downloaded \"%s\" from the map archive. Restart the game "
+                      "and join again to use it.", name.c_str());
     } else {
         std::snprintf(text, sizeof text,
                       "\"%s\" is not in the map archive%s%s. Ask the host for "
@@ -800,8 +799,8 @@ void arc_download(ArcMap& m) {
     }
     arc_scan_installed();
     arc_mark_installed();
-    g_dl_msg = "Downloaded into mods/maps/_archive. Press Load new maps now (the game "
-               "resets to the title screen) to see it in the Free Play map list.";
+    g_dl_msg = "Downloaded. Press Load new maps now (resets to the title screen) "
+               "to add it to the Free Play map list.";
     g_dl_new = true;
 }
 
@@ -848,9 +847,9 @@ void arc_download_many(const std::vector<size_t>& idx) {
         std::fflush(stderr);
         {
             std::lock_guard<std::mutex> lk(g_arc_mu);
-            g_dlm_msg = std::to_string(maps) + " map(s) downloaded into mods/maps/_archive" +
-                        (failed ? " (" + std::to_string(failed) + " could not be written)" : "") +
-                        ". Press Load new maps now to see them in the Free Play map list.";
+            g_dlm_msg = std::to_string(maps) + " map(s) downloaded" +
+                        (failed ? " (" + std::to_string(failed) + " failed)" : "") +
+                        ". Press Load new maps now to add them to the Free Play map list.";
         }
         g_dlm_done = true;
         g_dlm_busy = false;
@@ -911,11 +910,8 @@ void arc_draw(SDL_Renderer* ren) {
             return;
         }
         ImGui::TextWrapped("Nothing is downloaded until you press the button. The map "
-                           "archives (lnee's, the community's and the port's own) are a few "
-                           "files of about 50 MB in all, fetched over HTTPS from GitHub and "
-                           "Codeberg into mods/cache and read from there afterwards. A pack that "
-                           "changes in its archive is fetched again the next time you "
-                           "press it.");
+                           "archives are about 50 MB in all, downloaded from GitHub and "
+                           "Codeberg into mods/cache.");
         // Test aid: LB_MAPS_LOAD=1 presses Load the archive once.
         static bool aid_load = std::getenv("LB_MAPS_LOAD") != nullptr;
         if (ImGui::Button("Load the archive") || aid_load) {
@@ -962,14 +958,12 @@ void arc_draw(SDL_Renderer* ren) {
             arc_download_many(missing);
         }
         ImGui::EndDisabled();
-        ImGui::SetItemTooltip("Copies every map not yet installed, from every pack, into\n"
-                              "mods/maps/_archive. The game loads at most %d mod maps.",
+        ImGui::SetItemTooltip("Installs every map you don't have yet.\n"
+                              "The game loads at most %d mod maps.",
                               lb_mods_limit());
         ImGui::SameLine();
         if (ImGui::Button("Check the archives for new maps")) arc_start(true);
-        ImGui::SetItemTooltip("Asks each archive what it holds now and downloads the packs\n"
-                              "that are new or changed. Otherwise the page reads what is\n"
-                              "already in mods/cache.");
+        ImGui::SetItemTooltip("Downloads any new or updated map packs.");
         if (!g_dl_msg.empty() && sel < 0) ImGui::TextWrapped("%s", g_dl_msg.c_str());
         if (g_dl_new && sel < 0 && ImGui::Button("Load new maps now##top")) {
             if (lb_mods_request_rebuild()) {
@@ -981,8 +975,8 @@ void arc_draw(SDL_Renderer* ren) {
         }
         if (lb_mods_count() + (int)missing.size() > lb_mods_limit() && !missing.empty())
             ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f),
-                               "With every map installed there would be more than the %d "
-                               "the game loads; the rest are left out.", lb_mods_limit());
+                               "That's more than the %d mod maps the game loads; "
+                               "the rest are left out.", lb_mods_limit());
     }
     const ImVec2 avail = ImGui::GetContentRegionAvail();
     const float detail_w = sel >= 0 ? std::max(300.0f, avail.x * 0.34f) : 0.0f;
@@ -1096,17 +1090,16 @@ void arc_draw(SDL_Renderer* ren) {
         ImGui::ProgressBar((float)c / cells, ImVec2(150.0f, 0.0f), t);
     }
     ImGui::EndGroup();
-    ImGui::SetItemTooltip("Counted from the ground-type layer of the map file.");
+    ImGui::SetItemTooltip("How much of the map is each ground type.");
     ImGui::Spacing();
     if (m.installed) {
         ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "Installed");
         ImGui::SameLine();
-        ImGui::TextDisabled("(it is in your mods/maps folder)");
+        ImGui::TextDisabled("(in your mods/maps folder)");
     } else if (ImGui::Button("Download")) {
         arc_download(m);
     }
-    ImGui::SetItemTooltip("Copies this map's folder into mods/maps/_archive. The game\n"
-                          "reads mods/maps when it starts.");
+    ImGui::SetItemTooltip("Installs this map into mods/maps/_archive.");
     if (!g_dl_msg.empty()) ImGui::TextWrapped("%s", g_dl_msg.c_str());
     // docs/432: a Reset rebuilds the cartridge with the mods folder as it is now.
     if (g_dl_new && ImGui::Button("Load new maps now")) {
@@ -1119,7 +1112,7 @@ void arc_draw(SDL_Renderer* ren) {
     }
     if (lb_mods_count() >= lb_mods_limit())
         ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f),
-                           "The game loads at most %d mod maps and %d are already in use.",
+                           "The game loads at most %d mod maps; %d are in use.",
                            lb_mods_limit(), lb_mods_count());
     if (!m.notes.empty()) {
         ImGui::Separator();

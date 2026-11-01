@@ -56,6 +56,7 @@ extern "C" int lb_shown_band_x(void);            /* frontend.cpp (apply_hooks) *
 extern "C" int lb_shown_band_y(void);
 
 extern "C" int lb_setting_hud_anchor(void);
+extern "C" int lb_field_display(void);            /* src/lb_widemap.cpp, docs/449 */
 extern "C" int lb_drawer_animating(void);          /* src/lb_patches.cpp, BR-0030 */
 extern "C" float lb_setting_hud_scale(void);
 extern "C" int lb_setting_enhanced(void);
@@ -982,6 +983,13 @@ extern "C" int lb_hud_touch_phantom(int gx, int gy) {
 // start.
 extern "C" int lb_hud_refog_cell(int cx, int cy) {
     if (cx < 0 || cx >= 32 || cy < 0 || cy >= 24) return 0;
+    // docs/449: NOT OFF THE FIELD. g_refog is rebuilt by the scan, which only
+    // the battle's composite runs, so a screen the game opens in a battle (the
+    // objectives from the "!" button, the red-brick screen) kept the last
+    // battle frame's marks -- the "!" button's vacated cells (28,22) and
+    // (29,22) -- and lb_widemap_fog drew fog over that screen's own BG2 there:
+    // the bottom half of the last letter of its "Resume" label.
+    if (!lb_field_display()) return 0;
     return (g_refog[cy] >> cx) & 1u;
 }
 

@@ -101,6 +101,7 @@
 // it can never do the opposite and reveal ground the game is hiding. Panning
 // there corrects it from the guest's own output.
 
+#include <atomic>
 #include <cstdint>
 #include <thread>
 #include <functional>
@@ -6694,9 +6695,15 @@ int band_clamp_on() {
 // band: with the surface as wide as the map they sat hundreds of pixels to
 // one side of their labels (docs/447). The mode, not the BG enables: those
 // toggle inside a battle (the note at the DISPCNT bail in lb_widemap_fill).
-bool field_display() {
-    return (nds_io_debug_read(9, 0x04000000u, 32) & 7u) == 0u;
-}
+// Read ONCE PER FRAME, on the emulation thread, at the band latch, and kept:
+// the askers are the geometry path (per display list) and the compositor's
+// row workers (lb_hud_refog_cell, per fog cell), which should not each go
+// through the debug-path register read.
+std::atomic<int> g_field_disp{1};
+bool field_display() { return g_field_disp.load(std::memory_order_relaxed) != 0; }
+
+// For lb_hud.cpp: no refog off the field (docs/449).
+extern "C" int lb_field_display(void) { return field_display() ? 1 : 0; }
 
 int band_split(int span, int before, int after) {
     if (span <= 0) return 0;
@@ -7121,6 +7128,17 @@ extern "C" int lb_band_span_y(int output_height) {
 }
 
 extern "C" int lb_band_latch(int output_width, int output_height) {
+    {   // docs/449
+        const uint32_t dc = nds_io_debug_read(9, 0x04000000u, 32);
+        const int f = (dc & 7u) == 0u ? 1 : 0;
+        if (f != g_field_disp.load(std::memory_order_relaxed)) {
+            static const bool log = std::getenv("LB_HUDLOG") != nullptr;
+            static unsigned said = 0;
+            if (log && said++ < 40)
+                std::fprintf(stderr, "[lb_fielddisp] %d (dispcnt %08X)\n", f, (unsigned)dc);
+        }
+        g_field_disp.store(f, std::memory_order_relaxed);
+    }
     // VALUE BEFORE WIDTH. Publication order, not decoration.
     //
     // This wrote the width first. Between the two stores the pair was

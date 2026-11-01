@@ -341,8 +341,8 @@ void work(Job* job, fs::path src, fs::path root) {
     std::string sha = gba::sha1(rom.data(), rom.size()).hex();
     const bool title = rom.size() >= 0x10 && std::memcmp(rom.data(), "LEGO BATTLES", 12) == 0;
     if (sha == kUsSha1) {
-        say(job, 1, "That is the USA release. Converting it to the European image "
-                    "this port is built on...");
+        say(job, 1, "That's the USA release. Converting it to the European version "
+                    "the port uses...");
         std::string err;
         if (!apply_delta(&rom, root / "data" / "usa_to_eur.lbdelta", &err)) {
             say(job, 3, "The USA ROM could not be converted: " + err + ".");
@@ -356,9 +356,9 @@ void work(Job* job, fs::path src, fs::path root) {
         }
     } else if (sha != kEuSha1) {
         if (title)
-            say(job, 3, "That is LEGO Battles, but not a clean dump of the Europe or USA "
-                        "release (SHA-1 " + sha + "). A trimmed, patched or hacked ROM "
-                        "will not work; please use an untouched dump of your cartridge.");
+            say(job, 3, "That's LEGO Battles, but not a clean Europe or USA dump (SHA-1 " +
+                        sha + "). Trimmed, patched or hacked ROMs won't work; please use "
+                        "an untouched dump of your cartridge.");
         else
             say(job, 3, "That is not a LEGO Battles ROM. Please choose your own dump of "
                         "LEGO Battles (Europe or USA, .nds).");
@@ -411,7 +411,7 @@ bool stage_save(const fs::path& root, const fs::path& src, std::string* msg, boo
         return false;
     }
     if (std::memcmp(d.data() + 3, "_BATTLE_SAVES", 13) != 0) {
-        *msg = "That file has no _BATTLE_SAVES tag, so it is not a LEGO Battles save.";
+        *msg = "That isn't a LEGO Battles save.";
         *bad = true;
         return false;
     }
@@ -508,12 +508,11 @@ extern "C" int lb_first_run_setup(const char* root_dir, const char* found,
         ImGui::Separator();
         ImGui::TextWrapped(
             "This port plays your own copy of LEGO Battles for the Nintendo DS. "
-            "Choose your ROM (a dump of your cartridge, .nds): the Europe or the "
-            "USA release both work. You can also drag the file onto this window.");
+            "Choose your ROM (.nds, Europe or USA), or drag it onto this window.");
         ImGui::Spacing();
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-        ImGui::TextWrapped("Your file is only read. The image the port plays is saved "
-                           "in the rom folder beside the game, so this is asked once.");
+        ImGui::TextWrapped("Your file isn't changed. A copy is saved in the rom folder, "
+                           "so you only do this once.");
         ImGui::PopStyleColor();
         ImGui::Spacing();
         const int st = job.state.load();

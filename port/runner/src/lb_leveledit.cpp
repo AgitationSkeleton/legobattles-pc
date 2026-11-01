@@ -2588,8 +2588,8 @@ void panel_file() {
     ImGui::InputText("Name", g_doc.name, sizeof g_doc.name);
     ImGui::InputText("Author", g_doc.author, sizeof g_doc.author);
     if (ImGui::Button("Save to my maps")) save_folder();
-    ImGui::SetItemTooltip("Writes the level to mods/maps/Level Editor/<name>. Load new maps (below) to\n"
-                          "play it in Free Play and multiplayer; lobbies send it to players who lack it.");
+    ImGui::SetItemTooltip("Saves to mods/maps/Level Editor/<name>. Press Load new maps to play it.\n"
+                          "Lobbies send it to players who don't have it.");
     ImGui::SameLine();
     if (ImGui::Button("Export .lbz")) {
         std::snprintf(g_ui.path, sizeof g_ui.path, "%s.lbz", safe_name(g_doc.name).c_str());
@@ -2598,25 +2598,24 @@ void panel_file() {
             say(!write_file(fs::u8path(g_ui.path), z), "Exported %s.", g_ui.path);
         }
     }
-    ImGui::SetItemTooltip("The map tool's single-file package, for sharing or the community map sites.");
+    ImGui::SetItemTooltip("A single-file package for sharing.");
     if (ImGui::Button("Load new maps now")) {
         if (g_doc.dirty) save_folder();
         lb_mods_request_rebuild();
     }
-    ImGui::SetItemTooltip("Returns the game to the title screen with your saved levels in the map lists.\n"
-                          "A match in progress ends.");
+    ImGui::SetItemTooltip("Resets to the title screen with your saved levels in the map lists.\n"
+                          "Ends any match in progress.");
 }
 
 void panel_share() {
     if (!ImGui::CollapsingHeader("Share online")) return;
-    ImGui::TextWrapped("Upload this level to the community library. The moderator reviews each upload before "
-                       "it appears for everyone under Maps > Community levels.");
+    ImGui::TextWrapped("Share this level. It appears under Maps > Community levels once a moderator "
+                       "approves it.");
     ImGui::BeginDisabled(g_net.busy.load());
     if (ImGui::Button("Upload level")) start_upload();
     ImGui::EndDisabled();
-    ImGui::SetItemTooltip("Needs a level name (and optionally an author) of letters, digits, spaces or _-'.!?,\n"
-                          "no problems under Checks, and two or more start bases. Uploads go to the\n"
-                          "master server set under Network.");
+    ImGui::SetItemTooltip("Needs a name (letters, digits, spaces or _-'.!?), no problems under\n"
+                          "Checks, and at least two start bases.");
 }
 
 void panel_open() {
@@ -2662,8 +2661,8 @@ void panel_open() {
         ImGui::EndCombo();
     }
     if (ImGui::Button("Open game map")) load_stock(g_ui.stock_pick);
-    ImGui::SetItemTooltip("Any Free Play or story map from your cartridge, to study or remake. Story missions'\n"
-                          "scripted events stay with the cartridge: a saved level plays as a Free Play map.");
+    ImGui::SetItemTooltip("Opens a Free Play or story map from your cartridge. Story scripts aren't\n"
+                          "included: a saved level plays as a Free Play map.");
     ImGui::SameLine();
     if (ImGui::Button("Open file...")) {
         g_ui.path[0] = 0;
@@ -2685,17 +2684,16 @@ void panel_world() {
         stamp_mines();
         canvas_reset();
     }
-    ImGui::SetItemTooltip("King (castle), Pirate (tropical) or Mars. The terrain keeps its shape; its tiles,\n"
-                          "colours and the minimap palette follow the world. A remade map's own decorative\n"
-                          "tiles are dropped.");
+    ImGui::SetItemTooltip("King, Pirate or Mars. The terrain keeps its shape but takes the\n"
+                          "world's tiles and colours. Custom decorative tiles are dropped.");
     ImGui::Text("%d x %d cells", g_doc.m.w, g_doc.m.h);
     if (ImGui::Button("Tidy terrain")) {
         push_undo();
         retile(0, 0, g_doc.m.w - 1, g_doc.m.h - 1);
         stamp_mines();
     }
-    ImGui::SetItemTooltip("Re-picks every cell's tile from its neighbours (also replaces a remade map's\n"
-                          "own decorative tiles with the world's).");
+    ImGui::SetItemTooltip("Re-picks every tile to fit its neighbours. Replaces custom\n"
+                          "decorative tiles.");
 }
 
 void panel_terrain() {
@@ -2751,8 +2749,8 @@ void panel_objects() {
     if (ImGui::TreeNodeEx("Start bases", ImGuiTreeNodeFlags_DefaultOpen)) {
         tool_button(kToolStart);
         ImGui::Combo("Player", &g_ui.team, kTeamNames, 4);
-        ImGui::TextDisabled("%d of 4 placed. Each start is a base, barracks, farm,\nhero and two builders; "
-                            "the base's corner is the cell you click.", start_count());
+        ImGui::TextDisabled("%d of 4 placed. Each start is a base, barracks, farm,\nhero and two builders, "
+                            "placed from the cell you click.", start_count());
         ImGui::TreePop();
     }
     if (ImGui::TreeNodeEx("Resources", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -2769,8 +2767,8 @@ void panel_objects() {
         ImGui::RadioButton("6", &g_ui.bridge_len, 6);
         ImGui::SameLine();
         ImGui::RadioButton("9", &g_ui.bridge_len, 9);
-        ImGui::TextDisabled("Drag from the first water cell across the\nwater. A crossing that is not exactly that\n"
-                            "many water cells is carved to fit.");
+        ImGui::TextDisabled("Drag across the water from the first water\ncell. "
+                            "Other widths are carved to fit.");
         ImGui::TreePop();
     }
     if (ImGui::TreeNode("AI markers")) {
@@ -2778,8 +2776,8 @@ void panel_objects() {
         const char* g[3] = {"Trees to harvest", "Places to build", "Shipyard places"};
         ImGui::Combo("Kind", &g_ui.marker_group, g, 3);
         if (ImGui::Button("Place automatically")) auto_markers();
-        ImGui::SetItemTooltip("Replaces the three kinds with markers on tree clusters, open ground and shores,\n"
-                              "so computer players can find resources and room to build.");
+        ImGui::SetItemTooltip("Places markers on trees, open ground and shores so computer players\n"
+                              "know where to harvest and build. Replaces existing markers.");
         ImGui::TreePop();
     }
     if (ImGui::TreeNode("Buildings and units")) {
@@ -2788,8 +2786,8 @@ void panel_objects() {
         for (const EntityKind& k : kBuildings) names.push_back(k.name);
         ImGui::Combo("Type", &g_ui.building, names.data(), (int)names.size());
         ImGui::Combo("Owner", &g_ui.building_team, kTeamNames, 4);
-        ImGui::TextDisabled("Extra buildings and units present at the start.\nFor a story map's NPC buildings, "
-                            "give them a\nplayer that is not in the match.");
+        ImGui::TextDisabled("Extra buildings and units at the start.\nFor neutral buildings, "
+                            "give them a\nplayer who isn't in the match.");
         ImGui::TreePop();
     }
     tool_button(kToolErase);
@@ -2801,8 +2799,8 @@ void panel_view() {
     ImGui::Checkbox("Objects", &g_ui.show_objects);
     ImGui::Checkbox("AI markers", &g_ui.show_markers);
     ImGui::Checkbox("Connected areas", &g_ui.show_areas);
-    ImGui::SetItemTooltip("Tints each region units can walk within; starts in different regions\n"
-                          "need a bridge site between them.");
+    ImGui::SetItemTooltip("Colours each walkable region. Starts in different regions need\n"
+                          "a bridge site between them.");
     ImGui::SliderFloat("Zoom", &g_ui.zoom, 0.125f, 4.0f, "%.2f");
     ImGui::SeparatorText("Draw players as");
     const char* fn[6] = {kFactions[0].name, kFactions[1].name, kFactions[2].name,
@@ -2813,7 +2811,7 @@ void panel_view() {
         ImGui::Combo(kTeamNames[t], &g_ui.faction[t], fn, 6);
         ImGui::PopID();
     }
-    ImGui::TextDisabled("Only how the editor shows them: players pick\ntheir factions when a match starts.");
+    ImGui::TextDisabled("Editor display only: players pick their\nfactions when a match starts.");
 }
 
 void panel_checks() {
@@ -2857,8 +2855,8 @@ void lb_community_draw(SDL_Renderer* ren) {
                 c.message = "Restart the game to see the new maps.";
             }
         }
-        ImGui::SetItemTooltip("Returns the game to the title screen with your subscribed levels in the\n"
-                              "map lists. A match in progress ends.");
+        ImGui::SetItemTooltip("Resets to the title screen with your subscribed levels in the map\n"
+                              "lists. Ends any match in progress.");
     }
     if (g_net.busy.load()) {
         ImGui::SameLine();
@@ -2965,8 +2963,8 @@ void lb_community_draw(SDL_Renderer* ren) {
     } else if (ImGui::Button("Subscribe")) {
         net_start(4, "GET", "/levels/get?count=1&id=" + std::to_string(r.id), "");
     }
-    if (!inst) ImGui::SetItemTooltip("Downloads the level (checked first) into mods/maps/Community; Load new\n"
-                                     "maps now to play it in Free Play or online.");
+    if (!inst) ImGui::SetItemTooltip("Downloads the level into mods/maps/Community. Press Load new\n"
+                                     "maps now to play it.");
     ImGui::SameLine();
     const bool liked = c.liked.count(r.id) != 0;
     if (ImGui::Button(liked ? "Liked" : "Like")) {
@@ -2974,10 +2972,10 @@ void lb_community_draw(SDL_Renderer* ren) {
                                  std::to_string(r.id) + ",\"like\":" + (liked ? "false" : "true") + "}";
         net_start(6, "POST", "/levels/like", body);
     }
-    ImGui::SetItemTooltip(liked ? "You like this level. Press again to take the like back." : "One like per player.");
+    ImGui::SetItemTooltip(liked ? "Press again to remove your like." : "One like per player.");
     ImGui::SameLine();
     if (ImGui::Button("Open in editor")) net_start(5, "GET", "/levels/get?id=" + std::to_string(r.id), "");
-    ImGui::SetItemTooltip("Loads it into the Level Editor page to look at or remix; saving makes your own copy.");
+    ImGui::SetItemTooltip("Opens it in the Level Editor. Saving makes your own copy.");
     ImGui::EndDisabled();
     ImGui::EndChild();
 }

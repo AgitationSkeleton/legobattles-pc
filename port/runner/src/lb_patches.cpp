@@ -50,6 +50,11 @@ extern "C" {
 #include <vector>
 
 extern "C" int lb_band_left(int output_width);   /* src/lb_widemap.cpp */
+extern "C" void lb_cunits_tick(void);             /* src/lb_cunits.cpp, docs/448 */
+extern "C" int lb_cunits_test_pick(void);         /* src/lb_cunits.cpp, docs/448 test aid */
+extern "C" int lb_cunits_test_field(void);        /* src/lb_cunits.cpp, docs/448 test aid */
+extern "C" int lb_cunits_lobby_ok(void);          /* src/lb_cunits.cpp, docs/448 */
+extern "C" void lb_cunits_lobby_forget(void);
 extern "C" int lb_band_right(int output_width);  /* src/lb_widemap.cpp */
 extern "C" int lb_band_span(int output_width);   /* src/lb_widemap.cpp */
 extern "C" int lb_band_top(int output_height);   /* src/lb_widemap.cpp */
@@ -2020,6 +2025,42 @@ void set_hp_override(void) {
 //
 // Vanilla is untouched: lb_music_wanted_side() returns -1 when music_mode is 0.
 constexpr uint32_t kSetMusicSide = 0x02088980u;   // thumb
+
+// docs/448: a custom unit's own sounds. func_02089270 (Thumb; r0 the sound
+// manager, r1 the entity's handle, r2 the sequence index 0 ONSELECT, 1
+// ONDEATH, 2 ONSTRIKE, 3 ONHIT, 4 ONSPECIAL) starts an entity's own sound, and
+// all 11 of its call sites are dispatched. For a custom unit with its own WAV
+// for that index the host plays it (lb_cunits.cpp) and the cartridge's
+// sequence, its template's, is skipped. Otherwise a pure tail call.
+constexpr uint32_t kEntitySound = 0x02089270u;   // thumb
+extern "C" int lb_cunits_entity_sound(uint32_t mgr, uint32_t ent, int index);   // lb_cunits.cpp
+// The handle as func_020872DC resolves it (func_0205C9B4): {slot, generation}
+// into the entity pool (0x02155028: +8 the array, +0xC the count), the
+// slot's generation at +0xDD; and the entity only while +0xE0 -> +4 -> byte
+// +8 is clear.
+uint32_t entity_of_handle(uint32_t h) {
+    const uint32_t pool = bus_read_u32(0x02155028u);
+    if (pool < 0x02000000u || pool >= 0x02400000u) return 0u;
+    const uint32_t slot = h & 0xFFu, gen = (h >> 8) & 0xFFu;
+    if ((int32_t)slot >= (int32_t)bus_read_u32(pool + 0xCu)) return 0u;
+    const uint32_t arr = bus_read_u32(pool + 8u);
+    if (arr < 0x02000000u || arr >= 0x02400000u) return 0u;
+    const uint32_t ent = bus_read_u32(arr + slot * 4u);
+    if (ent < 0x02000000u || ent >= 0x02400000u || bus_read_u8(ent + 0xDDu) != gen) return 0u;
+    const uint32_t a = bus_read_u32(ent + 0xE0u);
+    const uint32_t b = a >= 0x02000000u && a < 0x02400000u ? bus_read_u32(a + 4u) : 0u;
+    if (b < 0x02000000u || b >= 0x02400000u || bus_read_u8(b + 8u) != 0u) return 0u;
+    return ent;
+}
+void entity_sound_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kEntitySound);
+    const uint32_t ent = entity_of_handle(g_cpu.R[1]);
+    if (ent && lb_cunits_entity_sound(g_cpu.R[0], ent, (int)(g_cpu.R[2] & 0xFFu))) {
+        lb_override_return();
+        return;
+    }
+    if (original) original();
+}
 
 void set_music_side_override(void) {
     const int want = lb_music_wanted_side();
@@ -4586,6 +4627,18 @@ void enemy_map_override(void) {
     lb_override_return();
 }
 
+// docs/448: THE BLUEPRINT FILE'S LOAD CALLBACK (registered by func_02001E70,
+// so it is reached through the dispatcher). Custom units stand a larger
+// blueprint array in for the game's; it is put back before the game frees the
+// old file buffer and pushes into its array again.
+constexpr uint32_t kEbpLoaded = 0x02001EE0u;   // arm
+extern "C" void lb_cunits_before_reload(void);   /* lb_cunits.cpp */
+void ebp_loaded_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kEbpLoaded);
+    lb_cunits_before_reload();
+    if (original) original();
+}
+
 void roster_build_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kRosterBuild);
     const uint32_t lr = g_cpu.R[14] & ~1u;
@@ -4594,6 +4647,18 @@ void roster_build_override(void) {
     // first build refused every one (run t384c). The bus maps DTCM; the lr
     // test is what says the pointer is the record.
     const uint32_t rec = g_cpu.R[1];
+    // docs/448 TEST AID (LB_TEST_CUNIT): player 1 (faction id 0x84) fields the
+    // appended blueprint in its source's role, whichever caller builds the
+    // roster (Free Play's is 0x020C0EEA, a match's kRosterFromMatch).
+    static const int cu_player = std::getenv("LB_TEST_CUNIT_PLAYER") ? std::atoi(std::getenv("LB_TEST_CUNIT_PLAYER")) : 0;
+    if (lb_cunits_test_pick() >= 0 && rec != 0u &&
+        bus_read_u8(g_cpu.R[0] + 0x30u) == (uint8_t)(0x84 + cu_player)) {
+        const int cu = lb_cunits_test_pick(), cu_field = lb_cunits_test_field();
+        bus_write_u16(rec + (uint32_t)cu_field, (uint16_t)cu);
+        std::fprintf(stderr, "[lb_cunits] player 1's army +0x%02X is blueprint %d (roster lr %08X)\n",
+                     cu_field, cu, (unsigned)lr);
+        std::fflush(stderr);
+    }
     if (lr == kRosterFromEnemy && g_enemy_pending && rec != 0u) {
         for (uint32_t i = 0; i < 20u; ++i)
             bus_write_u8(rec + i, g_enemy_rec[i]);
@@ -6443,22 +6508,26 @@ extern "C" void lb_patches_lobby_forget(void) {
     g_lobby_want = 0xFFFFFFFFu;
     g_lobby_withheld = false;
     lb_maptx_forget();   // docs/432: and stop asking a host for its map
+    lb_cunits_lobby_forget();   // docs/448: and its custom units
 }
 
 void ready_toggle_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kReadyToggle);
     // docs/418: nor before the host's balance is wholly in force here.
     const bool balance = lb_net_guest_state() == 5 && !lb_balance_host_set_current();
+    // docs/448: nor before this machine has built the host's custom units.
+    const bool units = lb_net_guest_state() == 5 && !lb_cunits_lobby_ok();
     std::fprintf(stderr, "[lb_balance] lobby: Ready pressed (state %d, host's balance: "
                  "%s)\n", lb_net_guest_state(), lb_balance_host_set_why());
     std::fflush(stderr);
-    if ((g_lobby_withheld || balance) && lobby_joined()) {
+    if ((g_lobby_withheld || balance || units) && lobby_joined()) {
         const uint8_t b = bus_read_u8(kLocalLobbyByte);
         // The toggle flips bit 0; set, it flips to "not ready".
         if (!(b & 1u)) bus_write_u8(kLocalLobbyByte, (uint8_t)(b | 1u));
         std::fprintf(stderr, "[lb_mods] lobby: Ready refused; %s\n",
                      g_lobby_withheld ? "this machine lacks the host's map"
-                                      : "the host's balance is not in force yet");
+                     : balance        ? "the host's balance is not in force yet"
+                                      : "the host's custom units are not loaded yet");
         std::fflush(stderr);
     }
     if (original) original();
@@ -6721,6 +6790,26 @@ void army_tier_override(void) {
 // never seen while the Wolf sat in Close Combat, where the screen opens on the
 // hero; with the Wolf as the hero it is the first card asked for. The game's
 // own answer for "no unit" is the K_Unknown card, which a null unit gets here.
+// docs/448: A CUSTOM UNIT'S HEAD ON THE ARMY SCREEN. FUN_020E06FC (Thumb; r0
+// the icon set, r1 a blueprint index, r2 the cell) draws the head at the
+// blueprint's position in the head key table (FUN_020E0784, 166 keys) and
+// draws nothing for a blueprint with no key, which every custom one is
+// (551.. its battle record, identity and card). All of its callers are split
+// Thumb BLs, which the lift dispatches, so this is reached. A custom unit is
+// given its template's head, as the Team Builder shows it.
+constexpr uint32_t kArmyHead = 0x020E06FCu;   // thumb
+extern "C" int lb_cunits_count(void);          // lb_cunits.cpp
+extern "C" int lb_cunits_template(int k);
+void army_head_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kArmyHead);
+    const int n = lb_cunits_count();
+    const int bp = (int)g_cpu.R[1];
+    if (n > 0 && bp >= 551 && bp < 551 + 3 * n) {
+        const int t = lb_cunits_template((bp - 551) % n);
+        if (t >= 0) g_cpu.R[1] = (uint32_t)t;
+    }
+    if (original) original();
+}
 constexpr uint32_t kFeCard = 0x02030A70u;   // ARM
 void fe_card_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kFeCard);
@@ -6731,6 +6820,16 @@ void fe_card_override(void) {
         // card of a player whose army holds a Wolf included).
         if (rec >= 0x02000000u && rec < 0x02400000u && bus_read_u16(rec + 4u) == 169u)
             g_cpu.R[1] = 0u;
+        static const bool cardlog = std::getenv("LB_CARDLOG") != nullptr;   // docs/448 test aid
+        if (cardlog && rec >= 0x02000000u && rec < 0x02400000u) {
+            char nm[40] = {0};
+            const uint32_t np = bus_read_u32(rec);
+            for (int i = 0; i < 39 && np >= 0x02000000u && np < 0x02400000u; ++i)
+                if (!(nm[i] = (char)bus_read_u8(np + (uint32_t)i))) break;
+            std::fprintf(stderr, "[lb_card] FE card for %s (index %u, lr %08X)\n", nm,
+                         (unsigned)bus_read_u16(rec + 4u), (unsigned)g_cpu.R[14]);
+            std::fflush(stderr);
+        }
     }
     if (original) original();
 }
@@ -7394,6 +7493,8 @@ const NdsDispatchEntry kOverrideTable[] = {
        opponent's (a Custom/Random army into its stack copy) and the
        multiplayer start's (bans). Otherwise a pure tail call. docs/384. */
     {kRosterBuild, 0u, roster_build_override, nullptr},    /* 0x02000E78 */
+    /* ARM. Entities.ebp's load callback: the custom units' array back first. docs/448. */
+    {kEbpLoaded, 0u, ebp_loaded_override, nullptr},        /* 0x02001EE0 */
     /* ARM. THE DECOMPILATION'S FIRST GRADED FUNCTION, not a patch. With
        LB_SHADOW unset this delegates to the cartridge and only counts; with
        LB_SHADOW=native it runs src/battles/registry.c instead. docs/333. */
@@ -7488,6 +7589,9 @@ const NdsDispatchEntry kOverrideTable[] = {
     /* Substitutes the faction-aligned side at MATCH LOAD, before the
        music starts, so freeplay opens on the right calm/battle pair. */
     {kSetMusicSide, 1u, set_music_side_override, nullptr}, /* 0x02088980 */
+    /* Thumb. An entity's own sound: a custom unit's WAV instead of its
+       template's sequence (docs/448); otherwise a pure tail call. */
+    {kEntitySound, 1u, entity_sound_override, nullptr},    /* 0x02089270 */
     /* Thumb. The map parser: Force Tileset's name, and each level's world;
        otherwise a pure tail call. docs/387. */
     /* Thumb. Terrain_FillWindow: a forced level's detail cells and blank
@@ -7540,6 +7644,9 @@ const NdsDispatchEntry kOverrideTable[] = {
        pending battle shortcut's button callback in front of it, as a tail
        call that returns here; otherwise a pure tail call. docs/383. */
     {kViewUpdate, 1u, view_update_override, nullptr},      /* 0x020DD708 */
+    /* Thumb. The army screen's unit head: a custom unit draws its template's
+       (docs/448); otherwise a pure tail call. */
+    {kArmyHead, 1u, army_head_override, nullptr},          /* 0x020E06FC */
     /* Thumb. ScreenType::virtual_08: while teal is live (docs/412), widens the five
        colour bars in the layout image; otherwise a pure tail call. */
     {kScreenInit, 1u, screen_init_override, nullptr},      /* 0x020E1880 */
@@ -7600,7 +7707,7 @@ const NdsDispatchEntry kOverrideTable[] = {
 // Compile-time guard so this cannot regrow. A runtime check would report the
 // fault after shipping; this refuses to build. Every future entry must be
 // inserted in address order or the build stops here with this message.
-static_assert(kRosterBuild < kRegistryFind &&
+static_assert(kRosterBuild < kEbpLoaded && kEbpLoaded < kRegistryFind &&
               kRegistryFind < kBillboardDraw && kBillboardDraw < kFeCard &&
               kSelRect < kReadyToggle && kReadyToggle < kMainMenuUpdate &&
               kSelRect < kMainMenuUpdate && kMainMenuUpdate < kEnemyMap &&
@@ -16450,6 +16557,7 @@ extern "C" void lb_patches_on_vblank(void) {
     lb_music_tick();
     lb_vwh_tick();              // docs/423: the host-level WH's deliveries
     lb_teams_portrait_tick();   // docs/390: the Custom/Random portrait records
+    lb_cunits_tick();           // docs/448: register the appended blueprints
     teal_tick();                // docs/412: teal's bounds and clamp
     drawer_anim_tick();         // BR-0030: a drawer sliding, for lb_hud.cpp
     opponent_open_portrait_tick();   // docs/393: and the opening choice's

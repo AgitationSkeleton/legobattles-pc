@@ -75,6 +75,9 @@ cp -p "$W/port/runner/src/lb_mapfetch.cpp" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_levelmap.h" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_levelmap.cpp" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_leveledit.cpp" "$TREE/runner/src/"
+cp -p "$W/port/runner/src/lb_unitlab.cpp" "$TREE/runner/src/"
+cp -p "$W/port/runner/src/lb_cunits.cpp" "$TREE/runner/src/"
+cp -p "$W/port/runner/src/lb_cunits.h" "$TREE/runner/src/"
 # The host-level WH: smooth online play (docs/423).
 cp -p "$W/port/runner/src/lb_vwh.cpp" "$TREE/runner/src/"
 # The master server's relay (docs/424).

@@ -412,3 +412,119 @@ extern "C" void lb_sfx_notify(void) {
     g_last_play = now;
     play(c, lb_setting_notify_volume());
 }
+
+// ---- docs/448: the custom-unit export's sounds ------------------------------
+//
+// The SDAT is loaded once for an export (begin/end), then read by name: its
+// SYMB block names every sequence archive (SEQARC__KING_HEROM, ...) and every
+// sequence in one (SE_KING_HEROM_ONSELECT, ...). A sequence renders through
+// render_effect, the notification sound's own decoder: mono S16 at 32 kHz.
+namespace {
+Sdat* g_exp = nullptr;
+std::string g_exp_name;
+}  // namespace
+
+extern "C" int lb_sfx_export_begin(void) {
+    if (g_exp) return 1;
+    const int n = lb_rom_read("Sound/sound_data.sdat", nullptr, 0);
+    if (n <= 0) return 0;
+    Sdat* sd = new Sdat;
+    sd->d.resize((size_t)n);
+    if (lb_rom_read("Sound/sound_data.sdat", sd->d.data(), n) != n) {
+        delete sd;
+        return 0;
+    }
+    sd->init();
+    g_exp = sd;
+    return 1;
+}
+
+extern "C" void lb_sfx_export_end(void) {
+    delete g_exp;
+    g_exp = nullptr;
+}
+
+// Archive `arc`'s symbol name, or "" (SYMB record 1: name, sub-record).
+extern "C" const char* lb_sfx_arc_name(int arc) {
+    g_exp_name.clear();
+    if (!g_exp || arc < 0) return "";
+    try {
+        const Sdat& sd = *g_exp;
+        const uint32_t arcs_off = sd.r.u32(sd.symb + 8 + 4);
+        const uint32_t count = sd.r.u32(sd.symb + arcs_off);
+        if ((uint32_t)arc >= count) return "";
+        const uint32_t no = sd.r.u32(sd.symb + arcs_off + 4 + 8 * (uint32_t)arc);
+        if (no) g_exp_name = sd.cstr(sd.symb + no);
+    } catch (const std::exception&) {
+        g_exp_name.clear();
+    }
+    return g_exp_name.c_str();
+}
+
+extern "C" int lb_sfx_arc_by_name(const char* name) {
+    if (!g_exp || !name) return -1;
+    try {
+        const Sdat& sd = *g_exp;
+        const uint32_t arcs_off = sd.r.u32(sd.symb + 8 + 4);
+        const uint32_t count = sd.r.u32(sd.symb + arcs_off);
+        for (uint32_t a = 0; a < count && a < 4096u; ++a) {
+            const uint32_t no = sd.r.u32(sd.symb + arcs_off + 4 + 8 * a);
+            if (no && sd.cstr(sd.symb + no) == name) return (int)a;
+        }
+    } catch (const std::exception&) {
+    }
+    return -1;
+}
+
+extern "C" int lb_sfx_arc_seqs(int arc) {
+    if (!g_exp || arc < 0) return 0;
+    try {
+        const Sdat& sd = *g_exp;
+        const uint32_t arcs_off = sd.r.u32(sd.symb + 8 + 4);
+        if ((uint32_t)arc >= sd.r.u32(sd.symb + arcs_off)) return 0;
+        const uint32_t sub = sd.r.u32(sd.symb + arcs_off + 4 + 8 * (uint32_t)arc + 4);
+        return sub ? (int)std::min<uint32_t>(sd.r.u32(sd.symb + sub), 256u) : 0;
+    } catch (const std::exception&) {
+        return 0;
+    }
+}
+
+extern "C" const char* lb_sfx_seq_name(int arc, int seq) {
+    g_exp_name.clear();
+    if (!g_exp || seq < 0 || seq >= lb_sfx_arc_seqs(arc)) return "";
+    try {
+        const Sdat& sd = *g_exp;
+        const uint32_t arcs_off = sd.r.u32(sd.symb + 8 + 4);
+        const uint32_t sub = sd.r.u32(sd.symb + arcs_off + 4 + 8 * (uint32_t)arc + 4);
+        const uint32_t no = sd.r.u32(sd.symb + sub + 4 + 4 * (uint32_t)seq);
+        if (no) g_exp_name = sd.cstr(sd.symb + no);
+    } catch (const std::exception&) {
+        g_exp_name.clear();
+    }
+    return g_exp_name.c_str();
+}
+
+// Sequence `seq` of archive `arc` as mono S16 at 32 kHz into out (cap
+// samples); returns the sample count, 0 when it renders nothing.
+extern "C" int lb_sfx_render(int arc, int seq, int16_t* out, int cap) {
+    if (!g_exp || !out || cap <= 0) return 0;
+    try {
+        const std::vector<int16_t> pcm = render_effect(*g_exp, arc, seq);
+        const int n = (int)std::min<size_t>(pcm.size(), (size_t)cap);
+        std::memcpy(out, pcm.data(), (size_t)n * sizeof(int16_t));
+        return n;
+    } catch (const std::exception&) {
+        return 0;
+    }
+}
+
+// docs/448: the custom-unit page's sound preview: mono S16 at 32 kHz on the
+// notification sound's own device, at the notification volume.
+extern "C" void lb_sfx_play_pcm(const int16_t* pcm, int n) {
+    if (!pcm || n <= 0 || !open_device()) return;
+    std::vector<int16_t> v(pcm, pcm + n);
+    const int vol = std::max(0, std::min(100, lb_setting_notify_volume()));
+    for (int16_t& s : v) s = (int16_t)(s * vol / 100);
+    SDL_ClearQueuedAudio(g_dev);
+    SDL_QueueAudio(g_dev, v.data(), (Uint32)(v.size() * sizeof(int16_t)));
+}
