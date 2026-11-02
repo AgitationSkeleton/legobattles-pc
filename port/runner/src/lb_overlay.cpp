@@ -104,6 +104,7 @@ extern "C" int lb_demo_playing(void);   /* lb_demo.cpp */
 extern "C" void lb_quick_request(int action);   /* lb_patches.cpp */
 extern "C" int lb_top_buttons(int* out, int max);   /* lb_patches.cpp, SG-0006 */
 extern "C" int lb_top_minimap(void);                /* lb_patches.cpp */
+extern "C" int lb_top_occupants(void);              /* lb_patches.cpp */
 
 namespace {
 
@@ -1638,7 +1639,9 @@ void tab_display() {
     // get_ms_override (lb_patches.cpp), consulted on every pass. A replay
     // plays at the pacing it was recorded with, whatever this says.
     help("Smooth, even game steps instead of the cartridge's uneven ones.\n"
-         "The game runs about 19% slower, likely the DS's real pace.");
+         "The game runs about 19% slower, likely the DS's real pace.\n"
+         "Off: the pace melonDS plays at (units build and move about\n"
+         "19% faster, with the uneven steps).");
     badge(WIRED);
 
     // docs/387: a Level Palettes option (Per-Mod/Vanilla/FactionWars/Random,
@@ -5625,10 +5628,11 @@ void draw_top_screen(SDL_Renderer* renderer) {
                                            ImGuiButtonFlags_MouseButtonRight);
                 if (ImGui::IsItemHovered()) {
                     ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                    const bool occupant = id >= 730 && lb_top_occupants();
                     ImGui::SetTooltip(
-                        id >= 730 && id <= 732
+                        id >= 730 && id <= 732 && !occupant
                             ? "Click to cancel this unit\nand get its bricks back"
-                        : id >= 733
+                        : id >= 730
                             ? "Click to unload this unit\nfrom the transport"
                         : id <= 721
                             ? "Click to take this unit\nout of the selection"
@@ -8739,6 +8743,10 @@ void draw_panels() {
 }
 
 }  // namespace
+
+// SG-0052: the spell names for the custom unit Stats tab (lb_unitlab.cpp).
+extern "C" const char* lb_spell_label(int id) { return lb_spell_name(id); }
+extern "C" int lb_spell_listed(int id) { return lb_spell_offered(id) ? 1 : 0; }
 
 // ---------------------------------------------------------------------------
 

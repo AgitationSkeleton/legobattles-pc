@@ -8,7 +8,8 @@
 // units exports (lb_unitlab.cpp), named in mods/units/enabled.txt:
 //
 //   unit.json                   "index" (the template it was exported from),
-//                               "name" (what the game calls it), "fields"
+//                               "name" (what the menus call it), "display_name"
+//                               (what the game shows, SG-0053; else "name"), "fields"
 //   sheets/<sheet>.png|.NCBR    a whole sheet, by the template's sheet name
 //   frames/<action>/d<d>_<n>.png  one frame (drawn over the sheet)
 //   portraits/card.png, card_top_screen.png   the army-screen / battle cards
@@ -77,7 +78,10 @@ namespace {
 namespace fs = std::filesystem;
 
 constexpr int kStock = 551;
-constexpr int kMaxUnits = 9;   // the blueprint array holds 560 (docs/448, run cu448a)
+// The 9 of docs/448 was the game's own array (capacity 560); ours stands in
+// for it at 551 + 3n entries, the army lists scroll (docs/450) and the lobby
+// pages the set (lb_teams.cpp), so this only keeps a cartridge build sane.
+constexpr int kMaxUnits = 128;
 constexpr size_t kPool = 4 + 182 * 0x7C + 27 * 0x74 + 342 * 0x70;   // docs/11
 constexpr uint32_t kPtrArray = 0x02150944u;   // data +4, count +8, capacity (bytes) +0xC
 constexpr uint32_t kUnitVtable = 0x0213AC40u; // a unit blueprint's wrapper (func_02002B68)
@@ -87,6 +91,7 @@ struct Entity {
     std::vector<uint8_t> rec;   // 0x7C bytes
     std::string name, asset;    // internal name, asset path
     std::string folder, display;
+    std::string ingame;         // SG-0053: what the game shows ("display_name"), else display
     int tmpl = -1;
     int card_src = -1;           // the template's minifig card (a collectable), or -1
     size_t rec_off = 0, wrap_off = 0, name_off = 0, asset_off = 0;   // in the file
@@ -699,6 +704,11 @@ bool load_unit(const std::string& folder, const std::string& tag, const std::vec
     e->folder = folder;
     e->display = jstr(j, "name");
     if (!name_ok(e->display)) e->display = folder;
+    // SG-0053: the name the game shows may differ from the one the menus list
+    // it by, and need not be unique ("Builder", as the stock builders are all
+    // called). It is the unit's language string; "name" stays its identity.
+    e->ingame = jstr(j, "display_name");
+    if (!name_ok(e->ingame)) e->ingame = e->display;
     // The stats: every known field, clamped to its width and range.
     const size_t fb = j.find("\"fields\"");
     const size_t fe = fb == std::string::npos ? std::string::npos : j.find('}', fb);
@@ -938,7 +948,7 @@ bool lb_cunits_prepare(const std::vector<uint8_t>& stock, const CuReader& read, 
         g_hashes.push_back(hash);
         g_bundles.push_back(std::move(bundle));
     }
-    for (const Entity& e : g_ents) names->push_back(e.display.empty() ? e.name : e.display);
+    for (const Entity& e : g_ents) names->push_back(!e.ingame.empty() ? e.ingame : e.display.empty() ? e.name : e.display);
     return !g_ents.empty();
 }
 
@@ -1081,6 +1091,16 @@ extern "C" void lb_cunits_before_reload(void) {
     g_pushed_base = 0;
     std::fprintf(stderr, "[lb_cunits] the blueprint file is reloading: the game's own array is back\n");
     std::fflush(stderr);
+}
+
+// BR-0038: the game was Reset (lb_port_on_guest_reset). The saved array and
+// the buffer we registered into belonged to the RAM boot() just replaced:
+// putting that array "back" at the next reload pointed the game at garbage
+// (the reads of "TGCN"/"TAHC" as addresses, then the ITCM overwritten). The
+// fresh boot registers into its own buffer from scratch.
+extern "C" void lb_cunits_on_reset(void) {
+    g_saved.live = false;
+    g_pushed_base = 0;
 }
 
 // Once a frame (lb_patches.cpp): register the appended records with the game

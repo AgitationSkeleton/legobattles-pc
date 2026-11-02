@@ -19,7 +19,7 @@
 {"Settings", "Display", "Mouse Wheel Zooms", "Turning the mouse wheel over the battlefield changes Magnification."},
 {"Settings", "Display", "HUD scale", "Size of the on-screen game buttons."},
 {"Settings", "Display", "Reset screen sizes", ""},
-{"Settings", "Display", "Steady game pacing (30 Hz)", "Smooth, even game steps instead of the cartridge's uneven ones. The game runs about 19% slower, likely the DS's real pace."},
+{"Settings", "Display", "Steady game pacing (30 Hz)", "Smooth, even game steps instead of the cartridge's uneven ones. The game runs about 19% slower, likely the DS's real pace. Off: the pace melonDS plays at (units build and move about 19% faster, with the uneven steps)."},
 {"Settings", "Display", "Level Palettes", "Terrain colours. FactionWars is that romhack's recolour (also used by REbalance and FunLite2, minus FunLite2's black King water). Random picks one per level. Per-Mod uses the ROM's own palettes. Changes at once, even mid-battle. Only you se"},
 {"Settings", "Display", "Mod Map Palettes", "Colours for maps from the mods folder, if you want them different from the stock maps."},
 {"Settings", "Display", "Force Tileset", "Draws every map with this world's tileset. Looks only; gameplay is unchanged. From the next battle, single player only."},

@@ -3755,7 +3755,10 @@ uint32_t quick_infotab() {
 //             (selection count at +0x58): the unit leaves the selection and
 //             its control groups (FUN_020E318C);
 //   730..732  [+0x390] == 1, [+0x394] == 2, byte [+0x355] == 0, one building
-//             selected, slot < queue length ([+0x80]): the cancel command;
+//             selected, slot < queue length ([+0x80]): the cancel command.
+//             Otherwise the case FALLS THROUGH into 733..735's (no break in
+//             the switch), so with a transport shown they are occupant slots
+//             0..2 (SG-0050's video: the first icon is 730, docs/456);
 //   733..735  [+0x390] == 1, [+0x394] == 1, one unit selected, and the slot
 //             ([+0x68 + 4 * (id - 730)], a unit type) is not the empty marker
 //             (the word at 020D48C8, the value virtual_12 fills the six slots
@@ -3768,7 +3771,7 @@ const char* quick_info_state(uint32_t tab, int id) {
         if (id - 713 >= (int)bus_read_u32(tab + 0x58u)) return "no unit there";
         return nullptr;
     }
-    if (id >= 730 && id <= 732) {
+    if (id >= 730 && id <= 732 && bus_read_u32(tab + 0x394u) != 1u) {
         if (bus_read_u32(tab + 0x58u) != 1u) return "not one building selected";
         if (bus_read_u32(tab + 0x390u) != 1u || bus_read_u32(tab + 0x394u) != 2u ||
             bus_read_u8(tab + 0x355u))
@@ -3776,7 +3779,7 @@ const char* quick_info_state(uint32_t tab, int id) {
         if (id - 730 >= (int)bus_read_u32(tab + 0x80u)) return "nothing in that slot";
         return nullptr;
     }
-    if (id >= 733 && id <= 735) {
+    if (id >= 730 && id <= 735) {
         if (bus_read_u32(tab + 0x58u) != 1u) return "not one unit selected";
         if (bus_read_u32(tab + 0x390u) != 1u || bus_read_u32(tab + 0x394u) != 1u)
             return "the panel is not showing these";
@@ -3851,6 +3854,7 @@ const char* quick_minimap_gate(uint32_t view) {
 std::atomic<uint64_t> g_top_btn[24];
 std::atomic<int> g_top_btn_n{0};
 std::atomic<int> g_top_minimap{0};
+std::atomic<int> g_top_occupants{0};   // 730..735 are a transport's occupants
 
 void quick_top_refresh(uint32_t view) {
     int n = 0;
@@ -3871,6 +3875,8 @@ void quick_top_refresh(uint32_t view) {
     for (int i = 0; i < n; ++i) g_top_btn[i].store(packed[i]);
     g_top_btn_n.store(n);
     g_top_minimap.store(quick_minimap_gate(view) ? 0 : 1);
+    const uint32_t tab = quick_infotab();
+    g_top_occupants.store(tab && bus_read_u32(tab + 0x394u) == 1u ? 1 : 0);
 }
 
 // ---- docs/385: ITEM N OF THE SECOND BRICK'S LIST ----
@@ -4025,6 +4031,7 @@ extern "C" int lb_top_buttons(int* out, int max) {
     return k;
 }
 extern "C" int lb_top_minimap(void) { return g_top_minimap.load(); }
+extern "C" int lb_top_occupants(void) { return g_top_occupants.load(); }
 // A replayed `q` event (lb_demo_tick): run it in this frame, as recorded.
 extern "C" void lb_keyboard_type(int ch);   /* docs/396, below */
 extern "C" void lb_quick_replay(int action) {
@@ -17551,6 +17558,8 @@ static void apply_player_name(void) {
 extern "C" void lb_balance_on_reset(void);   /* lb_balance.cpp */
 extern "C" void lb_demo_on_reset(void);      /* lb_demo.cpp */
 extern "C" void lb_field_reset(void);        /* lb_field.cpp */
+extern "C" void lb_cunits_on_reset(void);    /* lb_cunits.cpp */
+extern "C" void lb_teams_on_reset(void);     /* lb_teams.cpp */
 extern "C" void lb_port_on_guest_reset(void) {
     lb_field_reset();                // BR-0007: the cached camera object is gone
     g_world_w = g_world_h = 0;       // and so is the last level's extent
@@ -17582,6 +17591,8 @@ extern "C" void lb_port_on_guest_reset(void) {
     g_aic.active = false;            // docs/414
     g_opp_extra = 0;
     lb_demo_on_reset();
+    lb_cunits_on_reset();            // BR-0038: its saved array was the old RAM's
+    lb_teams_on_reset();
     std::fprintf(stderr, "[lb_reset] the game was reset to its title screen "
                          "(generation %u)\n", g_boot_gen);
     std::fflush(stderr);

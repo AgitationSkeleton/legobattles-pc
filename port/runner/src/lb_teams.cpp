@@ -537,9 +537,10 @@ void names_refresh() {
 // (FUN_020E0784); its sub-palette is byte +0x0F of the first frame of
 // UI/FE/UIMgrData.bin record 0x252 + position (FUN_020E06FC).
 constexpr int kAtlasW = 384, kAtlasH = 240;
-// docs/450: the Team Builder's texture has one more row, the custom units'
-// own heads (custom unit k at column k).
-constexpr int kTexH = kAtlasH + 24;
+// docs/450: the Team Builder's texture has more rows, the custom units' own
+// heads (custom unit k at column k % 16 of row k / 16).
+constexpr int kCustomHeads = 128;
+constexpr int kTexH = kAtlasH + 24 * (kCustomHeads / 16);
 std::vector<uint32_t> g_rgba, g_grey;   // RGBA32, one row after another
 std::vector<uint32_t> g_pal;            // UI/WorldViewTop_Back.NCLR as RGBA32
 int g_sub[160];                         // head position -> its sub-palette, -1 none
@@ -917,9 +918,96 @@ void cards_sheet(uint32_t army) {
     }
 }
 
+// THE WOLF'S BATTLE HEAD (docs/454, "Proper Creature Portraits"). The battle
+// sheet UI/MiniHeadsGame has a lantern at the cell the Wolf's records point
+// at ((11,2), records 0x2DB and 0x38B of the Game UIMgrData; the Ghost's item
+// icon, record 0x392, uses it with another palette). The sheet's one cell no
+// record uses is (13,4): there, in the game's resident copy, goes the Wolf's
+// head (the front end's, as head_tiles reads it), and the Wolf's two frames
+// are moved onto it. The game then draws the Wolf's head itself: its
+// portrait, its icon in a build list. Drawing data only. The Shark (a sack at
+// (11,1)) has no free cell left; its portrait is drawn on the picture
+// (lb_patches.cpp, lb_top_postprocess).
+extern "C" int lb_setting_creature_portraits(void);   // lb_overlay.cpp
+constexpr uint32_t kUiLoaded = 0x021581C0u;             // the loaded UIMgrData (Game, in battle)
+constexpr uint32_t kWolfRecs[2] = {0x2DBu, 0x38Bu};
+constexpr unsigned kFreeX = 13u * 24u, kFreeY = 4u * 24u;
+struct WolfBattle { uint32_t sheet = 0; bool tried = false; uint8_t t[288]; bool ok = false; std::vector<uint8_t> sig; };
+WolfBattle g_wolf;
+
+// The game's resident copy of UI/MiniHeadsGame's pixels: found once by its
+// first four tiles (the ROM's), and re-checked by them every time.
+uint32_t battle_sheet() {
+    if (g_wolf.sig.empty()) {
+        std::vector<uint8_t> g;
+        if (!nitro_file("UI/MiniHeadsGame.NCGR", &g) || !comp_unwrap(&g)) return 0;
+        const long c = section(g, "RAHC");
+        if (c < 0) return 0;
+        const uint32_t doff = rd32(g.data() + c + 28);
+        if ((size_t)c + 8u + doff + 128u > g.size()) return 0;
+        g_wolf.sig.assign(g.begin() + c + 8 + doff, g.begin() + c + 8 + doff + 128);
+    }
+    auto matches = [&](uint32_t p) {
+        for (uint32_t b = 0; b < 128u; b += 4)
+            if (bus_read_u32(p + b) != rd32(&g_wolf.sig[b])) return false;
+        return true;
+    };
+    if (g_wolf.sheet && matches(g_wolf.sheet)) return g_wolf.sheet;
+    g_wolf.sheet = 0;
+    const uint32_t first = rd32(&g_wolf.sig[0]);
+    for (uint32_t p = 0x02000000u; p + 46080u <= 0x02400000u; p += 4u)
+        if (bus_read_u32(p) == first && matches(p)) { g_wolf.sheet = p; break; }
+    return g_wolf.sheet;
+}
+
+void wolf_battle_tick() {
+    if (!lb_setting_creature_portraits() || !battle_present()) return;
+    static unsigned n = 0;
+    if ((++n % 30u) != 0u) return;   // twice a second is plenty
+    const uint32_t base = bus_read_u32(kUiLoaded);
+    if (!guest_ptr(base) || bus_read_u16(base) < 1277u) return;
+    // The Wolf's frames, as the game's file has them, or already moved.
+    uint32_t fr[2];
+    for (int i = 0; i < 2; ++i) {
+        const uint32_t r = base + 8u + kWolfRecs[i] * 0x1Cu;
+        fr[i] = bus_read_u32(r);
+        if (!guest_ptr(fr[i]) || bus_read_u32(r + 24u) != 0x2Cu) return;
+        const unsigned x = bus_read_u16(fr[i] + 0x14u), y = bus_read_u16(fr[i] + 0x16u);
+        if (!((x == 11u * 24u && y == 2u * 24u) || (x == kFreeX && y == kFreeY))) return;   // not this layout
+    }
+    if (!g_wolf.tried) {
+        g_wolf.tried = true;
+        int pos = 0, sub = 0;
+        g_wolf.ok = head_tiles(169, g_wolf.t, &pos, &sub);
+    }
+    if (!g_wolf.ok) return;
+    const uint32_t sheet = battle_sheet();
+    if (!sheet) return;
+    bool wrote = false;
+    for (int t = 0; t < 9; ++t) {
+        const uint32_t off = (uint32_t)(((kFreeY / 8u) + (uint32_t)(t / 3)) * 48u + (kFreeX / 8u) + (uint32_t)(t % 3)) * 32u;
+        for (uint32_t b = 0; b < 32u; b += 4) {
+            const uint32_t w = rd32(&g_wolf.t[t * 32 + b]);
+            if (bus_read_u32(sheet + off + b) != w) { bus_write_u32(sheet + off + b, w); wrote = true; }
+        }
+    }
+    for (int i = 0; i < 2; ++i)
+        if (bus_read_u16(fr[i] + 0x14u) != kFreeX || bus_read_u16(fr[i] + 0x16u) != kFreeY) {
+            bus_write_u16(fr[i] + 0x14u, (uint16_t)kFreeX);
+            bus_write_u16(fr[i] + 0x16u, (uint16_t)kFreeY);
+            wrote = true;
+        }
+    if (wrote) {
+        std::fprintf(stderr, "[lb_cards] the Wolf's battle head is in the free cell (13,4) "
+                     "(sheet %08X, UIMgrData %08X)\n", sheet, base);
+        std::fflush(stderr);
+    }
+}
+
 extern "C" void lb_teams_donors_tick(void);   // docs/450, below
 void cards_tick() {
     lb_teams_donors_tick();
+    wolf_battle_tick();
     const uint32_t base = lb_patches_blueprint_base();
     if (base != g_cards_base) {   // a game reset reloaded the blueprints
         g_cards_base = base;
@@ -1059,6 +1147,15 @@ bool g_bal_done = false, g_bal_absent = false;
 LbHostSettings g_set_recv = {};
 bool g_set_ok = false;
 constexpr int kBalPerPage = 60;
+// docs/458: the 'U' page's custom units per datagram, and the check that ties
+// the pages of one list together (FNV-1a over the identities).
+constexpr int kUnitsPerPage = 16;
+unsigned units_check(const unsigned long long* h, int n) {
+    unsigned c = 2166136261u;
+    for (int i = 0; i < n; ++i)
+        for (int b = 0; b < 8; ++b) c = (c ^ (unsigned)((h[i] >> (8 * b)) & 0xFFu)) * 16777619u;
+    return c ^ (unsigned)n;
+}
 // When they last arrived. A host sends them every 250 ms from opening its
 // lobby to the end of the match, so rules older than a few seconds belong to
 // a lobby this player has left and are not applied.
@@ -1165,6 +1262,9 @@ std::vector<Donor> g_donor;          // per custom unit
 uint64_t g_donor_sig = 0;
 std::vector<std::array<uint8_t, 288>> g_donor_tiles;
 std::vector<std::pair<uint32_t, uint8_t>> g_sub_restore;   // donor frames' own sub-palettes
+
+// The game was Reset: those records were in the RAM boot() replaced.
+extern "C" void lb_teams_on_reset(void) { g_sub_restore.clear(); }
 
 // The army screen has closed: the donor cells' records get their own
 // sub-palettes back (a building's head elsewhere draws as the cartridge's).
@@ -1479,7 +1579,7 @@ extern "C" SDL_Texture* lb_teams_atlas(SDL_Renderer* r, int grey) {
         std::vector<uint32_t> img(which ? g_grey : g_rgba);
         img.resize((size_t)kAtlasW * kTexH, 0u);
         unsigned int px[576];
-        for (int k = 0; k < lb_cunits_count() && k < 16; ++k) {
+        for (int k = 0; k < lb_cunits_count() && k < kCustomHeads; ++k) {
             if (!lb_cunits_head(k, px)) continue;
             for (int y = 0; y < 24; ++y)
                 for (int x = 0; x < 24; ++x) {
@@ -1492,7 +1592,7 @@ extern "C" SDL_Texture* lb_teams_atlas(SDL_Renderer* r, int grey) {
                     } else {
                         c |= 0xFF000000u;
                     }
-                    img[(size_t)(kAtlasH + y) * kAtlasW + (size_t)(k * 24 + x)] = c;
+                    img[(size_t)(kAtlasH + (k / 16) * 24 + y) * kAtlasW + (size_t)((k % 16) * 24 + x)] = c;
                 }
         }
         SDL_UpdateTexture(t, nullptr, img.data(), kAtlasW * 4);
@@ -1507,9 +1607,9 @@ extern "C" int lb_teams_icon_uv(int bp, float* u0, float* v0, float* u1,
                                 float* v1) {
     const int k = lb_cunits_of_any(bp);
     unsigned int px[576];
-    if (g_atlas_state > 0 && k >= 0 && k < 16 && lb_cunits_head(k, px)) {   // docs/450
-        *u0 = (float)(k * 24) / kAtlasW;
-        *v0 = (float)kAtlasH / kTexH;
+    if (g_atlas_state > 0 && k >= 0 && k < kCustomHeads && lb_cunits_head(k, px)) {   // docs/450
+        *u0 = (float)((k % 16) * 24) / kAtlasW;
+        *v0 = (float)(kAtlasH + (k / 16) * 24) / kTexH;
         *u1 = *u0 + 24.0f / kAtlasW;
         *v1 = *v0 + 24.0f / kTexH;
         return 1;
@@ -2267,18 +2367,35 @@ extern "C" int lb_rules_outgoing(unsigned char* buf, int cap) {
                         buf[n++] = 'A';
                         buf[n++] = 1;
                         for (int b = 0; b < 4; ++b) buf[n++] = (unsigned char)(ah >> (8 * b));
-                        // docs/448: then the 'U' page: 'U', a version (1), a
-                        // count and that many u64 custom-unit identities, in
-                        // build order (their indices). A host without it has
-                        // none.
-                        unsigned long long cu[16];
-                        const int cn = lb_cunits_hashes(cu, 16);
-                        if (n + 3 + 8 * cn <= cap) {
+                        // docs/448: then the 'U' page, the custom-unit
+                        // identities (u64) in build order (their indices).
+                        // Version 2 pages them like the balance: 'U', 2, the
+                        // total (u16), this page, the page count, the count on
+                        // this page, a check of the whole list (u32), then up
+                        // to kUnitsPerPage identities. The pages go round, one
+                        // per datagram. (Version 1, a count and up to 16, is
+                        // still read from an older host.) A host without it
+                        // has none.
+                        static std::vector<unsigned long long> cu(256);
+                        static int upage = 0;
+                        const int total = lb_cunits_hashes(cu.data(), (int)cu.size());
+                        const int pages = total ? (total + kUnitsPerPage - 1) / kUnitsPerPage : 1;
+                        upage = (upage + 1) % pages;
+                        const int first = upage * kUnitsPerPage;
+                        const int cn = std::min(kUnitsPerPage, total - first);
+                        if (n + 11 + 8 * cn <= cap) {
+                            const unsigned check = units_check(cu.data(), total);
                             buf[n++] = 'U';
-                            buf[n++] = 1;
+                            buf[n++] = 2;
+                            buf[n++] = (unsigned char)(total & 0xFF);
+                            buf[n++] = (unsigned char)(total >> 8);
+                            buf[n++] = (unsigned char)upage;
+                            buf[n++] = (unsigned char)pages;
                             buf[n++] = (unsigned char)cn;
+                            for (int b = 0; b < 4; ++b) buf[n++] = (unsigned char)(check >> (8 * b));
                             for (int i = 0; i < cn; ++i)
-                                for (int b = 0; b < 8; ++b) buf[n++] = (unsigned char)(cu[i] >> (8 * b));
+                                for (int b = 0; b < 8; ++b)
+                                    buf[n++] = (unsigned char)(cu[(size_t)(first + i)] >> (8 * b));
                         }
                     }
                 }
@@ -2599,18 +2716,49 @@ extern "C" void lb_rules_incoming(const unsigned char* buf, int len,
         // A joiner builds exactly that set (lb_cunits_lobby_set fetches what it
         // lacks and rebuilds); no page from an older host is none.
         const int u_at = a_at >= 0 ? a_at + 6 : -1;
-        unsigned long long cu[16];
-        int cn = 0;
-        if (u_at >= 0 && u_at + 3 <= len && buf[u_at] == 'U' && buf[u_at + 1] == 1) {
-            const int c = buf[u_at + 2];
-            if (c <= 16 && u_at + 3 + 8 * c <= len)
-                for (int i = 0; i < c; ++i) {
-                    unsigned long long h = 0;
-                    for (int b = 0; b < 8; ++b) h |= (unsigned long long)buf[u_at + 3 + 8 * i + b] << (8 * b);
-                    cu[cn++] = h;
+        auto u64_at = [&](int at) {
+            unsigned long long h = 0;
+            for (int b = 0; b < 8; ++b) h |= (unsigned long long)buf[at + b] << (8 * b);
+            return h;
+        };
+        if (u_at >= 0 && u_at + 11 <= len && buf[u_at] == 'U' && buf[u_at + 1] == 2) {
+            // Version 2: one page of the set. The set is handed on only when
+            // every page of the same list (total and check) has arrived.
+            static std::vector<unsigned long long> parts;
+            static std::vector<char> got;
+            static unsigned have_check = 0;
+            static int have_total = -1;
+            const int total = buf[u_at + 2] | (buf[u_at + 3] << 8);
+            const int page = buf[u_at + 4], pages = buf[u_at + 5], c = buf[u_at + 6];
+            const unsigned check = (unsigned)buf[u_at + 7] | ((unsigned)buf[u_at + 8] << 8) |
+                                   ((unsigned)buf[u_at + 9] << 16) | ((unsigned)buf[u_at + 10] << 24);
+            const int want_pages = total ? (total + kUnitsPerPage - 1) / kUnitsPerPage : 1;
+            const int first = page * kUnitsPerPage;
+            if (pages == want_pages && page < pages && c == std::min(kUnitsPerPage, total - first) &&
+                u_at + 11 + 8 * c <= len) {
+                if (total != have_total || check != have_check) {
+                    have_total = total;
+                    have_check = check;
+                    parts.assign((size_t)total, 0ull);
+                    got.assign((size_t)pages, 0);
                 }
+                for (int i = 0; i < c; ++i) parts[(size_t)(first + i)] = u64_at(u_at + 11 + 8 * i);
+                got[(size_t)page] = 1;
+                bool all = true;
+                for (char g : got) all = all && g;
+                if (all && units_check(parts.data(), total) == check)
+                    lb_cunits_lobby_set(parts.data(), total);
+            }
+        } else {
+            unsigned long long cu[16];
+            int cn = 0;
+            if (u_at >= 0 && u_at + 3 <= len && buf[u_at] == 'U' && buf[u_at + 1] == 1) {
+                const int c = buf[u_at + 2];
+                if (c <= 16 && u_at + 3 + 8 * c <= len)
+                    for (int i = 0; i < c; ++i) cu[cn++] = u64_at(u_at + 3 + 8 * i);
+            }
+            lb_cunits_lobby_set(cu, cn);
         }
-        lb_cunits_lobby_set(cu, cn);
     }
     if (bal_done_now) {
         std::fprintf(stderr, "[lb_teams] the host's balance from instance %u: "

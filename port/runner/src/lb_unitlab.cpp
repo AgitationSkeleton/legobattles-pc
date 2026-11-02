@@ -57,6 +57,8 @@
 extern "C" int lb_rom_read_unwrapped(const char* path, unsigned char* out, int cap);   // lb_teams.cpp
 extern "C" const char* lb_mods_dir(void);                                              // lb_mods.cpp
 extern "C" const char* lb_teams_unit_name_stock(int blueprint);                        // lb_teams.cpp
+extern "C" const char* lb_spell_label(int id);                                        // lb_overlay.cpp
+extern "C" int lb_spell_listed(int id);
 
 namespace {
 
@@ -619,9 +621,11 @@ const HowStep kHowTo[] = {
      "My custom units. Press Open folder to see it. At most 9 custom units can be\n"
      "loaded at once."},
     {"Change its stats and name",
-     "Open unit.json in a text editor. \"name\" is what the game calls it. Under\n"
-     "\"fields\" change cost, build_time, health, speed, damage and the rest; values are\n"
-     "kept within what the game can store. \"index\" is the unit it was made from:\n"
+     "Use the Stats tab, or open unit.json in a text editor. \"name\" is what the\n"
+     "menus list it by; \"display_name\" (optional) is what the game shows in battle,\n"
+     "and need not be unique (\"Builder\"). Under \"fields\" change cost, build_time,\n"
+     "health, speed, damage and the rest; values are kept within what the game can\n"
+     "store. The Stats tab names the projectile and spells. \"index\" is the unit it was made from:\n"
      "leave it. The other entries (sheets, animations, raw_record) are for reference\n"
      "and are not read back."},
     {"Pick another model or sprite set (optional)",
@@ -1212,6 +1216,7 @@ bool fields_span(const std::string& j, size_t* b, size_t* e) {
 struct Edit {
     std::string folder;
     char name[25] = "";
+    char ingame[25] = "";       // SG-0053: "display_name", the name the game shows
     std::string asset;
     long field[sizeof kFields / sizeof kFields[0]] = {};
     bool has[sizeof kFields / sizeof kFields[0]] = {};
@@ -1224,6 +1229,7 @@ void edit_open(const Mine& m, const Rec& tmpl) {
     e.folder = m.folder;
     const std::string j = read_text(units_root() / fs::u8path(m.folder) / "unit.json");
     std::snprintf(e.name, sizeof e.name, "%s", json_get_s(j, "name").c_str());
+    std::snprintf(e.ingame, sizeof e.ingame, "%s", json_get_s(j, "display_name").c_str());
     e.asset = json_get_s(j, "asset");
     if (e.asset.empty()) e.asset = tmpl.asset;
     size_t fb, fe;
@@ -1246,6 +1252,7 @@ bool edit_save() {
     std::string j = read_text(p);
     if (j.empty()) return false;
     json_set_s(j, "name", g_edit.name);
+    if (g_edit.ingame[0] || !json_get_s(j, "display_name").empty()) json_set_s(j, "display_name", g_edit.ingame);
     json_set_s(j, "asset", g_edit.asset);
     size_t fb, fe;
     if (!fields_span(j, &fb, &fe)) {
@@ -1324,12 +1331,81 @@ void draw_files(const Mine& m, const Rec& t) {
                         "Last build below says what was used and what was skipped.", tbase.c_str());
 }
 
+// SG-0052: the projectile (+0x66) is a blueprint index, 182..208 (the 27
+// projectile records after the units, docs/11), or 65535 for none (every
+// melee unit and building). Labelled with the record's name and the stock
+// units that fire it.
+const std::vector<std::pair<int, std::string>>& projectile_choices(const std::vector<Rec>& rs) {
+    static std::vector<std::pair<int, std::string>> v;
+    if (!v.empty()) return v;
+    v.push_back({65535, "None (melee)"});
+    const std::vector<uint8_t> e = rom_file("BP/Entities.ebp");
+    if (e.size() < kPool) return v;
+    for (int j = 0; j < 27; ++j) {
+        const size_t r = 4 + (size_t)kUnits * 0x7C + (size_t)j * 0x74;
+        const uint32_t off = (uint32_t)(e[r] | (e[r + 1] << 8) | (e[r + 2] << 16) | ((uint32_t)e[r + 3] << 24));
+        std::string nm;
+        for (size_t p = kPool + off; p < e.size() && e[p] && nm.size() < 32; ++p) nm += (char)e[p];
+        std::string users;
+        int n = 0;
+        for (const Rec& u : rs) {
+            if ((u.raw[0x66] | (u.raw[0x67] << 8)) != kUnits + j) continue;
+            if (n++ < 3) users += (users.empty() ? "" : ", ") + u.name;
+        }
+        if (n > 3) users += ", ...";
+        v.push_back({kUnits + j, nm + (users.empty() ? "  (no stock unit)" : "  (" + users + ")")});
+    }
+    return v;
+}
+std::string projectile_label(int value, const std::vector<Rec>& rs) {
+    for (const auto& c : projectile_choices(rs))
+        if (c.first == value) return c.second;
+    return std::to_string(value);
+}
+std::string spell_label(int id) { return id == 0 ? "None" : lb_spell_label(id); }
+
+// The fields chosen from a list rather than typed (SG-0052). True when drawn.
+bool draw_named_field(size_t i, const std::vector<Rec>& rs) {
+    const char* key = kFields[i].key;
+    const bool proj = std::strcmp(key, "projectile") == 0;
+    const bool spell = std::strncmp(key, "spell_", 6) == 0;
+    if (!proj && !spell) return false;
+    const int cur = (int)g_edit.field[i];
+    ImGui::SetNextItemWidth(proj ? 300.0f : 180.0f);
+    const std::string shown = proj ? projectile_label(cur, rs) : spell_label(cur);
+    if (ImGui::BeginCombo(key, shown.c_str())) {
+        if (proj) {
+            for (const auto& c : projectile_choices(rs))
+                if (ImGui::Selectable(c.second.c_str(), c.first == cur)) g_edit.field[i] = c.first;
+        } else {
+            for (int id = 0; id <= 0x20; ++id) {
+                if (!lb_spell_listed(id) && id != cur) continue;
+                ImGui::PushID(id);   // ids 1 and 2 are both "Unit Heal"
+                if (ImGui::Selectable(spell_label(id).c_str(), id == cur)) g_edit.field[i] = id;
+                ImGui::PopID();
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SetItemTooltip(proj ? "What it fires. None for a melee unit."
+                               : "A hero's spells, in the order its yellow brick lists them.\n"
+                                 "Other units do not cast.");
+    return true;
+}
+
 // The Stats tab of a custom unit: its name, the stock art it starts from and
 // every known value, saved into unit.json by the Save button above the tabs.
 void draw_edit_fields(const Mine& m, const std::vector<Rec>& rs) {
     const Rec& t = rs[(size_t)m.tmpl];
     ImGui::SetNextItemWidth(220.0f);
     ImGui::InputText("Name", g_edit.name, sizeof g_edit.name);
+    ImGui::SetItemTooltip("What the menus list it by (the Team Builder, this page, Community units).");
+    ImGui::SetNextItemWidth(220.0f);
+    ImGui::InputTextWithHint("In-game name", g_edit.name[0] ? g_edit.name : "the Name", g_edit.ingame,
+                             sizeof g_edit.ingame);
+    ImGui::SetItemTooltip("What the game itself shows in battle and on its cards. Empty: the Name.\n"
+                          "It need not be unique: call it \"Builder\" like the stock builders.\n"
+                          "Letters, digits, spaces and - ' . ! only, at most 24.");
     const auto choices = asset_choices(rs, t);
     std::string cur = g_edit.asset;
     for (const auto& c : choices)
@@ -1346,6 +1422,7 @@ void draw_edit_fields(const Mine& m, const std::vector<Rec>& rs) {
         for (size_t i = 0; i < sizeof kFields / sizeof kFields[0]; ++i) {
             if (std::strcmp(kFields[i].key, "display_name_id") == 0) continue;
             ImGui::TableNextColumn();
+            if (draw_named_field(i, rs)) continue;
             const long mx = kFields[i].width == 1 ? 255L : kFields[i].width == 2 ? 65535L : 0x7FFFFFFFL;
             int v = (int)std::min<long>(g_edit.field[i], 0x7FFFFFFFL);
             ImGui::SetNextItemWidth(140.0f);
@@ -1366,7 +1443,12 @@ void draw_stock_fields(const Rec& r) {
             ImGui::TableNextColumn();
             ImGui::TextDisabled("%s", kFields[i].key);
             ImGui::TableNextColumn();
-            ImGui::Text("%u", (unsigned)v);
+            if (std::strcmp(kFields[i].key, "projectile") == 0)
+                ImGui::TextUnformatted(projectile_label((int)v, records()).c_str());
+            else if (std::strncmp(kFields[i].key, "spell_", 6) == 0)
+                ImGui::TextUnformatted(spell_label((int)v).c_str());
+            else
+                ImGui::Text("%u", (unsigned)v);
         }
         ImGui::EndTable();
     }
