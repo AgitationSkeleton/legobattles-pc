@@ -7640,6 +7640,8 @@ def apply(runner_dir, imgui_dir):
           "src/lb_leveledit.cpp",
           # Balance > Custom units: export and preview (docs/448).
           "src/lb_unitlab.cpp",
+          # Its 3D preview of the models (siege, transports): lb_nsbmd.h.
+          "src/lb_nsbmd.cpp",
           # Custom units: appended blueprints (docs/448).
           "src/lb_cunits.cpp",
           # The host-level WH: smooth online play (docs/423).

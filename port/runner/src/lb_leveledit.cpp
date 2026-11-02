@@ -1121,6 +1121,7 @@ void move_grabbed(int x, int y, int w, int h) {
 // has one.
 struct Clip {
     int w = 0, h = 0, world = -1;
+    bool flipped = false;   // mirrored: its tiles' art is not, so they are re-picked
     std::vector<uint8_t> A, T;
     std::vector<uint16_t> E;
     std::vector<lvl::Point> mines;
@@ -1228,11 +1229,11 @@ void cut_selection() {
 // The clipboard with its corner at (x, y). Cells off the map are dropped.
 // Copied metatiles are kept (a remade map's own tiles only within the same
 // level's world); the ring around the block is re-picked so it joins in.
-void paste_at(int x, int y) {
+void paste_at(int x, int y, bool undo = true) {
     if (g_clip.w <= 0) return;
     Doc& d = g_doc;
-    push_undo();
-    const bool same_world = g_clip.world == d.world;
+    if (undo) push_undo();
+    const bool same_world = g_clip.world == d.world && !g_clip.flipped;
     for (int cy = 0; cy < g_clip.h; ++cy)
         for (int cx = 0; cx < g_clip.w; ++cx) {
             const int tx = x + cx, ty = y + cy;
@@ -1288,6 +1289,60 @@ void paste_at(int x, int y) {
     g_ui.sel_y0 = std::max(0, y);
     g_ui.sel_x1 = std::min(d.m.w - 1, x + g_clip.w - 1);
     g_ui.sel_y1 = std::min(d.m.h - 1, y + g_clip.h - 1);
+}
+
+// Mirrors the clipboard left-right (horizontal) or top-bottom. Cells swap
+// places; every object keeps its footprint, so its corner moves by its size
+// (a 2x2 mine at x lands at w - x - 2). The ground's tiles are re-picked when
+// it is pasted: a tile's picture cannot be mirrored.
+void flip_clip(bool horizontal) {
+    Clip& c = g_clip;
+    if (c.w <= 0) return;
+    auto cells = [&](auto& v) {
+        auto o = v;
+        for (int y = 0; y < c.h; ++y)
+            for (int x = 0; x < c.w; ++x) {
+                const int sx = horizontal ? c.w - 1 - x : x, sy = horizontal ? y : c.h - 1 - y;
+                o[(size_t)y * c.w + x] = v[(size_t)sy * c.w + sx];
+            }
+        v = std::move(o);
+    };
+    cells(c.A);
+    cells(c.T);
+    cells(c.E);
+    auto mv = [&](uint8_t& px, uint8_t& py, int fw, int fh) {
+        if (horizontal) px = (uint8_t)std::max(0, c.w - px - fw);
+        else py = (uint8_t)std::max(0, c.h - py - fh);
+    };
+    for (lvl::Point& p : c.mines) mv(p.x, p.y, 2, 2);
+    for (auto& gm : c.markers) mv(gm.second.x, gm.second.y, 1, 1);
+    for (lvl::Pickup& p : c.picks) mv(p.x, p.y, 1, 1);
+    for (lvl::Entity& e : c.ents) {
+        int w, h;
+        footprint(e.type, &w, &h);
+        mv(e.x, e.y, w, h);
+    }
+    c.flipped = true;
+}
+
+// Flips the selection where it is: one undo step.
+void flip_selection(bool horizontal) {
+    if (!has_selection()) return;
+    const Clip keep = g_clip;   // the clipboard is the player's; it is put back
+    const int x = g_ui.sel_x0, y = g_ui.sel_y0;
+    copy_selection();
+    flip_clip(horizontal);
+    push_undo();
+    clear_selection_cells();
+    paste_at(x, y, false);
+    g_clip = keep;
+    say(false, horizontal ? "Mirrored the selection left to right." : "Flipped the selection top to bottom.");
+}
+
+// The Flip buttons and H / V: the paste in progress if there is one, else the selection.
+void flip_action(bool horizontal) {
+    if (g_ui.pasting) flip_clip(horizontal);
+    else flip_selection(horizontal);
 }
 
 // ── Checks ───────────────────────────────────────────────────────────────────
@@ -2847,7 +2902,14 @@ void panel_terrain() {
     ImGui::BeginDisabled(g_clip.w <= 0);
     if (ImGui::Button("Paste")) g_ui.pasting = true;
     ImGui::EndDisabled();
-    ImGui::TextDisabled("Ctrl+C / X / V, Delete, Ctrl+A; Ctrl+Z undo,\nCtrl+Y or Ctrl+Shift+Z redo, Ctrl+S save.");
+    ImGui::BeginDisabled(!g_ui.pasting && !has_selection());
+    if (ImGui::Button("Mirror (H)")) flip_action(true);
+    ImGui::SetItemTooltip("Left to right: the paste you are placing, or else the selection where it is.");
+    ImGui::SameLine();
+    if (ImGui::Button("Flip (V)")) flip_action(false);
+    ImGui::SetItemTooltip("Top to bottom: the paste you are placing, or else the selection where it is.");
+    ImGui::EndDisabled();
+    ImGui::TextDisabled("Ctrl+C / X / V, Delete, Ctrl+A; H mirror, V flip;\nCtrl+Z undo, Ctrl+Y or Ctrl+Shift+Z redo, Ctrl+S save.");
     ImGui::Separator();
     ImGui::SliderInt("Size", &g_ui.brush, 1, 12);
     ImGui::Checkbox("Round brush", &g_ui.round_brush);
@@ -3135,6 +3197,8 @@ void lb_leveledit_draw(SDL_Renderer* ren) {
         if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C)) copy_selection();
         if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_X)) cut_selection();
         if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V) && g_clip.w > 0) g_ui.pasting = true;
+        if (!io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_H)) flip_action(true);
+        if (!io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V)) flip_action(false);
         if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_A)) {
             g_ui.tool = kToolSelect;
             g_ui.sel_x0 = 0; g_ui.sel_y0 = 0; g_ui.sel_x1 = g_doc.m.w - 1; g_ui.sel_y1 = g_doc.m.h - 1;

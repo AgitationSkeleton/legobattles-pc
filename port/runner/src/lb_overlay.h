@@ -813,6 +813,9 @@ int          lb_setting_ai_spectate(void);   /* SG-0002 */
 /* docs/414: extra computer opponents in Free Play, packed (kind 17). */
 int          lb_setting_ai_opp_packed(void);
 int          lb_demo_play_ai_opp(void);
+int          lb_setting_ai_cross_fire(void);   /* SG-0051 */
+int          lb_demo_play_ai_cross(void);
+int          lb_ai_cross_live(void);
 int          lb_ai_opp_live(void);           /* lb_patches.cpp: 0 online */
 /* SG-0036: the Gold Rush target in bricks, 0 for the game's own 10,000: this
    machine's setting, a replay's (kind 18), the host's while joined ('G' page,

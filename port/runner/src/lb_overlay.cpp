@@ -93,6 +93,7 @@ extern "C" const char* lb_mods_dir(void);   /* lb_mods.cpp */
 void lb_mapbrowser_draw(SDL_Renderer* renderer);   /* docs/431: lb_mapfetch.cpp */
 void lb_leveledit_draw(SDL_Renderer* renderer);    /* the level editor: lb_leveledit.cpp */
 void lb_unitlab_draw(SDL_Renderer* renderer);      /* Balance > Custom units: lb_unitlab.cpp */
+void lb_unitlab_draw_community(SDL_Renderer* renderer);   /* Balance > Community units */
 void lb_community_draw(SDL_Renderer* renderer);    /* community levels: lb_leveledit.cpp */
 
 // lb_https.cpp (WinHTTP); defined outside any namespace.
@@ -301,6 +302,7 @@ struct Settings {
     // (lb_patches.cpp, kAiHeroRebuild). Offline only.
     bool ai_hero_rebuild = false;
     bool ai_more_mines = false;     // SG-0032 (docs/444): the AI builds more mines and bridges
+    bool ai_cross_fire = false;     // SG-0051 (docs/457): the computers attack each other
     // docs/408: a hotwired transport stops taking its old owner's orders
     // (lb_patches.cpp, release_stolen_transport).
     bool transport_release = false;
@@ -310,6 +312,12 @@ struct Settings {
     // docs/437: owned creatures are tinted in their owner's team colour
     // (lb_patches.cpp, creature_tint). Needs `creatures`; this machine's own.
     bool creature_tint = true;
+    // docs/454 (SG-0041): the top screen's unit portraits in their owner's
+    // team colour (lb_patches.cpp, lb_top_postprocess); this machine's own.
+    bool portrait_tint = true;
+    // The Wolf's and the Shark's battle portraits are their heads, not the
+    // battle sheet's sack and lantern (lb_patches.cpp, portrait_tint_refresh).
+    bool creature_portraits = true;
     // docs/412: teal as a seventh team colour (colour 6). The host's rule
     // online (LB_RULE_TEAL); see lb_teal_live().
     bool teal_colour = false;
@@ -429,6 +437,14 @@ struct Settings {
     // six factions in the game's order (King, Wizard, Pirate, Imperial,
     // Earth, Alien), 6 Custom, 7 Random. 1, Wizard, is the cartridge's own.
     int  default_opponent = 1;
+    // docs/384/393: Free Play's opponent selector also offers Custom (the
+    // Team Builder's enemy team) and Randomizer. Off: the game's six.
+    bool extra_opponents = true;
+    // The audit of always-on changes (2026-11-01): each now a setting, on.
+    bool wheel_zoom = true;          // the mouse wheel sets Magnification
+    bool lobby_map_fix = true;       // docs/455: the lobby's map label follows the map
+    bool lobby_server_label = true;  // SG-0029: "Game Lobby (server)" while hosting/joined
+    bool mod_maps = true;            // docs/391/413: mod and editor maps join the lists
 
     // Multiplayer
     // docs/394: the public master server, a Cloudflare Worker
@@ -726,12 +742,18 @@ extern "C" void lb_settings_save(void) {
                   g_set.ai_hero_rebuild ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"ai_more_mines\": %s,\n",
                   g_set.ai_more_mines ? "true" : "false"); o += buf;   // SG-0032
+    std::snprintf(buf, sizeof buf, "  \"ai_cross_fire\": %s,\n",
+                  g_set.ai_cross_fire ? "true" : "false"); o += buf;   // SG-0051
     std::snprintf(buf, sizeof buf, "  \"transport_release\": %s,\n",
                   g_set.transport_release ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"creatures\": %s,\n",
                   g_set.creatures ? "true" : "false"); o += buf;   // docs/410
     std::snprintf(buf, sizeof buf, "  \"creature_tint\": %s,\n",
                   g_set.creature_tint ? "true" : "false"); o += buf;   // docs/437
+    std::snprintf(buf, sizeof buf, "  \"portrait_tint\": %s,\n",
+                  g_set.portrait_tint ? "true" : "false"); o += buf;   // docs/454
+    std::snprintf(buf, sizeof buf, "  \"creature_portraits\": %s,\n",
+                  g_set.creature_portraits ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"teal_colour\": %s,\n",
                   g_set.teal_colour ? "true" : "false"); o += buf;     // docs/412
     std::snprintf(buf, sizeof buf, "  \"teal_style\": %d,\n", g_set.teal_style); o += buf;
@@ -819,6 +841,13 @@ extern "C" void lb_settings_save(void) {
                   g_set.rename_bounty); o += buf;
     std::snprintf(buf, sizeof buf, "  \"default_opponent\": %d,\n",
                   g_set.default_opponent); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"extra_opponents\": %s,\n",
+                  g_set.extra_opponents ? "true" : "false"); o += buf;   // docs/384
+    std::snprintf(buf, sizeof buf, "  \"wheel_zoom\": %s,\n", g_set.wheel_zoom ? "true" : "false"); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"lobby_map_fix\": %s,\n", g_set.lobby_map_fix ? "true" : "false"); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"lobby_server_label\": %s,\n",
+                  g_set.lobby_server_label ? "true" : "false"); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"mod_maps\": %s,\n", g_set.mod_maps ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"skip_intro\": %s,\n",
                   g_set.skip_intro ? "true" : "false"); o += buf;   // SG-0016
     std::snprintf(buf, sizeof buf, "  \"name_from_save\": %s,\n",
@@ -981,9 +1010,12 @@ extern "C" void lb_settings_load(void) {
     json_get_bool(s, "stun_cast", &g_set.stun_cast);             // docs/453
     json_get_bool(s, "ai_hero_rebuild", &g_set.ai_hero_rebuild);
     json_get_bool(s, "ai_more_mines", &g_set.ai_more_mines);   // SG-0032
+    json_get_bool(s, "ai_cross_fire", &g_set.ai_cross_fire);   // SG-0051
     json_get_bool(s, "transport_release", &g_set.transport_release);
     json_get_bool(s, "creatures", &g_set.creatures);   // docs/410
     json_get_bool(s, "creature_tint", &g_set.creature_tint);   // docs/437
+    json_get_bool(s, "portrait_tint", &g_set.portrait_tint);   // docs/454
+    json_get_bool(s, "creature_portraits", &g_set.creature_portraits);
     json_get_bool(s, "teal_colour", &g_set.teal_colour);       // docs/412
     json_get_int(s, "teal_style", &g_set.teal_style);
     if (g_set.teal_style < 0 || g_set.teal_style > 1) g_set.teal_style = 0;
@@ -1041,6 +1073,11 @@ extern "C" void lb_settings_load(void) {
     json_get_int(s, "rename_pirate_buildings", &g_set.rename_pirate_buildings);   // SG-0021
     json_get_int(s, "rename_bounty", &g_set.rename_bounty);
     json_get_int(s, "default_opponent", &g_set.default_opponent);   // docs/392
+    json_get_bool(s, "extra_opponents", &g_set.extra_opponents);     // docs/384
+    json_get_bool(s, "wheel_zoom", &g_set.wheel_zoom);
+    json_get_bool(s, "lobby_map_fix", &g_set.lobby_map_fix);
+    json_get_bool(s, "lobby_server_label", &g_set.lobby_server_label);
+    json_get_bool(s, "mod_maps", &g_set.mod_maps);
     json_get_str(s, "master_host", g_set.master_host, sizeof g_set.master_host);
     json_get_bool(s, "master_both", &g_set.master_both);     // docs/419
     json_get_bool(s, "master_choice", &g_set.master_choice); // docs/424
@@ -1130,7 +1167,24 @@ extern "C" void lb_settings_load(void) {
 // tried and failed -- and it belongs in a code comment or a docs/ entry where
 // it is read once by whoever changes the code, not printed at the player every
 // time they open a tab.
+// The menu search's jump (draw_menu_search): the setting it found is outlined
+// for a moment and scrolled into view. help() follows almost every setting, so
+// it is where the widget just drawn can be compared with the one wanted.
+const char* g_search_focus = nullptr;
+int g_search_focus_frames = 0;
+bool g_search_scroll = false;
+
 void help(const char* text) {
+    if (g_search_focus_frames > 0 && g_search_focus && ImGui::GetItemID() == ImGui::GetID(g_search_focus)) {
+        const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
+        if (g_search_scroll) {
+            ImGui::SetScrollHereY(0.35f);
+            g_search_scroll = false;
+        }
+        const int alpha = std::min(255, g_search_focus_frames * 4);   // fades over the last second
+        ImGui::GetWindowDrawList()->AddRect(ImVec2(a.x - 5.0f, a.y - 3.0f), ImVec2(b.x + 5.0f, b.y + 3.0f),
+                                            IM_COL32(255, 210, 60, alpha), 4.0f, 0, 3.0f);
+    }
     ImGui::SetItemTooltip("%s", text);
 }
 
@@ -1506,6 +1560,9 @@ void tab_display() {
     help("How big each game pixel is drawn. A bigger window shows more\n"
          "of the map. Limits: 1024x512 game pixels max, 256x192 min.");
     badge(WIRED);
+    ImGui::Checkbox("Mouse Wheel Zooms", &g_set.wheel_zoom);
+    help("Turning the mouse wheel over the battlefield changes Magnification.");
+    badge(WIRED);
     // SHOW THE THREE NUMBERS THE SETTING ACTUALLY CONTROLS.
     //
     // A magnification slider whose effect is invisible until you resize the
@@ -1657,6 +1714,12 @@ void tab_display() {
     badge(WIRED);
     // docs/391: what the mods folder gave, read once at launch.
     ImGui::Separator();
+    ImGui::Checkbox("Use Mod and Editor Maps", &g_set.mod_maps);
+    help("Maps from the mods folder (.nds files, map folders, your Level\n"
+         "Editor maps) join Free Play and the lobby, two-player ones too.\n"
+         "Off: the game's own maps only; maps a host sends you still load.\n"
+         "Read when the game starts or the maps are loaded again.");
+    badge(WIRED);
     ImGui::TextDisabled("Mod maps: %s", lb_mods_status());
     help("Put mod ROMs (.nds) in a \"mods\" folder beside the game. Their\n"
          "multiplayer maps are added to Free Play's map list. Read at startup.");
@@ -1681,12 +1744,19 @@ void tab_enhancements() {
     // portrait's frame is the whole of the choice (FUN_020C0374 reads only
     // it), and the Wizard comes from UI/FE/OpponentSetup.bin; lb_patches.cpp
     // sets it as the screen finishes building (opponent_setup_override).
+    // docs/384/393: the two opponents the game does not have.
+    ImGui::Checkbox("Custom and Randomizer Opponents", &g_set.extra_opponents);
+    help("Free Play's opponent choice also offers Custom (the Team Builder's\n"
+         "enemy team) and Randomizer (a new army each match). Off: the game's\n"
+         "six factions only.");
+    badge(WIRED);
     ImGui::Text("Default Free Play Opponent");
     // docs/393: the dropdown's random choice is labelled "Randomizer".
     const char* opponents[] = {"King", "Wizard", "Pirate", "Imperial",
                                "Earth", "Alien", "Custom", "Randomizer"};
+    if (!g_set.extra_opponents && g_set.default_opponent > 5) g_set.default_opponent = 1;
     ImGui::Combo("##default_opponent", &g_set.default_opponent, opponents,
-                 IM_ARRAYSIZE(opponents));
+                 g_set.extra_opponents ? IM_ARRAYSIZE(opponents) : 6);
     help("The opponent Free Play starts on. The game's default is Wizard.\n"
          "Custom is the Team Builder's enemy team; Randomizer is a new\n"
          "army each match.");
@@ -3072,6 +3142,14 @@ void tab_multiplayer() {
     guide("Pick a server and how you connect. One player hosts; the others join from "
           "the game's menu. Match the host's Both servers and fast link settings. "
           "The relay kicks in if a direct link fails.");
+    ImGui::Checkbox("Lobby Shows the Current Map", &g_set.lobby_map_fix);
+    help("The game's lobby can keep showing the previous match's map until the\n"
+         "host picks again. On: the label follows the lobby's map. Looks only.");
+    badge(WIRED);
+    ImGui::SameLine();
+    ImGui::Checkbox("Show the Lobby's Server", &g_set.lobby_server_label);
+    help("While hosting or joined, a line in the lobby names the server it is on.");
+    badge(WIRED);
 
     // docs/400: the known servers by name; Custom shows the fields.
     {
@@ -3916,6 +3994,15 @@ void tab_team_builder() {
         help("If the colour is taken, or Automatic, it gets the first free one.");
         ImGui::Checkbox("Allied with the other computers##ai3", &g_set.ai_opp_teams);
         help("On: the computers team up against you. Off: free-for-all.");
+        // SG-0051 (docs/457): free-for-all computers otherwise hunt only you.
+        ImGui::BeginDisabled(g_set.ai_opp_teams);
+        ImGui::Checkbox("Computers attack each other's bases##ai3", &g_set.ai_cross_fire);
+        help("Normally each computer sends its army only at you and fights\n"
+             "the other computer only when they meet. On, each computer\n"
+             "targets the nearest enemy base, the other computer's included.\n"
+             "Not while the computers are allied. Free Play only.");
+        badge(WIRED);
+        ImGui::EndDisabled();
         ImGui::EndDisabled();
     }
     ImGui::Separator();
@@ -3946,6 +4033,17 @@ void tab_team_builder() {
         help("Original is the game's unused, mostly white teal. PC Port is a\n"
              "full teal like the other colours. Only you see it. From the next level.");
     }
+    // docs/454 (SG-0041): the selection portraits on the top screen.
+    ImGui::Checkbox("Team-Colour Unit Portraits", &g_set.portrait_tint);
+    help("The small round portraits of the selected units on the top screen\n"
+         "take their owner's team colour, like the units do. Off: the game's\n"
+         "own red and blue. Only you see it.");
+    badge(WIRED);
+    ImGui::Checkbox("Proper Creature Portraits", &g_set.creature_portraits);
+    help("The Wolf and the Shark show their own heads on the top screen when\n"
+         "selected. The game's battle art has a lantern and a sack in their place.\n"
+         "Only you see it.");
+    badge(WIRED);
     // docs/437: owned creatures take their owner's team colour.
     ImGui::BeginDisabled(!g_set.creatures);
     ImGui::Checkbox("Tint creatures by team", &g_set.creature_tint);
@@ -5147,6 +5245,7 @@ std::string server_label(const std::string& h) {
 }
 
 void draw_lobby_server_label() {
+    if (!g_set.lobby_server_label) return;
     const int st = lb_net_guest_state();
     if (st != 2 && st != 5) return;
     std::string text;
@@ -5529,6 +5628,8 @@ void draw_top_screen(SDL_Renderer* renderer) {
                     ImGui::SetTooltip(
                         id >= 730 && id <= 732
                             ? "Click to cancel this unit\nand get its bricks back"
+                        : id >= 733
+                            ? "Click to unload this unit\nfrom the transport"
                         : id <= 721
                             ? "Click to take this unit\nout of the selection"
                             : "Click to use this button");
@@ -8309,9 +8410,17 @@ void tab_community_levels() {
 void tab_custom_units() {
     if (!tab_begin("Custom units")) return;
     guide("View every unit and building animated; Compare shows a second one beside it. "
-          "Export saves a template to mods/units/export; make your own unit from it below, "
-          "share it online, or get other players' units under Community units.");
+          "Export saves a template to mods/units/export; make your own unit from it below "
+          "and share it online. Other players' units are under Community units.");
     lb_unitlab_draw(g_maps_ren);
+    tab_end();
+}
+
+void tab_community_units() {
+    if (!tab_begin("Community units")) return;
+    guide("Units other players shared. Subscribe to one to add it to your custom units; "
+          "it is loaded the next time the game builds them.");
+    lb_unitlab_draw_community(g_maps_ren);
     tab_end();
 }
 
@@ -8341,7 +8450,8 @@ const std::vector<MenuHeader>& menu_headers() {
                      {"Ban Units", "Ban Units", tab_ban_units},
                      {"Ban Maps", "Ban Maps", tab_ban_maps},
                      {"Presets", "Balance Presets", tab_balance_presets},
-                     {"Custom units", "Custom units", tab_custom_units}}},
+                     {"Custom units", "Custom units", tab_custom_units},
+                     {"Community units", "Community units", tab_community_units}}},
         {"Cheats", {{"Cheats", "Cheats", tab_cheats},
                     {"Action Replay", "Action Replay", tab_action_replay}}},
         {"Network", {{"Multiplayer", "Multiplayer", tab_multiplayer},
@@ -8357,6 +8467,75 @@ const std::vector<MenuHeader>& menu_headers() {
 
 int g_menu_header = 0;
 int g_menu_section[16] = {};   // one per header in menu_headers() (8 since SG-0040)
+
+// ── Search (as Ship of Harkinian's) ─────────────────────────────────────────
+// The header's search box matches every setting's label and help text, read
+// from the pages' source by tools/lb_menu_index.py into lb_menu_index.inc.
+// Picking a result opens its page and outlines the setting (help()).
+struct MenuIndexEntry { const char* header; const char* section; const char* label; const char* help; };
+const MenuIndexEntry kMenuIndex[] = {
+#include "lb_menu_index.inc"
+};
+char g_menu_search[64] = "";
+
+std::string lower_ascii(std::string s) {
+    for (char& c : s) c = (char)std::tolower((unsigned char)c);
+    return s;
+}
+
+void draw_menu_search(const std::vector<MenuHeader>& hs) {
+    std::vector<std::string> words;
+    {
+        std::string w;
+        for (const char* p = g_menu_search;; ++p) {
+            if (*p == 0 || *p == ' ') {
+                if (!w.empty()) words.push_back(lower_ascii(w));
+                w.clear();
+                if (*p == 0) break;
+            } else {
+                w += *p;
+            }
+        }
+    }
+    int shown = 0, found = 0;
+    for (const MenuIndexEntry& e : kMenuIndex) {
+        const std::string hay = lower_ascii(std::string(e.label) + " " + e.help + " " + e.section + " " + e.header);
+        bool all = !words.empty();
+        for (const std::string& w : words) all = all && hay.find(w) != std::string::npos;
+        if (!all) continue;
+        ++found;
+        if (shown >= 80) continue;
+        ++shown;
+        ImGui::PushID(&e);
+        char line[256];
+        if (std::strcmp(e.label, e.section) == 0) std::snprintf(line, sizeof line, "%s > %s", e.header, e.section);
+        else std::snprintf(line, sizeof line, "%s > %s:  %s", e.header, e.section, e.label);
+        if (ImGui::Selectable(line)) {
+            for (int h = 0; h < (int)hs.size(); ++h) {
+                if (std::strcmp(hs[(size_t)h].label, e.header) != 0) continue;
+                for (int s = 0; s < (int)hs[(size_t)h].sections.size(); ++s)
+                    if (std::strcmp(hs[(size_t)h].sections[(size_t)s].label, e.section) == 0) {
+                        g_menu_header = h;
+                        g_menu_section[h] = s;
+                    }
+            }
+            g_search_focus = e.label;
+            g_search_focus_frames = 300;   // five seconds
+            g_search_scroll = true;
+            g_menu_search[0] = 0;
+        }
+        if (e.help[0]) {
+            ImGui::Indent();
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 700.0f);
+            ImGui::TextDisabled("%s", e.help);
+            ImGui::PopTextWrapPos();
+            ImGui::Unindent();
+        }
+        ImGui::PopID();
+    }
+    if (found == 0) ImGui::TextDisabled("Nothing matches \"%s\".", g_menu_search);
+    else if (found > shown) ImGui::TextDisabled("%d more; type more of the name.", found - shown);
+}
 bool g_quit_ask = false, g_reset_ask = false;
 
 // A header or sidebar entry: a full-width button, coloured when selected.
@@ -8444,7 +8623,7 @@ void draw_panels() {
         float text = ImGui::CalcTextSize("Reset").x + ImGui::CalcTextSize("Quit").x +
                      ImGui::CalcTextSize("Close").x;
         for (const MenuHeader& h : hs) text += ImGui::CalcTextSize(h.label).x;
-        const float fixed = 20.0f * (float)hs.size() + 60.0f +
+        const float fixed = 20.0f * (float)hs.size() + 60.0f + 200.0f * 1.35f +   // + the search box
                             st.ItemSpacing.x * (float)(hs.size() + 3) + st.WindowPadding.x * 2;
         if (text > 0.0f && text * head_scale + fixed > size.x)
             head_scale = std::max(0.8f, (size.x - fixed) / text);
@@ -8456,9 +8635,22 @@ void draw_panels() {
         const float w = ImGui::CalcTextSize(hs[h].label).x + 20.0f;
         if (menu_entry(hs[h].label, h == g_menu_header, w)) g_menu_header = h;
     }
+    const float search_w = 200.0f * head_scale;
     const float bw = ImGui::CalcTextSize("Reset").x + ImGui::CalcTextSize("Quit").x +
-                     ImGui::CalcTextSize("Close").x + 60.0f + st.ItemSpacing.x * 2;
+                     ImGui::CalcTextSize("Close").x + 60.0f + st.ItemSpacing.x * 3 + search_w;
     ImGui::SameLine(std::max(ImGui::GetCursorPosX(), size.x - bw - st.WindowPadding.x));
+    {
+        static bool seeded = false;   // test aid: LB_MENU_SEARCH=<text> types it once
+        if (!seeded) {
+            seeded = true;
+            if (const char* v = std::getenv("LB_MENU_SEARCH")) std::snprintf(g_menu_search, sizeof g_menu_search, "%s", v);
+        }
+    }
+    if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_F)) ImGui::SetKeyboardFocusHere();
+    ImGui::SetNextItemWidth(search_w);
+    ImGui::InputTextWithHint("##menu_search", "Search (Ctrl+F)", g_menu_search, sizeof g_menu_search);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Find a setting by name or description");
+    ImGui::SameLine();
     if (menu_red_button("Quit", "Close the game")) g_quit_ask = true;
     ImGui::SameLine();
     if (menu_red_button("Reset", "Restart the game from its title screen (Ctrl+R)"))
@@ -8500,9 +8692,14 @@ void draw_panels() {
     ImGui::PushItemWidth(std::min(ImGui::GetContentRegionAvail().x * 0.6f, 460.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 4.0f);
     ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(10.0f, 7.0f));
-    g_menu_id = head.sections[(size_t)sec].id;
-    head.sections[(size_t)sec].draw();
-    g_menu_id = nullptr;
+    if (g_search_focus_frames > 0) --g_search_focus_frames;
+    if (g_menu_search[0]) {
+        draw_menu_search(hs);
+    } else {
+        g_menu_id = head.sections[(size_t)sec].id;
+        head.sections[(size_t)sec].draw();
+        g_menu_id = nullptr;
+    }
     ImGui::PopStyleVar(2);
     ImGui::PopItemWidth();
     ImGui::EndChild();
@@ -9140,7 +9337,7 @@ extern "C" bool lb_overlay_event(const SDL_Event* event) {
             // The panel gets the wheel first: scrolling a settings list must
             // not also zoom the battlefield behind it.
             if (io.WantCaptureMouse) return true;
-            if (event->wheel.y != 0) {
+            if (event->wheel.y != 0 && g_set.wheel_zoom) {
                 const float step = event->wheel.y > 0 ? 0.25f : -0.25f;
                 float s = g_set.pixel_scale + step;
                 if (s < 1.0f) s = 1.0f;
@@ -9841,6 +10038,16 @@ extern "C" int lb_setting_ai_more_mines(void) {
     return forced >= 0 ? forced : (g_set.ai_more_mines ? 1 : 0);
 }
 
+// SG-0051: LB_AI_CROSS_FIRE=0|1 forces it.
+extern "C" int lb_setting_ai_cross_fire(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_AI_CROSS_FIRE");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.ai_cross_fire ? 1 : 0);
+}
+
 // docs/406: LB_AI_HERO_REBUILD=0|1 forces it.
 extern "C" int lb_setting_ai_hero_rebuild(void) {
     static int forced = -2;
@@ -9885,6 +10092,18 @@ extern "C" int lb_teal_live(void) {
 }
 
 // docs/437: Tint creatures by team (default on). LB_CREATURE_TINT=0|1 forces it.
+extern "C" int lb_setting_creature_portraits(void) { return g_set.creature_portraits ? 1 : 0; }
+
+// docs/454: LB_PORTRAIT_TINT=0|1 forces it.
+extern "C" int lb_setting_portrait_tint(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_PORTRAIT_TINT");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.portrait_tint ? 1 : 0);
+}
+
 extern "C" int lb_setting_creature_tint(void) {
     static int forced = -2;
     if (forced == -2) {
@@ -10231,6 +10450,7 @@ extern "C" int lb_setting_rename(int which) {
 
 // docs/392: Free Play's opening opponent, 0..7 (lb_overlay.cpp's field).
 // LB_DEFAULT_OPPONENT=<0..7> forces it.
+extern "C" int lb_setting_extra_opponents(void);   // below
 extern "C" int lb_setting_default_opponent(void) {
     static int forced = -1;
     static bool read_env = false;
@@ -10242,7 +10462,21 @@ extern "C" int lb_setting_default_opponent(void) {
         }
     }
     const int m = forced >= 0 ? forced : g_set.default_opponent;
+    if (m > 5 && !lb_setting_extra_opponents()) return 1;   // the game's Wizard
     return (m < 0 || m > 7) ? 1 : m;
+}
+
+extern "C" int lb_setting_lobby_map_fix(void) { return g_set.lobby_map_fix ? 1 : 0; }
+extern "C" int lb_setting_mod_maps(void) { return g_set.mod_maps ? 1 : 0; }
+
+// docs/384: LB_EXTRA_OPPONENTS=0|1 forces it.
+extern "C" int lb_setting_extra_opponents(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_EXTRA_OPPONENTS");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.extra_opponents ? 1 : 0);
 }
 
 extern "C" float lb_setting_pixel_scale(void) {
@@ -10530,6 +10764,7 @@ extern "C" const char* lb_net_lobby_options_json(void) {
     kv.push_back({"Stunned heroes can cast", g_set.stun_cast ? "On" : "Off"});
     kv.push_back({"AI rebuilds its hero", g_set.ai_hero_rebuild ? "On" : "Off"});
     kv.push_back({"AI builds more mines", g_set.ai_more_mines ? "On" : "Off"});
+    kv.push_back({"Computers attack each other", g_set.ai_cross_fire ? "On" : "Off"});   // SG-0051
     kv.push_back({"Hotwired transports leave", g_set.transport_release ? "On" : "Off"});
     kv.push_back({"Attack boost reaches ranged",
                   g_set.attack_boost_ranged >= 2 ? "On, no blast"

@@ -52,6 +52,7 @@
 #include <zlib.h>
 
 #include "lb_cunits.h"   // the custom-unit preview and folders
+#include "lb_nsbmd.h"    // the 3D preview of the model units
 
 extern "C" int lb_rom_read_unwrapped(const char* path, unsigned char* out, int cap);   // lb_teams.cpp
 extern "C" const char* lb_mods_dir(void);                                              // lb_mods.cpp
@@ -961,23 +962,69 @@ void draw_sounds(const Rec& r) {
     }
 }
 
+std::string read_text(const fs::path& p);                       // below
+std::string json_get_s(const std::string& j, const char* key);  // below
+fs::path units_root();                                          // below
+
 void draw_view(const View& v, int frame_tick) {
     const std::vector<Rec>& rs = records();
     if (rs.empty()) return;
     const Rec& r = rs[(size_t)v.pick];
     const Layout L = layout_of(r);
     ImGui::BeginGroup();
-    if (v.folder.empty()) {
-        ImGui::Text("%s", r.name.c_str());
-        ImGui::TextDisabled("#%d %s, %s, %s", r.index, r.internal.c_str(), category_name(r.category), r.asset.c_str());
-    } else {
-        ImGui::Text("%s", v.title.c_str());
-        ImGui::TextDisabled("custom, from %s (%s), mods/units/%s", r.name.c_str(), category_name(r.category), v.folder.c_str());
+    // The page names the unit above its tabs; side by side, each view says which it is.
+    if (g_st.compare) {
+        if (v.folder.empty()) {
+            ImGui::Text("%s", r.name.c_str());
+            ImGui::TextDisabled("#%d %s, %s, %s", r.index, r.internal.c_str(), category_name(r.category), r.asset.c_str());
+        } else {
+            ImGui::Text("%s", v.title.c_str());
+            ImGui::TextDisabled("custom, from %s (%s), mods/units/%s", r.name.c_str(), category_name(r.category), v.folder.c_str());
+        }
     }
     if (L.actions.empty()) {
-        ImGui::TextWrapped("%s", L.note.c_str());
-        const Tex mt = pic_tex("model:" + std::to_string(r.index), [&] { return decode_model_texture(r.asset); });
-        if (mt.t) ImGui::Image((ImTextureID)(intptr_t)mt.t, ImVec2(mt.w * g_st.zoom, mt.h * g_st.zoom));
+        // A 3D unit: the model itself, turning while Play is on (else at the
+        // Direction), in the Team's colour, and its texture beside it.
+        std::string asset = r.asset;
+        if (!v.folder.empty()) {   // a custom unit's own choice (unit.json "asset")
+            const std::string a = json_get_s(read_text(units_root() / fs::u8path(v.folder) / "unit.json"), "asset");
+            if (a.compare(0, 7, "Models/") == 0) asset = a;
+        }
+        if (asset.compare(0, 7, "Models/") == 0) {
+            static std::string held_name;
+            static std::vector<uint8_t> held;
+            if (held_name != asset) {
+                held = rom_file(asset + ".nsbmd");
+                held_name = asset;
+            }
+            constexpr int kM = 256;
+            static SDL_Texture* mtex = nullptr;
+            static SDL_Renderer* mren = nullptr;
+            if (mren != g_ren) {
+                if (mtex) SDL_DestroyTexture(mtex);
+                mtex = g_ren ? SDL_CreateTexture(g_ren, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, kM, kM) : nullptr;
+                if (mtex) SDL_SetTextureBlendMode(mtex, SDL_BLENDMODE_BLEND);
+                mren = g_ren;
+            }
+            static const int kBank[6] = {1, 0, 2, 3, 4, 6};   // kTeamNames order -> palette bank (docs/412)
+            const float yaw = g_st.playing ? (float)ImGui::GetTime() * 0.9f : (float)(g_st.dir & 7) * 0.785398f;
+            static std::vector<uint32_t> px(kM * kM);
+            if (mtex && !held.empty() &&
+                lb_nsbmd_render(held.data(), held.size(), kBank[g_st.team % 6], yaw, 0.45f, kM, kM, px.data())) {
+                SDL_UpdateTexture(mtex, nullptr, px.data(), kM * 4);
+                const ImVec2 p = ImGui::GetCursorScreenPos();
+                const float side = 64.0f * std::max(2.0f, g_st.zoom);
+                ImGui::GetWindowDrawList()->AddRectFilled(p, ImVec2(p.x + side, p.y + side), IM_COL32(52, 92, 52, 255), 4.0f);
+                ImGui::Image((ImTextureID)(intptr_t)mtex, ImVec2(side, side));
+                ImGui::SameLine();
+            }
+        }
+        ImGui::BeginGroup();
+        if (asset == r.asset) ImGui::TextWrapped("%s", L.note.c_str());
+        else ImGui::TextWrapped("A 3D model (%s, chosen in unit.json): its texture is shown for re-skinning.", asset.c_str());
+        const Tex mt = pic_tex("model:" + asset, [&] { return decode_model_texture(asset); });
+        if (mt.t) ImGui::Image((ImTextureID)(intptr_t)mt.t, ImVec2(mt.w * 2.0f, mt.h * 2.0f));
+        ImGui::EndGroup();
         draw_sounds(r);
         ImGui::EndGroup();
         return;
@@ -1000,7 +1047,9 @@ void draw_view(const View& v, int frame_tick) {
             if (mirror) std::swap(u0, u1);
             const float v0 = (float)f.y / t.h, v1 = (float)(f.y + f.h) / t.h;
             const ImVec2 c(p.x + box.x * 0.5f, p.y + box.y * 0.5f);
-            const ImVec2 h(f.w * z * 0.5f, f.h * z * 0.5f);
+            // A building cell (up to 64x64 and more) fits the box instead of spilling out of it.
+            const float fz = std::min(z, (box.x - 16.0f) / (float)std::max(f.w, f.h));
+            const ImVec2 h(f.w * fz * 0.5f, f.h * fz * 0.5f);
             dl->AddImage((ImTextureID)(intptr_t)t.t, ImVec2(c.x - h.x, c.y - h.y), ImVec2(c.x + h.x, c.y + h.y),
                          ImVec2(u0, v0), ImVec2(u1, v1));
         }
@@ -1096,6 +1145,233 @@ std::string safe_name(const std::string& s) {
     return o.substr(0, 20);
 }
 
+// ── Editing a unit in the game ───────────────────────────────────────────────
+// unit.json is edited in place: only the values set here are rewritten, the
+// rest of the file stays as the player or the export wrote it.
+std::string read_text(const fs::path& p) {
+    std::string j;
+    std::FILE* f = std::fopen(utf8(p).c_str(), "rb");
+    if (!f) return j;
+    char buf[4096];
+    size_t n;
+    while ((n = std::fread(buf, 1, sizeof buf, f)) > 0 && j.size() < (1u << 20)) j.append(buf, n);
+    std::fclose(f);
+    return j;
+}
+
+// The value after "key": in [from, to): its start and end, or false.
+bool json_value_at(const std::string& j, size_t from, size_t to, const char* key, size_t* vb, size_t* ve) {
+    const std::string k = std::string("\"") + key + "\"";
+    const size_t p = j.find(k, from);
+    if (p == std::string::npos || p >= to) return false;
+    size_t c = j.find(':', p + k.size());
+    if (c == std::string::npos || c >= to) return false;
+    size_t b = c + 1;
+    while (b < j.size() && (j[b] == ' ' || j[b] == '\t' || j[b] == '\r' || j[b] == '\n')) ++b;
+    size_t e = b;
+    if (b < j.size() && j[b] == '"') {
+        for (e = b + 1; e < j.size() && j[e] != '"'; ++e)
+            if (j[e] == '\\') ++e;
+        ++e;
+    } else {
+        while (e < j.size() && (std::isdigit((unsigned char)j[e]) || j[e] == '-' || j[e] == '.')) ++e;
+    }
+    *vb = b;
+    *ve = e;
+    return e > b;
+}
+
+std::string json_get_s(const std::string& j, const char* key) {
+    size_t b, e;
+    if (!json_value_at(j, 0, j.size(), key, &b, &e) || j[b] != '"') return std::string();
+    return j.substr(b + 1, e - b - 2);
+}
+
+// Sets a top-level string (added after "index" when missing).
+void json_set_s(std::string& j, const char* key, const std::string& v) {
+    size_t b, e;
+    const size_t fb = j.find("\"fields\"");
+    if (json_value_at(j, 0, fb == std::string::npos ? j.size() : fb, key, &b, &e)) {
+        j.replace(b, e - b, json_str(v));
+        return;
+    }
+    const size_t ib = j.find("\"index\"");
+    const size_t nl = ib == std::string::npos ? std::string::npos : j.find('\n', ib);
+    if (nl != std::string::npos) j.insert(nl + 1, "  \"" + std::string(key) + "\": " + json_str(v) + ",\n");
+}
+
+// The "fields" object's span.
+bool fields_span(const std::string& j, size_t* b, size_t* e) {
+    const size_t f = j.find("\"fields\"");
+    if (f == std::string::npos) return false;
+    *b = j.find('{', f);
+    *e = *b == std::string::npos ? std::string::npos : j.find('}', *b);
+    return *e != std::string::npos;
+}
+
+struct Edit {
+    std::string folder;
+    char name[25] = "";
+    std::string asset;
+    long field[sizeof kFields / sizeof kFields[0]] = {};
+    bool has[sizeof kFields / sizeof kFields[0]] = {};
+    std::string msg;
+};
+Edit g_edit;
+
+void edit_open(const Mine& m, const Rec& tmpl) {
+    Edit e;
+    e.folder = m.folder;
+    const std::string j = read_text(units_root() / fs::u8path(m.folder) / "unit.json");
+    std::snprintf(e.name, sizeof e.name, "%s", json_get_s(j, "name").c_str());
+    e.asset = json_get_s(j, "asset");
+    if (e.asset.empty()) e.asset = tmpl.asset;
+    size_t fb, fe;
+    const bool f = fields_span(j, &fb, &fe);
+    for (size_t i = 0; i < sizeof kFields / sizeof kFields[0]; ++i) {
+        uint32_t v = 0;   // the template's value unless unit.json sets it
+        for (int k = 0; k < kFields[i].width; ++k) v |= (uint32_t)tmpl.raw[(size_t)(kFields[i].off + k)] << (8 * k);
+        e.field[i] = (long)v;
+        size_t b, en;
+        if (f && json_value_at(j, fb, fe, kFields[i].key, &b, &en)) {
+            e.field[i] = std::atol(j.c_str() + b);
+            e.has[i] = true;
+        }
+    }
+    g_edit = e;
+}
+
+bool edit_save() {
+    const fs::path p = units_root() / fs::u8path(g_edit.folder) / "unit.json";
+    std::string j = read_text(p);
+    if (j.empty()) return false;
+    json_set_s(j, "name", g_edit.name);
+    json_set_s(j, "asset", g_edit.asset);
+    size_t fb, fe;
+    if (!fields_span(j, &fb, &fe)) {
+        const size_t last = j.rfind('}');
+        if (last == std::string::npos) return false;
+        size_t q = last;
+        while (q > 0 && (j[q - 1] == ' ' || j[q - 1] == '\n' || j[q - 1] == '\r')) --q;
+        j.insert(q, ",\n  \"fields\": {\n  }");
+        if (!fields_span(j, &fb, &fe)) return false;
+    }
+    for (size_t i = 0; i < sizeof kFields / sizeof kFields[0]; ++i) {
+        // The name's text id is the game's to set for a custom unit; kept only if the file had it.
+        if (std::strcmp(kFields[i].key, "display_name_id") == 0 && !g_edit.has[i]) continue;
+        fields_span(j, &fb, &fe);
+        size_t b, en;
+        const std::string v = std::to_string(g_edit.field[i]);
+        if (json_value_at(j, fb, fe, kFields[i].key, &b, &en)) {
+            j.replace(b, en - b, v);
+        } else {
+            // A new line at the object's end; a comma after the last value.
+            size_t q = fe;
+            while (q > fb && (j[q - 1] == ' ' || j[q - 1] == '\n' || j[q - 1] == '\r')) --q;
+            const bool first = j[q - 1] == '{';
+            j.insert(q, std::string(first ? "" : ",") + "\n    " + json_str(kFields[i].key) + ": " + v);
+        }
+    }
+    return write_file(p, std::vector<uint8_t>(j.begin(), j.end()));
+}
+
+// The stock assets a unit made from `t` can start from: models for a model
+// template, sprite sets of the same role for a sprite one.
+std::vector<std::pair<std::string, std::string>> asset_choices(const std::vector<Rec>& rs, const Rec& t) {
+    std::vector<std::pair<std::string, std::string>> v;   // asset, label
+    const bool model = t.asset.compare(0, 7, "Models/") == 0;
+    for (const Rec& r : rs) {
+        const bool rm = r.asset.compare(0, 7, "Models/") == 0;
+        if (rm != model || r.asset.empty()) continue;
+        if (!model && (r.category != t.category || r.asset.compare(0, 8, "Sprites/") != 0)) continue;
+        if (std::any_of(v.begin(), v.end(), [&](const auto& x) { return x.first == r.asset; })) continue;
+        v.push_back({r.asset, r.name + "  (" + r.asset + ")"});
+    }
+    return v;
+}
+
+// What the folder holds against what the unit can use (the build reads the
+// same names; a sheet named for another unit counts by its role suffix).
+void draw_files(const Mine& m, const Rec& t) {
+    const fs::path dir = units_root() / fs::u8path(m.folder);
+    std::error_code ec;
+    auto row = [&](const std::string& what, bool there, const char* note) {
+        ImGui::TextColored(there ? ImVec4(0.5f, 1, 0.5f, 1) : ImVec4(0.6f, 0.6f, 0.6f, 1), "%s %s", there ? "[x]" : "[ ]",
+                           what.c_str());
+        if (note && *note) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", note);
+        }
+    };
+    const Layout L = layout_of(t);
+    const std::string tbase = t.asset.size() > 8 ? t.asset.substr(8) : t.asset;
+    for (const std::string& sh : L.sheets) {
+        // In sheets/ or, the community's way, beside unit.json.
+        const bool own = fs::exists(dir / "sheets" / (sh + ".png"), ec) || fs::exists(dir / "sheets" / (sh + ".NCBR"), ec) ||
+                         fs::exists(dir / (sh + ".png"), ec) || fs::exists(dir / (sh + ".NCBR"), ec);
+        row("sheets/" + sh + " (.png or .NCBR)", own, own ? "" : "missing: the starting unit's is used");
+    }
+    if (t.asset.compare(0, 7, "Models/") == 0)
+        row("model/texture.png", fs::exists(dir / "model" / "texture.png", ec), "a 3D unit's re-skin");
+    row("portraits/head.png", fs::exists(dir / "portraits" / "head.png", ec), "the round head");
+    row("portraits/card.png", fs::exists(dir / "portraits" / "card.png", ec), "the army screen's card");
+    row("portraits/card_top_screen.png", fs::exists(dir / "portraits" / "card_top_screen.png", ec), "the battle card");
+    int wavs = 0;
+    for (const auto& de : fs::directory_iterator(dir / "sounds", ec))
+        if (de.path().extension() == ".wav") ++wavs;
+    row("sounds/*.wav (" + std::to_string(wavs) + ")", wavs > 0, "SELECT, DEATH, STRIKE, HIT, SPECIAL");
+    ImGui::TextDisabled("Sheets named for another unit (e.g. %s_w0 -> any_w0) are matched by their ending;\n"
+                        "Last build below says what was used and what was skipped.", tbase.c_str());
+}
+
+// The Stats tab of a custom unit: its name, the stock art it starts from and
+// every known value, saved into unit.json by the Save button above the tabs.
+void draw_edit_fields(const Mine& m, const std::vector<Rec>& rs) {
+    const Rec& t = rs[(size_t)m.tmpl];
+    ImGui::SetNextItemWidth(220.0f);
+    ImGui::InputText("Name", g_edit.name, sizeof g_edit.name);
+    const auto choices = asset_choices(rs, t);
+    std::string cur = g_edit.asset;
+    for (const auto& c : choices)
+        if (c.first == g_edit.asset) cur = c.second;
+    ImGui::SetNextItemWidth(380.0f);
+    if (ImGui::BeginCombo(t.asset.compare(0, 7, "Models/") == 0 ? "Model" : "Sprite set", cur.c_str())) {
+        for (const auto& c : choices)
+            if (ImGui::Selectable(c.second.c_str(), c.first == g_edit.asset)) g_edit.asset = c.first;
+        ImGui::EndCombo();
+    }
+    ImGui::SetItemTooltip("The stock art it starts from. Your files in the folder are drawn over it.");
+    ImGui::SeparatorText("Values");
+    if (ImGui::BeginTable("##stats", 2, ImGuiTableFlags_SizingStretchSame)) {
+        for (size_t i = 0; i < sizeof kFields / sizeof kFields[0]; ++i) {
+            if (std::strcmp(kFields[i].key, "display_name_id") == 0) continue;
+            ImGui::TableNextColumn();
+            const long mx = kFields[i].width == 1 ? 255L : kFields[i].width == 2 ? 65535L : 0x7FFFFFFFL;
+            int v = (int)std::min<long>(g_edit.field[i], 0x7FFFFFFFL);
+            ImGui::SetNextItemWidth(140.0f);
+            if (ImGui::InputInt(kFields[i].key, &v)) g_edit.field[i] = std::clamp<long>(v, 0, mx);
+        }
+        ImGui::EndTable();
+    }
+}
+
+// A stock unit's values, to read (a custom unit made from it starts with them).
+void draw_stock_fields(const Rec& r) {
+    ImGui::TextDisabled("The starting unit's values. Make a custom unit from it to change them.");
+    if (ImGui::BeginTable("##stockstats", 4, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_RowBg)) {
+        for (size_t i = 0; i < sizeof kFields / sizeof kFields[0]; ++i) {
+            if (std::strcmp(kFields[i].key, "display_name_id") == 0) continue;
+            uint32_t v = 0;
+            for (int k = 0; k < kFields[i].width; ++k) v |= (uint32_t)r.raw[(size_t)(kFields[i].off + k)] << (8 * k);
+            ImGui::TableNextColumn();
+            ImGui::TextDisabled("%s", kFields[i].key);
+            ImGui::TableNextColumn();
+            ImGui::Text("%u", (unsigned)v);
+        }
+        ImGui::EndTable();
+    }
+}
+
 void start_share(const Mine& m, const std::vector<Rec>& rs);   // below
 bool share_busy();
 extern char g_author[25];
@@ -1133,87 +1409,12 @@ void draw_how_to() {
     ImGui::Spacing();
 }
 
-void draw_mine(const std::vector<Rec>& rs, const fs::path& export_root) {
-    State& s = g_st;
-    ImGui::SeparatorText("My custom units");
-    static char new_name[25] = "";
-    ImGui::SetNextItemWidth(220.0f);
-    ImGui::InputTextWithHint("##newname", "New unit's name", new_name, sizeof new_name);
-    ImGui::SameLine();
-    const std::string folder = safe_name(new_name);
-    ImGui::BeginDisabled(folder.empty() || !s.a.folder.empty());
-    if (ImGui::Button("Make a custom unit from this")) {
-        const Rec& r = rs[(size_t)s.a.pick];
-        std::error_code ec;
-        const fs::path dst = units_root() / fs::u8path(folder);
-        if (fs::exists(dst, ec)) {
-            s.bad = true;
-            s.message = "mods/units/" + folder + " already exists.";
-        } else if (export_one(r, export_root) < 0) {
-            s.bad = true;
-            s.message = "Could not export the template.";
-        } else {
-            fs::copy(export_root / safe(r.internal), dst, fs::copy_options::recursive, ec);
-            // Its name in unit.json.
-            std::vector<uint8_t> jb;
-            std::FILE* f = std::fopen(utf8(dst / "unit.json").c_str(), "rb");
-            if (f) {
-                char buf[4096];
-                size_t n;
-                while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) jb.insert(jb.end(), buf, buf + n);
-                std::fclose(f);
-            }
-            std::string j(jb.begin(), jb.end());
-            const size_t kn = j.find("\"name\"");
-            if (kn != std::string::npos) {
-                const size_t q = j.find('"', j.find(':', kn) + 1), e = j.find('"', q + 1);
-                if (q != std::string::npos && e != std::string::npos) j.replace(q + 1, e - q - 1, new_name);
-            }
-            write_file(dst / "unit.json", std::vector<uint8_t>(j.begin(), j.end()));
-            std::vector<std::string> en = read_enabled();
-            if (std::find(en.begin(), en.end(), folder) == en.end()) en.push_back(folder);
-            write_enabled(en);
-            s.bad = ec ? true : false;
-            s.message = ec ? "Could not copy the export." :
-                             "Made mods/units/" + folder + ". Edit its sheets, frames, portraits, model texture and "
-                             "unit.json, then Load new units now.";
-            new_name[0] = 0;
-        }
-    }
-    ImGui::EndDisabled();
-    ImGui::SetItemTooltip("Copies this unit's export into mods/units/<name> as a new unit and turns it on.\n"
-                          "It keeps this unit's role, sounds and head until you change them.");
-    ImGui::SameLine();
-    if (ImGui::Button("Open folder")) {
-        std::error_code ec;
-        fs::create_directories(units_root(), ec);
-        std::string url = "file:///" + utf8(units_root());
-        for (char& c : url) if (c == '\\') c = '/';
-        SDL_OpenURL(url.c_str());
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Load new units now")) {
-        if (lb_mods_request_rebuild()) {
-            s.bad = false;
-            s.message = "Loading the custom units: the game returns to the title screen.";
-            for (auto it = g_tex.begin(); it != g_tex.end();) {
-                if (it->first.compare(0, 2, "F:") == 0) {
-                    if (it->second.t) SDL_DestroyTexture(it->second.t);
-                    it = g_tex.erase(it);
-                } else {
-                    ++it;
-                }
-            }
-        } else {
-            s.bad = true;
-            s.message = "Restart the game to load the custom units.";
-        }
-    }
-    ImGui::SetItemTooltip("Rebuilds the game with the units ticked below. A match in progress ends.");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(170.0f);
-    ImGui::InputTextWithHint("##author", "Your name (for sharing)", g_author, sizeof g_author);
+// ── The page: a list of units on the left, the one picked on the right ─────
+bool is_community(const std::string& f) {
+    return f.size() > 1 && f[0] == 'c' && std::isdigit((unsigned char)f[1]);
+}
 
+std::vector<Mine> list_mine() {
     std::vector<Mine> mine;
     std::error_code ec;
     for (const auto& e : fs::directory_iterator(units_root(), ec)) {
@@ -1221,12 +1422,86 @@ void draw_mine(const std::vector<Rec>& rs, const fs::path& export_root) {
         mine.push_back(read_mine(e.path()));
     }
     std::sort(mine.begin(), mine.end(), [](const Mine& a, const Mine& b) { return a.folder < b.folder; });
-    if (mine.empty()) {
-        ImGui::TextDisabled("None yet. Pick a unit above, name it and press Make a custom unit from this.");
-        return;
+    return mine;
+}
+
+void drop_folder_textures(const std::string& folder) {   // empty: every custom unit's
+    const std::string pre = folder.empty() ? std::string("F:") : "F:" + folder + ":";
+    for (auto it = g_tex.begin(); it != g_tex.end();) {
+        if (it->first.compare(0, pre.size(), pre) == 0) {
+            if (it->second.t) SDL_DestroyTexture(it->second.t);
+            it = g_tex.erase(it);
+        } else {
+            ++it;
+        }
     }
+}
+
+void select_stock(int idx) {
+    g_st.a.pick = idx;
+    g_st.a.folder.clear();
+    g_st.a.title.clear();
+    g_edit = Edit();
+}
+
+void select_custom(const Mine& m, const std::vector<Rec>& rs) {
+    g_st.a.pick = m.ok ? m.tmpl : g_st.a.pick;
+    g_st.a.folder = m.folder;
+    g_st.a.title = m.name;
+    if (m.ok && g_edit.folder != m.folder) edit_open(m, rs[(size_t)m.tmpl]);
+}
+
+// A new custom unit from stock unit `r`: its export copied into mods/units/<name>,
+// renamed and turned on. The folder name, or empty (s.message says why).
+std::string make_custom(const Rec& r, const char* name, const fs::path& export_root) {
+    State& s = g_st;
+    const std::string folder = safe_name(name);
+    std::error_code ec;
+    const fs::path dst = units_root() / fs::u8path(folder);
+    if (fs::exists(dst, ec)) {
+        s.bad = true;
+        s.message = "mods/units/" + folder + " already exists.";
+        return std::string();
+    }
+    if (export_one(r, export_root) < 0) {
+        s.bad = true;
+        s.message = "Could not export the starting unit.";
+        return std::string();
+    }
+    fs::copy(export_root / safe(r.internal), dst, fs::copy_options::recursive, ec);
+    if (ec) {
+        s.bad = true;
+        s.message = "Could not copy the export.";
+        return std::string();
+    }
+    std::string j = read_text(dst / "unit.json");
+    json_set_s(j, "name", name);
+    write_file(dst / "unit.json", std::vector<uint8_t>(j.begin(), j.end()));
     std::vector<std::string> en = read_enabled();
+    if (std::find(en.begin(), en.end(), folder) == en.end()) en.push_back(folder);
+    write_enabled(en);
+    s.bad = false;
+    s.message = "Made mods/units/" + folder + ". Change it in the tabs on the right, then Load new units now.";
+    return folder;
+}
+
+void draw_lab_list(const std::vector<Rec>& rs, const std::vector<Mine>& mine) {
+    State& s = g_st;
+    static char q[32] = "";
+    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::InputTextWithHint("##labq", "Search units", q, sizeof q);
+    std::string ql = q;
+    for (char& c : ql) c = (char)std::tolower((unsigned char)c);
+    auto hit = [&](std::string hay) {
+        for (char& c : hay) c = (char)std::tolower((unsigned char)c);
+        return ql.empty() || hay.find(ql) != std::string::npos;
+    };
+    ImGui::SeparatorText("My custom units");
+    std::vector<std::string> en = read_enabled();
+    int shown = 0;
     for (const Mine& m : mine) {
+        if (!hit(m.name + " " + m.folder)) continue;
+        ++shown;
         ImGui::PushID(m.folder.c_str());
         bool on = std::find(en.begin(), en.end(), m.folder) != en.end();
         if (ImGui::Checkbox("##on", &on)) {
@@ -1236,57 +1511,166 @@ void draw_mine(const std::vector<Rec>& rs, const fs::path& export_root) {
         }
         ImGui::SetItemTooltip("Build the game with this unit (after Load new units now).");
         ImGui::SameLine();
-        int built = -1;
-        for (int k = 0; k < lb_cunits_count(); ++k)
-            if (m.folder == lb_cunits_folder(k)) built = k;
-        ImGui::Text("%s", m.name.c_str());
-        ImGui::SameLine();
-        if (m.folder.size() > 1 && m.folder[0] == 'c' && std::isdigit((unsigned char)m.folder[1])) {
-            ImGui::TextDisabled("(community #%d)", std::atoi(m.folder.c_str() + 1));
-            ImGui::SameLine();
-        }
-        if (!m.ok) ImGui::TextColored(ImVec4(1, 0.5f, 0.4f, 1), "(%s)", m.why.c_str());
-        else if (built >= 0) ImGui::TextDisabled("(from %s, in the game)", rs[(size_t)m.tmpl].name.c_str());
-        else ImGui::TextDisabled("(from %s, not loaded)", rs[(size_t)m.tmpl].name.c_str());
-        if (m.ok) {
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Preview")) {
-                s.a.pick = m.tmpl;
-                s.a.folder = m.folder;
-                s.a.title = m.name;
-            }
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Compare")) {
-                s.compare = true;
-                s.b.pick = m.tmpl;
-                s.b.folder = m.folder;
-                s.b.title = m.name;
-            }
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Reload art")) {
-                for (auto it = g_tex.begin(); it != g_tex.end();) {
-                    if (it->first.compare(0, 3 + m.folder.size(), "F:" + m.folder + ":") == 0) {
-                        if (it->second.t) SDL_DestroyTexture(it->second.t);
-                        it = g_tex.erase(it);
-                    } else {
-                        ++it;
-                    }
-                }
-            }
-            ImGui::SetItemTooltip("Reads the folder's sheets and frames again after you edit them.");
-            if (!(m.folder.size() > 1 && m.folder[0] == 'c' && std::isdigit((unsigned char)m.folder[1]))) {
-                ImGui::SameLine();
-                ImGui::BeginDisabled(share_busy());
-                if (ImGui::SmallButton("Share online")) start_share(m, rs);
-                ImGui::EndDisabled();
-                ImGui::SetItemTooltip("Uploads this unit to Community units. The moderator approves it first.\n"
-                                      "Sends its art, unit.json and the WAVs in its sounds folder.");
-            }
+        bool built = false;
+        for (int k = 0; k < lb_cunits_count(); ++k) built = built || m.folder == lb_cunits_folder(k);
+        std::string label = m.name + (m.ok ? "" : "  (!)");
+        if (ImGui::Selectable(label.c_str(), s.a.folder == m.folder)) select_custom(m, rs);
+        if (ImGui::IsItemHovered()) {
+            if (!m.ok) ImGui::SetTooltip("%s", m.why.c_str());
+            else ImGui::SetTooltip("From %s%s; %s", rs[(size_t)m.tmpl].name.c_str(),
+                                   is_community(m.folder) ? ", from Community units" : "",
+                                   built ? "in the game" : "not loaded yet");
         }
         ImGui::PopID();
     }
-    const char* rep = lb_cunits_report();
-    if (rep && rep[0]) ImGui::TextDisabled("Last build:\n%s", rep);
+    if (mine.empty()) ImGui::TextDisabled("None yet: pick a unit below,\nthen Make a custom unit.");
+    else if (!shown) ImGui::TextDisabled("None match.");
+    ImGui::SeparatorText("Starting units");
+    static const int kOrder[8] = {0, 1, 2, 3, 4, 5, 6, 7};   // category_name: 7+ are buildings
+    for (int c : kOrder) {
+        std::vector<const Rec*> v;
+        for (const Rec& r : rs) {
+            const int rc = r.category >= 7 ? 7 : r.category;
+            if (rc == c && hit(r.name + " " + r.internal)) v.push_back(&r);
+        }
+        if (v.empty()) continue;
+        const char* title = c == 7 ? "Buildings" : category_name(c);
+        if (!ql.empty()) ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+        if (ImGui::TreeNode(title)) {
+            for (const Rec* r : v) {
+                char row[96];
+                std::snprintf(row, sizeof row, "%s##%d", r->name.c_str(), r->index);
+                if (ImGui::Selectable(row, s.a.folder.empty() && s.a.pick == r->index)) select_stock(r->index);
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s, %s", r->internal.c_str(), r->asset.c_str());
+            }
+            ImGui::TreePop();
+        }
+    }
+}
+
+void draw_lab_detail(const std::vector<Rec>& rs, const std::vector<Mine>& mine, const fs::path& export_root) {
+    State& s = g_st;
+    s.a.pick = std::clamp(s.a.pick, 0, (int)rs.size() - 1);
+    const Rec& r = rs[(size_t)s.a.pick];
+    const Mine* m = nullptr;
+    for (const Mine& x : mine)
+        if (!s.a.folder.empty() && x.folder == s.a.folder) m = &x;
+    if (!s.a.folder.empty() && !m) select_stock(s.a.pick);   // its folder went away
+
+    // The unit and what can be done with it.
+    if (m) {
+        ImGui::Text("%s", m->name.c_str());
+        ImGui::TextDisabled("Custom, from %s (%s): mods/units/%s", r.name.c_str(), category_name(r.category),
+                            m->folder.c_str());
+        if (m->ok) {
+            if (ImGui::Button("Save"))
+                g_edit.msg = edit_save() ? "Saved. Press Load new units now to use it." : "Could not write unit.json.";
+            ImGui::SetItemTooltip("Writes the Stats tab's name, art and values into unit.json.");
+            ImGui::SameLine();
+            if (ImGui::Button("Reload art")) drop_folder_textures(m->folder);
+            ImGui::SetItemTooltip("Reads the folder's sheets and frames again after you edit them.");
+            ImGui::SameLine();
+        }
+        if (ImGui::Button("Open this folder")) {
+            std::string url = "file:///" + utf8(units_root() / fs::u8path(m->folder));
+            for (char& c : url) if (c == '\\') c = '/';
+            SDL_OpenURL(url.c_str());
+        }
+        if (m->ok && !is_community(m->folder)) {
+            ImGui::SameLine();
+            ImGui::BeginDisabled(share_busy());
+            if (ImGui::Button("Share online")) start_share(*m, rs);
+            ImGui::EndDisabled();
+            ImGui::SetItemTooltip("Uploads this unit to Community units. The moderator approves it first.\n"
+                                  "Sends its art, unit.json and the WAVs in its sounds folder.");
+        }
+        if (!m->ok) ImGui::TextColored(ImVec4(1, 0.5f, 0.4f, 1), "%s", m->why.c_str());
+        if (!g_edit.msg.empty()) ImGui::TextDisabled("%s", g_edit.msg.c_str());
+    } else {
+        ImGui::Text("%s", r.name.c_str());
+        ImGui::TextDisabled("#%d %s, %s, %s", r.index, r.internal.c_str(), category_name(r.category), r.asset.c_str());
+        static char new_name[25] = "";
+        ImGui::SetNextItemWidth(220.0f);
+        ImGui::InputTextWithHint("##newname", "New unit's name", new_name, sizeof new_name);
+        ImGui::SameLine();
+        ImGui::BeginDisabled(safe_name(new_name).empty());
+        if (ImGui::Button("Make a custom unit from this")) {
+            const std::string folder = make_custom(r, new_name, export_root);
+            if (!folder.empty()) {
+                new_name[0] = 0;
+                select_custom(read_mine(units_root() / fs::u8path(folder)), rs);
+            }
+        }
+        ImGui::EndDisabled();
+        ImGui::SetItemTooltip("Copies this unit into mods/units/<name> as a new unit and turns it on.\n"
+                              "It keeps this unit's role, art, sounds and head until you change them.");
+        ImGui::SameLine();
+        if (ImGui::Button("Export")) {
+            const bool snd = lb_sfx_export_begin() != 0;
+            const int n = export_one(r, export_root);
+            (void)snd;   // kept loaded for the sound preview (sounds_for)
+            s.bad = n < 0;
+            s.message = n < 0 ? "Could not write the export." :
+                        "Wrote " + std::to_string(n) + " files to " + utf8(export_root / safe(r.internal));
+        }
+        ImGui::SetItemTooltip("Writes this unit's files to mods/units/export (sheets, frames, cards,\n"
+                              "head, sounds, unit.json) to look at or start from.");
+    }
+    ImGui::Spacing();
+
+    // The tabs.
+    if (ImGui::BeginTabBar("##labtabs")) {
+        if (ImGui::BeginTabItem("Look")) {
+            const char* actions[3] = {"Idle", "Walk", "Attack"};
+            ImGui::SetNextItemWidth(120.0f);
+            ImGui::Combo("Action", &s.action, actions, 3);
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(200.0f);
+            ImGui::SliderInt("Direction", &s.dir, 0, 7, kCompass[s.dir & 7]);
+            ImGui::SetItemTooltip("Five directions are drawn; SW, W and NW are SE, E and NE mirrored.\n"
+                                  "The compass names are a reading of the art.");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(110.0f);
+            ImGui::Combo("Team", &s.team, kTeamNames, 6);
+            ImGui::Checkbox("Play", &s.playing);
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(140.0f);
+            ImGui::SliderFloat("Frames per second", &s.fps, 1.0f, 20.0f, "%.0f");
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(140.0f);
+            ImGui::SliderFloat("Zoom", &s.zoom, 1.0f, 8.0f, "%.0fx");
+            ImGui::Checkbox("Compare with", &s.compare);
+            if (s.compare) {
+                ImGui::SameLine();
+                pick_combo("##unit_b", s.b);
+            }
+            static int tick = 0;
+            if (s.playing) tick = (int)(ImGui::GetTime() * s.fps);
+            ImGui::Separator();
+            draw_view(s.a, tick);
+            if (s.compare) {
+                ImGui::SameLine(0.0f, 40.0f);
+                draw_view(s.b, tick);
+            }
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Stats")) {
+            if (m && m->ok && g_edit.folder == m->folder) draw_edit_fields(*m, rs);
+            else if (m && m->ok) edit_open(*m, rs[(size_t)m->tmpl]);
+            else draw_stock_fields(r);
+            ImGui::EndTabItem();
+        }
+        if (m && m->ok && ImGui::BeginTabItem("Files")) {
+            draw_files(*m, rs[(size_t)m->tmpl]);
+            const char* rep = lb_cunits_report();
+            if (rep && rep[0]) {
+                ImGui::SeparatorText("Last build");
+                ImGui::TextDisabled("%s", rep);
+            }
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
 }
 
 // ── Community units (the master server's /units, docs/448 phase 4) ───────────
@@ -1811,7 +2195,6 @@ void draw_community(const std::vector<Rec>& rs) {
     Com& c = g_com;
     State& s = g_st;
     load_liked();
-    if (!ImGui::CollapsingHeader("Community units")) return;
     const bool busy = g_un.busy;
     ImGui::BeginDisabled(busy);
     if (ImGui::Button(c.listed ? "Refresh" : "Show community units")) com_refresh();
@@ -1907,13 +2290,30 @@ void draw_community(const std::vector<Rec>& rs) {
 }  // namespace
 
 // Balance > Custom units (lb_overlay.cpp's page).
-void lb_unitlab_draw(SDL_Renderer* ren) {
+// The textures belong to one renderer; a new one (a window rebuilt) starts over.
+static void unitlab_renderer(SDL_Renderer* ren) {
     if (ren != g_ren) {
         for (auto& kv : g_tex)
             if (kv.second.t) SDL_DestroyTexture(kv.second.t);
         g_tex.clear();
         g_ren = ren;
     }
+}
+
+// Balance > Community units: other players' units, on a page of their own.
+void lb_unitlab_draw_community(SDL_Renderer* ren) {
+    unitlab_renderer(ren);
+    unet_poll();
+    const std::vector<Rec>& rs = records();
+    if (rs.empty()) {
+        ImGui::TextDisabled("The cartridge's BP/Entities.ebp could not be read.");
+        return;
+    }
+    draw_community(rs);
+}
+
+void lb_unitlab_draw(SDL_Renderer* ren) {
+    unitlab_renderer(ren);
     State& s = g_st;
     unet_poll();
     const std::vector<Rec>& rs = records();
@@ -1922,48 +2322,26 @@ void lb_unitlab_draw(SDL_Renderer* ren) {
         return;
     }
     draw_how_to();
-    pick_combo("##unit_a", s.a);
-    ImGui::SameLine();
-    ImGui::Checkbox("Compare with", &s.compare);
-    if (s.compare) {
-        ImGui::SameLine();
-        pick_combo("##unit_b", s.b);
-    }
-    const char* actions[3] = {"Idle", "Walk", "Attack"};
-    ImGui::SetNextItemWidth(120.0f);
-    ImGui::Combo("Action", &s.action, actions, 3);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(200.0f);
-    ImGui::SliderInt("Direction", &s.dir, 0, 7, kCompass[s.dir & 7]);
-    ImGui::SetItemTooltip("Five directions are drawn; SW, W and NW are SE, E and NE mirrored.\n"
-                          "The compass names are a reading of the art.");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(110.0f);
-    ImGui::Combo("Team", &s.team, kTeamNames, 6);
-    ImGui::Checkbox("Play", &s.playing);
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(140.0f);
-    ImGui::SliderFloat("Frames per second", &s.fps, 1.0f, 20.0f, "%.0f");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(140.0f);
-    ImGui::SliderFloat("Zoom", &s.zoom, 1.0f, 8.0f, "%.0fx");
-    static int tick = 0;
-    if (s.playing) tick = (int)(ImGui::GetTime() * s.fps);
-    ImGui::Separator();
-    draw_view(s.a, tick);
-    if (s.compare) {
-        ImGui::SameLine(0.0f, 40.0f);
-        draw_view(s.b, tick);
-    }
-    ImGui::Separator();
     const fs::path root = fs::u8path(lb_mods_dir()) / "units" / "export";
-    if (ImGui::Button("Export this unit")) {
-        const bool snd = lb_sfx_export_begin() != 0;
-        const int n = export_one(rs[(size_t)s.a.pick], root);
-        (void)snd;   // kept loaded for the sound preview (sounds_for)
-        s.bad = n < 0;
-        s.message = n < 0 ? "Could not write the export." :
-                    "Wrote " + std::to_string(n) + " files to " + utf8(root / safe(rs[(size_t)s.a.pick].internal));
+    // What applies to every custom unit.
+    if (ImGui::Button("Load new units now")) {
+        if (lb_mods_request_rebuild()) {
+            s.bad = false;
+            s.message = "Loading the custom units: the game returns to the title screen.";
+            drop_folder_textures(std::string());
+        } else {
+            s.bad = true;
+            s.message = "Restart the game to load the custom units.";
+        }
+    }
+    ImGui::SetItemTooltip("Rebuilds the game with the ticked custom units. A match in progress ends.");
+    ImGui::SameLine();
+    if (ImGui::Button("Open units folder")) {
+        std::error_code ec;
+        fs::create_directories(units_root(), ec);
+        std::string url = "file:///" + utf8(units_root());
+        for (char& c : url) if (c == '\\') c = '/';
+        SDL_OpenURL(url.c_str());
     }
     ImGui::SameLine();
     if (ImGui::Button("Export all")) {
@@ -1980,11 +2358,27 @@ void lb_unitlab_draw(SDL_Renderer* ren) {
                     " units and buildings to " + utf8(root) +
                     (failed ? " (" + std::to_string(failed) + " failed)" : std::string());
     }
-    ImGui::SetItemTooltip("Every unit and building: unit.json (all known values), the sheets as .NCBR\n"
-                          "and indexed .png, every frame as an indexed .png by action and direction,\n"
-                          "the cards, head and HUD icon, and every sound as a .wav.");
+    ImGui::SetItemTooltip("Every unit and building's files, into mods/units/export.");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(170.0f);
+    ImGui::InputTextWithHint("##author", "Your name (for sharing)", g_author, sizeof g_author);
     if (!s.message.empty())
         ImGui::TextColored(s.bad ? ImVec4(1, 0.5f, 0.4f, 1) : ImVec4(0.5f, 1, 0.5f, 1), "%s", s.message.c_str());
-    draw_mine(rs, root);
-    draw_community(rs);
+
+    const std::vector<Mine> mine = list_mine();
+    const float h = std::max(200.0f, ImGui::GetContentRegionAvail().y);
+    if (ImGui::BeginTable("##lab", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV)) {
+        ImGui::TableSetupColumn("units", ImGuiTableColumnFlags_WidthFixed, 260.0f);
+        ImGui::TableSetupColumn("detail", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableNextRow();
+        ImGui::TableSetColumnIndex(0);
+        ImGui::BeginChild("##lablist", ImVec2(0, h));
+        draw_lab_list(rs, mine);
+        ImGui::EndChild();
+        ImGui::TableSetColumnIndex(1);
+        ImGui::BeginChild("##labdetail", ImVec2(0, h));
+        draw_lab_detail(rs, mine, root);
+        ImGui::EndChild();
+        ImGui::EndTable();
+    }
 }

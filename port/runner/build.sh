@@ -46,6 +46,8 @@ for d in cmake recompiler runner vendor tools; do
 done
 cp -p "$W/port/runner/src/lb_overlay.h"   "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_overlay.cpp" "$TREE/runner/src/"
+# The menu's search index (tools/lb_menu_index.py), #included by lb_overlay.cpp.
+cp -p "$W/port/runner/src/lb_menu_index.inc" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_patches.cpp" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_net.cpp" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_balance.cpp" "$TREE/runner/src/"
@@ -76,6 +78,9 @@ cp -p "$W/port/runner/src/lb_levelmap.h" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_levelmap.cpp" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_leveledit.cpp" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_unitlab.cpp" "$TREE/runner/src/"
+# The custom units page's 3D preview: an NSBMD software renderer.
+cp -p "$W/port/runner/src/lb_nsbmd.cpp" "$TREE/runner/src/"
+cp -p "$W/port/runner/src/lb_nsbmd.h" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_cunits.cpp" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_cunits.h" "$TREE/runner/src/"
 # The host-level WH: smooth online play (docs/423).

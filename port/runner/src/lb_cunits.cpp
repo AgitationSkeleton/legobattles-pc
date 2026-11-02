@@ -147,40 +147,29 @@ bool slurp(const fs::path& p, std::vector<uint8_t>* out, size_t cap = 4u << 20) 
     std::fclose(f);
     return ok;
 }
-// The game's COMP wrapper, stored form only (what lvl::comp_wrap writes) and
-// LZ11 (the cartridge's own), for an .NCBR a player supplies.
-bool unwrap(std::vector<uint8_t>* b) {
-    if (b->size() < 20 || std::memcmp(b->data(), "PMOC", 4) != 0) return true;
-    const int32_t n = (int32_t)get32(*b, 4), mode = (int32_t)get32(*b, 8);
-    if (mode == 1 && n > 0 && (size_t)n + 20 <= b->size()) {
-        b->erase(b->begin(), b->begin() + 20);
-        b->resize((size_t)n);
-        return true;
-    }
-    // LZ11 body after the 20-byte header (the cartridge's own files).
-    const std::vector<uint8_t> in(b->begin() + 20, b->end());
-    if (in.size() < 4 || in[0] != 0x11) return false;
-    size_t want = in[1] | (in[2] << 8) | (in[3] << 16), p = 4;
-    std::vector<uint8_t> out;
-    out.reserve(want);
-    while (out.size() < want && p < in.size()) {
+// One Nintendo LZ11 stream at in[p..end), appended to `out`.
+bool lz11_append(const uint8_t* in, size_t end, size_t p, std::vector<uint8_t>* out) {
+    if (p + 4 > end || in[p] != 0x11) return false;
+    const size_t want = out->size() + (in[p + 1] | (in[p + 2] << 8) | (in[p + 3] << 16));
+    p += 4;
+    while (out->size() < want && p < end) {
         const uint8_t flags = in[p++];
-        for (int bit = 7; bit >= 0 && out.size() < want; --bit) {
+        for (int bit = 7; bit >= 0 && out->size() < want; --bit) {
             if (!(flags & (1 << bit))) {
-                if (p >= in.size()) return false;
-                out.push_back(in[p++]);
+                if (p >= end) return false;
+                out->push_back(in[p++]);
                 continue;
             }
-            if (p + 1 >= in.size()) return false;
+            if (p + 1 >= end) return false;
             const int ind = in[p] >> 4;
             size_t len, disp;
             if (ind == 0) {
-                if (p + 2 >= in.size()) return false;
+                if (p + 2 >= end) return false;
                 len = (size_t)(((in[p] & 0xF) << 4) | (in[p + 1] >> 4)) + 0x11;
                 disp = (size_t)(((in[p + 1] & 0xF) << 8) | in[p + 2]) + 1;
                 p += 3;
             } else if (ind == 1) {
-                if (p + 3 >= in.size()) return false;
+                if (p + 3 >= end) return false;
                 len = (size_t)(((in[p] & 0xF) << 12) | (in[p + 1] << 4) | (in[p + 2] >> 4)) + 0x111;
                 disp = (size_t)(((in[p + 2] & 0xF) << 8) | in[p + 3]) + 1;
                 p += 4;
@@ -189,11 +178,36 @@ bool unwrap(std::vector<uint8_t>* b) {
                 disp = (size_t)(((in[p] & 0xF) << 8) | in[p + 1]) + 1;
                 p += 2;
             }
-            if (disp > out.size()) return false;
-            for (size_t i = 0; i < len && out.size() < want; ++i) out.push_back(out[out.size() - disp]);
+            if (disp > out->size()) return false;
+            for (size_t i = 0; i < len && out->size() < want; ++i) out->push_back((*out)[out->size() - disp]);
         }
     }
-    if (out.size() != want) return false;
+    return out->size() == want;
+}
+
+// The game's COMP wrapper (tools/lb_comp.py): 'COMP', the decompressed size,
+// N blocks, a scratch hint, N packed sizes (negative: stored raw), then the
+// blocks, each an LZ11 stream or raw bytes, 4 KiB decompressed apiece. The
+// cartridge's own files and lvl::comp_wrap's have one block; a community
+// sheet of 4,144 bytes has two (only one block was handled, and it was taken
+// for "not a 4bpp sheet").
+bool unwrap(std::vector<uint8_t>* b) {
+    if (b->size() < 16 || std::memcmp(b->data(), "PMOC", 4) != 0) return true;
+    const uint32_t size = get32(*b, 4), cnt = get32(*b, 8);
+    if (cnt == 0 || cnt > 4096u) return false;
+    size_t p = 16u + 4u * (size_t)cnt;
+    if (p > b->size()) return false;
+    std::vector<uint8_t> out;
+    out.reserve(size);
+    for (uint32_t i = 0; i < cnt; ++i) {
+        const int32_t n = (int32_t)get32(*b, 16u + 4u * i);
+        const size_t k = n < 0 ? (size_t)(-(int64_t)n) : (size_t)n;
+        if (p + k > b->size()) return false;
+        if (n < 0) out.insert(out.end(), b->data() + p, b->data() + p + k);
+        else if (!lz11_append(b->data(), p + k, p, &out)) return false;
+        p += (k + 3u) & ~(size_t)3u;   // each block padded to 4 bytes
+    }
+    if (out.size() != size) return false;
     *b = std::move(out);
     return true;
 }
@@ -328,14 +342,23 @@ std::vector<uint32_t> make_palette(const std::vector<uint32_t>& px, size_t n) {
 // ---- sheets ------------------------------------------------------------------
 struct Sheet { std::vector<uint8_t> file; int w = 0, h = 0; size_t data = 0; std::vector<uint8_t> px; };
 // An NCBR: its CHAR block's size, depth and data (4bpp, linear rows).
-bool parse_sheet(std::vector<uint8_t> f, Sheet* s) {
+// ew x eh: the size to take when the file stores none (0xFFFF tiles, as some
+// tools write a linear sheet) and its data is exactly that size.
+bool parse_sheet(std::vector<uint8_t> f, Sheet* s, int ew = 0, int eh = 0) {
     if (!unwrap(&f) || f.size() < 0x30 || std::memcmp(f.data() + 0x10, "RAHC", 4) != 0) return false;
     const uint32_t th = get16(f, 0x18), tw = get16(f, 0x1A), depth = get32(f, 0x1C);
     const uint32_t dsize = get32(f, 0x28), doff = get32(f, 0x2C);
     const size_t base = 0x18 + doff;
-    if (depth != 3 || !tw || !th || tw == 0xFFFF || base + dsize > f.size()) return false;
-    s->w = (int)tw * 8;
-    s->h = (int)th * 8;
+    if (depth != 3 || base + dsize > f.size()) return false;
+    if (tw == 0xFFFF || th == 0xFFFF) {
+        if (ew <= 0 || eh <= 0 || dsize != (uint32_t)(ew * eh / 2)) return false;
+        s->w = ew;
+        s->h = eh;
+    } else {
+        if (!tw || !th) return false;
+        s->w = (int)tw * 8;
+        s->h = (int)th * 8;
+    }
     if ((size_t)s->w * s->h / 2 > dsize) return false;
     s->data = base;
     s->px.assign((size_t)s->w * s->h, 0);
@@ -363,6 +386,23 @@ void blit(Sheet& s, const Img& im, int x0, int y0, const std::vector<uint32_t>& 
             const int v = !im.idx.empty() ? (im.idx[o] & 15) : nearest(im.rgba[o], fpal);
             s.px[(size_t)Y * s.w + X] = (uint8_t)v;
         }
+}
+
+// Is `im` at (x0,y0) the very frame the template's sheet pixels `tpx` hold?
+// An exported frame nobody edited is, and drawing it would undo a replaced
+// sheet (a report: new NCBR sheets, the exported frames left, the template's
+// art came back).
+bool frame_unchanged(const std::vector<uint8_t>& tpx, int sw, int sh, const Img& im, int x0, int y0,
+                     const std::vector<uint32_t>& fpal) {
+    for (int y = 0; y < im.h; ++y)
+        for (int x = 0; x < im.w; ++x) {
+            const int X = x0 + x, Y = y0 + y;
+            if (X < 0 || Y < 0 || X >= sw || Y >= sh) continue;
+            const size_t o = (size_t)y * im.w + x;
+            const int v = !im.idx.empty() ? (im.idx[o] & 15) : nearest(im.rgba[o], fpal);
+            if (tpx[(size_t)Y * sw + X] != (uint8_t)v) return false;
+        }
+    return true;
 }
 
 // The frames of a template's layout (lb_unitlab.cpp's, by category).
@@ -597,6 +637,51 @@ std::vector<std::string> enabled_folders() {
     return v;
 }
 
+// Where a unit's sheets are: its sheets/ folder when that holds any sheet
+// file, else the unit's own folder -- the way the community's units come
+// (hh_conq_w0.NCBR ... beside unit.json, COMP-wrapped, no CPOS).
+bool has_sheet_files(const fs::path& d) {
+    std::error_code ec;
+    for (const auto& de : fs::directory_iterator(d, ec)) {
+        if (!de.is_regular_file(ec)) continue;
+        std::string ext = utf8(de.path().extension());
+        for (char& ch : ext) ch = (char)std::tolower((unsigned char)ch);
+        if (ext == ".png" || ext == ".ncbr") return true;
+    }
+    return false;
+}
+fs::path sheet_folder(const fs::path& unit) {
+    return has_sheet_files(unit / "sheets") ? unit / "sheets" : unit;
+}
+
+// The folder sheet that stands for template sheet `ts`: its own name if the
+// folder has it, else a sheet named for another unit with the same role
+// suffix (hh_krazi_w0 for hh_conq_w0: _w0, _a3, _1, ...) when exactly one
+// file in sheets/ ends that way. `names` are all the template's sheets.
+std::string sheet_stand_in(const fs::path& sheets, const std::vector<std::string>& names, const std::string& tbase,
+                           const std::string& ts) {
+    std::vector<std::string> stems;
+    std::error_code ec;
+    for (const auto& de : fs::directory_iterator(sheets, ec))
+        if (de.is_regular_file(ec)) {
+            std::string ext = utf8(de.path().extension());
+            for (char& ch : ext) ch = (char)std::tolower((unsigned char)ch);
+            if (ext == ".png" || ext == ".ncbr") stems.push_back(utf8(de.path().stem()));
+        }
+    if (std::find(stems.begin(), stems.end(), ts) != stems.end()) return ts;
+    const std::string suf = ts.size() > tbase.size() ? ts.substr(tbase.size()) : std::string();
+    if (suf.empty()) return ts;
+    std::string hit;
+    int n = 0;
+    for (const std::string& st : stems)
+        if (st.size() > suf.size() && st.compare(st.size() - suf.size(), suf.size(), suf) == 0 &&
+            std::find(names.begin(), names.end(), st) == names.end() && st != hit) {
+            hit = st;
+            ++n;
+        }
+    return n == 1 ? hit : ts;
+}
+
 // One enabled folder into an Entity and its files. `why` says what was wrong
 // when it returns false.
 bool load_unit(const std::string& folder, const std::string& tag, const std::vector<uint8_t>& stock, const CuReader& read,
@@ -655,25 +740,78 @@ bool load_unit(const std::string& folder, const std::string& tag, const std::vec
         const std::string tbase = tasset.substr(8);
         e->asset = "Sprites/cu/" + tag;
         const std::vector<Frame> frs = frames_of(cat, tbase, e->rec);
-        for (const std::string& ts : sheets_of(cat, tbase)) {
+        // What the folder's art did, for the menu's Last build: a sheet or
+        // frame that is the wrong size or format, or a sheet named for no
+        // sheet of this template, is ignored, and saying so is the only way a
+        // player can tell (a report: "replaced the sprites, still the template").
+        const std::vector<std::string> names = sheets_of(cat, tbase);
+        int sheets_used = 0, frames_used = 0;
+        std::string notes;
+        auto wh = [](int w, int h) { return std::to_string(w) + "x" + std::to_string(h); };
+        std::vector<std::string> claimed;   // stems standing in for a template sheet
+        const fs::path sdir = sheet_folder(dir);
+        if (sdir == dir && has_sheet_files(dir)) notes += "  sheets read from the unit's own folder (no sheets/ folder)\n";
+        auto stand_in = [&](const std::string& ts) { return sheet_stand_in(sdir, names, tbase, ts); };
+        for (const std::string& ts : names) {
             std::vector<uint8_t> raw;
             Sheet s;
             if (!read("Sprites/" + ts + ".NCBR", &raw) || !parse_sheet(raw, &s)) { *why = "the template's sheet " + ts + " is unreadable"; return false; }
             std::vector<uint8_t> mine;
             Sheet ms;
             Img im;
-            if (slurp(dir / "sheets" / (ts + ".NCBR"), &mine) && parse_sheet(mine, &ms) && ms.w == s.w && ms.h == s.h) s.px = ms.px;
-            else if (slurp(dir / "sheets" / (ts + ".png"), &mine) && read_png(mine, &im) && im.w == s.w && im.h == s.h) blit(s, im, 0, 0, fpal);
+            const std::vector<uint8_t> tpx = s.px;   // the template's own, for frame_unchanged
+            const std::string src = stand_in(ts);
+            if (src != ts) {
+                claimed.push_back(src);
+                notes += "  sheets/" + src + " stands in for " + ts + "\n";
+            }
+            const fs::path nb = sdir / (src + ".NCBR"), pb = sdir / (src + ".png");
+            bool used = false;
+            if (slurp(nb, &mine)) {
+                if (!parse_sheet(mine, &ms, s.w, s.h)) notes += "  sheets/" + src + ".NCBR is not a 4bpp sheet; ignored\n";
+                else if (ms.w != s.w || ms.h != s.h)
+                    notes += "  sheets/" + src + ".NCBR is " + wh(ms.w, ms.h) + ", the template's is " + wh(s.w, s.h) + "; ignored\n";
+                else { s.px = ms.px; used = true; }
+            }
+            if (!used && slurp(pb, &mine)) {
+                if (!read_png(mine, &im)) notes += "  sheets/" + src + ".png is not a PNG it can read; ignored\n";
+                else if (im.w != s.w || im.h != s.h)
+                    notes += "  sheets/" + src + ".png is " + wh(im.w, im.h) + ", the template's is " + wh(s.w, s.h) + "; ignored\n";
+                else { blit(s, im, 0, 0, fpal); used = true; }
+            }
+            sheets_used += used ? 1 : 0;
             for (const Frame& fr : frs) {
                 if (fr.sheet != ts) continue;
                 char nm[32];
                 std::snprintf(nm, sizeof nm, "d%d_%d.png", fr.dir, fr.n);
-                if (slurp(dir / "frames" / fr.action / nm, &mine) && read_png(mine, &im) && im.w == fr.w && im.h == fr.h)
+                if (!slurp(dir / "frames" / fr.action / nm, &mine)) continue;
+                if (read_png(mine, &im) && im.w == fr.w && im.h == fr.h) {
+                    if (frame_unchanged(tpx, s.w, s.h, im, fr.x, fr.y, fpal)) continue;   // as exported: the sheet's stands
                     blit(s, im, fr.x, fr.y, fpal);
+                    ++frames_used;
+                } else {
+                    notes += "  frames/" + fr.action + "/" + nm + " is not a " + wh(fr.w, fr.h) + " PNG; ignored\n";
+                }
             }
             const std::string mine_name = tag + ts.substr(tbase.size());   // k_eng_0 -> Folder_0
             files->push_back({"Sprites", mine_name + ".NCBR", lvl::comp_wrap(encode_sheet(s))});
         }
+        std::error_code dec;
+        std::string expect;
+        for (const std::string& n : names) expect += (expect.empty() ? "" : ", ") + n;
+        for (const auto& de : fs::directory_iterator(sdir, dec)) {
+            if (!de.is_regular_file(dec)) continue;
+            std::string ext = utf8(de.path().extension());
+            for (char& ch : ext) ch = (char)std::tolower((unsigned char)ch);
+            if (ext != ".png" && ext != ".ncbr") continue;   // unit.json and the rest, beside the sheets
+            const std::string stem = utf8(de.path().stem());
+            if (std::find(names.begin(), names.end(), stem) == names.end() &&
+                std::find(claimed.begin(), claimed.end(), stem) == claimed.end())
+                notes += "  sheets/" + utf8(de.path().filename()) + " is not one of this unit's sheets (" + expect + "); ignored\n";
+        }
+        g_report += folder + ": " + std::to_string(sheets_used) + " of " + std::to_string((int)names.size()) +
+                    " sheets and " + std::to_string(frames_used) + " frames from the folder\n" + notes;
+        if (!notes.empty()) std::fprintf(stderr, "[lb_cunits] %s:\n%s", folder.c_str(), notes.c_str());
     } else if (tasset.compare(0, 7, "Models/") == 0) {
         e->asset = "Models/cu/" + tag;
         std::vector<uint8_t> mdl, anim, mine;
@@ -1112,13 +1250,17 @@ bool lb_cunits_folder_sheet(const std::string& folder, int tmpl, const std::stri
     std::vector<uint8_t> mine;
     Sheet ms;
     Img im;
-    if (slurp(dir / "sheets" / (tsheet + ".NCBR"), &mine) && parse_sheet(mine, &ms) && ms.w == s.w && ms.h == s.h) s.px = ms.px;
-    else if (slurp(dir / "sheets" / (tsheet + ".png"), &mine) && read_png(mine, &im) && im.w == s.w && im.h == s.h) blit(s, im, 0, 0, fpal);
+    const std::vector<uint8_t> tpx = s.px;
+    const fs::path sdir = sheet_folder(dir);   // as the build does
+    const std::string src = sheet_stand_in(sdir, sheets_of(rec[0x5C], tbase), tbase, tsheet);
+    if (slurp(sdir / (src + ".NCBR"), &mine) && parse_sheet(mine, &ms, s.w, s.h) && ms.w == s.w && ms.h == s.h) s.px = ms.px;
+    else if (slurp(sdir / (src + ".png"), &mine) && read_png(mine, &im) && im.w == s.w && im.h == s.h) blit(s, im, 0, 0, fpal);
     for (const Frame& fr : frames_of(rec[0x5C], tbase, rec)) {
         if (fr.sheet != tsheet) continue;
         char nm[32];
         std::snprintf(nm, sizeof nm, "d%d_%d.png", fr.dir, fr.n);
-        if (slurp(dir / "frames" / fr.action / nm, &mine) && read_png(mine, &im) && im.w == fr.w && im.h == fr.h)
+        if (slurp(dir / "frames" / fr.action / nm, &mine) && read_png(mine, &im) && im.w == fr.w && im.h == fr.h &&
+            !frame_unchanged(tpx, s.w, s.h, im, fr.x, fr.y, fpal))
             blit(s, im, fr.x, fr.y, fpal);
     }
     *w = s.w;
@@ -1315,12 +1457,13 @@ std::vector<std::string> bundle_files(const fs::path& dir) {
     std::vector<std::string> v;
     std::error_code ec;
     if (fs::exists(dir / "unit.json", ec)) v.push_back("unit.json");
-    for (const char* sub : {"sheets"}) {
-        for (const auto& e : fs::directory_iterator(dir / sub, ec)) {
-            const std::string n = utf8(e.path().filename());
-            const std::string ext = n.size() > 4 ? n.substr(n.size() - 4) : "";
-            if (e.is_regular_file(ec) && (ext == ".png" || ext == "NCBR")) v.push_back(std::string(sub) + "/" + n);
-        }
+    // Sheets from sheets/ or, without one, the unit's own folder (sheet_folder);
+    // listed as sheets/<name> either way, so the bundle and its identity are
+    // the same whichever way the folder is laid out.
+    for (const auto& e : fs::directory_iterator(sheet_folder(dir), ec)) {
+        const std::string n = utf8(e.path().filename());
+        const std::string ext = n.size() > 4 ? n.substr(n.size() - 4) : "";
+        if (e.is_regular_file(ec) && (ext == ".png" || ext == "NCBR")) v.push_back("sheets/" + n);
     }
     for (const auto& a : fs::directory_iterator(dir / "frames", ec)) {
         if (!a.is_directory(ec)) continue;
@@ -1347,7 +1490,8 @@ bool make_bundle(const fs::path& dir, std::vector<uint8_t>* out) {
     out->push_back((uint8_t)(files.size() >> 8));
     for (const std::string& f : files) {
         std::vector<uint8_t> d;
-        if (!slurp(dir / fs::u8path(f), &d, kMaxUnitBundle)) d.clear();
+        const fs::path at = f.compare(0, 7, "sheets/") == 0 ? sheet_folder(dir) / fs::u8path(f.substr(7)) : dir / fs::u8path(f);
+        if (!slurp(at, &d, kMaxUnitBundle)) d.clear();
         out->push_back((uint8_t)f.size());
         out->push_back((uint8_t)(f.size() >> 8));
         out->insert(out->end(), f.begin(), f.end());

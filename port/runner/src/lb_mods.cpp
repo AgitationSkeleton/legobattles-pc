@@ -54,6 +54,8 @@
 #include <string>
 #include <vector>
 
+extern "C" int lb_settings_file_bool(const char* key, int dflt);   // lb_overlay.cpp
+
 namespace {
 
 uint16_t rd16(const uint8_t* p) { return (uint16_t)(p[0] | (p[1] << 8)); }
@@ -527,8 +529,12 @@ void scan(const std::vector<uint8_t>& rom, const Nitro& own) {
     const fs::path dir = alt && *alt ? fs::path(alt) : fs::path(exe_dir()) / "mods";
     std::error_code ec;
     if (!fs::is_directory(dir, ec)) return;
+    // "Use Mod and Editor Maps" off: only maps a host sent (mods/maps/_received)
+    // are read, so joining a lobby on a mod map still works.
+    const bool all_maps = lb_settings_file_bool("mod_maps", 1) != 0;
     std::vector<fs::path> roms;
     for (const auto& e : fs::directory_iterator(dir, ec)) {
+        if (!all_maps) break;
         std::string ext = e.path().extension().string();
         for (char& c : ext) c = (char)std::tolower((unsigned char)c);
         if (e.is_regular_file(ec) && ext == ".nds") roms.push_back(e.path());
@@ -638,6 +644,8 @@ void scan(const std::vector<uint8_t>& rom, const Nitro& own) {
         std::sort(folders.begin(), folders.end());
         int loose_n = 0;
         for (const fs::path& f : folders) {
+            if (!all_maps && f.lexically_relative(loose).generic_string().find("_received/") == std::string::npos)
+                continue;
             ModMap m;
             if (!loose_folder_map(f, [&](const std::string& p, std::vector<uint8_t>* o) {
                     return mem_read(rom, own, p, o);

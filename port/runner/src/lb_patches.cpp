@@ -539,12 +539,16 @@ constexpr uint32_t kMarqueeMapBytes = 0x680u;
 // to tell two different senders of the same transfer apart. See the note there.
 int g_mq_ttl = 0;
 
+// Only in Enhanced: that is where the port draws its own box (on the widened
+// picture). In DS Vanilla the game's box is the only one, so it stays (an
+// audit found it hidden there with nothing drawn in its place).
+extern "C" int lb_setting_enhanced(void);   // lb_overlay.cpp
 bool marquee_hide_guest() {
     static const bool on = [] {
         const char* v = std::getenv("LB_MARQUEE_KEEPGUEST");
         return !(v && v[0] != '0');
     }();
-    return on;
+    return on && lb_setting_enhanced() != 0;
 }
 
 // THE BUILDING PLACEMENT FOOTPRINT SHARES THIS BUFFER, and blanking it while a
@@ -3617,9 +3621,10 @@ constexpr int kQuickCancel = 40;
 constexpr int kQueueWidgetId = 730;
 // The whole top screen, by mouse. Every button the InfoTab draws has FUN_020D471C
 // as its handler: ids 713..721 (the selected units' portraits: drop one from
-// the selection), 730..732 (the queue: cancel that unit), 733..735 (the second
-// row of the same strip). Request 50 + (id - 713) runs that button's own
-// handler. 730..732 are also the older requests 40..42.
+// the selection), 730..732 (the queue: cancel that unit), 733..735 (a selected
+// transport's occupants, SG-0050: unload one unit of that kind -- docs/456).
+// Request 50 + (id - 713) runs that button's own handler. 730..732 are also
+// the older requests 40..42.
 constexpr int kQuickInfo = 50;
 constexpr int kInfoFirstId = 713;
 constexpr int kInfoLastId = 735;
@@ -3751,7 +3756,12 @@ uint32_t quick_infotab() {
 //             its control groups (FUN_020E318C);
 //   730..732  [+0x390] == 1, [+0x394] == 2, byte [+0x355] == 0, one building
 //             selected, slot < queue length ([+0x80]): the cancel command;
-//   733..735  [+0x390] == 1, [+0x394] == 1, one unit selected.
+//   733..735  [+0x390] == 1, [+0x394] == 1, one unit selected, and the slot
+//             ([+0x68 + 4 * (id - 730)], a unit type) is not the empty marker
+//             (the word at 020D48C8, the value virtual_12 fills the six slots
+//             with). The handler then finds the first occupant of that type
+//             in the transport's list (+0x100 handles, +0x104 count) and
+//             submits an unload command for that one unit (docs/456).
 const char* quick_info_state(uint32_t tab, int id) {
     if (id >= 713 && id <= 721) {
         if (bus_read_u32(tab + 0x390u) != 2u) return "not several units";
@@ -3770,16 +3780,28 @@ const char* quick_info_state(uint32_t tab, int id) {
         if (bus_read_u32(tab + 0x58u) != 1u) return "not one unit selected";
         if (bus_read_u32(tab + 0x390u) != 1u || bus_read_u32(tab + 0x394u) != 1u)
             return "the panel is not showing these";
+        if (bus_read_u32(tab + 0x68u + 4u * (uint32_t)(id - 730)) ==
+            bus_read_u32(0x020D48C8u))
+            return "nothing in that slot";
         return nullptr;
     }
     return "not a button";
 }
 
 // The widget for InfoTab button `id`, if the pen path would deliver a click on
-// it now. *rect gets its top-screen rectangle {x0, y0, x1, y1}.
+// it now. *rect gets its top-screen rectangle {x0, y0, x1, y1}. With
+// `drawn_only`, whether it is on screen at all: the input conditions (paused,
+// a victory banner, a button held, UI input off) are not checked, nor the
+// button being disabled -- for drawing over it (the portrait colours went back
+// to the game's while the game was paused or a button was held).
 const char* quick_info_gate(uint32_t view, int id, uint32_t* w_out,
-                            uint32_t* tab_out, int* rect = nullptr) {
-    if (const char* why = quick_screen_gate(view)) return why;
+                            uint32_t* tab_out, int* rect = nullptr, bool drawn_only = false) {
+    if (drawn_only) {
+        if (view != bus_read_u32(kViewSlot) || bus_read_u32(view) != kViewVtable) return "not the battle view";
+        if (!guest_ptr(bus_read_u32(view + 0x1Cu))) return "no layout";
+    } else if (const char* why = quick_screen_gate(view)) {
+        return why;
+    }
     const uint32_t tab = quick_infotab();
     if (!tab) return "no info panel";
     if (const char* why = quick_info_state(tab, id)) return why;
@@ -3793,7 +3815,7 @@ const char* quick_info_gate(uint32_t view, int id, uint32_t* w_out,
     const uint8_t f = bus_read_u8(rec);
     const uint32_t grp = bus_read_u32(rec + 0x14u);
     if ((f & 2u) || (guest_ptr(grp) && bus_read_u8(grp + 1u))) return "hidden";
-    if ((f & 1u) && bus_read_u32(w + 0x10u) == 0u) return "disabled";
+    if (!drawn_only && (f & 1u) && bus_read_u32(w + 0x10u) == 0u) return "disabled";
     if (rect) {   // the record: y0 at +4, x0 at +6, y1 at +8, x1 at +0xA
         rect[0] = (int16_t)bus_read_u16(rec + 6u);
         rect[1] = (int16_t)bus_read_u16(rec + 4u);
@@ -4756,9 +4778,14 @@ namespace {
 unsigned char g_enemy_rec[20];
 bool g_enemy_pending = false;
 
-// The eight-way selector is live in a session and in a recording that says
-// `enemy8=1`; an older recording cycles mod 6, as it was recorded.
-bool enemy8_live() { return lb_demo_play_enemy8() != 0; }
+// The eight-way selector: a replay follows its recording (`enemy8=`; an
+// older recording cycles mod 6, as it was recorded), a session the setting
+// "Custom and Randomizer Opponents".
+extern "C" int lb_setting_extra_opponents(void);   // lb_overlay.cpp
+bool enemy8_live() {
+    const int played = lb_demo_play_enemy8();
+    return played >= 0 ? played != 0 : lb_setting_extra_opponents() != 0;
+}
 
 uint32_t enemy_button_rec(uint32_t self) {
     const uint32_t w = bus_read_u32(self + 0x60u);
@@ -7197,11 +7224,13 @@ namespace {
 uint32_t g_cl_seen_screen = 0, g_cl_seen_mission = 0;
 }  // namespace
 
+extern "C" int lb_setting_lobby_map_fix(void);   // lb_overlay.cpp: "Lobby Shows the Current Map"
+
 void lobby_settings_tick_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kLobbySettingsTick);
     const uint32_t self = g_cpu.R[0];
     const uint32_t cur = bus_read_u32(kLobbyMission);
-    if (guest_ptr(self) && guest_ptr(cur)) {
+    if (lb_setting_lobby_map_fix() && guest_ptr(self) && guest_ptr(cur)) {
         const uint32_t drawn = bus_read_u32(self + 0x54u);
         if (drawn != 0u && drawn != cur) {
             // The original sees "not drawn yet" and redraws from the current.
@@ -7219,7 +7248,7 @@ void lobby_settings_tick_override(void) {
 
 void client_lobby_show_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kClientLobbyShow);
-    if (g_cpu.R[1] != 0u) g_cl_seen_mission = 0;   // shown: its box is empty
+    if (lb_setting_lobby_map_fix() && g_cpu.R[1] != 0u) g_cl_seen_mission = 0;   // shown: its box is empty
     if (original) original();
 }
 
@@ -7227,7 +7256,7 @@ void client_lobby_tick_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kClientLobbyTick);
     const uint32_t self = g_cpu.R[0];
     const uint32_t cur = bus_read_u32(kLobbyMission);
-    if (guest_ptr(self) && guest_ptr(cur) &&
+    if (lb_setting_lobby_map_fix() && guest_ptr(self) && guest_ptr(cur) &&
         (self != g_cl_seen_screen || cur != g_cl_seen_mission)) {
         g_cl_seen_screen = self;
         g_cl_seen_mission = cur;
@@ -7442,6 +7471,7 @@ constexpr uint32_t kBillboardDraw = 0x0202DA80u;       // arm
 constexpr uint32_t kBillboardDrawRet = 0x0203B2ACu;    // after Unit_BuildBillboard's call
 constexpr uint32_t kNeutralOwnerByte = 0x02155420u;    // FUN_02087634
 extern "C" int lb_setting_creature_tint(void);         /* lb_overlay.cpp */
+extern "C" int lb_setting_portrait_tint(void);        /* lb_overlay.cpp */
 extern "C" int lb_creatures_live(void);                /* below */
 namespace {
 struct TintEntry { uint8_t entry, shade; };   // shade 0 light, 1 mid, 2 dark (entries 12-14), 3 darker
@@ -7506,8 +7536,8 @@ uint32_t sprite_palette_vram() {
 // sprite bank, the unit sprites' own, so teal and its styles come for free --
 // are noted here; the frontend hands the top screen's pixels to
 // lb_top_postprocess, which repaints the head's team colours inside those
-// rectangles in a copy. Nothing in the game is written. LB_PORTRAIT_TINT=0
-// turns it off.
+// rectangles in a copy. Nothing in the game is written. The setting "Team-
+// Colour Unit Portraits" (on by default; LB_PORTRAIT_TINT=0|1 forces it).
 //
 // WHICH COLOURS ARE TEAM is per head (docs/454): the parts the unit's SPRITE
 // draws with its team entries (12-14 of the faction palette), found by
@@ -7518,7 +7548,26 @@ uint32_t sprite_palette_vram() {
 // (lips, hair). A rule can be limited to a rectangle of the head or to a
 // pixel mask (the Ninja's cowl). Colours other than the six stock ones take the owner's
 // shades by brightness, against the stock Red ramp's (team_shade_rgb).
-struct PortraitTint { int n = 0; int r[9][4]; int bp[9]; uint16_t sh[9][3]; };
+// Per slot: its rectangle, blueprint, owner's shades; whether to recolour it
+// (an owned unit, the setting on) and, for the Wolf and the Shark, the proper
+// head to draw first (setting "Proper Creature Portraits"; 0 = clear).
+struct PortraitTint {
+    int n = 0;
+    int r[9][4];
+    int bp[9];
+    uint16_t sh[9][3];
+    bool tint[9];
+    bool head_on[9];
+    bool in_play = false;    // 0x0214BBA8 == 5: not paused, no result banner
+    uint32_t head[9][576];   // 0xFFRRGGBB, 0 clear
+    // The top screen's (sub engine's) fades this frame: a dimmed pause or a
+    // victory screen changes every colour, so the team colours are matched,
+    // and written, through the same formulas the 2D engine uses (gpu2d.cpp
+    // brighten/darken): BLDCNT/BLDY (0x04001050/54) and MASTER_BRIGHT
+    // (0x0400106C).
+    uint16_t bldcnt = 0, master = 0;
+    uint8_t evy = 0;
+};
 std::mutex g_ptint_mu;
 PortraitTint g_ptint;
 
@@ -7616,19 +7665,29 @@ uint32_t ds_host_rgb(uint16_t c) {
     return 0xFF000000u | (ch(c & 31u) << 16) | (ch((c >> 5) & 31u) << 8) | ch((c >> 10) & 31u);
 }
 
+// THE WOLF'S AND THE SHARK'S BATTLE PORTRAITS. UI/MiniHeadsGame, the battle
+// HUD's head sheet, has a sack and a lantern where the front end's sheet has
+// the Shark's and the Wolf's heads (cells (11,1) and (11,2)); the two are the
+// Forest Man's and the Ghost's item icons (records 0x391/0x392, sub-palette 7),
+// and the creatures' records still point there (0x2CD/0x2DB, sub-palette 5).
+// The sheet has one free cell, so the heads are drawn on the picture instead:
+// the same 24x24 the Team Builder shows (lb_teams_hud_icon_rgba, which takes
+// those two from UI/MiniHeads).
+extern "C" int lb_setting_creature_portraits(void);                       // lb_overlay.cpp
+extern "C" int lb_teams_hud_icon_rgba(int bp, unsigned int out[576]);     // lb_teams.cpp
+bool creature_head(int bp) { return bp == 169 || bp == 155; }   // Wolf, Shark
+
 void portrait_tint_refresh() {
-    static int on = -1;
-    if (on < 0) {
-        const char* v = std::getenv("LB_PORTRAIT_TINT");
-        on = v ? (std::atoi(v) ? 1 : 0) : 1;
-    }
-    PortraitTint t;
+    const int on = lb_setting_portrait_tint();   // Team-Colour Unit Portraits (docs/454)
+    const int heads = lb_setting_creature_portraits();
+    static PortraitTint t;   // big (the heads): not on the stack
+    t.n = 0;
     const uint32_t view = bus_read_u32(kViewSlot);
     const uint32_t tab = quick_infotab();
     uint32_t size = 0;
     uint8_t* e = texpal_flat(&size);
     const uint32_t vpal = sprite_palette_vram();
-    if (on && guest_ptr(view) && bus_read_u32(view) == kViewVtable && tab && e && vpal &&
+    if ((on || heads) && guest_ptr(view) && bus_read_u32(view) == kViewVtable && tab && e && vpal &&
         vpal + 0x200u <= size) {
         const uint32_t handles = bus_read_u32(tab + 0x54u);
         const uint32_t n = bus_read_u32(tab + 0x58u);
@@ -7637,15 +7696,33 @@ void portrait_tint_refresh() {
             if (!guest_ptr(handles) || k >= n) break;
             uint32_t w = 0, tt = 0;
             int r[4] = {0, 0, 0, 0};
-            if (quick_info_gate(view, id, &w, &tt, r)) continue;   // not shown now
+            if (quick_info_gate(view, id, &w, &tt, r, true)) continue;   // not on screen now
             const uint32_t ent = unit_resolve(handles + 2u * k);
             if (!ent) continue;
             const unsigned o = bus_read_u8(ent + 0xE4u);
-            if (o == bus_read_u8(kNeutralOwnerByte) || o >= (unsigned)kTintPlayers) continue;
-            std::memcpy(t.sh[t.n], e + vpal + (uint32_t)(2u * o) * 0x20u + 12u * 2u, sizeof t.sh[0]);
-            for (int i = 0; i < 4; ++i) t.r[t.n][i] = r[i];
+            const bool owned = o != bus_read_u8(kNeutralOwnerByte) && o < (unsigned)kTintPlayers;
             const uint32_t bpr = unit_blueprint(ent);
-            t.bp[t.n] = guest_ptr(bpr) ? (int)bus_read_u16(bpr + 4u) : -1;
+            const int bpi = guest_ptr(bpr) ? (int)bus_read_u16(bpr + 4u) : -1;
+            t.head_on[t.n] = false;
+            // Test aid: LB_TEST_PORTRAIT_HEAD=<blueprint> draws that creature's
+            // head on every selected unit's portrait.
+            static const int force_head = std::getenv("LB_TEST_PORTRAIT_HEAD") ? std::atoi(std::getenv("LB_TEST_PORTRAIT_HEAD")) : 0;
+            const int head_bp = force_head > 0 ? force_head : bpi;
+            if (heads && creature_head(head_bp)) {   // wild ones too
+                unsigned int px[576];
+                if (lb_teams_hud_icon_rgba(head_bp, px)) {
+                    for (int i = 0; i < 576; ++i)   // 0xAABBGGRR -> 0xFFRRGGBB
+                        t.head[t.n][i] = px[i] ? (0xFF000000u | ((px[i] & 0xFFu) << 16) | (px[i] & 0xFF00u) |
+                                                  ((px[i] >> 16) & 0xFFu))
+                                               : 0u;
+                    t.head_on[t.n] = true;
+                }
+            }
+            t.tint[t.n] = on && owned;
+            if (!t.tint[t.n] && !t.head_on[t.n]) continue;
+            if (owned) std::memcpy(t.sh[t.n], e + vpal + (uint32_t)(2u * o) * 0x20u + 12u * 2u, sizeof t.sh[0]);
+            for (int i = 0; i < 4; ++i) t.r[t.n][i] = r[i];
+            t.bp[t.n] = bpi;
             static const bool log = std::getenv("LB_PTINT_LOG") != nullptr;
             if (log) {
                 static int said[9][5];
@@ -7660,8 +7737,58 @@ void portrait_tint_refresh() {
             ++t.n;
         }
     }
+    t.in_play = bus_read_u32(0x0214BBA8u) == 5u;
+    t.bldcnt = bus_read_u16(0x04001050u);
+    t.evy = (uint8_t)std::min<unsigned>(16u, bus_read_u16(0x04001054u) & 0x1Fu);
+    t.master = bus_read_u16(0x0400106Cu);
     std::lock_guard<std::mutex> lk(g_ptint_mu);
     g_ptint = t;
+}
+
+// The 2D engine's colour steps, as gpu2d.cpp has them: 6-bit channels packed
+// r | g << 8 | b << 16, brighten/darken with its rounding biases, and the
+// host pixel 0xFFRRGGBB.
+uint32_t six_of_ds(uint16_t c) {
+    return ((c & 0x1Fu) << 1) | (((c >> 5) & 0x1Fu) << 9) | (((c >> 10) & 0x1Fu) << 17);
+}
+uint32_t six_of_host(uint32_t h) {
+    return (((h >> 16) & 255u) >> 2) | ((((h >> 8) & 255u) >> 2) << 8) | (((h & 255u) >> 2) << 16);
+}
+uint32_t host_of_six(uint32_t c) {
+    auto e = [](uint32_t v) { return (v << 2) | (v >> 4); };
+    return 0xFF000000u | (e(c & 63u) << 16) | (e((c >> 8) & 63u) << 8) | e((c >> 16) & 63u);
+}
+uint32_t six_brighten(uint32_t c, uint32_t f, uint32_t bias) {
+    uint32_t o = 0;
+    for (int sft = 0; sft < 24; sft += 8) {
+        const uint32_t v = (c >> sft) & 63u;
+        o |= std::min(63u, v + (((63u - v) * f + bias) >> 4)) << sft;
+    }
+    return o;
+}
+uint32_t six_darken(uint32_t c, uint32_t f, uint32_t bias) {
+    uint32_t o = 0;
+    for (int sft = 0; sft < 24; sft += 8) {
+        const uint32_t v = (c >> sft) & 63u;
+        o |= (v - ((v * f + bias) >> 4)) << sft;
+    }
+    return o;
+}
+// Candidate `cand`: bit 0 the layer fade (BLDY), bit 1 the screen's master
+// brightness, applied in the engine's order.
+uint32_t fade_six(uint32_t c, int cand, const PortraitTint& t) {
+    if (cand & 1) {
+        const unsigned m = (t.bldcnt >> 6) & 3u;
+        if (m == 2u) c = six_brighten(c, t.evy, 8u);
+        else if (m == 3u) c = six_darken(c, t.evy, 7u);
+    }
+    if (cand & 2) {
+        const unsigned m = t.master >> 14;
+        const uint32_t f = std::min<uint32_t>(16u, t.master & 0x1Fu);
+        if (m == 1u) c = six_brighten(c, f, 0u);
+        else if (m == 2u) c = six_darken(c, f, 15u);
+    }
+    return c;
 }
 
 int tint_kind(uint32_t bp) {
@@ -14851,11 +14978,15 @@ static bool spell_score_is(const uint16_t (&w)[22]) {
 // stock behaviour is untouched, but a mod or custom map with two starts (the
 // Mars beta 3-3, every converted Ninjago map) was never listed. The compare
 // becomes `cmp r0,#2`; the loader (lb_mods.cpp) already admits two players.
+extern "C" int lb_settings_file_bool(const char* key, int dflt);   // lb_overlay.cpp
 static void apply_two_player_maps(void) {
     static unsigned gen = 0;
     static int done = 0;
     if (gen != g_boot_gen) { gen = g_boot_gen; done = 0; }
     if (done) return;
+    // With "Use Mod and Editor Maps" off the list is the game's own (and every
+    // stock map has 3 or 4 starts, so the patch would change nothing anyway).
+    if (!lb_settings_file_bool("mod_maps", 1)) { done = 1; return; }
     if (bus_read_u16(0x0204B02Cu) != 0x5DC8u || bus_read_u16(0x0204B030u) != 0xD302u)
         return;                                     // not loaded, or not this build
     if (bus_read_u16(0x0204B02Eu) == 0x2803u) {
@@ -15293,6 +15424,15 @@ extern "C" int lb_mods_map_starts(const unsigned char* data, size_t n);   /* lb_
 extern "C" int lb_ai_opp_live(void) {
     if (lb_net_guest_state() > 0) return 0;
     return lb_setting_ai_opp_packed();
+}
+
+// SG-0051 (docs/457): the computers hunt each other. Off: every computer
+// hunts the player (the game's script). On, with Computer Player 3 seated and
+// not allied: each computer aims at the nearest living base, the other
+// computer's included. Offline only; a recording carries it as kind 23.
+extern "C" int lb_ai_cross_live(void) {
+    if (lb_net_guest_state() > 0) return 0;
+    return lb_setting_ai_cross_fire();
 }
 
 namespace {
@@ -15849,6 +15989,12 @@ bool g_aiopp_mix_done = false;
 
 bool aiopp_ram(uint32_t p) { return p >= 0x02000000u && p < 0x02400000u; }
 
+// SG-0051: computer 0 (list entry 0) once it has been aimed at something
+// other than the player. Its own +0x37 and tile then no longer say who the
+// player is, so they are kept from before the first re-aim.
+struct AiCross { uint32_t ai; bool valid; uint8_t human, hx, hy, target; };
+AiCross g_aicross = {0, false, 0, 12, 9, 0};
+
 void aiopp_aim(uint32_t a, uint8_t handle, uint8_t tx, uint8_t ty) {
     const uint32_t s44 = bus_read_u32(a + 0x44u), s4c = bus_read_u32(a + 0x4Cu);
     bus_write_u8(a + 0x37u, handle);
@@ -15872,12 +16018,14 @@ void ai_opp_tick(void) {
         g_aiopp_nseen = 0;
         g_aiopp_frames = 0;
         g_aiopp_mix_done = false;
+        g_aicross.valid = false;
         g_opp_extra = 0;
         g_aic.active = false;
     }
     if (g_opp_extra <= 0 || (!free_play_mission() && !std::getenv("LB_AIOPP_DUMP")) ||
         std::getenv("LB_AIOPP_NOTICK")) {
         g_aiopp_nseen = 0;
+        g_aicross.valid = false;
         return;
     }
     const uint32_t ais = bus_read_u32(0x0215697Cu);
@@ -15926,9 +16074,15 @@ void ai_opp_tick(void) {
     if (!aiopp_ram(a0) ||
         (bus_read_u8(a0 + 0x5Cu) != 0x46u && bus_read_u8(a0 + 0x5Cu) != 0x12u)) return;
     ++g_aiopp_frames;
-    const uint8_t human = bus_read_u8(a0 + 0x37u);   // what entry 0 hunts
-    const uint32_t map = bus_read_u32(0x02156CB0u);
     const bool spectate = lb_ai_spectate_active() != 0;
+    // SG-0051: free for all, and the setting on.
+    const int cross_played = lb_demo_play_ai_cross();
+    const bool cross = !spectate && !g_opp_teams &&
+                       (cross_played >= 0 ? cross_played : lb_ai_cross_live()) != 0;
+    if (!cross) g_aicross.valid = false;
+    const bool crossed = cross && g_aicross.valid && g_aicross.ai == a0;
+    const uint8_t human = crossed ? g_aicross.human : bus_read_u8(a0 + 0x37u);   // what entry 0 hunts
+    const uint32_t map = bus_read_u32(0x02156CB0u);
     // Everyone present: handle, player id, ai (0 for the human).
     struct P { uint8_t h; int id; uint32_t ai; } ps[4];
     int np = 0;
@@ -15947,7 +16101,30 @@ void ai_opp_tick(void) {
     };
     // The target of AI `me`: the human; or, in a game of computers only, the
     // next living hostile team by player id.
+    uint8_t hx = 12, hy = 9;
+    {
+        const uint32_t s44 = bus_read_u32(a0 + 0x44u);
+        if (crossed) { hx = g_aicross.hx; hy = g_aicross.hy; }
+        else if (aiopp_ram(s44)) { hx = bus_read_u8(s44 + 0x60u); hy = bus_read_u8(s44 + 0x61u); }
+    }
+    auto tile_of = [&](const P& p, uint8_t* x, uint8_t* y) {
+        if (p.h == human) { *x = hx; *y = hy; }
+        else aiopp_start_tile(map, p.h, x, y);
+    };
     auto pick = [&](const P& me) -> int {
+        if (cross) {   // the nearest living base that is not my own, by start tile
+            uint8_t mx, my;
+            tile_of(me, &mx, &my);
+            int best = -1, bestd = 1 << 20;
+            for (int i = 0; i < np; ++i) {
+                if (&ps[i] == &me || ps[i].h == me.h || !alive(ps[i].h)) continue;
+                uint8_t x, y;
+                tile_of(ps[i], &x, &y);
+                const int d = std::abs((int)x - (int)mx) + std::abs((int)y - (int)my);
+                if (d < bestd) { bestd = d; best = i; }
+            }
+            if (best >= 0) return best;
+        }
         if (!spectate) {
             for (int i = 0; i < np; ++i) if (ps[i].h == human && alive(human)) return i;
         }
@@ -15985,10 +16162,39 @@ void ai_opp_tick(void) {
         std::fprintf(stderr, "\n");
         std::fflush(stderr);
     }
-    uint8_t hx = 12, hy = 9;
-    {
-        const uint32_t s44 = bus_read_u32(a0 + 0x44u);
-        if (aiopp_ram(s44)) { hx = bus_read_u8(s44 + 0x60u); hy = bus_read_u8(s44 + 0x61u); }
+    // SG-0051: computer 0 is scripted by the game (v06 aims it at the player,
+    // the 5 s attack goes at the player's start), so with the setting on it
+    // is re-aimed here, after v06, and again whenever its target falls. Only
+    // the aim: its personality and the 95 s change are the game's own.
+    if (cross && ps[0].ai == a0) {
+        if (!crossed) {
+            const uint32_t s44 = bus_read_u32(a0 + 0x44u), s4c = bus_read_u32(a0 + 0x4Cu);
+            if (aiopp_ram(s44) && aiopp_ram(s4c)) {
+                g_aicross = {a0, true, human, hx, hy, human};
+                const int t = pick(ps[0]);
+                if (t >= 0) {
+                    uint8_t tx, ty;
+                    tile_of(ps[t], &tx, &ty);
+                    aiopp_aim(a0, ps[t].h, tx, ty);
+                    g_aicross.target = ps[t].h;
+                    std::fprintf(stderr, "[lb_aicross] computer player id %d (team %u) "
+                                 "aimed at team %u, start tile (%u,%u)\n", ps[0].id,
+                                 ps[0].h, ps[t].h, tx, ty);
+                    std::fflush(stderr);
+                }
+            }
+        } else if (g_aiopp_frames % 30u == 0u && !alive(g_aicross.target)) {
+            const int t = pick(ps[0]);
+            if (t >= 0 && ps[t].h != g_aicross.target) {
+                uint8_t tx, ty;
+                tile_of(ps[t], &tx, &ty);
+                aiopp_aim(a0, ps[t].h, tx, ty);
+                g_aicross.target = ps[t].h;
+                std::fprintf(stderr, "[lb_aicross] computer player id %d: its target "
+                             "fell, now team %u\n", ps[0].id, ps[t].h);
+                std::fflush(stderr);
+            }
+        }
     }
     for (int i = 1; i < an; ++i) {
         const uint32_t a = ps[i].ai;
@@ -17866,7 +18072,7 @@ uint32_t team_shade_rgb(int kind, uint16_t c, const uint16_t sh[3]) {
 // (portrait_tint_refresh); the pixels themselves when there is nothing to do.
 extern "C" const uint32_t* lb_top_postprocess(const uint32_t* px, int width) {
     static std::vector<uint32_t> out;
-    PortraitTint t;
+    static PortraitTint t;   // big (the heads): not on the stack
     {
         std::lock_guard<std::mutex> lk(g_ptint_mu);
         t = g_ptint;
@@ -17877,18 +18083,76 @@ extern "C" const uint32_t* lb_top_postprocess(const uint32_t* px, int width) {
     for (int k = 0; k < t.n; ++k) {
         // The 24x24 head: centred across the button, at its top.
         const int hx = t.r[k][0] + ((t.r[k][2] - t.r[k][0] + 1) - 24) / 2, hy = t.r[k][1];
+        if (t.head_on[k] && t.in_play) {
+            // The proper head over the sack or lantern (a square cell): its
+            // clear corners take the panel's colour beside the slot.
+            const int bx = std::max(0, hx - 2), by = std::min(191, std::max(0, hy + 12));
+            const uint32_t bg = out[(size_t)by * width + (size_t)(bx + ox)];
+            for (int y = 0; y < 24; ++y)
+                for (int x = 0; x < 24; ++x) {
+                    const int X = hx + x, Y = hy + y;
+                    if (X < 0 || X > 255 || Y < 0 || Y > 191) continue;
+                    const uint32_t h = t.head[k][y * 24 + x];
+                    // Dimmed with the screen (its master brightness) when it is.
+                    out[(size_t)Y * width + (size_t)(X + ox)] = h ? host_of_six(fade_six(six_of_host(h), 2, t)) : bg;
+                }
+        }
+        if (!t.tint[k]) continue;
+        // The colours that can be team on this head, each as the screen shows
+        // it under each candidate fade; the candidate matching the most of the
+        // head's pixels is the one in force (none, when the screen is clear).
+        std::vector<uint16_t> cols = {0x015Fu, 0x005Cu, 0x0015u, 0x7228u, 0x6920u, 0x5880u};
+        for (const HeadRule& r : kHeadRules)
+            if (r.bp == t.bp[k] && r.kind == 0 &&
+                std::find(cols.begin(), cols.end(), r.c) == cols.end())
+                cols.push_back(r.c);
+        uint32_t shown[4][32];
+        const size_t nc = std::min<size_t>(cols.size(), 32);
+        for (int cand = 0; cand < 4; ++cand)
+            for (size_t i = 0; i < nc; ++i) shown[cand][i] = host_of_six(fade_six(six_of_ds(cols[i]), cand, t));
+        // Is a head drawn here at all (a paused game shows another page in
+        // the same place)? Every head's top and bottom outline, columns 9-14
+        // of rows 0 and 23, is the black 0C63, faded or not.
+        {
+            bool head = false;
+            for (int cand = 0; cand < 4 && !head; ++cand) {
+                const uint32_t black = host_of_six(fade_six(six_of_ds(0x0C63u), cand, t));
+                int n = 0;
+                for (int row : {0, 23})
+                    for (int x = 9; x <= 14; ++x) {
+                        const int X = hx + x, Y = hy + row;
+                        if (X >= 0 && X <= 255 && Y >= 0 && Y <= 191 && out[(size_t)Y * width + (size_t)(X + ox)] == black)
+                            ++n;
+                    }
+                head = n >= 10;
+            }
+            if (!head) continue;
+        }
+        int best = 0, best_n = -1;
+        for (int cand = 0; cand < 4; ++cand) {
+            int n = 0;
+            for (int y = 0; y < 24; ++y)
+                for (int x = 0; x < 24; ++x) {
+                    const int X = hx + x, Y = hy + y;
+                    if (X < 0 || X > 255 || Y < 0 || Y > 191) continue;
+                    const uint32_t c = out[(size_t)Y * width + (size_t)(X + ox)];
+                    for (size_t i = 0; i < nc; ++i)
+                        if (shown[cand][i] == c) { ++n; break; }
+                }
+            if (n > best_n) { best_n = n; best = cand; }
+        }
         for (int y = 0; y < 24; ++y)
             for (int x = 0; x < 24; ++x) {
                 const int X = hx + x, Y = hy + y;
                 if (X < 0 || X > 255 || Y < 0 || Y > 191) continue;
                 uint32_t& c = out[(size_t)Y * width + (size_t)(X + ox)];
-                // Back to the DS colour, and only if the 2D engine would draw it
-                // exactly so (a fading screen does not match and is left alone).
-                const uint16_t d = (uint16_t)(((c >> 19) & 31u) | (((c >> 11) & 31u) << 5) |
-                                              (((c >> 3) & 31u) << 10));
-                if (ds_host_rgb(d) != c) continue;
-                const int kind = head_team_kind(t.bp[k], d, x, y);
-                if (kind >= 0) c = team_shade_rgb(kind, d, t.sh[k]);
+                for (size_t i = 0; i < nc; ++i) {
+                    if (shown[best][i] != c) continue;
+                    const int kind = head_team_kind(t.bp[k], cols[i], x, y);
+                    if (kind >= 0)
+                        c = host_of_six(fade_six(six_of_host(team_shade_rgb(kind, cols[i], t.sh[k])), best, t));
+                    break;
+                }
             }
     }
     return out.data();
