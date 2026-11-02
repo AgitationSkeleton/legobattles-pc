@@ -11737,6 +11737,7 @@ constexpr uint32_t kCadenceCmpStock = 0x01520004u;   // cmpeq r2, r4
 constexpr uint32_t kCadenceCmp33 = 0x03520021u;      // cmpeq r2, #33 (v1)
 }  // namespace
 
+extern "C" int lb_rules_host_pace(void);   /* lb_teams.cpp, docs/459 */
 extern "C" int lb_cadence_effective(void) {
     static const int env = [] {
         const char* v = std::getenv("LB_CADENCE");
@@ -11746,6 +11747,9 @@ extern "C" int lb_cadence_effective(void) {
     }();
     if (env) return env;
     if (const int d = lb_demo_play_cadence()) return d;
+    // docs/459: joined, the host's pace. Online the match steps only as fast
+    // as its slowest console, so one pace for all is the host's.
+    if (const int h = lb_rules_host_pace(); h > 0) return h;
     return lb_setting_steady_cadence() ? 30 : 20;
 }
 
@@ -15782,6 +15786,59 @@ void teal_release(bool clear) {
 }
 }  // namespace
 
+// ---- BR-0039 (docs/460): maps taller than 96 rows -------------------------
+//
+// The occupation grid (which tiles units stand on) indexes its cells through a
+// row table, u16 rowoff[y] = y * width: FUN_0207D4C4 (ARM, the grid's
+// constructor, map load state 5) fills it for y < the map's height with no
+// bound, and FUN_0207E16C returns rowoff[y] + x for every occupancy query (11
+// direct callers, so no override can stand in). The table is a static at
+// 0x02155230 with room for 96 rows: 0x021552F0, 0xC0 bytes on, is the
+// pathfinder's, created after it (state 6). On a taller map rows 96.. were
+// written into the pathfinder's block and then read back as half a heap
+// pointer, so units in the lower rows met phantom occupants (Ryncat's "stuck
+// on invisible geometry") and heap bytes were written as occupancy.
+//
+// Both literal-pool words that hold the table's address (0x0207D5E8 in the
+// constructor, 0x0207E188 in FUN_0207E16C; no other reference) are pointed at
+// 256 bytes after the teal block (docs/412's run of zeros above the heap),
+// room for 128 rows, the level editor's largest and the map object's (128
+// row pointers at map+0x34). Claimed the way the teal block is: only while all
+// zeros, once a boot. The values are the game's own y * width, so a map of 96
+// rows or fewer behaves exactly as before.
+namespace {
+constexpr uint32_t kRowTable = 0x023F9900u;   // kTealBase + 0x100
+constexpr uint32_t kRowTableSize = 0x100u;    // 128 rows
+constexpr uint32_t kRowStock = 0x02155230u;
+constexpr uint32_t kRowLits[2] = {0x0207D5E8u, 0x0207E188u};
+unsigned g_rows_gen = ~0u;
+bool g_rows_ours = false, g_rows_dead = false;
+}  // namespace
+
+static void apply_tall_maps(void) {
+    if (g_rows_gen != g_boot_gen) {   // a reset reloads the image: stock literals again
+        g_rows_gen = g_boot_gen;
+        if (g_rows_ours)   // the last boot's table, ours to clear
+            for (uint32_t i = 0; i < kRowTableSize; ++i) bus_write_u8(kRowTable + i, 0u);
+        g_rows_ours = g_rows_dead = false;
+    }
+    if (g_rows_ours || g_rows_dead) return;
+    for (uint32_t a : kRowLits)
+        if (bus_read_u32(a) != kRowStock) return;   // not loaded yet, or not this build
+    for (uint32_t i = 0; i < kRowTableSize; ++i)
+        if (bus_read_u8(kRowTable + i)) {
+            g_rows_dead = true;
+            std::fprintf(stderr, "[lb_rows] the block at %08X is in use: maps keep the 96-row table\n",
+                         kRowTable);
+            std::fflush(stderr);
+            return;
+        }
+    for (uint32_t a : kRowLits) bus_write_u32(a, kRowTable);
+    g_rows_ours = true;
+    std::fprintf(stderr, "[lb_rows] the occupation grid's row table moved to %08X (128 rows)\n", kRowTable);
+    std::fflush(stderr);
+}
+
 static void apply_teal(void) {
     static unsigned gen = 0;   // a reset reloads the image: stock again
     if (gen != g_boot_gen) {
@@ -17637,7 +17694,8 @@ extern "C" void lb_patches_on_vblank(void) {
     apply_two_player_maps();
     apply_gold_rush_target();   // SG-0036
     apply_teal();                     // docs/412
-    models_paint();                   // docs/412 teal and docs/437 Shark: model palettes
+    apply_tall_maps();                // BR-0039, docs/460
+    models_paint();                  // docs/412 teal and docs/437 Shark: model palettes
     apply_ai_spectate();              // SG-0002
     ai_opp_tick();                    // docs/414
     brick_log();
@@ -18167,4 +18225,43 @@ extern "C" const uint32_t* lb_top_postprocess(const uint32_t* px, int width) {
             }
     }
     return out.data();
+}
+
+// docs/454: the match picture's use of the same recolour. `px` is a 24x24 HUD
+// icon as lb_teams_hud_icon_rgba returns it (0xAABBGGRR, 0 clear), `bp` the
+// unit's blueprint, `colour` the lobby's team colour (0 red .. 6 teal; the
+// sprite table's row, 0x02127F38, or teal_shade). Each opaque pixel is taken
+// back to the DS colour it was decoded from (the 5-bit channels widen
+// losslessly), run through head_team_kind with the same rules the portraits
+// use, and written in the colour's shades at full brightness (team_shade_rgb;
+// no fade). Red is recoloured too: the HUD icons are not all drawn in red
+// (the King's army's are blue, which head_team_kind also knows). Returns 1
+// when the icon was recoloured.
+extern "C" int lb_portrait_team_rgba(int bp, int colour, unsigned int px[576]) {
+    if (!px || colour < 0 || colour > 6) return 0;
+    uint16_t sh[3];
+    for (unsigned i = 0; i < 3; ++i)
+        sh[i] = colour == 6 ? teal_shade(i) : (uint16_t)bus_read_u16(0x02127F38u + 6u * (unsigned)colour + 2u * i);
+    // The 5-bit channel as the 2D engine widens it (ds_host_rgb), for the way back.
+    auto widen = [](uint32_t v5) { const uint32_t v6 = v5 << 1; return ((v6 << 2) | (v6 >> 4)) & 0xFFu; };
+    auto narrow = [&](uint32_t v8) {
+        for (uint32_t v5 = 0; v5 < 32; ++v5)
+            if (widen(v5) == v8) return (int)v5;
+        return -1;
+    };
+    int changed = 0;
+    for (int y = 0; y < 24; ++y)
+        for (int x = 0; x < 24; ++x) {
+            unsigned int& p = px[y * 24 + x];
+            if (!(p >> 24)) continue;
+            const int r = narrow(p & 0xFFu), g = narrow((p >> 8) & 0xFFu), b = narrow((p >> 16) & 0xFFu);
+            if (r < 0 || g < 0 || b < 0) continue;
+            const uint16_t c = (uint16_t)(r | (g << 5) | (b << 10));
+            const int kind = head_team_kind(bp, c, x, y);
+            if (kind < 0) continue;
+            const uint32_t h = team_shade_rgb(kind, c, sh);   // 0xFFRRGGBB
+            p = 0xFF000000u | ((h & 0xFFu) << 16) | (h & 0xFF00u) | ((h >> 16) & 0xFFu);
+            changed = 1;
+        }
+    return changed;
 }

@@ -352,6 +352,19 @@ bool map_facts(std::vector<uint8_t> m, int* world, int* players) {
     return p < m.size() && m[p] == 0x21;
 }
 
+// BR-0039 (docs/460): the largest map the game can hold is 128x128. The map
+// object keeps one row pointer per row at +0x34 with room for 128, and the
+// occupation grid's row table the port moves (lb_patches.cpp, apply_tall_maps)
+// has 128. Every stock map is 96, 64 or 48 square. A larger map is left out
+// with a line in the report, rather than overrun those.
+constexpr int kMaxMapSide = 128;
+bool map_too_big(std::vector<uint8_t> m, int* w, int* h) {
+    if (!comp_unwrap(&m) || m.size() < 9 || std::memcmp(m.data(), "MAP", 3) != 0) return false;
+    *w = m[7];
+    *h = m[8];
+    return *w > kMaxMapSide || *h > kMaxMapSide;
+}
+
 // String id `id` of a LANG file (Latin-1), or "".
 std::string lng_string(const std::vector<uint8_t>& f, uint32_t id) {
     if (f.size() < 0x10 || std::memcmp(f.data(), "LANG", 4) != 0) return "";
@@ -496,6 +509,16 @@ bool loose_folder_map(const std::filesystem::path& f,
                                  f.filename().string().c_str(), slot);
             }
             if (!ok) return false;
+            {
+                int bw = 0, bh = 0;
+                if (map_too_big(m.map, &bw, &bh)) {
+                    std::fprintf(stderr, "[lb_mods] %s: %dx%d is larger than the game "
+                                 "supports (%dx%d); left out\n",
+                                 f.filename().string().c_str(), bw, bh, kMaxMapSide,
+                                 kMaxMapSide);
+                    return false;
+                }
+            }
             if (!map_facts(m.map, &m.world, &m.players) || m.players < 2) {
                 std::fprintf(stderr, "[lb_mods] %s: %s.map is not a map the game "
                              "reads, skipped\n", f.filename().string().c_str(),
@@ -562,6 +585,16 @@ void scan(const std::vector<uint8_t>& rom, const Nitro& own) {
             if (mem_read(rom, own, std::string("Maps/") + stem + ".map", &stock) &&
                 stock == m.map)
                 continue;                                  // the stock map
+            {
+                int bw = 0, bh = 0;
+                if (map_too_big(m.map, &bw, &bh)) {
+                    std::fprintf(stderr, "[lb_mods] %s: %s: %dx%d is larger than the game "
+                                 "supports (%dx%d); left out\n",
+                                 p.filename().string().c_str(), stem, bw, bh, kMaxMapSide,
+                                 kMaxMapSide);
+                    continue;
+                }
+            }
             if (!map_facts(m.map, &m.world, &m.players) || m.players < 2) {
                 std::fprintf(stderr, "[lb_mods] %s: %s.map is not a map the "
                              "game reads, skipped\n",

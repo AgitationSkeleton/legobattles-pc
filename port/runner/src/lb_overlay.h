@@ -619,6 +619,8 @@ int lb_net_fallback_on(void);
 const char* lb_balance_family(int slot);
 void lb_matchpic_tick(void);           /* LB_MATCHPIC_TEST */
 int  lb_setting_match_picture(void);
+int  lb_setting_match_picture_tint(void);   // SG-0055: the picture's icons in team colours
+int  lb_portrait_team_rgba(int bp, int colour, unsigned int px[576]);   // lb_patches.cpp
 const char* lb_level_map_stem(void);   /* "mpNN" / "z/NN" / campaign stem */
 int  lb_rom_read_unwrapped(const char* path, unsigned char* out, int cap);
 int  lb_teams_hud_icon_rgba(int blueprint, unsigned int out[576]);

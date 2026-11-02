@@ -3165,6 +3165,40 @@ void lb_leveledit_draw(SDL_Renderer* ren) {
         if (const char* want = std::getenv("LB_EDITOR_OPEN"))
             for (int k = 0; k < (int)(sizeof kStock / sizeof kStock[0]); ++k)
                 if (std::strcmp(kStock[k].stem, want) == 0) load_stock(k);
+        // Test aid (BR-0039, docs/460): LB_EDITOR_GROW=WxH grows the opened map
+        // to that size, its last 8 rows and columns and everything new grass
+        // inside a tree border, and saves it as a mod map ("Grown WxH").
+        int gw = 0, gh = 0;
+        if (const char* g = std::getenv("LB_EDITOR_GROW"))
+            if (std::sscanf(g, "%dx%d", &gw, &gh) == 2 && gw >= g_doc.m.w && gh >= g_doc.m.h) {
+                lvl::Map m = g_doc.m;
+                const int ow = m.w, oh = m.h;
+                m.w = std::min(gw, kMaxSize);
+                m.h = std::min(gh, kMaxSize);
+                const size_t cells = (size_t)m.w * m.h;
+                std::vector<uint8_t> A(cells, lvl::kGrass), B(cells, 0), C(cells, 0), trees(cells, 0);
+                std::vector<uint16_t> E(cells, 116);
+                for (int y = 0; y < oh; ++y)
+                    for (int x = 0; x < ow; ++x) {
+                        const size_t s = (size_t)y * ow + x, t = (size_t)y * m.w + x;
+                        A[t] = m.A[s]; B[t] = m.B[s]; C[t] = m.C[s]; E[t] = m.E[s]; trees[t] = g_doc.trees[s];
+                    }
+                m.A = std::move(A); m.B = std::move(B); m.C = std::move(C); m.E = std::move(E);
+                m.D = lvl::trees_encode(trees);
+                char name[32];
+                std::snprintf(name, sizeof name, "Grown %dx%d", m.w, m.h);
+                adopt(std::move(m), {}, name);
+                for (int y = 0; y < g_doc.m.h; ++y)
+                    for (int x = 0; x < g_doc.m.w; ++x) {
+                        const bool edge = x < 2 || y < 2 || x >= g_doc.m.w - 2 || y >= g_doc.m.h - 2;
+                        if (edge) set_cell(x, y, kMatTrees);
+                        else if (x >= ow - 8 || y >= oh - 8) set_cell(x, y, kMatGrass);
+                    }
+                retile(0, 0, g_doc.m.w - 1, g_doc.m.h - 1);
+                std::fprintf(stderr, "[lb_editor] test aid: grown to %dx%d, %s\n", g_doc.m.w, g_doc.m.h,
+                             save_folder() ? "saved" : "NOT saved");
+                std::fflush(stderr);
+            }
     }
     WorldAssets& wa = world_assets(g_doc.world);
     if (!wa.ok) {

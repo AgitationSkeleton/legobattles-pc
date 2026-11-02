@@ -241,6 +241,7 @@ long section(const std::vector<uint8_t>& b, const char* magic) {
 // say so instead of mislabelling.
 extern "C" int lb_cunits_count(void);              // lb_cunits.cpp, docs/448
 extern "C" int lb_cunits_hashes(unsigned long long* out, int cap);
+extern "C" int lb_cadence_effective(void);         // lb_patches.cpp, docs/351
 extern "C" void lb_cunits_lobby_set(const unsigned long long* hashes, int n);
 extern "C" int lb_cunits_template(int k);
 extern "C" const char* lb_cunits_name(int k);
@@ -1128,6 +1129,7 @@ uint8_t g_flags_recv = 0;                  // docs/406; under g_rules_mu
 int g_cslots_recv = 0;                     // docs/436; under g_rules_mu
 int g_gold_recv = 0;                       // SG-0036; under g_rules_mu
 unsigned g_ar_recv = 0;                    // SG-0035: the host's Action Replay hash; under g_rules_mu
+int g_pace_recv = 0;                       // the host's game pacing, 20 or 30 (0 none); under g_rules_mu
 // docs/413: the host's mod maps as its rules list them (key, content hash,
 // name), and whether its rules carried the list at all (an older build's
 // do not).
@@ -2396,6 +2398,16 @@ extern "C" int lb_rules_outgoing(unsigned char* buf, int cap) {
                             for (int i = 0; i < cn; ++i)
                                 for (int b = 0; b < 8; ++b)
                                     buf[n++] = (unsigned char)(cu[(size_t)(first + i)] >> (8 * b));
+                            // Then the 'P' page: 'P', a version (1) and the
+                            // host's game pacing (20 the cartridge's clock, 30
+                            // steady), which a joiner plays at. Online the
+                            // match steps at the slowest console's pace, so
+                            // one pace for all is the host's (docs/459).
+                            if (n + 3 <= cap) {
+                                buf[n++] = 'P';
+                                buf[n++] = 1;
+                                buf[n++] = (unsigned char)lb_cadence_effective();
+                            }
                         }
                     }
                 }
@@ -2440,6 +2452,7 @@ extern "C" void lb_rules_on_leave(void) {
     g_cslots_recv = 0;
     g_gold_recv = 0;
     g_ar_recv = 0;
+    g_pace_recv = 0;
     g_maps_recv.clear();
     g_maps_recv_has = false;
     g_bal_done = false;
@@ -2514,6 +2527,14 @@ extern "C" int lb_rules_host_ar_hash(unsigned* out) {
     std::lock_guard<std::mutex> lk(g_rules_mu);
     if (out) *out = g_bans_recv_ok ? g_ar_recv : 0;
     return 0;
+}
+
+// docs/459: -1 when this machine decides (not joined), 0 when the host sent no
+// pacing, else its pace (20 or 30).
+extern "C" int lb_rules_host_pace(void) {
+    if (!net_joined(lb_net_guest_state())) return -1;
+    std::lock_guard<std::mutex> lk(g_rules_mu);
+    return g_bans_recv_ok ? g_pace_recv : 0;
 }
 
 extern "C" int lb_rules_host_gold_target(void) {   // SG-0036
@@ -2721,6 +2742,20 @@ extern "C" void lb_rules_incoming(const unsigned char* buf, int len,
             for (int b = 0; b < 8; ++b) h |= (unsigned long long)buf[at + b] << (8 * b);
             return h;
         };
+        // The 'P' page after it (docs/459): the host's pacing; none from an
+        // older host, whose joiners keep their own.
+        auto read_pace = [&](int p_at) {
+            int pace = 0;
+            if (p_at >= 0 && p_at + 3 <= len && buf[p_at] == 'P' && buf[p_at + 1] == 1 &&
+                (buf[p_at + 2] == 20 || buf[p_at + 2] == 30))
+                pace = buf[p_at + 2];
+            if (pace != g_pace_recv) {
+                std::fprintf(stderr, "[lb_teams] the host's game pacing: %s\n",
+                             pace == 30 ? "steady 30 Hz" : pace == 20 ? "the cartridge's clock" : "none sent");
+                std::fflush(stderr);
+            }
+            g_pace_recv = pace;
+        };
         if (u_at >= 0 && u_at + 11 <= len && buf[u_at] == 'U' && buf[u_at + 1] == 2) {
             // Version 2: one page of the set. The set is handed on only when
             // every page of the same list (total and check) has arrived.
@@ -2734,6 +2769,7 @@ extern "C" void lb_rules_incoming(const unsigned char* buf, int len,
                                    ((unsigned)buf[u_at + 9] << 16) | ((unsigned)buf[u_at + 10] << 24);
             const int want_pages = total ? (total + kUnitsPerPage - 1) / kUnitsPerPage : 1;
             const int first = page * kUnitsPerPage;
+            read_pace(u_at + 11 + 8 * c);
             if (pages == want_pages && page < pages && c == std::min(kUnitsPerPage, total - first) &&
                 u_at + 11 + 8 * c <= len) {
                 if (total != have_total || check != have_check) {
@@ -2757,6 +2793,7 @@ extern "C" void lb_rules_incoming(const unsigned char* buf, int len,
                 if (c <= 16 && u_at + 3 + 8 * c <= len)
                     for (int i = 0; i < c; ++i) cu[cn++] = u64_at(u_at + 3 + 8 * i);
             }
+            read_pace(-1);   // a version 1 host predates the page
             lb_cunits_lobby_set(cu, cn);
         }
     }

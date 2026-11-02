@@ -302,6 +302,7 @@ struct Player {
     int bp[9] = {};
     std::string name;
     uint32_t colour = 0;   // BR-0008: the lobby's team colour (0: not known)
+    int colour_idx = -1;   // SG-0055: that colour's index (0 red .. 6 teal; -1 not known: icons stay stock)
 };
 constexpr int kMaxPlayers = 8;
 
@@ -312,6 +313,11 @@ constexpr int kMaxPlayers = 8;
 // light one, eased toward white so a name reads on the blue backdrop.
 uint32_t bgr555_to_rgba(unsigned c);
 uint32_t team_colour_rgba(unsigned c);
+int lobby_colour_index(int player) {
+    if (player < 0 || player >= 3) return -1;
+    const unsigned c = (bus_read_u8(0x0215B814u + 0x2Cu * (uint32_t)player + 0x20u) >> 2) & 7u;
+    return c <= 6u ? (int)c : -1;
+}
 uint32_t lobby_colour(int player) {
     if (player < 0 || player >= 3) return 0;
     return team_colour_rgba((bus_read_u8(0x0215B814u + 0x2Cu * (uint32_t)player + 0x20u) >> 2) & 7u);
@@ -444,12 +450,16 @@ void draw_preview(Img& im, int x, int y, int w, const std::vector<uint8_t>& idx,
         }
 }
 
-void draw_icon(Img& im, int x, int y, int bp) {
+// `colour`: the player's team colour index, which recolours the icon the way the
+// in-game portraits are (SG-0055, docs/454) when that setting is on; -1 (the
+// colour not known, or the banned strip) leaves it stock.
+void draw_icon(Img& im, int x, int y, int bp, int colour = -1) {
     unsigned int icon[576];
     if (!lb_teams_hud_icon_rgba(bp, icon)) {
         fill_rect(im, x, y, 24, 24, rgba(0, 0, 0), 90);
         return;
     }
+    if (colour >= 0 && lb_setting_match_picture_tint()) lb_portrait_team_rgba(bp, colour, icon);
     fill_rect(im, x, y, 24, 24, rgba(0, 0, 0), 70);
     for (int j = 0; j < 24; ++j)
         for (int i = 0; i < 24; ++i) {
@@ -489,7 +499,7 @@ Img render(const Match& m) {
         draw_text(im, x0 + 10, 7, p.name.c_str(), col, colW - 20, true);
         for (int k = 0; k < 9; ++k) {
             const int y = kHead + k * kPitch;
-            draw_icon(im, x0 + 8, y, p.bp[k]);
+            draw_icon(im, x0 + 8, y, p.bp[k], p.colour_idx);
             draw_text(im, x0 + 8 + 28, y + (24 - text_height()) / 2,
                       lb_teams_unit_name_stock(p.bp[k]), rgba(255, 255, 255), colW - 8 - 32 - 4);
         }
@@ -830,6 +840,7 @@ extern "C" void lb_matchpic_note_player(int player, const unsigned char rec[20])
         name[ok ? n : 0] = '\0';
     }
     p.colour = lobby_colour(player);
+    p.colour_idx = lobby_colour_index(player);
     p.name = name[0] ? name : ("Player " + std::to_string(player + 1));
     std::string ids;
     for (int k = 0; k < 9; ++k) {
@@ -1027,6 +1038,7 @@ extern "C" void lb_matchpic_tick(void) {
         p.have = true;
         p.name = "Tester" + std::to_string(i + 1);
         p.colour = team_colour_rgba(kTestColour[i]);
+        p.colour_idx = (int)kTestColour[i];
         for (int k = 0; k < 9; ++k) p.bp[k] = kKing[k] + (i ? 20 : 0) * 0;
         m.players.push_back(p);
     }

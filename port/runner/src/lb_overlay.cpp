@@ -105,6 +105,7 @@ extern "C" void lb_quick_request(int action);   /* lb_patches.cpp */
 extern "C" int lb_top_buttons(int* out, int max);   /* lb_patches.cpp, SG-0006 */
 extern "C" int lb_top_minimap(void);                /* lb_patches.cpp */
 extern "C" int lb_top_occupants(void);              /* lb_patches.cpp */
+extern "C" int lb_rules_host_pace(void);           /* lb_teams.cpp, docs/459 */
 
 namespace {
 
@@ -460,6 +461,7 @@ struct Settings {
     bool master_choice = false;
     bool master_https = true;
     bool match_picture = true;     // docs/428
+    bool match_picture_tint = true;   // SG-0055: the picture's icons in each player's team colour
     bool scores_opt_out = false;   // SG-0018: keep out of the score tables
     char player_id[40] = "";       // docs/443: random, 32 hex; made on first use, never shown
     // Record every session to lb-session-*.lbdemo. Off by default;
@@ -868,6 +870,8 @@ extern "C" void lb_settings_save(void) {
                   g_set.master_https ? "true" : "false"); o += buf;   // docs/419
     std::snprintf(buf, sizeof buf, "  \"match_picture\": %s,\n",
                   g_set.match_picture ? "true" : "false"); o += buf;   // docs/428
+    std::snprintf(buf, sizeof buf, "  \"match_picture_tint\": %s,\n",
+                  g_set.match_picture_tint ? "true" : "false"); o += buf;   // SG-0055
     std::snprintf(buf, sizeof buf, "  \"scores_opt_out\": %s,\n",
                   g_set.scores_opt_out ? "true" : "false"); o += buf;   // SG-0018
     json_put_str(o, "player_id", g_set.player_id, true);   // docs/443
@@ -1084,6 +1088,7 @@ extern "C" void lb_settings_load(void) {
     json_get_bool(s, "master_choice", &g_set.master_choice); // docs/424
     json_get_bool(s, "master_https", &g_set.master_https);   // docs/419
     json_get_bool(s, "match_picture", &g_set.match_picture);   // docs/428
+    json_get_bool(s, "match_picture_tint", &g_set.match_picture_tint);   // SG-0055
     json_get_bool(s, "scores_opt_out", &g_set.scores_opt_out);   // SG-0018
     json_get_str(s, "player_id", g_set.player_id, sizeof g_set.player_id);   // docs/443
     json_get_bool(s, "record_sessions", &g_set.record_sessions);
@@ -1641,8 +1646,13 @@ void tab_display() {
     help("Smooth, even game steps instead of the cartridge's uneven ones.\n"
          "The game runs about 19% slower, likely the DS's real pace.\n"
          "Off: the pace melonDS plays at (units build and move about\n"
-         "19% faster, with the uneven steps).");
+         "19% faster, with the uneven steps).\n"
+         "Online, everyone plays at the host's choice.");
     badge(WIRED);
+    // docs/459: joined, the host's pace applies (lb_cadence_effective).
+    if (const int hp = lb_rules_host_pace(); hp > 0)
+        ImGui::TextDisabled("  In this lobby the host's pacing applies: %s.",
+                            hp == 30 ? "steady 30 Hz" : "the cartridge's (uneven, faster)");
 
     // docs/387: a Level Palettes option (Per-Mod/Vanilla/FactionWars/Random,
     // default Per-Mod) and Force Tileset (Off/Castle/Pirates/Mars/Random,
@@ -3258,6 +3268,13 @@ void tab_multiplayer() {
         ImGui::Checkbox("Share Match Telemetry", &g_set.match_picture);
         help("When you host, sends a match summary (teams, units, map, bans)\n"
              "to the server's Discord log.");
+        ImGui::BeginDisabled(!g_set.match_picture);
+        ImGui::Checkbox("Team-Colour Portraits in the Match Picture", &g_set.match_picture_tint);
+        help("Draws each player's unit icons in that player's team colour in\n"
+             "the match summary, by the same rules as Team-Colour Unit\n"
+             "Portraits. Off keeps them red.");
+        badge(WIRED);   // SG-0055
+        ImGui::EndDisabled();
         ImGui::Checkbox("Fetch a host's mod map I don't have", &g_set.fetch_maps);
         help("Downloads a host's mod map you're missing from the community\n"
              "archive into mods/maps/_archive. Restart the game to use it.");
@@ -10101,6 +10118,16 @@ extern "C" int lb_teal_live(void) {
 
 // docs/437: Tint creatures by team (default on). LB_CREATURE_TINT=0|1 forces it.
 extern "C" int lb_setting_creature_portraits(void) { return g_set.creature_portraits ? 1 : 0; }
+
+// SG-0055: team-colour icons in the match picture (default on). LB_MATCHPIC_TINT=0|1 forces it.
+extern "C" int lb_setting_match_picture_tint(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_MATCHPIC_TINT");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.match_picture_tint ? 1 : 0);
+}
 
 // docs/454: LB_PORTRAIT_TINT=0|1 forces it.
 extern "C" int lb_setting_portrait_tint(void) {
