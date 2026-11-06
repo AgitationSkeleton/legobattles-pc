@@ -410,6 +410,9 @@ struct ModMap {
 const char* const kMiniExt[4] = {"mini.NCGR", "mini.NCBR", "miniNT.NCGR",
                                  "miniNT.NCBR"};
 std::vector<ModMap> g_maps;
+// BR-0046: the language files' id count after the strings this build appended
+// (map names and descriptions, custom unit names); 0 when none were.
+uint32_t g_lang_ids = 0;
 // docs/439: the stem of mod map k is "<letter>/NN": 99 maps to a letter, 'z'
 // first, then 'y'. (The game copies the stem from a 5-byte "mpNN" string, so
 // it is four characters.) Two letters are two groups of three directories.
@@ -887,7 +890,13 @@ extern "C" int lb_mods_build(std::vector<uint8_t>* rom_p) {
     }
     // Every language file gets the maps' names and descriptions appended; the
     // same ids in each (they all hold 3,064 in the retail ROM).
+    // BR-0046 (docs/467): the first appended id, the retail count 3,064, is the
+    // cartridge's "no text" value, so it is left an empty string; the names
+    // start after it. lb_patches.cpp's apply_text_count moves that value and
+    // the text widgets' limit to the new count.
     std::vector<std::string> strings;
+    if (!g_maps.empty() || !cu_names.empty()) strings.push_back(std::string());
+    const uint32_t map_first_string = (uint32_t)strings.size();
     for (const ModMap& m : g_maps) { strings.push_back(m.name); strings.push_back(m.desc); }
     const size_t cu_first_string = strings.size();   // docs/448: one name per custom unit
     for (const std::string& nm : cu_names) strings.push_back(nm);
@@ -917,6 +926,7 @@ extern "C" int lb_mods_build(std::vector<uint8_t>* rom_p) {
             fs.fat[(size_t)this_id] = place(x);
         }
     }
+    g_lang_ids = first_set ? first_new + (uint32_t)strings.size() : 0u;
     if (!first_set && !g_maps.empty()) {
         g_maps.clear();
         if (!cu) return 0;
@@ -948,8 +958,8 @@ extern "C" int lb_mods_build(std::vector<uint8_t>* rom_p) {
         }
     }
     for (size_t k = 0; k < n; ++k) {
-        g_maps[k].name_id = first_new + 2u * (uint32_t)k;
-        g_maps[k].desc_id = first_new + 2u * (uint32_t)k + 1u;
+        g_maps[k].name_id = first_new + map_first_string + 2u * (uint32_t)k;
+        g_maps[k].desc_id = first_new + map_first_string + 2u * (uint32_t)k + 1u;
     }
     // The tables, after the data.
     const std::vector<uint8_t> fnt = fs.serialize_fnt();
@@ -990,6 +1000,7 @@ extern "C" int lb_mods_build(std::vector<uint8_t>* rom_p) {
 }
 
 extern "C" int lb_mods_count(void) { return (int)g_maps.size(); }
+extern "C" unsigned lb_mods_lang_ids(void) { return g_lang_ids; }   // BR-0046
 // docs/439: the most mod maps the game takes, the stem of map k ("z/01" ..
 // "y/99"), and the map a stem names (-1 when it is not a mod map's).
 extern "C" int lb_mods_limit(void) { return kMaxMods; }

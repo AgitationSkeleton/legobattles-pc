@@ -150,6 +150,7 @@ void        lb_request_swap_screens(void);   // SG-0012
 int         lb_screens_swapped(void);
 int         lb_setting_skip_intro(void);   // SG-0016
 int         lb_boot_skip_wanted(void);     // SG-0016, lb_patches.cpp
+int         lb_ff_extra_frames(void);      // BR-0041, lb_overlay.cpp
 int         lb_take_game_reset(void);
 void        lb_port_on_guest_reset(void);
 // docs/396: typing on the game's keyboards (lb_patches.cpp). ch is a
@@ -356,6 +357,9 @@ const char* lb_balance_host_set_why(void);
 enum { LB_BAL_SPELL_FIELD0 = 10, LB_BAL_SPELLS = 5 };
 // docs/426: units' fields 15..25 are the Traits section (lb_balance.cpp).
 enum { LB_BAL_TRAIT_FIELD0 = 15, LB_BAL_TRAITS = 11, LB_BAL_SPEED_FIELD = 4 };
+// docs/463: units' fields 26..30 are the port's capability bytes (Mountains,
+// Hotwire/EMP/ESP immune, Construction style), kept in the record's padding.
+enum { LB_BAL_PORT_FIELD0 = 26, LB_BAL_PORT_FIELDS = 5 };
 // docs/426: a blueprint diffed against the player's own; fills msg; returns the
 // number of values set, or -1 on failure.
 int lb_balance_import_file(const char* path, char* msg, int msg_cap);
@@ -363,6 +367,9 @@ int lb_pick_balance_rom_file(char* buf, int cap);
 // The reverse: the own blueprint with the player's values, as an Entities.ebp.
 int lb_balance_export_ebp(const char* path, char* msg, int msg_cap);
 int lb_pick_ebp_save_file(char* buf, int cap);
+/* SG-0061: the custom unit lab's Convert tool. kind 0 an .NCBR, 1 an .NCLR, 2 a .PNG;
+   saving 0 opens an existing file, else chooses a destination. */
+int lb_pick_art_file(char* buf, int cap, int saving, int kind);
 int         lb_balance_field_count(int kind);
 const char* lb_balance_field_name(int kind, int field);
 int         lb_balance_field_max(int kind, int field);   // the field's range
@@ -561,6 +568,7 @@ void lb_overlay_notice(const char* text);
 // docs/427: the notification sound (lb_sfx.cpp), on its own audio device.
 int  lb_setting_notify_sound(void);    /* 0 off, 1 Group set (default) .. 8 */
 int  lb_setting_notify_volume(void);   /* 0..100 */
+int  lb_setting_cunit_volume(void);    /* 0..200 percent, BR-0047 */
 const char* lb_sfx_choice_name(int i);
 void lb_sfx_tick(void);
 void lb_sfx_preview(void);
@@ -573,6 +581,11 @@ void lb_matchpic_on_playing(void);     /* host only, once per match */
 void lb_discord_tick(void);
 int  lb_setting_discord_status(void);
 int  lb_setting_discord_hero(void);
+int  lb_setting_discord_invites(void);   /* docs/466 */
+/* docs/466: 1 while this machine's lobby is open with a free seat; fills the
+   master server, its port, the room code and the seats. lb_net.cpp. */
+int  lb_net_host_invite(char* server, int scap, int* port, char* code, int ccap,
+                        int* players, int* maxp);
 /* SG-0018 (lb_scores.cpp): a match's post-match statistics, observe only. */
 typedef struct LbMatchStats {
     int valid; int won;
@@ -815,6 +828,9 @@ int          lb_setting_ai_spectate(void);   /* SG-0002 */
 /* docs/414: extra computer opponents in Free Play, packed (kind 17). */
 int          lb_setting_ai_opp_packed(void);
 int          lb_demo_play_ai_opp(void);
+int          lb_setting_ai_bridges(void);      /* SG-0071 */
+int          lb_demo_play_ai_bridges(void);
+int          lb_ai_bridges_live(void);
 int          lb_setting_ai_cross_fire(void);   /* SG-0051 */
 int          lb_demo_play_ai_cross(void);
 int          lb_ai_cross_live(void);

@@ -4,8 +4,9 @@
 // same Discord channel and buttons (custom ids "lvl:unit:..." so the bot, which
 // forwards every "lvl:" press, needs no change).
 //
-//   POST /units/upload  {key, name, author, category, template, bundle, sheet,
+//   POST /units/upload  {key, name, author, credits?, category, template, bundle, sheet,
 //                        thumb, sounds:[{name, wav}]}      binary fields: base64
+//                        (credits: optional collaborators line, SG-0070)
 //   GET  /units/list?sort=new|old|downloads|likes&category=<0..19>&offset=&limit=
 //   GET  /units/get?id=N[&count=1]    the bundle (count: a download)
 //   GET  /units/thumb?id=N            the small picture for the catalogue
@@ -27,6 +28,8 @@ const MAX_SHEET = 768 * 1024;
 const MAX_THUMB = 64 * 1024;
 const MAX_WAV = 256 * 1024;
 const MAX_SOUNDS = 8;
+// SG-0070: the optional credits line: letters, digits, space and _ - ' . , & ! ?, 1..60.
+const CREDITS_OK = /^[\w \-'.,&!?]{1,60}$/u;
 export const MAX_UNIT_BODY = Math.ceil((MAX_BUNDLE + MAX_SHEET + MAX_THUMB + MAX_SOUNDS * MAX_WAV) * 4 / 3) + 16384;
 const NAME_OK = /^[\w \-'.!?]{1,24}$/u;
 const KEY_OK = /^[0-9a-fA-F]{32}$/;
@@ -131,7 +134,7 @@ function unitEmbed(row, status) {
                : status === 'banned' ? 0x8b0000 : 0xfaa61a;
   return {
     title: row.name,
-    description: `Custom unit by ${row.author || 'unknown'}`,
+    description: `Custom unit by ${row.author || 'unknown'}${row.credits ? ` (credits: ${row.credits})` : ''}`,
     color: colour,
     fields: [
       { name: 'Kind', value: CATEGORY_NAMES[row.category] || '?', inline: true },
@@ -166,6 +169,9 @@ export function unitsSetup(sql) {
       category INTEGER, template INTEGER, sounds INTEGER, size INTEGER, status TEXT, owner TEXT, addr TEXT,
       created INTEGER, decided INTEGER, message TEXT, downloads INTEGER DEFAULT 0, likes INTEGER DEFAULT 0,
       bundle BLOB, thumb BLOB)`);
+  // SG-0070: older databases lack the credits column; add it once. The error
+  // from a table that already has it is the expected case, so it is ignored.
+  try { sql.exec('ALTER TABLE units ADD COLUMN credits TEXT'); } catch { /* already there */ }
   sql.exec('CREATE INDEX IF NOT EXISTS units_status ON units (status, id)');
   sql.exec('CREATE TABLE IF NOT EXISTS unit_likes (unit INTEGER, owner TEXT, PRIMARY KEY (unit, owner))');
 }
@@ -181,7 +187,7 @@ export async function unitsFetch(obj, request, url, path) {
     const cat = Number.parseInt(url.searchParams.get('category') ?? '', 10);
     const byCat = Number.isInteger(cat) && cat >= 0 && cat <= MAX_CATEGORY;
     const rows = sql.exec(
-      `SELECT id, name, author, category, template, sounds, size, downloads, likes, created, hash FROM units
+      `SELECT id, name, author, credits, category, template, sounds, size, downloads, likes, created, hash FROM units
          WHERE status = 'approved' ${byCat ? 'AND category = ?' : ''} ORDER BY ${order} LIMIT ? OFFSET ?`,
       ...(byCat ? [cat, limit, offset] : [limit, offset])).toArray();
     const total = sql.exec(`SELECT COUNT(*) AS n FROM units WHERE status = 'approved' ${byCat ? 'AND category = ?' : ''}`,
@@ -191,12 +197,12 @@ export async function unitsFetch(obj, request, url, path) {
   if (request.method === 'GET' && (path === '/units/get' || path === '/units/thumb')) {
     const id = Number.parseInt(url.searchParams.get('id') || '', 10);
     if (!Number.isFinite(id) || id < 1) return json(400, { ok: false, error: 'id' });
-    const r = sql.exec("SELECT id, name, author, category, template, hash, bundle, thumb FROM units WHERE id = ? AND status = 'approved'", id).toArray()[0];
+    const r = sql.exec("SELECT id, name, author, credits, category, template, hash, bundle, thumb FROM units WHERE id = ? AND status = 'approved'", id).toArray()[0];
     if (!r) return json(404, { ok: false, error: 'no such unit' });
     if (path === '/units/thumb')
       return json(200, { ok: true, id: r.id, png: r.thumb ? bytesB64(new Uint8Array(r.thumb)) : '' }, 'public, max-age=86400');
     if (url.searchParams.get('count') === '1') sql.exec('UPDATE units SET downloads = downloads + 1 WHERE id = ?', id);
-    return json(200, { ok: true, id: r.id, name: r.name, author: r.author, category: r.category, template: r.template,
+    return json(200, { ok: true, id: r.id, name: r.name, author: r.author, credits: r.credits || '', category: r.category, template: r.template,
       hash: r.hash, bundle: bytesB64(new Uint8Array(r.bundle)) });
   }
   if (request.method === 'POST' && path === '/units/like') {
@@ -252,6 +258,9 @@ async function upload(obj, request) {
   if (!name) return json(400, { ok: false, error: 'the unit name is not allowed' });
   const author = b.author ? clean(b.author) : '';
   if (author === null) return json(400, { ok: false, error: 'the author name is not allowed' });
+  // SG-0070: optional; absent from older clients. Same swear filter as the names.
+  const credits = b.credits ? String(b.credits).trim() : '';
+  if (credits && (!CREDITS_OK.test(credits) || obj.swear(credits))) return json(400, { ok: false, error: 'the credits are not allowed' });
   const category = Number.parseInt(b.category, 10);
   if (!Number.isInteger(category) || category < 0 || category > MAX_CATEGORY) return json(400, { ok: false, error: 'category' });
   const bundle = b64bytes(b.bundle, MAX_BUNDLE);
@@ -287,9 +296,9 @@ async function upload(obj, request) {
   if (sql.exec('SELECT 1 FROM units WHERE hash = ?', hash).toArray().length)
     return json(409, { ok: false, error: 'this unit was uploaded before' });
   const status = cfg.auto_approve ? 'approved' : 'pending';
-  sql.exec(`INSERT INTO units (hash, name, author, category, template, sounds, size, status, owner, addr, created, bundle, thumb)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    hash, name, author || '', category, v.unit.template, sounds.length, bundle.length, status, owner, addr, now, bundle, thumb);
+  sql.exec(`INSERT INTO units (hash, name, author, credits, category, template, sounds, size, status, owner, addr, created, bundle, thumb)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    hash, name, author || '', credits, category, v.unit.template, sounds.length, bundle.length, status, owner, addr, now, bundle, thumb);
   const row = sql.exec('SELECT * FROM units WHERE hash = ?', hash).toArray()[0];
   const msg = await post(env, unitEmbed(row, status), unitButtons(row, status), sheet, sounds);
   if (msg) sql.exec('UPDATE units SET message = ? WHERE id = ?', msg, row.id);

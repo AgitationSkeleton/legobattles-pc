@@ -41,3 +41,16 @@ bool lb_cunits_folder_sheet(const std::string& folder, int tmpl, const std::stri
 bool lb_cunits_folder_bundle(const std::string& folder, std::vector<uint8_t>* out);
 bool lb_cunits_unpack(const std::vector<uint8_t>& bundle, const std::string& folder);
 bool lb_cunits_png_rgba(const std::vector<uint8_t>& png, int* w, int* h, std::vector<uint32_t>* px);
+
+// SG-0061, the lab's Convert tool. An .NCBR (raw or COMP-wrapped, 4bpp, linear
+// or tiled) as 4-bit palette indices; false with `why` set otherwise.
+bool lb_cunits_ncbr_decode(const std::vector<uint8_t>& file, int* w, int* h, std::vector<uint8_t>* idx,
+                           std::string* why);
+// Bank `bank` (16 colours) of an .NCLR as 0xAABBGGRR; entry 0 is clear.
+bool lb_cunits_nclr_decode(const std::vector<uint8_t>& file, int bank, uint32_t out[16]);
+// A PNG as a linear 4bpp .NCBR, sized up to whole 8-pixel tiles with clear
+// pixels. A 16-colour indexed PNG keeps its indices (the lab's own exports);
+// any other picture takes the nearest of pal[1..15] (0xAABBGGRR). `comp` wraps
+// the file the way the cartridge's own are.
+bool lb_cunits_png_to_ncbr(const std::vector<uint8_t>& png, const uint32_t pal[16], bool comp,
+                           std::vector<uint8_t>* out, std::string* why);

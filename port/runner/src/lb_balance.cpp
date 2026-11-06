@@ -274,7 +274,19 @@ const BalField kUnitFields[] = {
     {"AI priority", 0x70, 1, 0, 255},
     {"Defogged area", 0x71, 1, 0, 255},
     {"Not water-only", 0x16, 1, 0, 1},   // the editor's BoatAntiFlag: 0 for a water-only unit
+    // docs/463: the port's own per-unit capabilities (LB_BAL_PORT_FIELD0 = 26).
+    // They live in the record's PADDING: +0x22/+0x23 (before the u32 at +0x24),
+    // +0x79..+0x7B (the record's tail), all 0xA2 in every one of the 182 records
+    // and in the four packs. The game cannot name padding, so no code reads it;
+    // lb_patches.cpp reads them (cap_flag). A value is on only at exactly 1, so
+    // the stock 0xA2 reads as off/auto (lb_balance_value folds it to 0).
+    {"Mountains", 0x79, 1, 0, 1},            // terrain class 5 is passable
+    {"Hotwire immune", 0x7A, 1, 0, 1},       // the Hotwire spell cannot take it
+    {"EMP immune", 0x7B, 1, 0, 1},           // the EMP (EAttackSpell, +0x74 clear) skips it
+    {"ESP immune", 0x22, 1, 0, 1},           // the ESP (EAttackSpell, +0x74 set) skips it
+    {"Construction style", 0x23, 1, 0, 3},   // training effect: 0 auto, 1 human, 2 skeleton, 3 alien
 };
+constexpr int kPortField0 = 26;   // the first of them (lb_overlay.h LB_BAL_PORT_FIELD0)
 // docs/408: +0x70/+0x72 are NOT a copy of +0x6C/+0x6E. The hit (FUN_0206E408,
 // `ldrh [bp,#0x6c]`/`#0x6e`) and the impact and blast (FUN_0206E450,
 // FUN_0206E60C, `ldrh [bp,#0x70]`/`#0x72`) read their own u16 pair; vanilla
@@ -424,6 +436,13 @@ bool applies(uint32_t base, int rec, const BalField& f) {
     return !(f.width == 4 && read_w(record_at(base, rec) + f.off, 4) == 0xFFFFFFFFu);
 }
 
+// docs/463: a port capability byte shows as 0 until it is set. The padding it
+// lives in is 0xA2 in the stock records, which is neither a flag nor a style.
+int fold_port(int rec, int field, const BalField& f, int raw) {
+    if (kind_of(rec) == LB_BAL_UNITS && field >= kPortField0 && raw > f.max) return 0;
+    return raw;
+}
+
 }  // namespace
 
 extern "C" int lb_balance_field_count(int kind) {
@@ -512,7 +531,7 @@ extern "C" int lb_balance_value(int rec, int field) {
     const uint32_t base = lb_patches_blueprint_base();
     const BalField* f = field_of(rec, field);
     if (!base || !f || !applies(base, rec, *f)) return -1;
-    return (int)read_w(record_at(base, rec) + f->off, f->width);
+    return fold_port(rec, field, *f, (int)read_w(record_at(base, rec) + f->off, f->width));
 }
 extern "C" int lb_balance_base(int rec, int field) {
     if (kind_of(rec) == LB_BAL_GLOBALS) return global_stock(field);   // docs/416
@@ -524,7 +543,7 @@ extern "C" int lb_balance_base(int rec, int field) {
     // before the player's value, which is what sits beneath it.
     for (size_t i = g_written.size(); i-- > 0;)
         if (g_written[i].addr == a && g_written[i].width == f->width)
-            return (int)g_written[i].before;
+            return fold_port(rec, field, *f, (int)g_written[i].before);
     return lb_balance_value(rec, field);
 }
 

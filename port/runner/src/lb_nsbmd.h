@@ -23,3 +23,8 @@
 // Returns false (out cleared) when the file does not parse.
 bool lb_nsbmd_render(const uint8_t* bmd, size_t n, int bank, float yaw_radians, float pitch_radians, int w,
                      int h, uint32_t* out_abgr);
+
+// SG-0064: as above in the teal team colour; shades are three BGR555 words
+// (light, mid, dark). Bank 5 is built from bank 6 with entries 12-14 replaced.
+bool lb_nsbmd_render_teal(const uint8_t* bmd, size_t n, const uint16_t shades[3], float yaw_radians,
+                          float pitch_radians, int w, int h, uint32_t* out_abgr);

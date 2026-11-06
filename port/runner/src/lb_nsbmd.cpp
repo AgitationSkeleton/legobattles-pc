@@ -481,6 +481,37 @@ uint32_t sample(const Tex& t, float s, float u) {
 
 }  // namespace
 
+// SG-0064: the model in the teal team colour. As teal_models_paint does in the
+// game (docs/412), bank 5 of every palette becomes a copy of bank 6 with
+// entries 12-14 set to `shades` (three BGR555 words), then bank 5 is drawn.
+bool lb_nsbmd_render_teal(const uint8_t* bmd, size_t n, const uint16_t shades[3], float yaw, float pitch, int w,
+                          int h, uint32_t* out) {
+    if (!bmd || !shades || n < 0x14 || std::memcmp(bmd, "BMD0", 4) != 0)
+        return lb_nsbmd_render(bmd, n, 5, yaw, pitch, w, h, out);
+    std::vector<uint8_t> copy(bmd, bmd + n);
+    const Rd r{copy.data(), copy.size()};
+    size_t tex0 = 0;
+    for (uint32_t i = 0, nb = r.u16(0x0E); i < nb && i < 8; ++i) {
+        const size_t o = r.u32(0x10 + 4 * i);
+        if (o + 8 <= r.n && std::memcmp(r.d + o, "TEX0", 4) == 0) tex0 = o;
+    }
+    if (tex0) {
+        const Dict pald = read_dict(r, tex0 + r.u32(tex0 + 0x34));
+        const size_t pal_data = tex0 + r.u32(tex0 + 0x38);
+        const size_t pal_end = std::min(r.n, pal_data + ((size_t)r.u32(tex0 + 0x30) << 3));
+        for (unsigned i = 0; i < pald.count; ++i) {
+            const size_t base = pal_data + ((size_t)r.u16(pald.entry(i)) << 3);
+            if (base + 7 * 32 > pal_end) continue;   // no bank 6: leave this palette alone
+            std::memcpy(copy.data() + base + 5 * 32, copy.data() + base + 6 * 32, 32);
+            for (int k = 0; k < 3; ++k) {
+                copy[base + 5 * 32 + (size_t)(12 + k) * 2] = (uint8_t)shades[k];
+                copy[base + 5 * 32 + (size_t)(12 + k) * 2 + 1] = (uint8_t)(shades[k] >> 8);
+            }
+        }
+    }
+    return lb_nsbmd_render(copy.data(), copy.size(), 5, yaw, pitch, w, h, out);
+}
+
 bool lb_nsbmd_render(const uint8_t* bmd, size_t n, int bank, float yaw, float pitch, int w, int h,
                      uint32_t* out) {
     if (!out || w <= 0 || h <= 0) return false;

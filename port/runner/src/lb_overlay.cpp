@@ -218,6 +218,15 @@ struct Settings {
     // inputs alone.
     bool quick_keys = true;
     bool tas_keys = false;   // SG-0027: F5 pause, F6 one frame (offline)
+    // BR-0041: holding Tab in a single-player battle runs ff_speed emulated
+    // frames per presented frame. Offline, and not while a demo records or
+    // plays. Only acts while Tab is held.
+    bool ff_battle = true;
+    int  ff_speed = 4;
+    // SG-0072: the Top Screen panel in a window of its own, so the main window
+    // is clear. Enhanced only (DS Vanilla already shows both screens). Off by
+    // default. Closing that window turns this off again.
+    bool top_own_window = false;
     // docs/398: while the blue brick's list is the open one, 1-9 pick from it
     // instead of the second brick's list. On by default.
     bool quick_keys_blue = true;
@@ -305,6 +314,7 @@ struct Settings {
     bool ai_hero_rebuild = false;
     bool ai_more_mines = false;     // SG-0032 (docs/444): the AI builds more mines and bridges
     bool ai_cross_fire = false;     // SG-0051 (docs/457): the computers attack each other
+    bool ai_bridges = false;        // SG-0071 (docs/464): the AI builds bridges even where it needs none
     // docs/408: a hotwired transport stops taking its old owner's orders
     // (lb_patches.cpp, release_stolen_transport).
     bool transport_release = false;
@@ -414,6 +424,7 @@ struct Settings {
     // docs/427: the notification sound, local only (never the emulated DS).
     int  notify_sound = 1;         // 0 off, 1 Group set (default) .. 8 Magic
     int  notify_volume = 60;       // percent
+    int  cunit_volume = 100;       // BR-0047: custom unit sounds, percent of the normalised level
 
     // Cosmetic, CLIENT-LOCAL (docs/356): what this machine's text calls the
     // Space Criminal Leader -- 0 the cartridge's own words, 1 Kranxx,
@@ -470,6 +481,7 @@ struct Settings {
     bool record_sessions = false;
     bool discord_status = true;    // docs/430: Discord Rich Presence
     bool discord_hero = true;      // docs/430: ... with the hero as the small image
+    bool discord_invites = true;   // docs/466 (SG-0056): Discord invites to my lobby
     bool update_check = true;      // docs/430: look for a newer release at startup
     bool auto_update = false;      // docs/435: and install it by itself
     // docs/420: a lobby's mod map this machine lacks is fetched from the archive.
@@ -697,6 +709,12 @@ extern "C" void lb_settings_save(void) {
                   g_set.quick_keys ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"tas_keys\": %s,\n",
                   g_set.tas_keys ? "true" : "false"); o += buf;   // SG-0027
+    std::snprintf(buf, sizeof buf, "  \"ff_battle\": %s,\n",
+                  g_set.ff_battle ? "true" : "false"); o += buf;   // BR-0041
+    std::snprintf(buf, sizeof buf, "  \"ff_speed\": %d,\n",
+                  g_set.ff_speed); o += buf;   // BR-0041
+    std::snprintf(buf, sizeof buf, "  \"top_own_window\": %s,\n",
+                  g_set.top_own_window ? "true" : "false"); o += buf;   // SG-0072
     std::snprintf(buf, sizeof buf, "  \"quick_keys_blue\": %s,\n",
                   g_set.quick_keys_blue ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"tabs_stay_open\": %s,\n",
@@ -747,6 +765,8 @@ extern "C" void lb_settings_save(void) {
                   g_set.ai_more_mines ? "true" : "false"); o += buf;   // SG-0032
     std::snprintf(buf, sizeof buf, "  \"ai_cross_fire\": %s,\n",
                   g_set.ai_cross_fire ? "true" : "false"); o += buf;   // SG-0051
+    std::snprintf(buf, sizeof buf, "  \"ai_bridges\": %s,\n",
+                  g_set.ai_bridges ? "true" : "false"); o += buf;   // SG-0071
     std::snprintf(buf, sizeof buf, "  \"transport_release\": %s,\n",
                   g_set.transport_release ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"creatures\": %s,\n",
@@ -816,6 +836,8 @@ extern "C" void lb_settings_save(void) {
                   g_set.notify_sound); o += buf;   // docs/427
     std::snprintf(buf, sizeof buf, "  \"notify_volume\": %d,\n",
                   g_set.notify_volume); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"cunit_volume\": %d,\n",
+                  g_set.cunit_volume); o += buf;   // BR-0047
     std::snprintf(buf, sizeof buf, "  \"criminal_leader_name\": %d,\n",
                   g_set.criminal_leader_name); o += buf;
     std::snprintf(buf, sizeof buf, "  \"plantation_name\": %d,\n",
@@ -881,6 +903,8 @@ extern "C" void lb_settings_save(void) {
                   g_set.discord_status ? "true" : "false"); o += buf;   // docs/430
     std::snprintf(buf, sizeof buf, "  \"discord_hero\": %s,\n",
                   g_set.discord_hero ? "true" : "false"); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"discord_invites\": %s,\n",
+                  g_set.discord_invites ? "true" : "false"); o += buf;   // docs/466
     std::snprintf(buf, sizeof buf, "  \"update_check\": %s,\n",
                   g_set.update_check ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"auto_update\": %s,\n",
@@ -985,6 +1009,10 @@ extern "C" void lb_settings_load(void) {
     if (g_set.force_tileset < 0 || g_set.force_tileset > 4) g_set.force_tileset = 0;
     json_get_bool(s, "quick_keys", &g_set.quick_keys);   // docs/383, default on
     json_get_bool(s, "tas_keys", &g_set.tas_keys);       // SG-0027
+    json_get_bool(s, "ff_battle", &g_set.ff_battle);     // BR-0041
+    json_get_int(s, "ff_speed", &g_set.ff_speed);        // BR-0041
+    if (g_set.ff_speed < 2 || g_set.ff_speed > 8) g_set.ff_speed = 4;
+    json_get_bool(s, "top_own_window", &g_set.top_own_window);   // SG-0072
     json_get_bool(s, "quick_keys_blue", &g_set.quick_keys_blue);   // docs/398
     json_get_bool(s, "tabs_stay_open", &g_set.tabs_stay_open);   // docs/451
     json_get_bool(s, "cancel_queue_click", &g_set.cancel_queue_click);   // SG-0006
@@ -1016,6 +1044,7 @@ extern "C" void lb_settings_load(void) {
     json_get_bool(s, "ai_hero_rebuild", &g_set.ai_hero_rebuild);
     json_get_bool(s, "ai_more_mines", &g_set.ai_more_mines);   // SG-0032
     json_get_bool(s, "ai_cross_fire", &g_set.ai_cross_fire);   // SG-0051
+    json_get_bool(s, "ai_bridges", &g_set.ai_bridges);         // SG-0071
     json_get_bool(s, "transport_release", &g_set.transport_release);
     json_get_bool(s, "creatures", &g_set.creatures);   // docs/410
     json_get_bool(s, "creature_tint", &g_set.creature_tint);   // docs/437
@@ -1063,6 +1092,8 @@ extern "C" void lb_settings_load(void) {
     json_get_int(s, "notify_volume", &g_set.notify_volume);
     g_set.notify_sound = std::max(0, std::min(8, g_set.notify_sound));
     g_set.notify_volume = std::max(0, std::min(100, g_set.notify_volume));
+    json_get_int(s, "cunit_volume", &g_set.cunit_volume);   // BR-0047
+    g_set.cunit_volume = std::max(0, std::min(200, g_set.cunit_volume));
     // A file written before this key existed keeps the default (off).
     json_get_int(s, "criminal_leader_name", &g_set.criminal_leader_name);
     json_get_int(s, "plantation_name", &g_set.plantation_name);     // docs/392
@@ -1094,6 +1125,7 @@ extern "C" void lb_settings_load(void) {
     json_get_bool(s, "record_sessions", &g_set.record_sessions);
     json_get_bool(s, "discord_status", &g_set.discord_status);   // docs/430
     json_get_bool(s, "discord_hero", &g_set.discord_hero);
+    json_get_bool(s, "discord_invites", &g_set.discord_invites);   // docs/466
     json_get_bool(s, "update_check", &g_set.update_check);
     json_get_bool(s, "auto_update", &g_set.auto_update);   // docs/435
     json_get_bool(s, "fetch_maps", &g_set.fetch_maps);       // docs/420
@@ -1787,6 +1819,15 @@ void tab_enhancements() {
     help("Normally the computer builds one mine and one or two bridges.\n"
          "On, it builds a mine at every free mine spot it can reach and up\n"
          "to three bridges. Free Play only.");
+    badge(WIRED);
+    // SG-0071 (docs/464): the bridge planner returns at once on a map with
+    // fewer than five land regions, and builds the first bridge only.
+    ImGui::Checkbox("The AI Builds Bridges On Any Map", &g_set.ai_bridges);
+    help("Normally the computer builds bridges only on maps that cut the\n"
+         "land into five or more pieces, and then only when it needs one.\n"
+         "On, it also bridges maps that do not need transports, once it\n"
+         "has the builders, and keeps going up to eight bridges. Free\n"
+         "Play only.");
     badge(WIRED);
     // SG-0002: AI vs AI.
     ImGui::Checkbox("AI Plays My Side (Spectate)", &g_set.ai_spectate);
@@ -3043,7 +3084,19 @@ void tab_input() {
     // SG-0027: pause and frame advance, for slow play and tool-assisted runs.
     ImGui::Checkbox("TAS controls", &g_set.tas_keys);
     help("F5: pause or resume. F6 while paused: advance one frame.\n"
-         "Tab still fast-forwards. Offline only.");
+         "Offline only.");
+    // BR-0041: Tab fast-forward inside a battle.
+    ImGui::Checkbox("Hold Tab to fast-forward battles", &g_set.ff_battle);
+    badge(WIRED);
+    help("Holding Tab used to speed up only the menus: in a battle the\n"
+         "emulator was already the limit. Now it runs several game frames\n"
+         "for each one drawn. Single-player only; ignored online and while\n"
+         "a demo is recording or replaying, so nothing can go out of step.");
+    if (g_set.ff_battle) {
+        ImGui::SliderInt("Fast-forward speed", &g_set.ff_speed, 2, 8, "%dx");
+        if (g_set.ff_speed < 2) g_set.ff_speed = 2;
+        if (g_set.ff_speed > 8) g_set.ff_speed = 8;
+    }
     ImGui::Checkbox("Number keys pick from the open blue menu", &g_set.quick_keys_blue);
     help("When the blue brick menu is open, 1-9 pick from it instead.");
     ImGui::Checkbox("Keep brick menus open when a unit dies", &g_set.tabs_stay_open);
@@ -4912,6 +4965,17 @@ void tab_music() {
         ImGui::SetItemTooltip("Plays the chosen sound.");
     }
     ImGui::Spacing();
+    // BR-0047: the sounds of custom units (Balance > Custom units), mixed by
+    // the host (lb_cunits.cpp). Each is peak-normalised when it loads; this
+    // scales that level.
+    ImGui::Separator();
+    guide("Custom unit sounds: the WAV files of units made in the custom unit lab.");
+    ImGui::SliderInt("Custom Unit Sound Volume", &g_set.cunit_volume, 0, 200, "%d%%");
+    help("How loud custom units' own sounds play. 100% is the level every\n"
+         "custom sound is normalised to, close to the game's own effects.\n"
+         "Only you hear this; it is not sent to other players.");
+    badge(WIRED);
+    ImGui::Spacing();
     // HOW IT WORKS, kept here rather than printed at the player.
     //
     // The cartridge picks a track with func_02089c38(side, kind), a nested
@@ -5330,7 +5394,229 @@ void draw_gold_panel() {
     ImGui::End();
 }
 
+// ---- SG-0072: THE TOP SCREEN IN ITS OWN OS WINDOW --------------------------
+//
+// The vendored ImGui has the multi-viewport machinery, but its SDL_Renderer
+// backend (imgui_impl_sdlrenderer2) has no viewport support, so a panel cannot
+// be dragged out of the game window that way. Instead this is a second
+// SDL_Window with a renderer of its own that shows the same top-screen pixels
+// the panel would (the scrubbed copy included) and takes the same clicks:
+// the selection panel's buttons and the minimap are requested through
+// lb_quick_request exactly as the panel's InvisibleButtons do.
+//
+// The picture is drawn through SDL_RenderSetLogicalSize(top w, top h): the
+// window may be any shape, the picture letterboxes and keeps its aspect, and
+// SDL hands this window's mouse events over in picture pixels, which is what
+// lb_top_buttons describes. Closing the window turns the setting off, so the
+// panel comes back in the game window. Created without taking focus.
+static SDL_Window* g_main_window = nullptr;
+static SDL_Window* g_top_win = nullptr;
+static SDL_Renderer* g_top_wren = nullptr;
+static SDL_Texture* g_top_wtex = nullptr;
+static int g_top_wtex_w = 0, g_top_wtex_h = 0;
+static Uint32 g_top_win_id = 0;
+static bool g_top_win_drag = false;
+static int g_top_win_last = -1;
+// Set when the window is closed, so an LB_TOP_OWN=1 start does not reopen it.
+static bool g_top_env_off = false;
+
+// LB_TOP_OWN=0|1 overrides the setting (a test aid).
+static bool top_own_wanted() {
+    static const int env = [] {
+        const char* v = std::getenv("LB_TOP_OWN");
+        return v ? (v[0] != '0' ? 1 : 0) : -1;
+    }();
+    if (env >= 0 && !g_top_env_off) return env == 1;
+    return g_set.top_own_window;
+}
+extern "C" int lb_setting_top_own_window(void) { return top_own_wanted() ? 1 : 0; }
+
+static void top_own_destroy() {
+    if (g_top_wtex) { SDL_DestroyTexture(g_top_wtex); g_top_wtex = nullptr; }
+    g_top_wtex_w = g_top_wtex_h = 0;
+    if (g_top_wren) { SDL_DestroyRenderer(g_top_wren); g_top_wren = nullptr; }
+    if (g_top_win) { SDL_DestroyWindow(g_top_win); g_top_win = nullptr; }
+    g_top_win_id = 0;
+    g_top_win_drag = false;
+}
+
+static bool top_own_create(SDL_Renderer* main_ren) {
+    int disp = g_main_window ? SDL_GetWindowDisplayIndex(g_main_window) : 0;
+    if (disp < 0) disp = 0;
+    int w = g_top_w * 2, h = g_top_h * 2;
+    int x = SDL_WINDOWPOS_UNDEFINED, y = SDL_WINDOWPOS_UNDEFINED;
+    SDL_Rect b{};
+    if (SDL_GetDisplayUsableBounds(disp, &b) == 0 && b.w > 0 && b.h > 0) {
+        if (w > b.w / 2 || h > b.h / 2) { w = g_top_w; h = g_top_h; }
+        x = b.x + b.w - w - 40;   // the display's top-right, clear of the game
+        y = b.y + 40;
+    }
+    SDL_SetHint(SDL_HINT_WINDOW_NO_ACTIVATION_WHEN_SHOWN, "1");
+    g_top_win = SDL_CreateWindow("LEGO Battles - Top Screen", x, y, w, h,
+                                 SDL_WINDOW_RESIZABLE);
+    SDL_SetHint(SDL_HINT_WINDOW_NO_ACTIVATION_WHEN_SHOWN, "0");
+    if (!g_top_win) {
+        std::fprintf(stderr, "[lb_topwin] window failed: %s\n", SDL_GetError());
+        return false;
+    }
+    // Not the GL driver: a second GL renderer would take the current context
+    // from the frontend's own GL window.
+    SDL_RendererInfo ri{};
+    const bool gl = SDL_GetRendererInfo(main_ren, &ri) == 0 && ri.name &&
+                    std::strstr(ri.name, "opengl") != nullptr;
+    g_top_wren = gl ? nullptr : SDL_CreateRenderer(g_top_win, -1, SDL_RENDERER_ACCELERATED);
+    if (!g_top_wren) g_top_wren = SDL_CreateRenderer(g_top_win, -1, SDL_RENDERER_SOFTWARE);
+    if (!g_top_wren) {
+        std::fprintf(stderr, "[lb_topwin] renderer failed: %s\n", SDL_GetError());
+        SDL_DestroyWindow(g_top_win);
+        g_top_win = nullptr;
+        return false;
+    }
+    g_top_win_id = SDL_GetWindowID(g_top_win);
+    std::fprintf(stderr, "[lb_topwin] opened %dx%d at %d,%d\n", w, h, x, y);
+    return true;
+}
+
+// The corrected camera box, in minimap pixels, or false when none applies.
+// The same rectangle the panel computes below (see the long note there).
+static bool top_camera_box(float* ax, float* ay, float* bx, float* by) {
+    float vx0 = g_view_x0, vy0 = g_view_y0, vx1 = g_view_x1, vy1 = g_view_y1;
+    bool have = g_wide_field && g_view_valid;
+    if (!have) {
+        const int ow = (int)nds_gpu3d_output_width();
+        const int oh = (int)nds_gpu3d_output_height();
+        int cx = 0, cy = 0;
+        if (ow > 256 && lb_widemap_cam_px(&cx, &cy)) {
+            vx0 = (float)(cx - lb_band_left(ow));
+            vy0 = (float)(cy - lb_band_top(oh));
+            vx1 = vx0 + (float)ow;
+            vy1 = vy0 + (float)oh;
+            have = true;
+        }
+    }
+    if (!have || !g_top_box_found) return false;
+    lb_field_map_to_minimap((int)vx0, (int)vy0, ax, ay);
+    lb_field_map_to_minimap((int)vx1, (int)vy1, bx, by);
+    return true;
+}
+
+static void top_own_draw(SDL_Renderer* main_ren, const void* src) {
+    if (!g_top_win && !top_own_create(main_ren)) {
+        g_set.top_own_window = false;   // could not open: back to the panel
+        g_top_env_off = true;
+        return;
+    }
+    SDL_Renderer* r = g_top_wren;
+    if (!g_top_wtex || g_top_wtex_w != g_top_w || g_top_wtex_h != g_top_h) {
+        if (g_top_wtex) SDL_DestroyTexture(g_top_wtex);
+        g_top_wtex = SDL_CreateTexture(r, SDL_PIXELFORMAT_ARGB8888,
+                                       SDL_TEXTUREACCESS_STREAMING,
+                                       g_top_w, g_top_h);
+        g_top_wtex_w = g_top_w;
+        g_top_wtex_h = g_top_h;
+        if (!g_top_wtex) return;
+        SDL_SetTextureBlendMode(g_top_wtex, SDL_BLENDMODE_NONE);
+        SDL_RenderSetLogicalSize(r, g_top_w, g_top_h);
+    }
+    if (SDL_GetWindowFlags(g_top_win) & SDL_WINDOW_HIDDEN) {
+        SDL_SetHint(SDL_HINT_WINDOW_NO_ACTIVATION_WHEN_SHOWN, "1");
+        SDL_ShowWindow(g_top_win);
+        SDL_SetHint(SDL_HINT_WINDOW_NO_ACTIVATION_WHEN_SHOWN, "0");
+    }
+    SDL_UpdateTexture(g_top_wtex, nullptr, src, g_top_w * (int)sizeof(uint32_t));
+    SDL_SetRenderDrawColor(r, 0, 0, 0, 255);
+    SDL_RenderClear(r);
+    SDL_RenderCopy(r, g_top_wtex, nullptr, nullptr);
+    float ax = 0, ay = 0, bx = 0, by = 0;
+    if (top_camera_box(&ax, &ay, &bx, &by)) {
+        SDL_SetRenderDrawColor(r, 255, 255, 255, 255);
+        SDL_Rect rc{(int)ax, (int)ay, (int)(bx - ax), (int)(by - ay)};
+        SDL_RenderDrawRect(r, &rc);
+        if (rc.w > 2 && rc.h > 2) {   // two pixels thick, like the panel's
+            SDL_Rect in{rc.x + 1, rc.y + 1, rc.w - 2, rc.h - 2};
+            SDL_RenderDrawRect(r, &in);
+        }
+    }
+    SDL_RenderPresent(r);
+}
+
+// A minimap press or drag at picture pixel (lx, ly): the same request the
+// panel sends, once per changed cell.
+static void top_own_minimap(int lx, int ly) {
+    lx -= 136;
+    ly -= 40;
+    lx = lx < 0 ? 0 : (lx > 95 ? 95 : lx);
+    ly = ly < 0 ? 0 : (ly > 95 ? 95 : ly);
+    const int cell = ly * 96 + lx;
+    if (cell == g_top_win_last) return;
+    g_top_win_last = cell;
+    lb_quick_request(1000 + cell);
+}
+
+// Events for the second window. True when consumed. Keys are not: they fall
+// through, so the game keeps working while this window has the focus.
+static bool top_own_event(const SDL_Event* e) {
+    if (!g_top_win) return false;
+    switch (e->type) {
+    case SDL_WINDOWEVENT:
+        if (e->window.windowID != g_top_win_id) return false;
+        if (e->window.event == SDL_WINDOWEVENT_CLOSE) {
+            g_set.top_own_window = false;   // the panel returns to the game window
+            g_top_env_off = true;
+            top_own_destroy();
+        } else if (e->window.event == SDL_WINDOWEVENT_LEAVE) {
+            g_top_win_drag = false;
+        }
+        return true;
+    case SDL_MOUSEMOTION:
+        if (e->motion.windowID != g_top_win_id) return false;
+        if (g_top_win_drag && lb_top_minimap())
+            top_own_minimap(e->motion.x, e->motion.y);
+        return true;
+    case SDL_MOUSEBUTTONUP:
+        if (e->button.windowID != g_top_win_id) return false;
+        if (e->button.button == SDL_BUTTON_LEFT) g_top_win_drag = false;
+        return true;
+    case SDL_MOUSEBUTTONDOWN: {
+        if (e->button.windowID != g_top_win_id) return false;
+        const bool L = e->button.button == SDL_BUTTON_LEFT;
+        const bool R = e->button.button == SDL_BUTTON_RIGHT;
+        if ((!L && !R) || !g_set.cancel_queue_click) return true;
+        const int lx = e->button.x, ly = e->button.y;
+        int btn[24 * 5];
+        const int nb = lb_top_buttons(btn, 24);
+        for (int k = 0; k < nb; ++k) {
+            const int id = btn[k * 5];
+            const int x0 = btn[k * 5 + 1], y0 = btn[k * 5 + 2];
+            const int x1 = btn[k * 5 + 3], y1 = btn[k * 5 + 4];
+            if (x1 <= x0 || y1 <= y0) continue;
+            if (lx >= x0 && lx < x1 && ly >= y0 && ly < y1) {
+                lb_quick_request(id >= 730 && id <= 732 ? 40 + (id - 730)
+                                                        : 50 + (id - 713));
+                return true;
+            }
+        }
+        if (L && lb_top_minimap() && lx >= 136 && lx < 232 && ly >= 40 &&
+            ly < 136) {
+            g_top_win_drag = true;
+            g_top_win_last = -1;
+            top_own_minimap(lx, ly);
+        }
+        return true;
+    }
+    default:
+        return false;
+    }
+}
+
 void draw_top_screen(SDL_Renderer* renderer) {
+    // SG-0072: the window follows the setting, the overlay checkbox, and
+    // Enhanced. Not wanted: closed. Wanted but the panel is hidden: hidden.
+    const bool own = top_own_wanted() && g_set.enhanced;
+    if (g_top_win) {
+        if (!own) top_own_destroy();
+        else if (!g_top_visible) SDL_HideWindow(g_top_win);
+    }
     if (!g_top_visible || !g_top_pixels || g_top_w <= 0 || g_top_h <= 0) return;
     // DS Vanilla shows the top screen above the bottom one already.
     if (!g_set.enhanced) return;
@@ -5498,6 +5784,10 @@ void draw_top_screen(SDL_Renderer* renderer) {
                 g_top_box_found = erased >= 8;
             }
         }
+    }
+    if (own) {   // SG-0072: shown in the second window instead of the panel
+        top_own_draw(renderer, top_src);
+        if (g_top_win) return;
     }
     SDL_UpdateTexture(g_top_tex, nullptr, top_src,
                       g_top_w * (int)sizeof(uint32_t));
@@ -6817,6 +7107,15 @@ void section_windows() {
     if (!tab_begin("Windows")) return;
     ImGui::Checkbox("Show the top screen overlay", &g_top_visible);
         badge(WIRED);   // g_top_visible gates draw_top_screen
+    // SG-0072: the panel as its own OS window.
+    ImGui::Checkbox("Top Screen in its own window", &g_set.top_own_window);
+    badge(WIRED);
+    if (g_set.top_own_window) g_top_env_off = false;
+    help("Moves the Top Screen panel out of the game window into a window of\n"
+         "its own, so you can drag it to another monitor or beside the game\n"
+         "and keep the battlefield clear. Clicks work as on the panel (cancel\n"
+         "queue, unload, minimap). Resize it freely: the picture keeps its\n"
+         "shape. Closing that window puts the panel back. Enhanced only.");
         // THE "WIDE FIELD" VIEWER NO LONGER HAS A CONTROL HERE.
         //
         // Two rules settle it: adaptive window size is ONE toggle, and no
@@ -7132,7 +7431,8 @@ void tab_balance_traits() {
         static const char* const kCols[] = {
             "Land", "Water", "Trees", "Bld collision", "Land<->water", "Not water-only",
             "Hitbox", "Uninteract.", "Speed: none", "Projectile", "AI priority",
-            "Defogged"};
+            "Defogged", "Mountains", "Hotwire imm.", "EMP imm.", "ESP imm.",
+            "Build effect"};
         static const char* const kTips[] = {
             "Can walk on land.",
             "Can enter water. Ticking Land or Water also sets the next three "
@@ -7151,8 +7451,16 @@ void tab_balance_traits() {
             "Arrow: edit one in Balance Attacks and point a unit at it.",
             "AI priority in combat.",
             "How far the unit clears the fog; FF clears the map. Units only "
-            "auto-attack within this, so raise it along with Range."};
-        const int nc = 12;
+            "auto-attack within this, so raise it along with Range.",
+            // docs/463: the port's own per-unit capabilities.
+            "Can walk over mountains and cliffs (terrain class 5), which no unit "
+            "can in the stock game. Tick it with Land.",
+            "The Hotwire spell cannot take it.",
+            "The EMP skips it (specials, and transports with EMP Disables Transports).",
+            "The ESP skips it (the ESP stuns heroes, builders and soldiers).",
+            "The brick animation shown while this unit is trained: 0 automatic "
+            "(its faction's), 1 human, 2 skeleton (the Wizards'), 3 alien."};
+        const int nc = 17;
         if (ImGui::BeginTable("baltraits", 2 + nc,
                               ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                                   ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY |
@@ -7263,6 +7571,13 @@ void tab_balance_traits() {
                 }
                 ImGui::TableNextColumn(); bal_cell(LB_BAL_UNITS, rec, F + 8, locked);
                 ImGui::TableNextColumn(); bal_cell(LB_BAL_UNITS, rec, F + 9, locked);
+                // docs/463: Mountains, Hotwire/EMP/ESP immune, Build effect.
+                for (int k = 0; k < 4; ++k) {
+                    ImGui::TableNextColumn();
+                    bal_flag(rec, LB_BAL_PORT_FIELD0 + k, locked);
+                }
+                ImGui::TableNextColumn();
+                bal_cell(LB_BAL_UNITS, rec, LB_BAL_PORT_FIELD0 + 4, locked);
             }
             ImGui::EndTable();
         }
@@ -7837,6 +8152,12 @@ void tab_general() {
     ImGui::BeginDisabled(!g_set.discord_status);
     ImGui::Checkbox("Show my hero in Discord status", &g_set.discord_hero);
     help("Adds your hero's picture to your Discord status.");
+    ImGui::Checkbox("Discord invites to my lobby", &g_set.discord_invites);
+    help("While your lobby is open with a free seat, your Discord status gets a\n"
+         "\"Ask to join\" button, and friends can join your lobby from Discord.\n"
+         "Uses the same status as above; it does nothing with the status off.\n"
+         "Turning it on also lets Discord start the game from an invite.");
+    badge(WIRED);
     ImGui::EndDisabled();
     tab_end();
 }
@@ -8815,6 +9136,13 @@ extern "C" void lb_overlay_notice(const char* text) {
 extern "C" int lb_setting_notify_sound(void) { return g_set.notify_sound; }
 extern "C" int lb_setting_notify_volume(void) { return g_set.notify_volume; }
 
+// BR-0047: custom unit sound volume, 0..200 percent. LB_CUNIT_VOLUME forces it.
+extern "C" int lb_setting_cunit_volume(void) {
+    static const char* v = std::getenv("LB_CUNIT_VOLUME");
+    if (v) return std::max(0, std::min(200, std::atoi(v)));
+    return g_set.cunit_volume;
+}
+
 extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
     if (std::getenv("LB_DIAG")) {
         static int t2 = 0;
@@ -8824,6 +9152,7 @@ extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
                          (int)g_wide_field, (int)g_top_visible, g_top_w, g_top_h);
     }
     if (!window || !renderer) return;
+    g_main_window = window;   // SG-0072
     g_maps_ren = renderer;   // docs/431
     // Before any panel logic and independent of every panel's visibility, so
     // the band audit's reference dump lands whether or not anything is open.
@@ -9135,7 +9464,10 @@ bool quick_in_battle() {
 
 // Returns true when the event was a shortcut (and so is consumed).
 bool quick_event(const SDL_Event* event, const ImGuiIO& io) {
-    if (!g_set.quick_keys || !lb_setting_enhanced()) return false;
+    // BR-0043: no display-mode test. These are input conveniences that call
+    // the game's own widget callbacks, which exist in DS Vanilla as well; only
+    // the "Battle shortcuts" setting turns them off.
+    if (!g_set.quick_keys) return false;
     int action = kQuickNone;
     const int sc = event->type == SDL_KEYDOWN ? (int)event->key.keysym.scancode : -1;
     const bool key = event->type == SDL_KEYDOWN && event->key.repeat == 0 &&
@@ -9170,6 +9502,7 @@ bool quick_event(const SDL_Event* event, const ImGuiIO& io) {
 
 extern "C" bool lb_overlay_event(const SDL_Event* event) {
     if (!g_ready || !event) return false;
+    if (top_own_event(event)) return true;   // SG-0072: the Top Screen window
 
     // docs/415: the text event of the key that opened the chat comes after its
     // key event; it is not part of the message.
@@ -9797,6 +10130,26 @@ extern "C" int lb_setting_quick_blue(void) {
     return g_set.quick_keys_blue ? 1 : 0;
 }
 
+// BR-0041: extra emulated frames to run per presented frame while Tab turbo is
+// on. 0 unless this is an offline single-player battle with no demo recording
+// or playing. LB_FF=0 disables, LB_FF=2..8 forces a speed (test aid).
+extern "C" int lb_ff_extra_frames(void) {
+    static const int env = [] {
+        const char* v = std::getenv("LB_FF");
+        return v ? std::atoi(v) : -1;
+    }();
+    if (env == 0) return 0;
+    if (env < 0 && !g_set.ff_battle) return 0;
+    if (lb_net_guest_state() != 0 && lb_net_guest_state() != -1) return 0;
+    if (lb_demo_state() != 0) return 0;
+    int cx = 0, cy = 0;
+    if (!lb_field_camera(&cx, &cy)) return 0;   // menus already run unpaced
+    int n = env > 0 ? env : g_set.ff_speed;
+    if (n < 2) n = 2;
+    if (n > 8) n = 8;
+    return n - 1;
+}
+
 // docs/451: HUD lists stay open when the selection shrinks.
 extern "C" int lb_setting_tabs_stay_open(void) {
     return g_set.tabs_stay_open ? 1 : 0;
@@ -9878,6 +10231,15 @@ extern "C" const char* lb_setting_player_key(void) {
 }
 extern "C" int lb_setting_discord_status(void) { return g_set.discord_status ? 1 : 0; }   // docs/430
 extern "C" int lb_setting_discord_hero(void) { return g_set.discord_hero ? 1 : 0; }
+// docs/466 (SG-0056). LB_DISCORD_INVITES=0|1 forces it.
+extern "C" int lb_setting_discord_invites(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_DISCORD_INVITES");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.discord_invites ? 1 : 0);
+}
 // docs/419. LB_MASTER_HTTPS=0|1 forces it (a test aid).
 // The master server this machine uses (Network > master server), for the
 // level editor's community levels.
@@ -10061,6 +10423,16 @@ extern "C" int lb_setting_ai_more_mines(void) {
         forced = v ? (std::atoi(v) ? 1 : 0) : -1;
     }
     return forced >= 0 ? forced : (g_set.ai_more_mines ? 1 : 0);
+}
+
+// SG-0071: LB_AI_BRIDGES=0|1 forces it.
+extern "C" int lb_setting_ai_bridges(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_AI_BRIDGES");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.ai_bridges ? 1 : 0);
 }
 
 // SG-0051: LB_AI_CROSS_FIRE=0|1 forces it.
@@ -10717,6 +11089,7 @@ extern "C" void lb_overlay_shutdown(void) {
     // The sizes are cleared as well as the pointer: the pointer alone is
     // enough for the guard, but a stale 0-size pair is the honest state after
     // the texture it described is gone.
+    top_own_destroy();   // SG-0072
     if (g_top_tex) { SDL_DestroyTexture(g_top_tex); g_top_tex = nullptr; }
     if (g_field_tex) { SDL_DestroyTexture(g_field_tex); g_field_tex = nullptr; }
     if (g_wide_tex) { SDL_DestroyTexture(g_wide_tex); g_wide_tex = nullptr; }
@@ -10800,6 +11173,7 @@ extern "C" const char* lb_net_lobby_options_json(void) {
     kv.push_back({"AI rebuilds its hero", g_set.ai_hero_rebuild ? "On" : "Off"});
     kv.push_back({"AI builds more mines", g_set.ai_more_mines ? "On" : "Off"});
     kv.push_back({"Computers attack each other", g_set.ai_cross_fire ? "On" : "Off"});   // SG-0051
+    kv.push_back({"AI bridges any map", g_set.ai_bridges ? "On" : "Off"});               // SG-0071
     kv.push_back({"Hotwired transports leave", g_set.transport_release ? "On" : "Off"});
     kv.push_back({"Attack boost reaches ranged",
                   g_set.attack_boost_ranged >= 2 ? "On, no blast"

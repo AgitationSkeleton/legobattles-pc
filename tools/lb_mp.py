@@ -72,6 +72,15 @@ def launch(out, index, port, extra_env, base_port=None):
     # instance renames its profile at the main menu (LB_TEST_RENAME, saved by
     # the game itself) to a neutral test name. --env LB_TEST_RENAME=... wins.
     env.setdefault("LB_TEST_RENAME", "Tester%d" % (index + 1))
+    # OWNER RULE: tests never use the live servers. A hosting instance
+    # otherwise lists its lobby on the public master server (docs/424's Both
+    # default; a 2026-11-06 run did, as room TP79). LB_MASTER points the run
+    # at a server of its own -- here a closed local port, so nothing leaves
+    # the machine; the instances still meet over local wireless. --env
+    # LB_MASTER=host:port (a local `wrangler dev`) wins. Discord invites stay
+    # off too: they would register the test exe as the game's launch command.
+    env.setdefault("LB_MASTER", "127.0.0.1:9")
+    env.setdefault("LB_DISCORD_INVITES", "0")
     # Each instance records its session, which the game no longer does by
     # default (a desync or crash replays from it).
     env.setdefault("LB_DEMO_RECORD", "1")

@@ -7456,6 +7456,20 @@ def apply(runner_dir, imgui_dir):
             "            turbo_active = lb_turbo_want;")
     done.append("frontend.cpp: turbo can be requested by the intro skip (SG-0016)")
 
+    #     BR-0041: "the speed up only works in the main menu". Turbo only
+    #     skips the host's pacing wait; a battle's emulation already costs
+    #     about a frame period, so there was nothing left to skip. While Tab
+    #     turbo is on (offline battle, no demo -- lb_ff_extra_frames decides),
+    #     run the scheduler several guest frames before the one present.
+    replace(front,
+            "        const uint64_t next_frame =\n"
+            "            (now / kSystemCyclesPerFrame + 1u) * kSystemCyclesPerFrame;\n",
+            "        const uint64_t next_frame =\n"
+            "            (now / kSystemCyclesPerFrame + 1u +\n"
+            "             (turbo_active ? (uint64_t)lb_ff_extra_frames() : 0u)) *\n"
+            "            kSystemCyclesPerFrame;  /* BR-0041 */\n")
+    done.append("frontend.cpp: Tab turbo runs extra frames in a battle (BR-0041)")
+
     # 4. Draw, on the BOTTOM screen only. The ImGui SDL_Renderer backend binds
     #    to a single renderer, so the overlay must be drawn for exactly one of
     #    them; the port makes the touch screen the main game window, so the
@@ -8272,6 +8286,36 @@ def apply(runner_dir, imgui_dir):
             "    if (lb_nullpage_mode() > 0) g_busf_itcm_limit = 0u;   /* docs/369 */\n")
     done.append("bus.cpp: LB_NULLPAGE names the ARM9 accesses below "
                 "0x01000000 (docs/369)")
+
+    # 0zzzz0. AN UNMAPPED ACCESS SAYS WHERE IT CAME FROM (BR-0049, docs/468).
+    #
+    # BR-0049's log had a run of "[bus] ARM9 unmapped read 0xE59F106C" lines
+    # (a code word used as a pointer) after an EMP hit a hotwired unit online,
+    # and nothing to say which guest code made them: the match could not be
+    # reproduced. The first eight ARM9 ones now carry the pc, lr, r0-r3 and
+    # the shadow return stack, the same report LB_NULLPAGE gives. They only
+    # happen on a fault, so normal play costs nothing.
+    replace(bus,
+            "        ++warned;\n"
+            "    }\n"
+            "    (void)value;\n",
+            "        if (warned < 8 && g_nds_active == NDS_ARM9) {   /* BR-0049 */\n"
+            "            const uint32_t d = runtime_call_stack_depth();\n"
+            "            const uint32_t* s = runtime_call_stack_data();\n"
+            "            std::fprintf(stderr, \"[bus]   at pc %08X lr %08X r0 %08X r1 %08X r2 %08X\"\n"
+            "                         \" r3 %08X sp %08X; callers (depth %u):\", g_cpu.R[15],\n"
+            "                         g_cpu.R[14], g_cpu.R[0], g_cpu.R[1], g_cpu.R[2], g_cpu.R[3],\n"
+            "                         g_cpu.R[13], d);\n"
+            "            for (uint32_t i = 0; i < d && i < 16u; ++i)\n"
+            "                std::fprintf(stderr, \" %08X\", s[d - 1u - i]);\n"
+            "            std::fprintf(stderr, \"\\n\");\n"
+            "            std::fflush(stderr);\n"
+            "        }\n"
+            "        ++warned;\n"
+            "    }\n"
+            "    (void)value;\n")
+    done.append("bus.cpp: an unmapped ARM9 access logs its pc and callers "
+                "(BR-0049, docs/468)")
 
     # 0zzzz. THE CARTRIDGE'S WIDGET HIT TEST MOVES WITH THE PICTURE (docs/371).
     #
@@ -9200,6 +9244,137 @@ def apply(runner_dir, imgui_dir):
             "        }\n")
     done.append("frontend.cpp: a fast click is released where it was pressed "
                 "(docs/383)")
+
+    # BR-0042: "if you click too fast the check mark to confirm building a
+    # building doesn't show up". A click is held two frames minimum
+    # (touch_release_pending), and the cartridge acts on the pen RELEASE edge.
+    # A second press arriving inside that window cleared touch_release_pending
+    # and re-sent "down": the first click's release never reached the guest, so
+    # it saw one long drag instead of two clicks. The same happened when a
+    # release and the next press landed in one event drain. Now a release owed
+    # is delivered first, and a press that follows within two frames of ANY
+    # release is deferred until the guest has had two frames of "up".
+    front_042 = os.path.join(runner_dir, "src", "frontend.cpp")
+    replace(front_042,
+            "    bool touch_release_pending = false;\n"
+            "    uint32_t touch_frames_held = 0;\n",
+            "    bool touch_release_pending = false;\n"
+            "    uint32_t touch_frames_held = 0;\n"
+            "    /* BR-0042 */\n"
+            "    int64_t lb_touch_iter = 0;          /* host frames so far */\n"
+            "    int64_t lb_touch_up_iter = -100;    /* when a release last went out */\n"
+            "    bool lb_press_deferred = false;     /* a press waiting for its gap */\n"
+            "    bool lb_defer_up = false;           /* ...and already released */\n"
+            "    int lb_defer_x = 0, lb_defer_y = 0;\n")
+    replace(front_042,
+            "                mouse_down = true;\n"
+            "                ++host_touch_presses;\n"
+            "                last_touch_event_x = event.button.x;\n"
+            "                last_touch_event_y = event.button.y;\n"
+            "                touch_release_pending = false;\n"
+            "                touch_frames_held = 0;\n"
+            "                set_touch_from_mouse(event.button.x, event.button.y, true,\n"
+            "                                     options.screen_layout,\n"
+            "                                     bottom_logical_width);\n",
+            "                if (touch_release_pending) {   /* BR-0042: owed */\n"
+            "                    set_touch_from_mouse(last_touch_event_x,\n"
+            "                                         last_touch_event_y, false,\n"
+            "                                         options.screen_layout,\n"
+            "                                         bottom_logical_width);\n"
+            "                    lb_touch_up_iter = lb_touch_iter;\n"
+            "                }\n"
+            "                mouse_down = true;\n"
+            "                ++host_touch_presses;\n"
+            "                last_touch_event_x = event.button.x;\n"
+            "                last_touch_event_y = event.button.y;\n"
+            "                touch_release_pending = false;\n"
+            "                touch_frames_held = 0;\n"
+            "                if (lb_press_deferred || lb_touch_iter - lb_touch_up_iter < 2) {\n"
+            "                    lb_press_deferred = true;   /* BR-0042 */\n"
+            "                    lb_defer_up = false;\n"
+            "                    lb_defer_x = event.button.x;\n"
+            "                    lb_defer_y = event.button.y;\n"
+            "                } else\n"
+            "                set_touch_from_mouse(event.button.x, event.button.y, true,\n"
+            "                                     options.screen_layout,\n"
+            "                                     bottom_logical_width);\n")
+    replace(front_042,
+            "                if (touch_frames_held < 2)\n"
+            "                    touch_release_pending = true;\n"
+            "                else\n"
+            "                    set_touch_from_mouse(event.button.x, event.button.y, false,\n"
+            "                                         options.screen_layout,\n"
+            "                                         bottom_logical_width);\n",
+            "                if (lb_press_deferred) {   /* BR-0042 */\n"
+            "                    lb_defer_up = true;\n"
+            "                    lb_defer_x = event.button.x;\n"
+            "                    lb_defer_y = event.button.y;\n"
+            "                } else if (touch_frames_held < 2)\n"
+            "                    touch_release_pending = true;\n"
+            "                else {\n"
+            "                    set_touch_from_mouse(event.button.x, event.button.y, false,\n"
+            "                                         options.screen_layout,\n"
+            "                                         bottom_logical_width);\n"
+            "                    lb_touch_up_iter = lb_touch_iter;\n"
+            "                }\n")
+    replace(front_042,
+            "            if (event.type == SDL_MOUSEMOTION && mouse_down &&\n"
+            "                event.motion.windowID == presentation.window_ids[1])\n"
+            "                set_touch_from_mouse(",
+            "            if (event.type == SDL_MOUSEMOTION && mouse_down &&\n"
+            "                lb_press_deferred &&   /* BR-0042 */\n"
+            "                event.motion.windowID == presentation.window_ids[1]) {\n"
+            "                lb_defer_x = event.motion.x;\n"
+            "                lb_defer_y = event.motion.y;\n"
+            "            } else\n"
+            "            if (event.type == SDL_MOUSEMOTION && mouse_down &&\n"
+            "                event.motion.windowID == presentation.window_ids[1])\n"
+            "                set_touch_from_mouse(")
+    replace(front_042,
+            "                if (touch_frames_held < 2)\n"
+            "                    touch_release_pending = true;\n"
+            "                else\n"
+            "                    nds_set_touch(0, 0, false);\n",
+            "                if (lb_press_deferred)   /* BR-0042 */\n"
+            "                    lb_defer_up = true;\n"
+            "                else if (touch_frames_held < 2)\n"
+            "                    touch_release_pending = true;\n"
+            "                else {\n"
+            "                    nds_set_touch(0, 0, false);\n"
+            "                    lb_touch_up_iter = lb_touch_iter;\n"
+            "                }\n")
+    # the deferred press goes out just before the emulation step
+    replace(front_042,
+            "        const uint64_t phase0 = SDL_GetPerformanceCounter();\n"
+            "        const uint64_t now = scheduler_system_timestamp();\n",
+            "        if (lb_press_deferred &&   /* BR-0042 */\n"
+            "            lb_touch_iter - lb_touch_up_iter >= 2) {\n"
+            "            lb_press_deferred = false;\n"
+            "            last_touch_event_x = lb_defer_x;\n"
+            "            last_touch_event_y = lb_defer_y;\n"
+            "            touch_frames_held = 0;\n"
+            "            set_touch_from_mouse(lb_defer_x, lb_defer_y, true,\n"
+            "                                 options.screen_layout,\n"
+            "                                 bottom_logical_width);\n"
+            "            if (lb_defer_up) {   /* released while it waited */\n"
+            "                mouse_down = false;\n"
+            "                touch_release_pending = true;\n"
+            "            }\n"
+            "        }\n"
+            "        const uint64_t phase0 = SDL_GetPerformanceCounter();\n"
+            "        const uint64_t now = scheduler_system_timestamp();\n")
+    replace(front_042,
+            "        if (mouse_down || touch_release_pending)\n"
+            "            ++touch_frames_held;\n",
+            "        ++lb_touch_iter;   /* BR-0042 */\n"
+            "        if (mouse_down || touch_release_pending)\n"
+            "            ++touch_frames_held;\n")
+    replace(front_042,
+            "            /* docs/383: where it was pressed, with its out-of-band\n",
+            "            lb_touch_up_iter = lb_touch_iter;   /* BR-0042 */\n"
+            "            /* docs/383: where it was pressed, with its out-of-band\n")
+    done.append("frontend.cpp: a press right after a release waits for the "
+                "guest to see the pen go up (BR-0042)")
 
     # 0zzzzzzzzzzzz. TEAM BUILDER AND BAN UNITS (docs/384).
     #

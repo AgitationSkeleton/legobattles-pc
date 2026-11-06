@@ -4748,6 +4748,114 @@ void entity_state_override(void) {
     if (original) original();
 }
 
+// ---- docs/463: PER-UNIT CAPABILITIES (SG-0062, SG-0065, SG-0069) --------------
+//
+// Five bytes in a blueprint record's padding (the Balance fields 26..30, and
+// the custom unit's `fields`): Mountains +0x79, Hotwire immune +0x7A, EMP
+// immune +0x7B, ESP immune +0x22, Construction style +0x23. They are the
+// game's alignment padding (0xA2 in all 182 records and in the packs), so no
+// cartridge code reads them; a flag is on only at exactly 1, a style only at
+// 1..3, and the stock 0xA2 is therefore off. The record is part of the balance
+// data both machines share (docs/418) and of a custom unit's file (docs/448),
+// so every machine reads the same bytes: nothing here needs a new datagram.
+//
+//  * Mountains. FUN_02001510(holder, class) is the one place a terrain class
+//    becomes "this blueprint may stand here": class 0..3 read +0x16/+0x19/
+//    +0x17/+0x18, and classes 4 and 5 return 0 whatever the blueprint says
+//    (the jump table at 0x02001518, bytes read). Plane A holds only 0, 2, 3
+//    and 5 on all 122 maps, so class 5 is the plateau and cliff. Every BL to it
+//    in the lifted code (the wrapper FUN_02001574 at 0x02001590, and
+//    0x02002C64, 0x0205390C, 0x0205B1C0, 0x0206BC1C) goes through
+//    runtime_dispatch_literal_call, so this override sees them all. For class
+//    5 and a flagged blueprint it answers 1.
+//  * Hotwire. cast_spell_override (below) refuses a cast of effect 0x20 whose
+//    target's blueprint is flagged, the way "Patch the glitch" refuses one.
+//  * EMP and ESP. Both are EAttackSpell; FUN_02077510 (its tick, 0x020774B8)
+//    walks the victim records at spell+0x54 (count +0x58) and stuns each whose
+//    byte +3 is 0. The override marks a flagged victim done (+3 = 1) first.
+//    Spell+0x74 selects the variant (clear: EMP, categories 6; set: ESP,
+//    categories 0..4), read from the bytes of FUN_020775F0.
+//  * Construction style. The unit-training progress action (the constructor
+//    at 0x02051F14) picks the brick animation from the faction of the
+//    trained blueprint, FUN_020EAD18(index) (124 King, 125 Wizard, 126
+//    Pirate, 127 Imperial, 128 Earth, 129 Alien; anything else 124): 125 gives
+//    animation set 1 and 129 set 2, every other id set 0. A custom unit has
+//    an index of 551 or more, so it always got set 0. Called from 0x0205202C
+//    (return 0x02052030) with r1 still the blueprint holder, the override
+//    answers 0x7C / 0x7D / 0x81 for style 1 / 2 / 3.
+constexpr uint32_t kPassability = 0x02001510u;    // arm
+constexpr uint32_t kEmpApply = 0x02077510u;       // arm
+constexpr uint32_t kFactionOfBp = 0x020EAD18u;    // thumb
+constexpr uint32_t kProduceFxRet = 0x02052030u;   // the BLX at 0x0205202C returns here
+constexpr uint32_t kCapMountains = 0x79u, kCapHotwire = 0x7Au, kCapEmp = 0x7Bu,
+                   kCapEsp = 0x22u, kCapStyle = 0x23u;
+
+// A flag byte of a blueprint record: on only at exactly 1.
+static bool cap_flag(uint32_t record, uint32_t off) {
+    return guest_ptr(record) && bus_read_u8(record + off) == 1u;
+}
+
+void passability_override(void) {
+    // The path finder asks this for every cell it looks at, so the lifted
+    // body is looked up once (lb_dispatch_original's memo is 64 entries and
+    // rescans every bank when it is evicted); the title bank never changes.
+    static void (*cached)(void) = nullptr;
+    if (!cached) cached = lb_dispatch_original(0, kPassability);
+    void (*original)(void) = cached;
+    if (g_cpu.R[1] == 5u) {
+        const uint32_t holder = g_cpu.R[0];
+        const uint32_t record = guest_ptr(holder) ? bus_read_u32(holder + 4u) : 0u;
+        if (cap_flag(record, kCapMountains)) {
+            g_cpu.R[0] = 1u;
+            lb_override_return();
+            return;
+        }
+    }
+    if (original) original();
+}
+
+void emp_victims_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kEmpApply);
+    const uint32_t spell = g_cpu.R[0];
+    const uint32_t list = guest_ptr(spell) ? bus_read_u32(spell + 0x54u) : 0u;
+    const uint32_t n = guest_ptr(spell) ? bus_read_u32(spell + 0x58u) : 0u;
+    if (guest_ptr(list) && n <= 256u) {
+        const uint32_t cap = bus_read_u8(spell + 0x74u) ? kCapEsp : kCapEmp;
+        for (uint32_t i = 0; i < n; ++i) {
+            const uint32_t rec = bus_read_u32(list + 4u * i);
+            // +2 set: already stunned; +3 set: finished with. Either way leave it.
+            if (!guest_ptr(rec) || bus_read_u8(rec + 2u) || bus_read_u8(rec + 3u)) continue;
+            const uint32_t e = unit_resolve(rec);
+            if (e && cap_flag(unit_blueprint(e), cap)) {
+                bus_write_u8(rec + 3u, 1u);
+                static int said = 0;
+                if (lb_trace_dispatch() && said < 6) {
+                    ++said;
+                    std::fprintf(stderr, "[lb_cap] %s skips unit %08X\n",
+                                 cap == kCapEsp ? "ESP" : "EMP", (unsigned)e);
+                    std::fflush(stderr);
+                }
+            }
+        }
+    }
+    if (original) original();
+}
+
+void produce_style_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kFactionOfBp);
+    if ((g_cpu.R[14] & ~1u) == kProduceFxRet) {
+        const uint32_t holder = g_cpu.R[1];
+        const uint32_t record = guest_ptr(holder) ? bus_read_u32(holder + 4u) : 0u;
+        const uint32_t style = guest_ptr(record) ? bus_read_u8(record + kCapStyle) : 0u;
+        if (style >= 1u && style <= 3u) {
+            g_cpu.R[0] = style == 1u ? 0x7Cu : style == 2u ? 0x7Du : 0x81u;
+            lb_override_return();
+            return;
+        }
+    }
+    if (original) original();
+}
+
 // ---- docs/384: CUSTOM AND RANDOM OPPONENTS, AND BANS ------------------------
 //
 // Free Play's opponent is one button on OpponentSetup whose frame index is the
@@ -6730,6 +6838,25 @@ void cast_spell_override(void) {
             human = !owner_has_ai(caster_owner);
         }
     }
+    // docs/463 (SG-0065): a blueprint marked Hotwire immune is refused as a
+    // target, for every caster and every setting, by the same refusal as below.
+    if (out && order && bus_read_u8(order) == 0x20u) {
+        const uint32_t victim = cast_handle_entity(bus_read_u32(g_cpu.R[13]));
+        const uint32_t nul = bus_read_u32(kNullHandleLit);
+        if (victim && check_in_ram(nul) && cap_flag(unit_blueprint(victim), kCapHotwire)) {
+            static int said = 0;
+            if (lb_trace_dispatch() && said < 5) {
+                ++said;
+                std::fprintf(stderr, "[lb_cap] hotwire on %08X refused: immune\n",
+                             (unsigned)victim);
+                std::fflush(stderr);
+            }
+            bus_write_u8(out, bus_read_u8(nul));
+            bus_write_u8(out + 1u, bus_read_u8(nul + 1u));
+            lb_override_return();
+            return;
+        }
+    }
     if ((lb_setting_patch_hotwire_glitch() || human) && out && order &&
         bus_read_u8(order) == 0x20u) {
         const uint32_t target = bus_read_u32(g_cpu.R[13]);   // the 5th argument
@@ -8374,6 +8501,10 @@ const NdsDispatchEntry kOverrideTable[] = {
        multiplayer start's (bans). Otherwise a pure tail call. docs/384. */
     {kRosterBuild, 0u, roster_build_override, nullptr},    /* 0x02000E78 */
     /* ARM. Entities.ebp's load callback: the custom units' array back first. docs/448. */
+    /* ARM. A terrain class asked of a blueprint: class 5 (plateau, cliff) is
+       passable to a unit with the Mountains capability; every other call is a
+       pure tail call. docs/463. */
+    {kPassability, 0u, passability_override, nullptr},     /* 0x02001510 */
     {kEbpLoaded, 0u, ebp_loaded_override, nullptr},        /* 0x02001EE0 */
     /* ARM. THE DECOMPILATION'S FIRST GRADED FUNCTION, not a patch. With
        LB_SHADOW unset this delegates to the cartridge and only counts; with
@@ -8456,6 +8587,9 @@ const NdsDispatchEntry kOverrideTable[] = {
        setting on; otherwise a pure tail call. Replaces the old override on
        func_0206E408, whose nested guest call was not re-entrant. docs/369. */
     {kApplyDamage, 0u, apply_damage_observer, nullptr},    /* 0x0206E970 */
+    /* ARM. The EMP/ESP tick's stun step: victims whose blueprint is EMP or
+       ESP immune are marked done first; otherwise a pure tail call. docs/463. */
+    {kEmpApply, 0u, emp_victims_override, nullptr},        /* 0x02077510 */
     {kHealTick, 0u, heal_tick_override, nullptr},          /* 0x02078770 */
     {kHotWireTick, 0u, hotwire_tick_override, nullptr},    /* 0x02078D5C */
     /* ARM. The cast validator's only caller: "Patch the glitch" refuses a
@@ -8568,6 +8702,10 @@ const NdsDispatchEntry kOverrideTable[] = {
     /* Thumb. The army screen's two list filters, answered for a creature
        from FUN_020B96FC's calls only; otherwise a pure tail call. docs/430. */
     {kArmyListable, 1u, army_listable_override, nullptr},  /* 0x020EAC1C */
+    /* Thumb. The faction of a blueprint index, for the training animation's
+       call only (return 0x02052030): a unit with a Construction style answers
+       its own faction; otherwise a pure tail call. docs/463. */
+    {kFactionOfBp, 1u, produce_style_override, nullptr},   /* 0x020EAD18 */
     {kArmyTier, 1u, army_tier_override, nullptr},          /* 0x020EB21C */
     /* GRADED, NOT PATCHED. docs/333. */
     /* ARM. The game's array append: pure tail call except from the map
@@ -8612,7 +8750,8 @@ const NdsDispatchEntry kOverrideTable[] = {
 // Compile-time guard so this cannot regrow. A runtime check would report the
 // fault after shipping; this refuses to build. Every future entry must be
 // inserted in address order or the build stops here with this message.
-static_assert(kRosterBuild < kEbpLoaded && kEbpLoaded < kRegistryFind &&
+static_assert(kRosterBuild < kPassability && kPassability < kEbpLoaded &&
+              kEbpLoaded < kRegistryFind &&
               kRegistryFind < kBillboardDraw && kBillboardDraw < kFeCard &&
               kSelRect < kReadyToggle && kReadyToggle < kMainMenuUpdate &&
               kReadyToggle < kClientLobbyShow &&
@@ -8625,7 +8764,8 @@ static_assert(kRosterBuild < kEbpLoaded && kEbpLoaded < kRegistryFind &&
               kOppSetupLabel < kEnemyCycle &&
               kEnemyCycle < kMapListFill && kMapListFill < kMapConfirm &&
               kMapConfirm < kMapPreview && kMapPreview < kMarkerPlace &&
-              kWidgetSetPos < kArmyListable && kArmyListable < kArmyTier &&
+              kWidgetSetPos < kArmyListable && kArmyListable < kFactionOfBp &&
+              kFactionOfBp < kArmyTier &&
               kArmyTier < kPtrAppend && kPtrAppend < kSplitArray &&
               kMarkerPlace < kHeroHud &&
               kHeroHud < kViewUpdate && kViewUpdate < kScreenInit &&
@@ -8640,7 +8780,8 @@ static_assert(kRosterBuild < kEbpLoaded && kEbpLoaded < kRegistryFind &&
               kRegisterMissions < kGfxTransfer &&
               kGfxTransfer < kImageXfer && kImageXfer < kSetOwner &&
               kSetOwner < kSetHp && kSetHp < kApplyDamage &&
-              kApplyDamage < kHealTick && kHealTick < kHotWireTick &&
+              kApplyDamage < kEmpApply && kEmpApply < kHealTick &&
+              kHealTick < kHotWireTick &&
               kHotWireTick < kCastGround && kCastGround < kCastSpell &&
               kCastSpell < kTileGather &&
               kTileGather < kTeamAddBricks && kTeamAddBricks < kAiMineScore && kAiMineScore < kSetMusicSide &&
@@ -9365,7 +9506,10 @@ extern "C" void lb_creature_watch(void) {
 //   wait F | tap X Y | tapent <builder|hero|bp N|cat N> DX DY | quick N |
 //   ents | sel | say TEXT
 // `tapent` aims at an owner-0 unit's drawn position (+DX,+DY) in the guest's
-// 256x192 coordinates, the camera being wherever it is.
+// 256x192 coordinates, the camera being wherever it is. `owner N` makes
+// tapent, camhold and ents look at owner N's units instead (a second
+// instance's own player, or the other side's units to target).
+static unsigned g_drive_owner = 0;
 static int drive_entity_screen(const char* kind, int n, int* sx, int* sy, uint32_t* out) {
     int cx = 0, cy = 0;
     if (!lb_field_camera(&cx, &cy)) return 0;
@@ -9375,7 +9519,7 @@ static int drive_entity_screen(const char* kind, int n, int* sx, int* sy, uint32
     const int32_t count = (int32_t)bus_read_u32(pool + 0xCu);
     for (int32_t i = 0; guest_ptr(array) && i < count && i < 4096; ++i) {
         const uint32_t e = bus_read_u32(array + (uint32_t)i * 4u);
-        if (!guest_ptr(e) || !bus_read_u8(e + 0x227u) || bus_read_u8(e + 0xE4u) != 0u) continue;
+        if (!guest_ptr(e) || !bus_read_u8(e + 0x227u) || bus_read_u8(e + 0xE4u) != g_drive_owner) continue;
         const uint32_t bp = unit_blueprint(e);
         if (!bp) continue;
         const unsigned cat = bus_read_u8(bp + 0x5Cu), idx = bus_read_u16(bp + 4u);
@@ -9452,6 +9596,8 @@ extern "C" void lb_test_drive(void) {
         hold_n = 0;
         if (std::sscanf(cmd.c_str(), "camhold %31s %d", k, &hold_n) >= 1) std::strcpy(hold_kind, k);
         if (!std::strcmp(k, "off")) hold_kind[0] = 0;
+    } else if (!std::strcmp(w, "owner")) {
+        if (std::sscanf(cmd.c_str(), "owner %d", &a) == 1 && a >= 0 && a < 8) g_drive_owner = (unsigned)a;
     } else if (!std::strcmp(w, "quick")) {
         if (std::sscanf(cmd.c_str(), "quick %d", &a) == 1) lb_quick_request(a);
     } else if (!std::strcmp(w, "sel")) {
@@ -9464,10 +9610,12 @@ extern "C" void lb_test_drive(void) {
         const int32_t count = guest_ptr(pool) ? (int32_t)bus_read_u32(pool + 0xCu) : 0;
         for (int32_t i = 0; guest_ptr(array) && i < count && i < 4096; ++i) {
             const uint32_t e = bus_read_u32(array + (uint32_t)i * 4u);
-            if (!guest_ptr(e) || !bus_read_u8(e + 0x227u) || bus_read_u8(e + 0xE4u) != 0u) continue;
+            if (!guest_ptr(e) || !bus_read_u8(e + 0x227u) || bus_read_u8(e + 0xE4u) != g_drive_owner) continue;
             const uint32_t bp = unit_blueprint(e);
             if (!bp) continue;
-            std::fprintf(stderr, "[lb_drive]   %08X bp %u cat %u screen %d,%d hp %u\n", e,
+            // The handle LB_TEST_ADOPT_FILE takes: the pool index, then +0xDD.
+            std::fprintf(stderr, "[lb_drive]   %08X handle %04X bp %u cat %u screen %d,%d hp %u\n", e,
+                         (unsigned)(((uint32_t)i << 8) | bus_read_u8(e + 0xDDu)),
                          (unsigned)bus_read_u16(bp + 4u), (unsigned)bus_read_u8(bp + 0x5Cu),
                          ((int32_t)bus_read_u32(e + 0xECu) >> 12) - 29 - cx,
                          ((int32_t)bus_read_u32(e + 0xF0u) >> 12) - 1 - cy,
@@ -14915,20 +15063,54 @@ extern "C" int lb_ai_more_mines_live(void) {
     if (lb_net_guest_state() > 0) return 0;
     return lb_setting_ai_more_mines();
 }
+// SG-0071 (docs/464): THE AI BRIDGES ANY MAP. The bridge builder FUN_02095470
+// returns 0 unless FUN_02093A70 (the count of the map's land regions) is above
+// 4 -- a map that does not cut the land into five pieces never gets a bridge,
+// however many spots it has. Past that, while the AI sees no need (failure
+// counters +0x88 <= 1 and +0x80 <= 2) it also requires the economy's +0x42
+// above 8 and no bridge standing yet, so it builds one and stops. With the
+// setting: the region test branches always (`bhi` -> `b`, 0x020954A4), the
+// "no bridge yet" test is a nop (0x020954F0, the `bhs`), and the cap load
+// (0x020945B8) reads as 8. The +0x42 gate, the 1000-tick cooldown, the free
+// spot search (it skips a spot that already holds a bridge) and the build
+// queue's own brick check are the cartridge's. Free Play only.
+constexpr HalfWordPatch kAiBridges[2] = {{0x020954A4u, 0xD802u, 0xE002u},
+                                         {0x020954F0u, 0xD219u, 0x46C0u}};
+constexpr uint32_t kAiBridgeCapAddr = 0x020945B8u;   // stock 0x7809 (ldrb r1,[r1])
+
+extern "C" int lb_ai_bridges_live(void) {
+    if (lb_net_guest_state() > 0) return 0;
+    return lb_setting_ai_bridges();
+}
+
 static void apply_ai_more_mines(void) {
+    // Bit 0: SG-0032 more mines and bridges; bit 1: SG-0071 bridge any map.
     static int applied = 0;
     static unsigned gen = 0;
     if (gen != g_boot_gen) { gen = g_boot_gen; applied = 0; }
     const int played = lb_demo_play_ai_more_mines();
-    const int want = played >= 0 ? played : lb_ai_more_mines_live();
+    const int playedb = lb_demo_play_ai_bridges();
+    const int mines = played >= 0 ? played : lb_ai_more_mines_live();
+    const int bridges = playedb >= 0 ? playedb : lb_ai_bridges_live();
+    const int want = (mines ? 1 : 0) | (bridges ? 2 : 0);
     if (want == applied) return;
-    for (const HalfWordPatch& p : kAiMoreMines) {   // both, or neither
+    // All sites stock or already ours, or none are touched.
+    if (bus_read_u16(kAiMoreMines[0].addr) != kAiMoreMines[0].stock &&
+        bus_read_u16(kAiMoreMines[0].addr) != kAiMoreMines[0].want) return;
+    {
+        const uint32_t cap = bus_read_u16(kAiBridgeCapAddr);
+        if (cap != 0x7809u && cap != 0x2103u && cap != 0x2108u) return;
+    }
+    for (const HalfWordPatch& p : kAiBridges) {
         const uint32_t got = bus_read_u16(p.addr);
         if (got != p.stock && got != p.want) return;
     }
-    for (const HalfWordPatch& p : kAiMoreMines) bus_write_u16(p.addr, want ? p.want : p.stock);
+    bus_write_u16(kAiMoreMines[0].addr, (want & 1) ? kAiMoreMines[0].want : kAiMoreMines[0].stock);
+    bus_write_u16(kAiBridgeCapAddr, (want & 2) ? 0x2108u : (want & 1) ? 0x2103u : 0x7809u);
+    for (const HalfWordPatch& p : kAiBridges) bus_write_u16(p.addr, (want & 2) ? p.want : p.stock);
     applied = want;
-    std::fprintf(stderr, "[lb_aimines] the AI builds more mines and bridges: %s\n", want ? "ON" : "off");
+    std::fprintf(stderr, "[lb_aimines] the AI builds more mines and bridges: %s; "
+                 "bridges on any map: %s\n", (want & 1) ? "ON" : "off", (want & 2) ? "ON" : "off");
     std::fflush(stderr);
 }
 
@@ -14952,6 +15134,68 @@ static void apply_ai_hero_rebuild(void) {
     std::fprintf(stderr, "[lb_aihero] the AI rebuilds its hero every time: %s "
                  "(%08X)\n", want ? "ON" : "off", p.addr);
     std::fflush(stderr);
+}
+
+// BR-0040 (docs/464): A HERO ITEM THAT CANNOT BE BUILT STOPS THE BUILDERS.
+// FUN_02094A9C wipes L28 (FUN_0208CB5C: the available AND the used vector)
+// and queues the hero item (priority 100) alone; the builder planner
+// (FUN_02094E78) then appends its builder items (99) behind it. The producer
+// FUN_0208C204 picks from L28 through FUN_0208CC6C, which takes index 0 when
+// that item is affordable, else the last affordable one. So an affordable hero
+// at index 0 is picked on every tick; if it then cannot start (no idle type-7
+// building from FUN_0208C590, no population room FUN_02085E78, or the item
+// was refused), nothing behind it is ever tried: no builders for the rest of
+// the match. The rebuild option (kAiHeroRebuild) makes this happen after every
+// hero death instead of once. Each vblank, per AI: if the head of the available
+// vector is a hero item and another item sits behind it for 900 vblanks (15 s)
+// in a row, the head is rotated to the back (a pointer shuffle inside the
+// vector, no free). A hero that can start is picked within a tick, so it
+// leaves the vector long before the timeout. Only with the rebuild option on
+// (the stock bytes and stock queue otherwise); offline only.
+static void apply_ai_hero_unstick(void) {
+    static unsigned gen = 0;
+    static unsigned wait[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    if (gen != g_boot_gen) { gen = g_boot_gen; std::memset(wait, 0, sizeof wait); }
+    const int played = lb_demo_play_ai_hero_rebuild();
+    const int on = played >= 0 ? played : lb_ai_hero_rebuild_live();
+    if (!on) return;
+    auto ram = [](uint32_t p) { return p >= 0x02000000u && p < 0x02400000u; };
+    const uint32_t V = bus_read_u32(0x0215697Cu);
+    if (!ram(V)) return;
+    const uint32_t ar = bus_read_u32(V + 4u);
+    const int32_t n = (int32_t)bus_read_u32(V + 8u);
+    if (!ram(ar) || n <= 0) return;
+    auto cat_of = [&](uint32_t item) -> int {
+        if (!ram(item)) return -1;
+        const uint32_t rec = bus_read_u32(item + 8u);
+        if (!ram(rec)) return -1;
+        const uint32_t st = bus_read_u32(rec + 8u);
+        return ram(st) ? (int)bus_read_u8(st + 0x5Cu) : -1;
+    };
+    for (int32_t i = 0; i < n && i < 8; ++i) {
+        const uint32_t ai = bus_read_u32(ar + 4u * (uint32_t)i);
+        const uint32_t prod = ram(ai) ? bus_read_u32(ai + 0x54u) : 0u;
+        const uint32_t list = ram(prod) ? bus_read_u32(prod + 0x28u) : 0u;
+        const uint32_t vec = ram(list) ? bus_read_u32(list) : 0u;
+        const uint32_t arr = ram(vec) ? bus_read_u32(vec + 4u) : 0u;
+        const int32_t cnt = ram(vec) ? (int32_t)bus_read_u32(vec + 8u) : 0;
+        if (!ram(arr) || cnt < 2 || cnt > 64) { wait[i] = 0; continue; }
+        bool behind = false;
+        for (int32_t k = 1; k < cnt && !behind; ++k) {
+            const int c = cat_of(bus_read_u32(arr + 4u * (uint32_t)k));
+            behind = c >= 0 && c != 0;
+        }
+        if (cat_of(bus_read_u32(arr)) != 0 || !behind) { wait[i] = 0; continue; }
+        if (++wait[i] < 900u) continue;
+        wait[i] = 0;
+        const uint32_t head = bus_read_u32(arr);
+        for (int32_t k = 1; k < cnt; ++k)
+            bus_write_u32(arr + 4u * (uint32_t)(k - 1), bus_read_u32(arr + 4u * (uint32_t)k));
+        bus_write_u32(arr + 4u * (uint32_t)(cnt - 1), head);
+        std::fprintf(stderr, "[lb_aihero] AI %d: a hero item stuck at the head of its build "
+                     "list for 15 s; moved behind the builders (BR-0040)\n", (int)i);
+        std::fflush(stderr);
+    }
 }
 
 // SG-0017 step 1: THE AI'S ENTITY-CAST BRANCH IS DEAD CODE. FUN_02097A08 tests
@@ -15836,6 +16080,52 @@ static void apply_tall_maps(void) {
     for (uint32_t a : kRowLits) bus_write_u32(a, kRowTable);
     g_rows_ours = true;
     std::fprintf(stderr, "[lb_rows] the occupation grid's row table moved to %08X (128 rows)\n", kRowTable);
+    std::fflush(stderr);
+}
+
+// ---- BR-0046 (docs/467): the text count, 3,064 ------------------------------
+//
+// The cartridge's language files hold 0xBF8 strings, and the code knows that
+// number in fifteen words: the loader's relocation count (FUN_0203E0B4, the
+// literal at 0x0203E0F8), the text widget's "an id below this is text" test
+// (User__TextWidget__v03, 0x020E9A00), and the "no text" value that widgets,
+// the store hints, the objectives tab, the credits (and one credits table
+// entry in data, 0x0214C6E0) are set to and compared against. 0xBF8 is no ARM
+// or Thumb immediate, so every use is one of these words (none in the
+// overlays). The strings lb_mods appends (custom unit names, mod map names)
+// sit at 3,064 and up: the widgets refused them, so a custom unit's name
+// showed blank. With strings appended, all fifteen move to the new count
+// together, so "no text" stays past every real id; id 3,064 itself is an
+// empty string (lb_mods.cpp) for anything that still holds the old value.
+// Only words still holding 0xBF8 are written; once a boot, after the ARM9
+// image is in. lb_teams.cpp's lang_appended_fixup relocates the appended
+// entries of a file the game loaded before this ran.
+namespace {
+constexpr uint32_t kTextCountStock = 0xBF8u;
+constexpr uint32_t kTextCountWords[] = {
+    0x0203E0F8u, 0x020B4E80u, 0x020B55BCu, 0x020B7C70u, 0x020C3880u,
+    0x020CD020u, 0x020CD17Cu, 0x020CD4E4u, 0x020D5CA0u, 0x020D5F98u,
+    0x020D6160u, 0x020E1DA0u, 0x020E9A00u, 0x020EAA10u, 0x0214C6E0u,
+};
+unsigned g_textcount_gen = ~0u;
+}  // namespace
+extern "C" unsigned lb_mods_lang_ids(void);   /* lb_mods.cpp */
+
+static void apply_text_count(void) {
+    if (g_textcount_gen == g_boot_gen) return;
+    const uint32_t n = lb_mods_lang_ids();
+    if (n <= kTextCountStock) return;
+    // The ARM9 image is in when the loader's own word reads the retail count.
+    if (bus_read_u32(kTextCountWords[0]) != kTextCountStock) return;
+    unsigned wrote = 0;
+    for (uint32_t a : kTextCountWords)
+        if (bus_read_u32(a) == kTextCountStock) {
+            bus_write_u32(a, n);
+            ++wrote;
+        }
+    g_textcount_gen = g_boot_gen;
+    std::fprintf(stderr, "[lb_lang] the text count %u -> %u in %u of %u words\n", kTextCountStock, n,
+                 wrote, (unsigned)(sizeof kTextCountWords / sizeof kTextCountWords[0]));
     std::fflush(stderr);
 }
 
@@ -17688,13 +17978,15 @@ extern "C" void lb_patches_on_vblank(void) {
     lb_ar_apply_frame();   // SG-0035: Action Replay codes (recordings do not carry them)
     apply_ai_cheats();
     apply_ai_hero_rebuild();
-    apply_ai_more_mines();            // SG-0032
+    apply_ai_hero_unstick();          // BR-0040
+    apply_ai_more_mines();            // SG-0032, SG-0071
     apply_ai_hero_multi();
     apply_ai_tap_spells();
     apply_two_player_maps();
     apply_gold_rush_target();   // SG-0036
     apply_teal();                     // docs/412
     apply_tall_maps();                // BR-0039, docs/460
+    apply_text_count();               // BR-0046, docs/467
     models_paint();                  // docs/412 teal and docs/437 Shark: model palettes
     apply_ai_spectate();              // SG-0002
     ai_opp_tick();                    // docs/414

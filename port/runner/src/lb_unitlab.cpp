@@ -201,8 +201,9 @@ Layout layout_of(const Rec& r) {
         keep(base);
         for (int d = 0; d < 5; ++d) {
             add(idle, d, base, 0, 96 + d * 32, 32, 32);
-            for (int f = 0; f < 5; ++f) add(walk, d, base, f * 32, 96 + d * 32, 32, 32);
-            for (int f = 5; f < 8; ++f) add(attack, d, base, f * 32, 96 + d * 32, 32, 32);
+            // Mounts have 4 walk and 4 attack frames (BR-0045/0048), not 5 and 3.
+            for (int f = 0; f < 4; ++f) add(walk, d, base, f * 32, 96 + d * 32, 32, 32);
+            for (int f = 4; f < 8; ++f) add(attack, d, base, f * 32, 96 + d * 32, 32, 32);
         }
     } else {
         keep(base);
@@ -228,7 +229,20 @@ Layout layout_of(const Rec& r) {
 const uint16_t kTeamShades[6][3] = {{0x113F, 0x005C, 0x0015}, {0x7628, 0x6D60, 0x5880},
                                     {0x03AF, 0x02A6, 0x01E0}, {0x035F, 0x023F, 0x011D},
                                     {0x7C1F, 0x4419, 0x1C12}, {0x3D8A, 0x3106, 0x1880}};
-const char* const kTeamNames[6] = {"Red", "Blue", "Green", "Yellow", "Purple", "Grey"};
+// SG-0064: colour 6, Teal, light/mid/dark by lb_setting_teal_style(): 0 the
+// cartridge's unused teal (KingFaction.NCLR banks 10/11), 1 the port's ramp.
+// The same words as lb_patches.cpp's kTealShades (docs/412).
+const uint16_t kTealShades[2][3] = {{0x7FFF, 0x6B73, 0x56EA}, {0x6764, 0x4E80, 0x31A0}};
+const char* const kTeamNames[7] = {"Red", "Blue", "Green", "Yellow", "Purple", "Grey", "Teal"};
+constexpr int kTeams = 7;
+extern "C" int lb_setting_teal_style(void);   // lb_overlay.cpp
+
+// The preview's team number with the teal style folded in (6 or 7), so the
+// texture cache follows the style setting.
+int team_key(int t) { return t == 6 ? 6 + (lb_setting_teal_style() ? 1 : 0) : t; }
+const uint16_t* team_shades(int t) {
+    return t >= 6 ? kTealShades[t == 7 ? 1 : 0] : kTeamShades[t];
+}
 
 uint32_t ds_rgba(uint16_t c) {
     auto ch = [](int v) { const int s = v * 2; return (uint32_t)(((s << 2) | (s >> 4)) & 255); };
@@ -247,7 +261,8 @@ std::array<uint32_t, 16> palette(int t) {
     }
     std::array<uint32_t, 16> p{};
     for (int i = 0; i < 16; ++i) p[(size_t)i] = ds_rgba(bank[i]);
-    for (int k = 0; k < 3; ++k) p[(size_t)(12 + k)] = ds_rgba(kTeamShades[t % 6][k]);
+    const uint16_t* sh = team_shades(t < 0 || t > 7 ? 0 : t);   // t: 0..5, 6 or 7 teal (team_key)
+    for (int k = 0; k < 3; ++k) p[(size_t)(12 + k)] = ds_rgba(sh[k]);
     p[0] = 0;
     return p;
 }
@@ -264,7 +279,8 @@ void chunk(std::vector<uint8_t>& o, const char* type, const std::vector<uint8_t>
     o.insert(o.end(), d.begin(), d.end());
     put32(o, (uint32_t)crc32(0, o.data() + at, (uInt)(4 + d.size())));
 }
-bool indexed_png(const Sheet& s, int sx, int sy, int w, int h, std::vector<uint8_t>* out) {
+bool indexed_png(const Sheet& s, int sx, int sy, int w, int h, std::vector<uint8_t>* out,
+                 const std::array<uint32_t, 16>* with_pal = nullptr) {
     std::vector<uint8_t> raw;
     raw.reserve((size_t)h * (1 + (size_t)w));
     for (int y = 0; y < h; ++y) {
@@ -284,7 +300,7 @@ bool indexed_png(const Sheet& s, int sx, int sy, int w, int h, std::vector<uint8
     put32(ihdr, (uint32_t)w); put32(ihdr, (uint32_t)h);
     ihdr.push_back(8); ihdr.push_back(3); ihdr.push_back(0); ihdr.push_back(0); ihdr.push_back(0);
     chunk(*out, "IHDR", ihdr);
-    const std::array<uint32_t, 16> pal = palette(0);
+    const std::array<uint32_t, 16> pal = with_pal ? *with_pal : palette(0);
     std::vector<uint8_t> plte, trns;
     for (uint32_t c : pal) {
         plte.push_back((uint8_t)c); plte.push_back((uint8_t)(c >> 8)); plte.push_back((uint8_t)(c >> 16));
@@ -584,8 +600,36 @@ const Field kFields[] = {
     {"spell_4", 0x75, 1}, {"spell_5", 0x76, 1}, {"land", 0x17, 1}, {"water", 0x18, 1},
     {"trees", 0x19, 1}, {"building_collision", 0x1A, 1}, {"land_water", 0x1B, 1},
     {"hitbox_size", 0x1D, 1}, {"not_water_only", 0x16, 1}, {"ai_priority", 0x70, 1},
-    {"defogged_area", 0x71, 1}, {"display_name_id", 0x06, 2},
+    {"defogged_area", 0x71, 1},
+    // docs/463: the port's capability bytes (the record's padding, stock 0xA2).
+    {"mountains", 0x79, 1}, {"hotwire_immune", 0x7A, 1}, {"emp_immune", 0x7B, 1},
+    {"esp_immune", 0x22, 1}, {"construction_style", 0x23, 1},
+    {"display_name_id", 0x06, 2},
 };
+
+// docs/463: the largest value of a capability field (1 for the on/off ones,
+// 3 for the construction style), or 0 for any other field. A template's stock
+// 0xA2 is neither, so it shows, and saves, as 0.
+int port_field_max(const char* key) {
+    if (!std::strcmp(key, "mountains") || !std::strcmp(key, "hotwire_immune") ||
+        !std::strcmp(key, "emp_immune") || !std::strcmp(key, "esp_immune"))
+        return 1;
+    return !std::strcmp(key, "construction_style") ? 3 : 0;
+}
+long fold_port_value(const char* key, long v) {
+    const int mx = port_field_max(key);
+    return mx && (v < 0 || v > mx) ? 0 : v;
+}
+const char* port_field_tip(const char* key) {
+    if (!std::strcmp(key, "mountains"))
+        return "Can walk over mountains and cliffs (terrain class 5), which no unit can in the\n"
+               "stock game. Give it Land as well. Online, every player has the same record.";
+    if (!std::strcmp(key, "hotwire_immune")) return "The Hotwire spell cannot take this unit.";
+    if (!std::strcmp(key, "emp_immune")) return "The EMP spell skips this unit.";
+    if (!std::strcmp(key, "esp_immune")) return "The ESP spell skips this unit.";
+    return "The brick animation shown while this unit is trained.\n"
+           "Auto: its faction's (a custom unit is Human). Skeleton is the Wizards', Alien the Aliens'.";
+}
 
 std::string json_str(const std::string& s) {
     std::string o = "\"";
@@ -625,7 +669,10 @@ const HowStep kHowTo[] = {
      "menus list it by; \"display_name\" (optional) is what the game shows in battle,\n"
      "and need not be unique (\"Builder\"). Under \"fields\" change cost, build_time,\n"
      "health, speed, damage and the rest; values are kept within what the game can\n"
-     "store. The Stats tab names the projectile and spells. \"index\" is the unit it was made from:\n"
+     "store. The Stats tab names the projectile and spells, and has tick boxes for\n"
+     "mountains (walk over cliffs) and immunity to Hotwire, EMP and ESP, and a\n"
+     "construction style for the brick animation when it is trained.\n"
+     "\"index\" is the unit it was made from:\n"
      "leave it. The other entries (sheets, animations, raw_record) are for reference\n"
      "and are not read back."},
     {"Pick another model or sprite set (optional)",
@@ -720,7 +767,8 @@ int export_one(const Rec& r, const fs::path& root) {
              ", \"h\": " + std::to_string(r.ch) + "},\n";
     j += "  \"fields\": {\n";
     for (size_t i = 0; i < sizeof kFields / sizeof kFields[0]; ++i)
-        j += "    " + json_str(kFields[i].key) + ": " + std::to_string(rd(kFields[i].off, kFields[i].width)) +
+        j += "    " + json_str(kFields[i].key) + ": " +
+             std::to_string(fold_port_value(kFields[i].key, (long)rd(kFields[i].off, kFields[i].width))) +
              (i + 1 < sizeof kFields / sizeof kFields[0] ? ",\n" : "\n");
     j += "  },\n";
     j += "  \"sheets\": [";
@@ -827,6 +875,7 @@ std::map<std::string, Tex> g_tex;   // "<sheet>#<team>"
 SDL_Renderer* g_ren = nullptr;
 
 const Tex& sheet_tex(const std::string& name, int team) {
+    team = team_key(team);
     const std::string key = name + "#" + std::to_string(team);
     auto it = g_tex.find(key);
     if (it != g_tex.end()) return it->second;
@@ -881,6 +930,7 @@ struct View {
 
 // A custom unit's sheet as the importer will build it (lb_cunits.cpp).
 const Tex& folder_tex(const std::string& folder, int tmpl, const std::string& name, int team) {
+    team = team_key(team);
     const std::string key = "F:" + folder + ":" + name + "#" + std::to_string(team);
     auto it = g_tex.find(key);
     if (it != g_tex.end()) return it->second;
@@ -1013,8 +1063,11 @@ void draw_view(const View& v, int frame_tick) {
             static const int kBank[6] = {1, 0, 2, 3, 4, 6};   // kTeamNames order -> palette bank (docs/412)
             const float yaw = g_st.playing ? (float)ImGui::GetTime() * 0.9f : (float)(g_st.dir & 7) * 0.785398f;
             static std::vector<uint32_t> px(kM * kM);
+            const bool teal = g_st.team >= 6;   // SG-0064: bank 5 rebuilt in the teal shades
             if (mtex && !held.empty() &&
-                lb_nsbmd_render(held.data(), held.size(), kBank[g_st.team % 6], yaw, 0.45f, kM, kM, px.data())) {
+                (teal ? lb_nsbmd_render_teal(held.data(), held.size(), team_shades(team_key(g_st.team)), yaw, 0.45f, kM, kM,
+                                             px.data())
+                      : lb_nsbmd_render(held.data(), held.size(), kBank[g_st.team % 6], yaw, 0.45f, kM, kM, px.data()))) {
                 SDL_UpdateTexture(mtex, nullptr, px.data(), kM * 4);
                 const ImVec2 p = ImGui::GetCursorScreenPos();
                 const float side = 64.0f * std::max(2.0f, g_st.zoom);
@@ -1204,6 +1257,21 @@ void json_set_s(std::string& j, const char* key, const std::string& v) {
     if (nl != std::string::npos) j.insert(nl + 1, "  \"" + std::string(key) + "\": " + json_str(v) + ",\n");
 }
 
+// SG-0070: the credits line, who else worked on a unit ("sprites by Ryncat").
+// Kept to the server's allow-list (src/units.js CREDITS_OK): letters, digits,
+// space and _ - ' . , & ! ?, at most 60. Anything else is dropped.
+std::string credits_clean(const std::string& in) {
+    std::string o;
+    for (unsigned char c : in) {
+        if (o.size() >= 60) break;
+        if (std::isalnum(c) || c == ' ' || c == '_' || c == '-' || c == '\'' || c == '.' || c == ',' || c == '&' ||
+            c == '!' || c == '?')
+            o += (char)c;
+    }
+    while (!o.empty() && o.back() == ' ') o.pop_back();
+    return o;
+}
+
 // The "fields" object's span.
 bool fields_span(const std::string& j, size_t* b, size_t* e) {
     const size_t f = j.find("\"fields\"");
@@ -1217,6 +1285,7 @@ struct Edit {
     std::string folder;
     char name[25] = "";
     char ingame[25] = "";       // SG-0053: "display_name", the name the game shows
+    char credits[61] = "";      // SG-0070: "credits", the collaborators
     std::string asset;
     long field[sizeof kFields / sizeof kFields[0]] = {};
     bool has[sizeof kFields / sizeof kFields[0]] = {};
@@ -1230,6 +1299,7 @@ void edit_open(const Mine& m, const Rec& tmpl) {
     const std::string j = read_text(units_root() / fs::u8path(m.folder) / "unit.json");
     std::snprintf(e.name, sizeof e.name, "%s", json_get_s(j, "name").c_str());
     std::snprintf(e.ingame, sizeof e.ingame, "%s", json_get_s(j, "display_name").c_str());
+    std::snprintf(e.credits, sizeof e.credits, "%s", credits_clean(json_get_s(j, "credits")).c_str());
     e.asset = json_get_s(j, "asset");
     if (e.asset.empty()) e.asset = tmpl.asset;
     size_t fb, fe;
@@ -1237,10 +1307,10 @@ void edit_open(const Mine& m, const Rec& tmpl) {
     for (size_t i = 0; i < sizeof kFields / sizeof kFields[0]; ++i) {
         uint32_t v = 0;   // the template's value unless unit.json sets it
         for (int k = 0; k < kFields[i].width; ++k) v |= (uint32_t)tmpl.raw[(size_t)(kFields[i].off + k)] << (8 * k);
-        e.field[i] = (long)v;
+        e.field[i] = fold_port_value(kFields[i].key, (long)v);
         size_t b, en;
         if (f && json_value_at(j, fb, fe, kFields[i].key, &b, &en)) {
-            e.field[i] = std::atol(j.c_str() + b);
+            e.field[i] = fold_port_value(kFields[i].key, std::atol(j.c_str() + b));
             e.has[i] = true;
         }
     }
@@ -1253,6 +1323,8 @@ bool edit_save() {
     if (j.empty()) return false;
     json_set_s(j, "name", g_edit.name);
     if (g_edit.ingame[0] || !json_get_s(j, "display_name").empty()) json_set_s(j, "display_name", g_edit.ingame);
+    if (g_edit.credits[0] || !json_get_s(j, "credits").empty())
+        json_set_s(j, "credits", credits_clean(g_edit.credits));
     json_set_s(j, "asset", g_edit.asset);
     size_t fb, fe;
     if (!fields_span(j, &fb, &fe)) {
@@ -1369,6 +1441,24 @@ bool draw_named_field(size_t i, const std::vector<Rec>& rs) {
     const char* key = kFields[i].key;
     const bool proj = std::strcmp(key, "projectile") == 0;
     const bool spell = std::strncmp(key, "spell_", 6) == 0;
+    // docs/463: the capability fields are a tick box, or a short list.
+    if (const int pmax = port_field_max(key)) {
+        if (pmax == 1) {
+            bool on = g_edit.field[i] == 1;
+            if (ImGui::Checkbox(key, &on)) g_edit.field[i] = on ? 1 : 0;
+        } else {
+            static const char* const kStyle[4] = {"Auto", "Human", "Skeleton", "Alien"};
+            const int cur = (int)std::clamp<long>(g_edit.field[i], 0, 3);
+            ImGui::SetNextItemWidth(180.0f);
+            if (ImGui::BeginCombo(key, kStyle[cur])) {
+                for (int s = 0; s < 4; ++s)
+                    if (ImGui::Selectable(kStyle[s], s == cur)) g_edit.field[i] = s;
+                ImGui::EndCombo();
+            }
+        }
+        ImGui::SetItemTooltip("%s", port_field_tip(key));
+        return true;
+    }
     if (!proj && !spell) return false;
     const int cur = (int)g_edit.field[i];
     ImGui::SetNextItemWidth(proj ? 300.0f : 180.0f);
@@ -1406,6 +1496,11 @@ void draw_edit_fields(const Mine& m, const std::vector<Rec>& rs) {
     ImGui::SetItemTooltip("What the game itself shows in battle and on its cards. Empty: the Name.\n"
                           "It need not be unique: call it \"Builder\" like the stock builders.\n"
                           "Letters, digits, spaces and - ' . ! only, at most 24.");
+    ImGui::SetNextItemWidth(220.0f);
+    ImGui::InputTextWithHint("Credits", "e.g. sprites by a friend", g_edit.credits, sizeof g_edit.credits);
+    ImGui::SetItemTooltip("Who helped make this unit. Shown with the unit under Community units\n"
+                          "and sent when you share it. Letters, digits, spaces and _ - ' . , & ! ?,\n"
+                          "at most 60, no swearing.");
     const auto choices = asset_choices(rs, t);
     std::string cur = g_edit.asset;
     for (const auto& c : choices)
@@ -1440,6 +1535,7 @@ void draw_stock_fields(const Rec& r) {
             if (std::strcmp(kFields[i].key, "display_name_id") == 0) continue;
             uint32_t v = 0;
             for (int k = 0; k < kFields[i].width; ++k) v |= (uint32_t)r.raw[(size_t)(kFields[i].off + k)] << (8 * k);
+            v = (uint32_t)fold_port_value(kFields[i].key, (long)v);   // docs/463: stock padding reads 0
             ImGui::TableNextColumn();
             ImGui::TextDisabled("%s", kFields[i].key);
             ImGui::TableNextColumn();
@@ -1713,7 +1809,7 @@ void draw_lab_detail(const std::vector<Rec>& rs, const std::vector<Mine>& mine, 
                                   "The compass names are a reading of the art.");
             ImGui::SameLine();
             ImGui::SetNextItemWidth(110.0f);
-            ImGui::Combo("Team", &s.team, kTeamNames, 6);
+            ImGui::Combo("Team", &s.team, kTeamNames, kTeams);
             ImGui::Checkbox("Play", &s.playing);
             ImGui::SameLine();
             ImGui::SetNextItemWidth(140.0f);
@@ -1967,6 +2063,133 @@ bool slurp_file(const fs::path& p, std::vector<uint8_t>* out, size_t cap) {
     return ok;
 }
 
+// ── Convert: .NCBR <-> .PNG (SG-0061) ───────────────────────────────────────
+// The lab page's "Convert..." panel. An .NCBR (raw or COMP-wrapped, 4bpp) is
+// written as an indexed PNG on an .NCLR's palette bank (or the faction palette
+// when none is chosen); a PNG is written as an .NCBR the same way the importer
+// reads one (lb_cunits.cpp: a 16-colour indexed PNG keeps its indices, any
+// other picture takes the nearest palette colour).
+extern "C" int lb_pick_art_file(char* buf, int cap, int saving, int kind);   // lb_filedlg.cpp
+
+struct Conv {
+    bool open = false;
+    char ncbr[512] = "", nclr[512] = "", png[512] = "";
+    int bank = 0;
+    bool comp = true;
+    std::string msg;
+    bool bad = false;
+};
+Conv g_conv;
+
+// The palette the conversion uses: the chosen NCLR's bank, else the faction's.
+std::array<uint32_t, 16> convert_palette(std::string* note) {
+    std::array<uint32_t, 16> p = palette(0);
+    if (!g_conv.nclr[0]) {
+        *note = "faction palette";
+        return p;
+    }
+    std::vector<uint8_t> b;
+    uint32_t c[16];
+    if (slurp_file(fs::u8path(g_conv.nclr), &b, 1u << 20) && lb_cunits_nclr_decode(b, g_conv.bank, c)) {
+        for (int i = 0; i < 16; ++i) p[(size_t)i] = c[i];
+        *note = "the NCLR's bank " + std::to_string(g_conv.bank);
+    } else {
+        *note = "faction palette (the NCLR could not be read)";
+    }
+    return p;
+}
+
+// `from` with its extension changed to `ext` (with the dot), into `to`.
+void swap_ext(const char* from, const char* ext, char* to, size_t cap) {
+    fs::path p = fs::u8path(from);
+    p.replace_extension(ext);
+    std::snprintf(to, cap, "%s", utf8(p).c_str());
+}
+
+void draw_convert() {
+    Conv& c = g_conv;
+    ImGui::SeparatorText("Convert sprite files");
+    ImGui::TextWrapped("Turn an .NCBR sheet into a PNG, or a PNG into an .NCBR. A palette (.NCLR) is optional: "
+                       "without one the faction palette is used.");
+    ImGui::SetNextItemWidth(360.0f);
+    ImGui::InputText("##cnclr", c.nclr, sizeof c.nclr);
+    ImGui::SameLine();
+    if (ImGui::Button("Palette (.NCLR)...")) lb_pick_art_file(c.nclr, (int)sizeof c.nclr, 0, 1);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(70.0f);
+    ImGui::InputInt("Bank", &c.bank, 0, 0);
+    c.bank = std::max(0, std::min(15, c.bank));
+    ImGui::SetItemTooltip("Which 16-colour bank of the NCLR to use (0 for the cartridge's sprite palettes).");
+
+    ImGui::SetNextItemWidth(360.0f);
+    ImGui::InputText("##cncbr", c.ncbr, sizeof c.ncbr);
+    ImGui::SameLine();
+    if (ImGui::Button("Open .NCBR...")) lb_pick_art_file(c.ncbr, (int)sizeof c.ncbr, 0, 0);
+    ImGui::SameLine();
+    if (ImGui::Button("Write PNG...") && c.ncbr[0]) {
+        std::vector<uint8_t> b, idx, png;
+        int w = 0, h = 0;
+        std::string why, note;
+        if (!slurp_file(fs::u8path(c.ncbr), &b, 4u << 20)) {
+            c.bad = true;
+            c.msg = "Could not read the .NCBR.";
+        } else if (!lb_cunits_ncbr_decode(b, &w, &h, &idx, &why)) {
+            c.bad = true;
+            c.msg = "Could not convert: " + why + ".";
+        } else {
+            char out[512];
+            swap_ext(c.ncbr, ".png", out, sizeof out);
+            if (lb_pick_art_file(out, (int)sizeof out, 1, 2)) {
+                Sheet sh;
+                sh.w = w;
+                sh.h = h;
+                sh.px = std::move(idx);
+                const std::array<uint32_t, 16> pal = convert_palette(&note);
+                c.bad = !(indexed_png(sh, 0, 0, w, h, &png, &pal) && write_file(fs::u8path(out), png));
+                c.msg = c.bad ? "Could not write the PNG."
+                              : "Wrote " + std::to_string(w) + "x" + std::to_string(h) + " PNG (" + note + ") to " + out;
+            }
+        }
+    }
+    ImGui::SetItemTooltip("Choose where to save the PNG. Colour 0 is transparent.");
+
+    ImGui::SetNextItemWidth(360.0f);
+    ImGui::InputText("##cpng", c.png, sizeof c.png);
+    ImGui::SameLine();
+    if (ImGui::Button("Open PNG...")) lb_pick_art_file(c.png, (int)sizeof c.png, 0, 2);
+    ImGui::SameLine();
+    if (ImGui::Button("Write .NCBR...") && c.png[0]) {
+        std::vector<uint8_t> b, ncbr;
+        std::string why, note;
+        if (!slurp_file(fs::u8path(c.png), &b, 4u << 20)) {
+            c.bad = true;
+            c.msg = "Could not read the PNG.";
+        } else {
+            const std::array<uint32_t, 16> pal = convert_palette(&note);
+            if (!lb_cunits_png_to_ncbr(b, pal.data(), c.comp, &ncbr, &why)) {
+                c.bad = true;
+                c.msg = "Could not convert: " + why + ".";
+            } else {
+                char out[512];
+                swap_ext(c.png, ".NCBR", out, sizeof out);
+                if (lb_pick_art_file(out, (int)sizeof out, 1, 0)) {
+                    c.bad = !write_file(fs::u8path(out), ncbr);
+                    c.msg = c.bad ? "Could not write the .NCBR."
+                                  : "Wrote " + std::to_string(ncbr.size()) + " bytes (" + note + ") to " + out;
+                }
+            }
+        }
+    }
+    ImGui::SetItemTooltip("A 16-colour indexed PNG (the lab's exports) keeps its colour numbers; any other picture\n"
+                          "takes the nearest palette colour. The size is rounded up to whole 8-pixel tiles.");
+    ImGui::SameLine();
+    ImGui::Checkbox("COMP-wrapped", &c.comp);
+    ImGui::SetItemTooltip("On: compressed and wrapped like the game's own files. Off: the raw file.");
+    if (!c.msg.empty())
+        ImGui::TextColored(c.bad ? ImVec4(1, 0.5f, 0.4f, 1) : ImVec4(0.5f, 1, 0.5f, 1), "%s", c.msg.c_str());
+    ImGui::Separator();
+}
+
 // The preview sheet (every sheet of the unit stacked, as the importer builds
 // it, in Red) and the thumbnail (its first idle frame facing the camera).
 bool share_pictures(const Mine& m, const Rec& r, std::vector<uint8_t>* sheet_png, std::vector<uint8_t>* thumb_png) {
@@ -2026,7 +2249,7 @@ bool share_pictures(const Mine& m, const Rec& r, std::vector<uint8_t>* sheet_png
 }
 
 struct Com {
-    struct Row { int id = 0, category = 0, tmpl = 0, sounds = 0, downloads = 0, likes = 0; std::string name, author; };
+    struct Row { int id = 0, category = 0, tmpl = 0, sounds = 0, downloads = 0, likes = 0; std::string name, author, credits; };
     std::vector<Row> rows;
     bool listed = false;
     int sort = 0, category = -1;   // -1 all
@@ -2095,6 +2318,15 @@ void start_share(const Mine& m, const std::vector<Rec>& rs) {
         s.message = "Units made from this record cannot be shared.";
         return;
     }
+    const std::string credits = credits_clean(json_get_s(read_text(units_root() / fs::u8path(m.folder) / "unit.json"), "credits"));
+    if (!credits.empty()) {
+        char tmp[128];
+        if (lb_swear_filter(credits.c_str(), tmp, sizeof tmp) != 0) {
+            s.bad = true;
+            s.message = "The credits may not contain swearing.";
+            return;
+        }
+    }
     std::vector<uint8_t> bundle, sheet, thumb;
     if (!lb_cunits_folder_bundle(m.folder, &bundle)) {
         s.bad = true;
@@ -2129,7 +2361,7 @@ void start_share(const Mine& m, const std::vector<Rec>& rs) {
         ++ns;
     }
     const std::string body = std::string("{\"key\":\"") + lb_setting_player_key() + "\",\"name\":\"" + m.name +
-                             "\",\"author\":\"" + g_author + "\",\"category\":" + std::to_string(r.category) +
+                             "\",\"author\":\"" + g_author + "\",\"credits\":\"" + credits + "\",\"category\":" + std::to_string(r.category) +
                              ",\"template\":" + std::to_string(r.index) + ",\"bundle\":\"" + b64_encode(bundle) +
                              "\",\"sheet\":\"" + b64_encode(sheet) + "\",\"thumb\":\"" + b64_encode(thumb) +
                              "\",\"sounds\":[" + sounds + "]}";
@@ -2200,6 +2432,7 @@ void unet_poll() {
                 r.likes = flat_int(u, "likes");
                 r.name = flat_str(u, "name").substr(0, 24);
                 r.author = flat_str(u, "author").substr(0, 24);
+                r.credits = credits_clean(flat_str(u, "credits"));   // SG-0070; absent from older servers
                 if (r.id > 0 && r.tmpl >= 0 && r.tmpl < 182) c.rows.push_back(r);
                 flat_ws(reply, q);
                 if (q < reply.size() && reply[q] == ',') ++q;
@@ -2326,6 +2559,7 @@ void draw_community(const std::vector<Rec>& rs) {
         ImGui::Text("%s", r.name.c_str());
         ImGui::TextDisabled("by %s, from %s%s", r.author.empty() ? "someone" : r.author.c_str(),
                             rs[(size_t)r.tmpl].name.c_str(), r.sounds ? ", has sounds" : "");
+        if (!r.credits.empty()) ImGui::TextDisabled("Credits: %s", r.credits.c_str());   // SG-0070
         ImGui::TableNextColumn();
         ImGui::Text("%s", r.category >= 0 && r.category < 20 ? kKinds[r.category] : "?");
         ImGui::TableNextColumn();
@@ -2442,11 +2676,15 @@ void lb_unitlab_draw(SDL_Renderer* ren) {
     }
     ImGui::SetItemTooltip("Every unit and building's files, into mods/units/export.");
     ImGui::SameLine();
+    if (ImGui::Button("Convert...")) g_conv.open = !g_conv.open;   // SG-0061
+    ImGui::SetItemTooltip("Convert an .NCBR (and .NCLR palette) to a PNG, or a PNG to an .NCBR.");
+    ImGui::SameLine();
     ImGui::SetNextItemWidth(170.0f);
     ImGui::InputTextWithHint("##author", "Your name (for sharing)", g_author, sizeof g_author);
     if (!s.message.empty())
         ImGui::TextColored(s.bad ? ImVec4(1, 0.5f, 0.4f, 1) : ImVec4(0.5f, 1, 0.5f, 1), "%s", s.message.c_str());
 
+    if (g_conv.open) draw_convert();
     const std::vector<Mine> mine = list_mine();
     const float h = std::max(200.0f, ImGui::GetContentRegionAvail().y);
     if (ImGui::BeginTable("##lab", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV)) {

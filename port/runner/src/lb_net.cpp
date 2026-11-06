@@ -1042,6 +1042,7 @@ std::string g_host_status = "Not hosting.";
 std::atomic<bool> g_hosting{false};
 std::atomic<long long> g_last_beat{0};
 std::atomic<int> g_host_players{1};
+std::atomic<int> g_host_max{3};   // SG-0056: the seats the lobby was listed with
 // docs/394: what the lobby is doing, for the master server ("open" listed,
 // "starting" unlisted, "playing" the match), and its map once one loaded.
 std::string g_host_state = "open";   // under g_host_mutex
@@ -1093,6 +1094,7 @@ extern "C" void lb_net_announce(const char* server, int port, const char* name,
     body += "}";
 
     g_host_players = players > 0 ? players : 1;
+    g_host_max = max_players > 0 ? max_players : 3;
     // ADVERTISING IS ALSO "START LISTENING". A lobby whose address nobody can
     // send to is a directory entry and nothing else, and the socket binds
     // loopback until it is told otherwise -- deliberately, so that merely
@@ -1424,6 +1426,34 @@ extern "C" const char* lb_net_host_status(void) {
     std::lock_guard<std::mutex> lock(g_host_mutex);
     copy = g_host_status;
     return copy.c_str();
+}
+
+// SG-0056 (docs/466): what a Discord invite to this lobby needs -- the master
+// server that lists it, its room code, and the seats. Returns 1 only while the
+// lobby is joinable (listed, open, a seat free); 0 otherwise. The host token
+// and every other secret stay in here.
+extern "C" int lb_net_host_invite(char* server, int scap, int* port, char* code,
+                                  int ccap, int* players, int* maxp) {
+    if (!g_hosting.load()) return 0;
+    std::string srv, cd, state;
+    int prt = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_host_mutex);
+        srv = g_host_server; cd = g_host_code; prt = g_host_port; state = g_host_state;
+    }
+    if (cd.empty() || srv.empty() || state != "open") return 0;
+    int n = g_host_players.load();
+    const int m = g_host_max.load();
+    // The announce count is the host alone; a learned peer is a second player.
+    uint32_t ip = 0; uint16_t pp = 0; int learned = 0;
+    if (nds_local_wireless_peer(&ip, &pp, &learned) && ip && learned && n < 2) n = 2;
+    if (n >= m) return 0;
+    if (server && scap > 0) std::snprintf(server, (size_t)scap, "%s", srv.c_str());
+    if (code && ccap > 0) std::snprintf(code, (size_t)ccap, "%s", cd.c_str());
+    if (port) *port = prt;
+    if (players) *players = n;
+    if (maxp) *maxp = m;
+    return 1;
 }
 
 extern "C" const char* lb_net_host_code(void) {

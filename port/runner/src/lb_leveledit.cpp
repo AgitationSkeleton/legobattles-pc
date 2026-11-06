@@ -393,7 +393,7 @@ uint16_t tree_lookup(uint32_t code) {
 // marker. Golden bricks are cell (48,16) of the world's items sheet.
 struct Faction { char letter; const char* name; };
 const Faction kFactions[6] = {{'k', "King"}, {'w', "Wizard"}, {'p', "Pirate"},
-                              {'i', "Imperial"}, {'h', "Space Police"}, {'a', "Alien"}};
+                              {'i', "Imperial"}, {'h', "Earth"}, {'a', "Alien"}};
 struct Blueprint { char faction; int category; const char* sheet; int ebp; };
 // Each faction's first blueprint of a category: its sprite asset and its
 // record's offset in the decompressed BP/Entities.ebp (docs/data/entities.tsv).
@@ -554,23 +554,49 @@ const Sprite* entity_sprite(SDL_Renderer* ren, int faction, uint8_t type, int te
     return slot.tex ? &slot : nullptr;
 }
 
-const Sprite* brick_sprite(SDL_Renderer* ren, int world) {
-    const std::string key = std::string("brick:") + std::to_string(world);
+// SG-0060: the pickup record's byte 4 is a collectable kind. In the stock
+// campaign maps, 5 is the level's red brick (18 in all), 6 its minikit (one
+// per mission), 0-3 the mission's own objects (bones, maps, crates, crystals)
+// and 7 (4,133 of them) and 8 (Free Play's) the gold brick. The counts are
+// measured; which blueprint each kind names was not read out. The collectable
+// blueprints (BP/Entities.ebp 209..550) carry no sprite cell, so the cells
+// below were picked by eye from the three <World>Items sheets (16x16 cells, 4
+// across): the red brick is the strong-red one at (1,3), the minikit the chest
+// at (0,4), and a mission object takes the world's own cell for its slot.
+// Anything else keeps the gold brick at (3,1).
+struct Cell { int cx, cy; };
+const Cell kObjectCells[3][4] = {
+    {{3, 0}, {1, 0}, {2, 0}, {1, 1}},   // King, Wizard (castle): bones, scroll, ...
+    {{2, 0}, {1, 1}, {2, 1}, {3, 0}},   // Pirate, Imperial: map A, map B, crate, ...
+    {{1, 0}, {2, 0}, {1, 1}, {2, 1}},   // Mars: crystal dome, parts, ...
+};
+const Sprite* brick_sprite(SDL_Renderer* ren, int world, int subtype = 8) {
+    Cell c{3, 1};
+    if (subtype == 5) c = {1, 3};
+    else if (subtype == 6) c = {0, 4};
+    else if (subtype >= 0 && subtype <= 3) c = kObjectCells[std::clamp(world, 0, 2)][subtype];
+    const std::string key = std::string("brick:") + std::to_string(world) + ":" + std::to_string(c.cx) + "," +
+                            std::to_string(c.cy);
     auto it = g_sprites.find(key);
     if (it != g_sprites.end()) return it->second.tex ? &it->second : nullptr;
     const char* sheet = world == 1 ? "PiratesItems" : world == 2 ? "MarsItems" : "CastleItems";
-    auto& slot = g_sprites[key] = make_sprite(ren, sheet, 48, 16, 16, 16, 0);
+    auto& slot = g_sprites[key] = make_sprite(ren, sheet, c.cx * 16, c.cy * 16, 16, 16, 0);
+    if (!slot.tex && (c.cx != 3 || c.cy != 1)) return brick_sprite(ren, world, 8);
     return slot.tex ? &slot : nullptr;
+}
+const char* pickup_name(int subtype) {
+    return subtype == 5 ? "red brick" : subtype == 6 ? "minikit" : subtype >= 0 && subtype <= 3 ? "mission object"
+         : "golden brick";
 }
 
 // ── The document ─────────────────────────────────────────────────────────────
 enum Tool { kToolBrush, kToolLine, kToolRect, kToolEllipse, kToolFill, kToolPick,
             kToolStart, kToolMine, kToolBridge, kToolMarker, kToolBrick, kToolBuilding, kToolErase,
-            kToolSelect, kToolMove, kToolCount };
+            kToolSelect, kToolMove, kToolPatrol, kToolDecor, kToolCount };
 const char* const kToolNames[kToolCount] = {
     "Brush", "Line", "Rectangle", "Ellipse", "Fill", "Eyedropper",
     "Start base", "Mine", "Bridge site", "AI marker", "Golden brick", "Building / unit", "Remove object",
-    "Select (copy / paste)", "Move object",
+    "Select (copy / paste)", "Move object", "Patrol points", "Decorative tile",
 };
 enum Material { kMatGrass, kMatStone, kMatWater, kMatMountain, kMatTrees, kMatCount };
 const char* const kMatNames[kMatCount] = {"Grass", "Stone", "Water", "Mountain", "Trees"};
@@ -646,6 +672,12 @@ struct Ui {
     int grab_kind = -1;
     size_t grab_a = 0, grab_b = 0;
     int grab_ox = 0, grab_oy = 0, grab_x0 = 0, grab_y0 = 0;
+    // SG-0059: the Patrol points tool's event (its path is that event's
+    // points; -1 none) and the point being dragged (-1 none).
+    int patrol_ev = -1, patrol_pt = -1;
+    // SG-0066: the metatile the Decorative tile tool paints (E: < 440 the world's
+    // table, above it the map's own), -1 none.
+    int decor = -1;
     // The faction each player's buildings and units are drawn as. A map does
     // not say: players pick their factions when a match starts.
     int faction[4] = {0, 5, 2, 1};   // King, Alien, Pirate, Wizard
@@ -1018,7 +1050,13 @@ bool remove_at(int x, int y) {
         for (size_t k = 0; k < g.size(); ++k)
             if (x >= g[k].x && x <= g[k].x + 1 && y >= g[k].y && y <= g[k].y + 1) {
                 push_undo();
+                // SG-0067: the pad (plane E, stamped stone) goes with the mine;
+                // the cells are re-tiled as the stone they stand on, and any
+                // neighbouring mine's pad is stamped back.
+                const int px = g[k].x, py = g[k].y;
                 g.erase(g.begin() + (long)k);
+                retile(px - 1, py - 1, px + 2, py + 2);
+                stamp_mines();
                 return true;
             }
     for (size_t i = 0; i < m.events.size(); ++i) {
@@ -1043,6 +1081,15 @@ bool remove_at(int x, int y) {
             return true;
         }
     }
+    // SG-0059: a patrol point, when no unit or building stands on it. The
+    // event stays: its units and conditions are the level's script.
+    for (lvl::Event& e : m.events)
+        for (size_t k = 0; k < e.points.size(); ++k)
+            if (e.points[k].x == x && e.points[k].y == y) {
+                push_undo();
+                e.points.erase(e.points.begin() + (long)k);
+                return true;
+            }
     return false;
 }
 
@@ -1071,7 +1118,7 @@ Grabbed object_at(int x, int y) {
     for (size_t i = 0; i < m.events.size(); ++i) {
         const lvl::Event& e = m.events[i];
         for (size_t k = 0; k < e.picks.size(); ++k)
-            if (e.picks[k].x == x && e.picks[k].y == y) return {2, i, k, x, y, 1, 1, "golden brick"};
+            if (e.picks[k].x == x && e.picks[k].y == y) return {2, i, k, x, y, 1, 1, pickup_name(e.picks[k].subtype)};
         for (size_t k = 0; k < e.ents.size(); ++k) {
             int w, h;
             footprint(e.ents[k].type, &w, &h);
@@ -1080,6 +1127,10 @@ Grabbed object_at(int x, int y) {
             return {3, i, k, e.ents[k].x, e.ents[k].y, w, h, kd ? kd->name : "object"};
         }
     }
+    for (size_t i = 0; i < m.events.size(); ++i)
+        for (size_t k = 0; k < m.events[i].points.size(); ++k)
+            if (m.events[i].points[k].x == x && m.events[i].points[k].y == y)
+                return {4, i, k, x, y, 1, 1, "patrol point"};
     return g;
 }
 
@@ -1107,6 +1158,11 @@ void move_grabbed(int x, int y, int w, int h) {
     case 3: {
         lvl::Entity& e = m.events[g_ui.grab_a].ents[g_ui.grab_b];
         e.x = (uint8_t)x; e.y = (uint8_t)y;
+        break;
+    }
+    case 4: {
+        lvl::Point& p = m.events[g_ui.grab_a].points[g_ui.grab_b];
+        p.x = (uint8_t)x; p.y = (uint8_t)y;
         break;
     }
     default:
@@ -1390,9 +1446,49 @@ std::vector<Check> run_checks() {
         }
         bool bridges = false;
         for (const lvl::MarkerGroup& g : m.markers) bridges = bridges || ((g.id == 7 || g.id == 8) && !g.m.empty());
-        if (split)
-            out.push_back({!bridges, bridges ? "Some starts are only connected by bridge sites."
-                                             : "Some starts cannot reach each other over land."});
+        if (split) {
+            // SG-0068: starts that water alone separates are fine (transports
+            // cross it; many stock maps are built so). Flood from the first
+            // start over everything but mountain: when every start is still
+            // reached, only water was in the way and this is a note.
+            std::vector<uint8_t> seen((size_t)m.w * m.h, 0);
+            std::vector<int> st;
+            int fx = -1, fy = -1;
+            for (int t = 0; t < 4 && fx < 0; ++t) {
+                const int i = find_start(t);
+                if (i >= 0 && inside(m.events[i].ents[0].x, m.events[i].ents[0].y)) {
+                    fx = m.events[i].ents[0].x;
+                    fy = m.events[i].ents[0].y;
+                }
+            }
+            if (fx >= 0 && m.A[at(fx, fy)] != lvl::kMountain) {
+                seen[at(fx, fy)] = 1;
+                st.push_back((int)at(fx, fy));
+            }
+            while (!st.empty()) {
+                const int c = st.back();
+                st.pop_back();
+                for (int dy = -1; dy <= 1; ++dy)
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        const int nx = c % m.w + dx, ny = c / m.w + dy;
+                        if (!inside(nx, ny) || seen[at(nx, ny)] || m.A[at(nx, ny)] == lvl::kMountain) continue;
+                        seen[at(nx, ny)] = 1;
+                        st.push_back((int)at(nx, ny));
+                    }
+            }
+            bool by_water = fx >= 0;
+            for (int t = 0; t < 4; ++t) {
+                const int i = find_start(t);
+                if (i < 0) continue;
+                const lvl::Entity& b = m.events[i].ents[0];
+                if (inside(b.x, b.y) && !seen[at(b.x, b.y)]) by_water = false;
+            }
+            if (by_water)
+                out.push_back({false, "Some starts are separated by water: players reach each other by transport."});
+            else
+                out.push_back({!bridges, bridges ? "Some starts are only connected by bridge sites."
+                                                 : "Some starts are walled off from each other by mountains."});
+        }
     }
     for (const lvl::MarkerGroup& g : m.markers) {
         if (g.id != 7 && g.id != 8) continue;
@@ -2432,11 +2528,33 @@ void draw_objects(ImDrawList* dl, SDL_Renderer* ren, ImVec2 o, float cw, float c
                 dl->AddQuadFilled(ImVec2(c.x, c.y - r), ImVec2(c.x + r, c.y), ImVec2(c.x, c.y + r),
                                   ImVec2(c.x - r, c.y), col);
             }
+    // SG-0059: patrol paths, one polyline per event, its nodes numbered. The
+    // event the Patrol points tool holds is drawn bright.
+    for (size_t ei = 0; ei < m.events.size(); ++ei) {
+        const std::vector<lvl::Point>& pts = m.events[ei].points;
+        if (pts.empty()) continue;
+        const bool sel = (int)ei == g_ui.patrol_ev;
+        const ImU32 col = sel ? IM_COL32(255, 230, 60, 255) : IM_COL32(255, 150, 255, 200);
+        for (size_t k = 0; k < pts.size(); ++k) {
+            const ImVec2 c(o.x + (pts[k].x + 0.5f) * cw, o.y + (pts[k].y + 0.5f) * ch);
+            if (k > 0) {
+                const ImVec2 p(o.x + (pts[k - 1].x + 0.5f) * cw, o.y + (pts[k - 1].y + 0.5f) * ch);
+                dl->AddLine(p, c, col, sel ? 2.5f : 1.5f);
+            }
+            dl->AddCircleFilled(c, std::max(3.0f, ch * 0.22f), col);
+            dl->AddCircle(c, std::max(3.0f, ch * 0.22f), IM_COL32(0, 0, 0, 255), 0, 1.0f);
+            if (cw >= 14) {
+                char n[8];
+                std::snprintf(n, sizeof n, "%d", (int)k + 1);
+                dl->AddText(ImVec2(c.x + 5, c.y - 14), col, n);
+            }
+        }
+    }
     // Events: buildings and units (starts included), golden bricks, walls.
     for (const lvl::Event& e : m.events) {
         for (const lvl::Entity& x : e.ents) entity_sprite_draw(&sprites, dl, ren, o, z, x, false);
         for (const lvl::Pickup& p : e.picks) {
-            if (const Sprite* sp = brick_sprite(ren, g_doc.world)) {
+            if (const Sprite* sp = brick_sprite(ren, g_doc.world, p.subtype)) {
                 SpriteDraw d;
                 d.foot = (float)p.y + 1.0f;
                 d.sp = sp;
@@ -2465,9 +2583,48 @@ void draw_objects(ImDrawList* dl, SDL_Renderer* ren, ImVec2 o, float cw, float c
     flush_sprites(dl, &sprites);
 }
 
+// SG-0066: puts one metatile on a cell. A table metatile brings its usual
+// class and tree-edge byte (what the stock maps pair it with), so the area
+// plane stays true; the map's own metatiles keep the cell's class.
+void stamp_decor(int x, int y, int meta) {
+    Doc& d = g_doc;
+    if (!inside(x, y)) return;
+    const size_t i = at(x, y);
+    if (meta < kTableMetas) {
+        WorldAssets& wa = world_assets(d.world);
+        if (wa.ok && wa.e2a[(size_t)meta] >= 0) d.m.A[i] = (uint8_t)wa.e2a[(size_t)meta];
+        d.m.B[i] = wa.ok ? wa.e2b[(size_t)meta] : 0;
+        d.trees[i] = 0;
+    } else if ((size_t)(meta - kTableMetas) >= d.detail.size()) {
+        return;
+    } else {
+        d.m.B[i] = 0;
+    }
+    d.m.E[i] = (uint16_t)meta;
+    mark(x, y, x, y);
+}
+
 void apply_click(int x, int y, bool first) {
     Doc& d = g_doc;
     switch (g_ui.tool) {
+    case kToolDecor: {
+        // Shift-click lifts the metatile under the pointer; a plain click or
+        // drag paints it with the brush's size and shape.
+        if (first && ImGui::GetIO().KeyShift) {
+            g_ui.decor = d.m.E[at(x, y)];
+            break;
+        }
+        if (g_ui.decor < 0) {
+            if (first) say(false, "Pick a decorative tile in the panel first (or Shift-click one on the map).");
+            break;
+        }
+        if (first) push_undo();
+        std::vector<std::pair<int, int>> cells;
+        brush_cells(x, y, g_ui.brush, g_ui.round_brush, &cells);
+        for (const auto& c : cells) stamp_decor(c.first, c.second, g_ui.decor);
+        stamp_mines();
+        break;
+    }
     case kToolBrush: {
         // A stroke joins the cells the pointer passed between frames, so a
         // fast drag paints a line, not dots.
@@ -2643,7 +2800,7 @@ void canvas(SDL_Renderer* ren) {
             flush_sprites(dl, &list);
         } else if (!shape || !g_ui.dragging) {
             std::vector<std::pair<int, int>> cells;
-            if (g_ui.tool == kToolBrush) brush_cells(mx, my, g_ui.brush, g_ui.round_brush, &cells);
+            if (g_ui.tool == kToolBrush || g_ui.tool == kToolDecor) brush_cells(mx, my, g_ui.brush, g_ui.round_brush, &cells);
             else cells.push_back({mx, my});
             for (const auto& c : cells)
                 dl->AddRect(ImVec2(o.x + c.first * cw, o.y + c.second * ch),
@@ -2688,6 +2845,79 @@ void canvas(SDL_Renderer* ren) {
         dl->PopClipRect();
         return;
     }
+    // SG-0059: the Patrol points tool. A press on a point picks its path and
+    // drags the point (Shift-click removes it); a press on a unit or building
+    // that is no start picks that unit's event, so it can be given a path; a
+    // press on empty ground adds a point to the picked path.
+    if (g_ui.tool == kToolPatrol) {
+        if (g_ui.patrol_ev >= (int)d.m.events.size()) g_ui.patrol_ev = -1;
+        if (g_ui.patrol_pt >= 0 &&
+            (g_ui.patrol_ev < 0 || g_ui.patrol_pt >= (int)d.m.events[(size_t)g_ui.patrol_ev].points.size()))
+            g_ui.patrol_pt = -1;
+        if (g_ui.patrol_pt >= 0) {
+            lvl::Point& p = d.m.events[(size_t)g_ui.patrol_ev].points[(size_t)g_ui.patrol_pt];
+            p.x = (uint8_t)std::clamp(mx, 0, d.m.w - 1);
+            p.y = (uint8_t)std::clamp(my, 0, d.m.h - 1);
+            if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) g_ui.patrol_pt = -1;
+        } else if (on_map) {
+            int hit_e = -1, hit_k = -1, unit_e = -1;
+            // Points of the picked path win over other paths.
+            for (int pass = 0; pass < 2 && hit_e < 0; ++pass)
+                for (size_t i = 0; i < d.m.events.size() && hit_e < 0; ++i) {
+                    if (pass == 0 && (int)i != g_ui.patrol_ev) continue;
+                    const auto& pts = d.m.events[i].points;
+                    for (size_t k = pts.size(); k-- > 0;)
+                        if (pts[k].x == mx && pts[k].y == my) { hit_e = (int)i; hit_k = (int)k; break; }
+                }
+            if (hit_e < 0)
+                for (size_t i = 0; i < d.m.events.size() && unit_e < 0; ++i) {
+                    const lvl::Event& e = d.m.events[i];
+                    if (e.ents.size() >= 6) continue;   // a start
+                    for (const lvl::Entity& u : e.ents) {
+                        int w, h;
+                        footprint(u.type, &w, &h);
+                        if (mx >= u.x && mx < u.x + w && my >= u.y && my < u.y + h) { unit_e = (int)i; break; }
+                    }
+                }
+            if (hit_e >= 0) {
+                dl->AddRect(ImVec2(o.x + mx * cw, o.y + my * ch), ImVec2(o.x + (mx + 1) * cw, o.y + (my + 1) * ch),
+                            IM_COL32(255, 255, 255, 230), 0, 0, 2.0f);
+                ImGui::SetTooltip("%d, %d: point %d of %d. Drag to move, Shift-click to remove", mx, my, hit_k + 1,
+                                  (int)d.m.events[(size_t)hit_e].points.size());
+            } else if (unit_e >= 0) {
+                ImGui::SetTooltip("%d, %d: click to give this unit's group a patrol path", mx, my);
+            } else if (g_ui.patrol_ev >= 0) {
+                ImGui::SetTooltip("%d, %d: click to add point %d", mx, my,
+                                  (int)d.m.events[(size_t)g_ui.patrol_ev].points.size() + 1);
+            } else {
+                ImGui::SetTooltip("%d, %d: click a patrol point or a unit to pick a path", mx, my);
+            }
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                if (hit_e >= 0 && io.KeyShift) {
+                    push_undo();
+                    auto& pts = d.m.events[(size_t)hit_e].points;
+                    pts.erase(pts.begin() + hit_k);
+                    g_ui.patrol_ev = hit_e;
+                } else if (hit_e >= 0) {
+                    push_undo();
+                    g_ui.patrol_ev = hit_e;
+                    g_ui.patrol_pt = hit_k;
+                } else if (unit_e >= 0) {
+                    g_ui.patrol_ev = unit_e;
+                } else if (g_ui.patrol_ev >= 0) {
+                    auto& pts = d.m.events[(size_t)g_ui.patrol_ev].points;
+                    if (pts.size() < 255) {
+                        push_undo();
+                        d.m.events[(size_t)g_ui.patrol_ev].points.push_back({(uint8_t)mx, (uint8_t)my});
+                    } else {
+                        say(true, "A patrol path holds 255 points at most.");
+                    }
+                }
+            }
+        }
+        dl->PopClipRect();
+        return;
+    }
     // Clicks and drags.
     if (on_map && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
         if (shape) {
@@ -2699,7 +2929,7 @@ void canvas(SDL_Renderer* ren) {
             apply_click(mx, my, true);
         }
     }
-    if (g_ui.painting && ImGui::IsMouseDown(ImGuiMouseButton_Left) && on_map && g_ui.tool == kToolBrush)
+    if (g_ui.painting && ImGui::IsMouseDown(ImGuiMouseButton_Left) && on_map && (g_ui.tool == kToolBrush || g_ui.tool == kToolDecor))
         apply_click(mx, my, false);
     if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) g_ui.painting = false;
     if (g_ui.dragging) {
@@ -2811,8 +3041,8 @@ void panel_open() {
                     l = std::string("Free Play: ") + name;
             } else {
                 const char* who = !std::strncmp(s.stem, "ck", 2) ? "King" : !std::strncmp(s.stem, "cw", 2) ? "Wizard"
-                                : !std::strncmp(s.stem, "pi", 2) ? "Pirate" : !std::strncmp(s.stem, "pp", 2) ? "Imperial"
-                                : !std::strncmp(s.stem, "mh", 2) ? "Space Police" : !std::strncmp(s.stem, "ma", 2) ? "Alien"
+                                : !std::strncmp(s.stem, "pi", 2) ? "Imperial" : !std::strncmp(s.stem, "pp", 2) ? "Pirate"
+                                : !std::strncmp(s.stem, "mh", 2) ? "Earth" : !std::strncmp(s.stem, "ma", 2) ? "Alien"
                                 : "Test";
                 l = std::string("Story, ") + who + " " + std::string(s.stem + 2);
             }
@@ -2862,6 +3092,66 @@ void panel_world() {
                           "decorative tiles.");
 }
 
+// SG-0066: the map's own metatiles (E >= 440, from a stock map's DetailTiles
+// file or a downloaded level) as a strip texture, rebuilt when they change.
+SDL_Texture* detail_atlas(SDL_Renderer* ren) {
+    static SDL_Texture* tex = nullptr;
+    static SDL_Renderer* tex_ren = nullptr;
+    static uint64_t key = 0;
+    const Doc& d = g_doc;
+    WorldAssets& wa = world_assets(d.world);
+    if (!wa.ok || !ren || d.detail.empty()) return nullptr;
+    uint64_t k = 1469598103934665603ull ^ (uint64_t)d.world;
+    for (const Meta& m : d.detail)
+        for (uint16_t t : m.t) k = (k ^ t) * 1099511628211ull;
+    k ^= (uint64_t)d.detail.size() << 48;
+    if (tex && tex_ren == ren && key == k) return tex;
+    if (tex) SDL_DestroyTexture(tex);
+    const int cols = 20, rows = ((int)d.detail.size() + cols - 1) / cols;
+    std::vector<uint32_t> px((size_t)cols * kMetaW * rows * kMetaH, 0);
+    for (size_t e = 0; e < d.detail.size(); ++e)
+        draw_meta(wa, d.detail[e], px.data() + (e / cols) * kMetaH * cols * kMetaW + (e % cols) * kMetaW,
+                  cols * kMetaW);
+    tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STATIC, cols * kMetaW, rows * kMetaH);
+    if (tex) {
+        SDL_UpdateTexture(tex, nullptr, px.data(), cols * kMetaW * 4);
+        SDL_SetTextureScaleMode(tex, SDL_ScaleModeNearest);
+    }
+    tex_ren = ren;
+    key = k;
+    return tex;
+}
+
+// A grid of metatiles (20 across) in a scrolling child; a click picks one.
+// `base` is the first metatile's E value, `count` how many there are.
+void decor_grid(const char* id, SDL_Texture* tex, int base, int count, float height) {
+    if (!tex) return;
+    const int cols = 20, rows = (count + cols - 1) / cols;
+    const float z = std::clamp((ImGui::GetContentRegionAvail().x - 16.0f) / (cols * kMetaW), 0.5f, 1.5f);
+    ImGui::BeginChild(id, ImVec2(0, height), ImGuiChildFlags_Borders);
+    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    ImGui::Image((ImTextureID)(intptr_t)tex, ImVec2(cols * kMetaW * z, rows * kMetaH * z));
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    if (g_ui.decor >= base && g_ui.decor < base + count) {
+        const int e = g_ui.decor - base;
+        const ImVec2 a(p0.x + (e % cols) * kMetaW * z, p0.y + (e / cols) * kMetaH * z);
+        dl->AddRect(a, ImVec2(a.x + kMetaW * z, a.y + kMetaH * z), IM_COL32(255, 255, 0, 255), 0, 0, 2.0f);
+    }
+    if (ImGui::IsItemHovered()) {
+        const ImVec2 mp = ImGui::GetIO().MousePos;
+        const int cx = (int)std::floor((mp.x - p0.x) / (kMetaW * z)), cy = (int)std::floor((mp.y - p0.y) / (kMetaH * z));
+        const int e = cy * cols + cx;
+        if (cx >= 0 && cx < cols && cy >= 0 && e < count) {
+            ImGui::SetTooltip("Metatile %d", base + e);
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                g_ui.decor = base + e;
+                g_ui.tool = kToolDecor;
+            }
+        }
+    }
+    ImGui::EndChild();
+}
+
 void panel_terrain() {
     if (!ImGui::CollapsingHeader("Terrain tools", ImGuiTreeNodeFlags_DefaultOpen)) return;
     for (int t : {kToolBrush, kToolLine, kToolRect, kToolEllipse, kToolFill, kToolPick}) tool_button(t);
@@ -2888,6 +3178,21 @@ void panel_terrain() {
         ImGui::SameLine();
         if (ImGui::RadioButton(kMatNames[k], g_ui.material == k)) g_ui.material = k;
         ImGui::PopID();
+    }
+    ImGui::Separator();
+    // SG-0066: every metatile of the world's table, so the stock maps'
+    // flowers, mountain peaks and alternate patterns can be painted.
+    if (ImGui::TreeNode("Decorative tiles")) {
+        tool_button(kToolDecor);
+        ImGui::SetItemTooltip("Paints one metatile exactly as picked, with the brush's size. Shift-click\n"
+                              "the map to lift the tile under the pointer. Tidy terrain, or painting\n"
+                              "terrain beside it, re-picks the tile.");
+        decor_grid("##decor_table", atlas, 0, kTableMetas, 150.0f);
+        if (SDL_Texture* dt = detail_atlas(g_ren)) {
+            ImGui::TextDisabled("This map's own tiles");
+            decor_grid("##decor_detail", dt, kTableMetas, (int)g_doc.detail.size(), 60.0f);
+        }
+        ImGui::TreePop();
     }
     ImGui::Separator();
     tool_button(kToolSelect);
@@ -2966,7 +3271,32 @@ void panel_objects() {
     tool_button(kToolErase);
     tool_button(kToolMove);
     ImGui::SetItemTooltip("Drag an object to a new place: a building, unit, mine, AI marker,\n"
-                          "bridge site or golden brick, or one piece of a starting base.");
+                          "bridge site, pickup or patrol point, or one piece of a starting base.");
+    tool_button(kToolPatrol);
+    ImGui::SetItemTooltip("Edit the patrol paths of a level's units. Click a point (pink dots)\n"
+                          "or a unit to pick its path, drag points to move them, click empty\n"
+                          "ground to add one at the end, Shift-click a point to remove it.");
+    if (g_ui.tool == kToolPatrol) {
+        const bool have = g_ui.patrol_ev >= 0 && g_ui.patrol_ev < (int)g_doc.m.events.size();
+        if (have)
+            ImGui::TextDisabled("Path %d: %d points", g_ui.patrol_ev + 1,
+                                (int)g_doc.m.events[(size_t)g_ui.patrol_ev].points.size());
+        else
+            ImGui::TextDisabled("No path picked.");
+        ImGui::BeginDisabled(!have || g_doc.m.events[(size_t)g_ui.patrol_ev].points.empty());
+        if (ImGui::Button("Remove last point")) {
+            push_undo();
+            g_doc.m.events[(size_t)g_ui.patrol_ev].points.pop_back();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Clear path")) {
+            push_undo();
+            g_doc.m.events[(size_t)g_ui.patrol_ev].points.clear();
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Drop")) g_ui.patrol_ev = -1;
+    }
 }
 
 void panel_view() {
@@ -2975,8 +3305,8 @@ void panel_view() {
     ImGui::Checkbox("Objects", &g_ui.show_objects);
     ImGui::Checkbox("AI markers", &g_ui.show_markers);
     ImGui::Checkbox("Connected areas", &g_ui.show_areas);
-    ImGui::SetItemTooltip("Colours each walkable region. Starts in different regions need\n"
-                          "a bridge site between them.");
+    ImGui::SetItemTooltip("Colours each walkable region. Starts in different regions are\n"
+                          "fine when only water divides them (transports cross it).");
     ImGui::SliderFloat("Zoom", &g_ui.zoom, 0.125f, 4.0f, "%.2f");
     ImGui::SeparatorText("Draw players as");
     const char* fn[6] = {kFactions[0].name, kFactions[1].name, kFactions[2].name,

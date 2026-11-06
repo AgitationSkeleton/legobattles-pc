@@ -1005,8 +1005,40 @@ void wolf_battle_tick() {
     }
 }
 
+// BR-0046 (docs/467): THE APPENDED STRINGS' POINTERS. The cartridge turns the
+// language file's offset table into pointers for its own 3,064 ids (kLangIds)
+// when it loads the file; the ids lb_mods appended after them (custom unit
+// names, mod map names) stayed file offsets, so a custom unit's name read as
+// nothing. Once the file is loaded, each appended entry that still holds an
+// offset inside the file is relocated the same way (file + offset). Text only.
+extern "C" unsigned lb_mods_lang_ids(void);   // lb_mods.cpp
+void lang_appended_fixup() {
+    const uint32_t n = lb_mods_lang_ids();
+    if (n <= kLangIds) return;
+    const uint32_t file = lang_table();
+    if (!file) return;
+    static uint32_t done_file = 0;
+    if (file == done_file && bus_read_u32(file + 0x0Cu + kLangIds * 4u) >= file) return;
+    unsigned fixed = 0;
+    for (uint32_t id = kLangIds; id < n; ++id) {
+        const uint32_t a = file + 0x0Cu + id * 4u;
+        const uint32_t v = bus_read_u32(a);
+        if (v < file && v >= 0x0Cu + n * 4u && v < kLangMaxBytes) {
+            bus_write_u32(a, file + v);
+            ++fixed;
+        }
+    }
+    done_file = file;
+    if (fixed) {
+        std::fprintf(stderr, "[lb_lang] %u appended string(s) relocated (file %08X, ids %u..%u)\n",
+                     fixed, (unsigned)file, (unsigned)kLangIds, (unsigned)(n - 1));
+        std::fflush(stderr);
+    }
+}
+
 extern "C" void lb_teams_donors_tick(void);   // docs/450, below
 void cards_tick() {
+    lang_appended_fixup();
     lb_teams_donors_tick();
     wolf_battle_tick();
     const uint32_t base = lb_patches_blueprint_base();

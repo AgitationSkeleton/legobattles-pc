@@ -55,6 +55,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -72,6 +73,7 @@
 
 extern "C" int lb_patches_blueprint_settled(void);   // lb_patches.cpp
 extern "C" const char* lb_mods_dir(void);              // lb_mods.cpp
+extern "C" int lb_setting_cunit_volume(void);          // lb_overlay.cpp, BR-0047
 
 namespace {
 
@@ -431,8 +433,8 @@ std::vector<Frame> frames_of(int cat, const std::string& base, const std::vector
     else if (cat == 4)
         for (int d = 0; d < 5; ++d) {
             v.push_back({"idle", base, d, 0, 0, 96 + d * 32, 32, 32});
-            for (int f = 0; f < 5; ++f) v.push_back({"walk", base, d, f, f * 32, 96 + d * 32, 32, 32});
-            for (int f = 5; f < 8; ++f) v.push_back({"attack", base, d, f - 5, f * 32, 96 + d * 32, 32, 32});
+            for (int f = 0; f < 4; ++f) v.push_back({"walk", base, d, f, f * 32, 96 + d * 32, 32, 32});
+            for (int f = 4; f < 8; ++f) v.push_back({"attack", base, d, f - 4, f * 32, 96 + d * 32, 32, 32});
         }
     else if (cat >= 7) {
         const int cell = (int)get16(rec, 0x20), cw = rec[0x1E], chh = rec[0x1F];
@@ -597,6 +599,10 @@ const Field kFields[] = {
     {"trees", 0x19, 1, 1}, {"building_collision", 0x1A, 1, 1}, {"land_water", 0x1B, 1, 1},
     {"hitbox_size", 0x1D, 1, 255}, {"not_water_only", 0x16, 1, 1}, {"ai_priority", 0x70, 1, 255},
     {"defogged_area", 0x71, 1, 255},
+    // docs/463: the port's capability bytes, in the record's padding. 1 is on;
+    // a template's stock 0xA2 reads as off, and a value above `max` is clamped.
+    {"mountains", 0x79, 1, 1}, {"hotwire_immune", 0x7A, 1, 1}, {"emp_immune", 0x7B, 1, 1},
+    {"esp_immune", 0x22, 1, 1}, {"construction_style", 0x23, 1, 3},
 };
 bool name_ok(const std::string& n) {
     if (n.empty() || n.size() > 24) return false;
@@ -1234,6 +1240,9 @@ static void census(uint32_t base) {
 extern "C" int lb_cunits_test_field(void) {
     if (!g_built || g_ents.empty() || !(std::getenv("LB_TEST_CUNIT") || std::getenv("LB_TEST_CUNIT_FIELD"))) return -1;
     const int cat = g_ents[0].rec[0x5C];
+    // A siege unit (category 6) takes the builders' slot (+0x0A), so the battle
+    // starts with one beside the hero (BR-0049's EMP-on-hotwire repro).
+    if (cat == 6) return 0x0A;
     return cat >= 0 && cat <= 4 ? 0x08 + 2 * cat : -1;
 }
 extern "C" int lb_cunits_test_pick(void) { return lb_cunits_test_field() >= 0 ? lb_cunits_battle(0) : -1; }
@@ -1321,6 +1330,7 @@ namespace {
 
 constexpr int kMixRate = 33513982 / 1024;   // frontend.cpp kAudioFrequency
 constexpr size_t kMaxSoundSamples = (size_t)kMixRate * 6;   // 6 s at most
+constexpr float kSoundPeak = 9000.0f;   // BR-0047: normalised peak of a custom sound
 
 int sound_role(std::string stem) {
     for (char& c : stem) c = (char)std::toupper((unsigned char)c);
@@ -1369,13 +1379,23 @@ bool wav_to_mix(const std::vector<uint8_t>& b, std::vector<int16_t>* out) {
     const double step = (double)rate / (double)kMixRate;
     const size_t n = std::min(kMaxSoundSamples, (size_t)((double)frames / step));
     out->resize(n);
+    std::vector<float> res(n);
+    float peak = 1.0f;
     for (size_t i = 0; i < n; ++i) {
         const double x = (double)i * step;
         const size_t a = (size_t)x;
         const float t = (float)(x - (double)a);
-        const float v = mono[std::min(a, frames - 1)] * (1.0f - t) + mono[std::min(a + 1, frames - 1)] * t;
-        (*out)[i] = (int16_t)std::max(-32768.0f, std::min(32767.0f, v));
+        res[i] = mono[std::min(a, frames - 1)] * (1.0f - t) + mono[std::min(a + 1, frames - 1)] * t;
+        peak = std::max(peak, std::fabs(res[i]));
     }
+    // BR-0047: custom sounds were far louder than the game's effects. Each is
+    // peak-normalised to kSoundPeak (about -11 dBFS, below the 32767 the
+    // cartridge's mix is hot to), boosting a quiet file at most 4x. The player's
+    // "Custom Unit Sound Volume" scales this at mix time. The target is a
+    // judgement, not a measurement of the stock effects: unverified by ear.
+    const float gain = std::min(4.0f, kSoundPeak / peak);
+    for (size_t i = 0; i < n; ++i)
+        (*out)[i] = (int16_t)std::max(-32768.0f, std::min(32767.0f, res[i] * gain));
     return n > 0;
 }
 
@@ -1403,10 +1423,12 @@ void load_unit_sounds(const fs::path& dir, std::array<std::shared_ptr<const std:
 extern "C" void lb_cunits_audio_mix(int16_t* stereo, unsigned frames) {
     std::lock_guard<std::mutex> lk(g_mix_mu);
     if (g_voices.empty()) return;
+    const int vol = lb_setting_cunit_volume();   // BR-0047, percent
     for (unsigned i = 0; i < frames; ++i) {
         int add = 0;
         for (Voice& v : g_voices)
             if (v.pos < v.pcm->size()) add += (*v.pcm)[v.pos++];
+        add = add * vol / 100;
         if (!add) continue;
         for (int c = 0; c < 2; ++c) {
             const int s = stereo[i * 2u + (unsigned)c] + add;
@@ -1639,6 +1661,105 @@ bool lb_cunits_png_rgba(const std::vector<uint8_t>& png, int* w, int* h, std::ve
     *w = im.w;
     *h = im.h;
     *px = std::move(im.rgba);
+    return true;
+}
+
+// ---- SG-0061: the lab's Convert tool ------------------------------------------
+bool lb_cunits_ncbr_decode(const std::vector<uint8_t>& file, int* w, int* h, std::vector<uint8_t>* idx,
+                           std::string* why) {
+    std::vector<uint8_t> f = file;
+    if (!unwrap(&f) || f.size() < 0x30 || std::memcmp(f.data() + 0x10, "RAHC", 4) != 0) {
+        *why = "not an NCBR (no CHAR block)";
+        return false;
+    }
+    const uint32_t th = get16(f, 0x18), tw = get16(f, 0x1A), depth = get32(f, 0x1C);
+    const uint32_t dsize = get32(f, 0x28), doff = get32(f, 0x2C);
+    const bool linear = (get32(f, 0x24) & 0xFFu) == 1u;
+    const size_t base = 0x18 + (size_t)doff;
+    if (depth != 3) {
+        *why = depth == 4 ? "this is an 8bpp sheet; only 4bpp sheets convert" : "an unknown colour depth";
+        return false;
+    }
+    if (tw == 0xFFFF || th == 0xFFFF || !tw || !th || tw > 128 || th > 128) {
+        *why = "the file stores no usable size (tiles wide/high)";
+        return false;
+    }
+    const size_t W = (size_t)tw * 8, H = (size_t)th * 8;
+    if (base + (W * H) / 2 > f.size() || (W * H) / 2 > dsize) {
+        *why = "the pixel data is shorter than the size says";
+        return false;
+    }
+    idx->assign(W * H, 0);
+    for (size_t i = 0; i < W * H; ++i) {
+        const uint8_t b = f[base + i / 2];
+        const uint8_t v = (i & 1) ? (uint8_t)(b >> 4) : (uint8_t)(b & 15);
+        size_t x, y;
+        if (linear) {
+            x = i % W;
+            y = i / W;
+        } else {   // 8x8 tiles in order, left to right, top to bottom
+            const size_t t = i / 64, r = i % 64;
+            x = (t % tw) * 8 + r % 8;
+            y = (t / tw) * 8 + r / 8;
+        }
+        (*idx)[y * W + x] = v;
+    }
+    *w = (int)W;
+    *h = (int)H;
+    return true;
+}
+
+bool lb_cunits_nclr_decode(const std::vector<uint8_t>& file, int bank, uint32_t out[16]) {
+    std::vector<uint8_t> f = file;
+    if (!unwrap(&f) || f.size() < 0x28 || std::memcmp(f.data() + 0x10, "TTLP", 4) != 0) return false;
+    const size_t at = 0x18 + (size_t)get32(f, 0x24);   // the data; 0x28 in the cartridge's files
+    const size_t first = at + (size_t)std::max(bank, 0) * 32u;
+    if (first + 32 > f.size()) return false;
+    for (int i = 0; i < 16; ++i) out[i] = ds_rgba((uint16_t)get16(f, first + (size_t)i * 2));
+    out[0] = 0;
+    return true;
+}
+
+bool lb_cunits_png_to_ncbr(const std::vector<uint8_t>& png, const uint32_t pal[16], bool comp,
+                           std::vector<uint8_t>* out, std::string* why) {
+    Img im;
+    if (!read_png(png, &im) || im.w <= 0 || im.h <= 0) {
+        *why = "not a PNG this tool can read (no interlaced; 1024 pixels at most)";
+        return false;
+    }
+    const int W = (im.w + 7) & ~7, H = (im.h + 7) & ~7;
+    if (W > 1024 || H > 1024) {
+        *why = "too big";
+        return false;
+    }
+    const std::vector<uint32_t> fpal(pal, pal + 16);
+    std::vector<uint8_t> px((size_t)W * H, 0);
+    for (int y = 0; y < im.h; ++y)
+        for (int x = 0; x < im.w; ++x) {
+            const size_t o = (size_t)y * im.w + x;
+            px[(size_t)y * W + x] = (uint8_t)(!im.idx.empty() ? (im.idx[o] & 15) : nearest(im.rgba[o], fpal));
+        }
+    const uint32_t dsize = (uint32_t)((size_t)W * H / 2);
+    std::vector<uint8_t> f;
+    auto p16 = [&](uint32_t v) { f.push_back((uint8_t)v); f.push_back((uint8_t)(v >> 8)); };
+    auto p32 = [&](uint32_t v) { p16(v & 0xFFFF); p16(v >> 16); };
+    f.insert(f.end(), {'R', 'G', 'C', 'N'});
+    p16(0xFEFF);   // bytes FF FE, as the cartridge's files
+    p16(0x0101);
+    p32(0x30 + dsize);
+    p16(0x10);
+    p16(1);
+    f.insert(f.end(), {'R', 'A', 'H', 'C'});
+    p32(0x20 + dsize);
+    p16((uint32_t)H / 8);
+    p16((uint32_t)W / 8);
+    p32(3);   // 4bpp
+    p32(0);
+    p32(1);   // linear rows
+    p32(dsize);
+    p32(0x18);
+    for (size_t i = 0; i < (size_t)dsize; ++i) f.push_back((uint8_t)((px[i * 2] & 15) | (px[i * 2 + 1] << 4)));
+    *out = comp ? lvl::comp_wrap(f) : std::move(f);
     return true;
 }
 
