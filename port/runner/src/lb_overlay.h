@@ -804,6 +804,11 @@ void         lb_rules_incoming(const unsigned char* buf, int len,
    cartridge's way). Set means OFF, so an older host (no bit) keeps BR-0011's
    shared cheats, which is what it always did. */
 #define LB_RULE_OWN_CHEATS     0x10
+/* SG-0077 (docs/471): more than 10 mine spots per map. Set means ON, so an
+   older host (no bit) keeps the cartridge's 10, as its own game does. */
+#define LB_RULE_MANY_MINES     0x20
+int          lb_setting_many_mines(void);   /* this machine's choice */
+int          lb_many_mines_live(void);      /* the host's online, else this */
 int          lb_setting_phantom_guard(void);   /* this machine's choice */
 int          lb_phantom_guard_live(void);      /* the host's online, else this */
 int          lb_rules_local_flags(void);   /* this machine's (lb_overlay) */

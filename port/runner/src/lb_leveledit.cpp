@@ -599,11 +599,21 @@ const char* const kToolNames[kToolCount] = {
     "Start base", "Mine", "Bridge site", "AI marker", "Golden brick", "Building / unit", "Remove object",
     "Select (copy / paste)", "Move object", "Patrol points", "Decorative tile",
 };
-enum Material { kMatGrass, kMatStone, kMatWater, kMatMountain, kMatTrees, kMatCount };
-const char* const kMatNames[kMatCount] = {"Grass", "Stone", "Water", "Mountain", "Trees"};
+enum Material { kMatGrass, kMatStone, kMatWater, kMatMountain, kMatTrees, kMatGravel, kMatCount };
+const char* const kMatNames[kMatCount] = {"Grass", "Stone", "Water", "Mountain", "Trees", "Gravel"};
 const ImU32 kMatColours[kMatCount] = {IM_COL32(70, 160, 60, 255), IM_COL32(150, 140, 120, 255),
                                       IM_COL32(50, 110, 200, 255), IM_COL32(110, 80, 60, 255),
-                                      IM_COL32(20, 90, 30, 255)};
+                                      IM_COL32(20, 90, 30, 255), IM_COL32(120, 100, 80, 255)};
+// SG-0076: GRAVEL, the darker patches every world's tileset has on stone.
+// Metatiles 190..204 in all three worlds (the same ids in LegoBattlesMapTool's
+// Tiled wang set "Gravel", which borders only Stone): 196 is all gravel, the
+// rest are stone with gravel in some corners. A gravel cell is a stone cell
+// (plane A 2) whose metatile is 196; the stone round it takes the corner
+// pieces. kGravelEdge[mask] is the piece for corners TL 1, TR 2, BR 4, BL 8.
+constexpr uint16_t kGravelFull = 196;
+const uint16_t kGravelEdge[16] = {0, 202, 200, 201, 190, 203, 195, 194,
+                                  192, 197, 204, 193, 191, 198, 199, 196};
+bool gravel_meta(int e) { return e >= 190 && e <= 204; }
 const ImU32 kTeamColours[4] = {IM_COL32(60, 110, 255, 255), IM_COL32(230, 50, 50, 255),
                                IM_COL32(60, 200, 70, 255), IM_COL32(240, 200, 40, 255)};
 const char* const kTeamNames[4] = {"Player 1 (blue)", "Player 2 (red)", "Player 3 (green)",
@@ -752,6 +762,18 @@ uint16_t pick_meta(int x, int y) {
     const uint8_t a = d.m.A[i];
     if (!wa.ok) return fall_meta(a);
     const int t = d.trees[i];
+    if (a == lvl::kStone && !t) {   // SG-0076: gravel, and the stone round it
+        if (d.m.E[i] == kGravelFull) return kGravelFull;
+        auto g = [&](int dx, int dy) {
+            return inside(x + dx, y + dy) && d.m.A[at(x + dx, y + dy)] == lvl::kStone &&
+                   d.m.E[at(x + dx, y + dy)] == kGravelFull;
+        };
+        const int mask = ((g(-1, 0) || g(0, -1) || g(-1, -1)) ? 1 : 0) |
+                         ((g(1, 0) || g(0, -1) || g(1, -1)) ? 2 : 0) |
+                         ((g(1, 0) || g(0, 1) || g(1, 1)) ? 4 : 0) |
+                         ((g(-1, 0) || g(0, 1) || g(-1, 1)) ? 8 : 0);
+        if (mask) return kGravelEdge[mask];
+    }
     bool interior = true;
     for (int dy = -1; dy <= 1 && interior; ++dy)
         for (int dx = -1; dx <= 1 && interior; ++dx)
@@ -766,6 +788,7 @@ uint16_t pick_meta(int x, int y) {
         uint16_t e = 0;
         for (const auto& kv : it->second) {
             if (kv.first >= kTableMetas || wa.e2a[kv.first] != a) continue;
+            if (gravel_meta(kv.first)) continue;   // SG-0076: only where gravel is painted
             if (!interior && wa.flat[kv.first]) continue;
             sum += kv.second;
             if (kv.second > best) { best = kv.second; e = kv.first; }
@@ -792,9 +815,63 @@ void retile(int x0, int y0, int x1, int y1) {
     mark(x0, y0, x1, y1);
 }
 
+bool bridge_ok(int x, int y, int horizontal, int len, std::string* why);
+int bridge_len_at(int x, int y, int horizontal) {
+    for (int L : {3, 6, 9})
+        if (bridge_ok(x, y, horizontal, L, nullptr)) return L;
+    return 0;
+}
+
+// SG-0067/SG-0075: THE BRIDGE SITE MARKERS. The posts a player sees at a
+// bridge spot are metatiles of the map, not sprites: every stock site (all
+// three worlds, lengths 3, 6 and 9; measured over the 122 maps) has them
+// on the water cells just outside its two lanes at the span's first and
+// last cells -- horizontal (group 7) 231 230 above, 236 235 below; vertical
+// (group 8) 225 220 on the left, 226 221 on the right -- and the lanes'
+// end cells take 138 / 136 (horizontal) or 86 / 81 (vertical). A post goes
+// only on a water cell, as on every stock map.
+void stamp_bridges() {
+    Doc& d = g_doc;
+    for (const lvl::MarkerGroup& g : d.m.markers) {
+        if (g.id != 7 && g.id != 8) continue;
+        const bool hz = g.id == 7;
+        const int dx = hz ? 1 : 0, dy = hz ? 0 : 1, px = hz ? 0 : 1, py = hz ? 1 : 0;
+        for (const lvl::Marker& mk : g.m) {
+            const int L = bridge_len_at(mk.x, mk.y, hz);
+            if (!L) continue;
+            const int fx = mk.x, fy = mk.y, lx = mk.x + dx * (L - 1), ly = mk.y + dy * (L - 1);
+            auto put = [&](int x, int y, uint16_t e) {
+                if (!inside(x, y) || d.m.A[at(x, y)] != lvl::kWater) return false;
+                d.m.E[at(x, y)] = e;
+                d.m.B[at(x, y)] = 0;
+                d.trees[at(x, y)] = 0;
+                mark(x, y, x, y);
+                return true;
+            };
+            const uint16_t post[4] = {(uint16_t)(hz ? 231 : 225), (uint16_t)(hz ? 230 : 220),
+                                      (uint16_t)(hz ? 236 : 226), (uint16_t)(hz ? 235 : 221)};
+            const bool posts = inside(fx - px, fy - py) && inside(fx + 2 * px, fy + 2 * py) &&
+                               d.m.A[at(fx - px, fy - py)] == lvl::kWater &&
+                               d.m.A[at(fx + 2 * px, fy + 2 * py)] == lvl::kWater &&
+                               d.m.A[at(lx - px, ly - py)] == lvl::kWater &&
+                               d.m.A[at(lx + 2 * px, ly + 2 * py)] == lvl::kWater;
+            if (!posts) continue;
+            put(fx - px, fy - py, post[0]);
+            put(lx - px, ly - py, post[1]);
+            put(fx + 2 * px, fy + 2 * py, post[2]);
+            put(lx + 2 * px, ly + 2 * py, post[3]);
+            for (int lane = 0; lane < 2; ++lane) {
+                put(fx + px * lane, fy + py * lane, hz ? 138 : 86);
+                put(lx + px * lane, ly + py * lane, hz ? 136 : 81);
+            }
+        }
+    }
+}
+
 // Writes the pads of every mine into plane E (the stock pad, metatiles
-// 13 14 / 18 19), on stone.
+// 13 14 / 18 19), on stone; and the bridge sites' posts (stamp_bridges).
 void stamp_mines() {
+    stamp_bridges();
     Doc& d = g_doc;
     for (const auto& g : d.m.mines)
         for (const lvl::Point& p : g) {
@@ -816,10 +893,13 @@ void set_cell(int x, int y, int mat) {
     if (!inside(x, y)) return;
     Doc& d = g_doc;
     const size_t i = at(x, y);
-    const uint8_t a = mat == kMatStone ? lvl::kStone : mat == kMatWater ? lvl::kWater
+    const uint8_t a = (mat == kMatStone || mat == kMatGravel) ? lvl::kStone : mat == kMatWater ? lvl::kWater
                     : mat == kMatMountain ? lvl::kMountain : lvl::kGrass;
     d.m.A[i] = a;
     d.trees[i] = mat == kMatTrees ? 1 : 0;
+    // SG-0076: gravel is marked by its metatile; anything else painted here
+    // drops the mark (retile picks the real tile next).
+    d.m.E[i] = mat == kMatGravel ? kGravelFull : (d.m.E[i] == kGravelFull ? 0 : d.m.E[i]);
 }
 
 // The cells a shape covers, in a box; painted, then retiled once.
@@ -1045,6 +1125,10 @@ bool remove_at(int x, int y) {
             if (g.m[k].x == x && g.m[k].y == y) {
                 push_undo();
                 g.m.erase(g.m.begin() + (long)k);
+                if (g.id == 7 || g.id == 8) {   // SG-0075: its posts go with it
+                    retile(x - 2, y - 2, x + 11, y + 11);
+                    stamp_mines();
+                }
                 return true;
             }
     for (auto& g : m.mines)
@@ -1509,6 +1593,12 @@ std::vector<Check> run_checks() {
     for (const auto& g : m.mines) mines += (int)g.size();
     if (mines == 0) out.push_back({false, std::string("No ") + kWorlds[g_doc.world].mine +
                                               "s: players will only have trees to harvest."});
+    // SG-0077 (docs/471): the cartridge keeps 10 spots; the port up to 32.
+    if (mines > 32)
+        out.push_back({false, std::to_string(mines) + " mine spots: only the first 32 can be used."});
+    else if (mines > 10)
+        out.push_back({false, std::to_string(mines) + " mine spots: spots past the 10th need \"More Than "
+                              "10 Mine Spots\" (on by default; online, the host's)."});
     size_t markers0 = 0, markers3 = 0;
     for (const lvl::MarkerGroup& g : m.markers) {
         if (g.id == 0) markers0 += g.m.size();
@@ -2650,7 +2740,9 @@ void apply_click(int x, int y, bool first) {
     case kToolPick: {
         if (!first) break;
         const uint8_t a = d.m.A[at(x, y)];
-        g_ui.material = d.trees[at(x, y)] ? kMatTrees : a == lvl::kStone ? kMatStone : a == lvl::kWater ? kMatWater
+        g_ui.material = d.trees[at(x, y)] ? kMatTrees
+                      : a == lvl::kStone ? (d.m.E[at(x, y)] == kGravelFull ? kMatGravel : kMatStone)
+                      : a == lvl::kWater ? kMatWater
                       : a == lvl::kMountain ? kMatMountain : kMatGrass;
         g_ui.tool = kToolBrush;
         break;
@@ -2955,6 +3047,7 @@ void canvas(SDL_Renderer* ren) {
                 push_undo();
                 if (!ok) carve_bridge(g_ui.drag_x, g_ui.drag_y, horiz, L);
                 marker_group(horiz ? 7 : 8).m.push_back({(uint8_t)g_ui.drag_x, (uint8_t)g_ui.drag_y, 0});
+                stamp_mines();   // SG-0075: and the site's posts
                 g_ui.dragging = false;
             }
         } else {
@@ -3125,11 +3218,16 @@ SDL_Texture* detail_atlas(SDL_Renderer* ren) {
 
 // A grid of metatiles (20 across) in a scrolling child; a click picks one.
 // `base` is the first metatile's E value, `count` how many there are.
+// SG-0076: the grid's own zoom (1 = the panel's width), the panel scrolling
+// sideways past that, and the hovered tile magnified in its tooltip.
+float g_decor_zoom = 3.0f;
 void decor_grid(const char* id, SDL_Texture* tex, int base, int count, float height) {
     if (!tex) return;
     const int cols = 20, rows = (count + cols - 1) / cols;
-    const float z = std::clamp((ImGui::GetContentRegionAvail().x - 16.0f) / (cols * kMetaW), 0.5f, 1.5f);
-    ImGui::BeginChild(id, ImVec2(0, height), ImGuiChildFlags_Borders);
+    const float fit = std::clamp((ImGui::GetContentRegionAvail().x - 16.0f) / (cols * kMetaW), 0.5f, 1.5f);
+    const float z = fit * g_decor_zoom;
+    ImGui::BeginChild(id, ImVec2(0, height), ImGuiChildFlags_Borders | ImGuiChildFlags_ResizeY,
+                      ImGuiWindowFlags_HorizontalScrollbar);
     const ImVec2 p0 = ImGui::GetCursorScreenPos();
     ImGui::Image((ImTextureID)(intptr_t)tex, ImVec2(cols * kMetaW * z, rows * kMetaH * z));
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -3143,7 +3241,12 @@ void decor_grid(const char* id, SDL_Texture* tex, int base, int count, float hei
         const int cx = (int)std::floor((mp.x - p0.x) / (kMetaW * z)), cy = (int)std::floor((mp.y - p0.y) / (kMetaH * z));
         const int e = cy * cols + cx;
         if (cx >= 0 && cx < cols && cy >= 0 && e < count) {
-            ImGui::SetTooltip("Metatile %d", base + e);
+            ImGui::BeginTooltip();
+            ImGui::Image((ImTextureID)(intptr_t)tex, ImVec2(kMetaW * 5.0f, kMetaH * 5.0f),
+                         ImVec2((float)cx / cols, (float)cy / rows),
+                         ImVec2((float)(cx + 1) / cols, (float)(cy + 1) / rows));
+            ImGui::Text("Metatile %d", base + e);
+            ImGui::EndTooltip();
             if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
                 g_ui.decor = base + e;
                 g_ui.tool = kToolDecor;
@@ -3162,7 +3265,7 @@ void panel_terrain() {
     // trees (the game's tree rule with trees all round).
     SDL_Texture* atlas = world_atlas(g_doc.world, g_ren);
     const uint16_t forest = tree_rule_ready() ? tree_lookup(0x15555u) : 116;   // all nine slots 1
-    const uint16_t tiles[kMatCount] = {116, 96, 64, 89, forest};
+    const uint16_t tiles[kMatCount] = {116, 96, 64, 89, forest, kGravelFull};
     for (int k = 0; k < kMatCount; ++k) {
         ImGui::PushID(k);
         const int e = tiles[k] < kTableMetas ? tiles[k] : 116;
@@ -3188,7 +3291,20 @@ void panel_terrain() {
         ImGui::SetItemTooltip("Paints one metatile exactly as picked, with the brush's size. Shift-click\n"
                               "the map to lift the tile under the pointer. Tidy terrain, or painting\n"
                               "terrain beside it, re-picks the tile.");
-        decor_grid("##decor_table", atlas, 0, kTableMetas, 150.0f);
+        if (g_ui.decor >= 0 && g_ui.decor < kTableMetas && atlas) {   // SG-0076: the pick, large
+            ImGui::SameLine();
+            const int e = g_ui.decor;
+            ImGui::Image((ImTextureID)(intptr_t)atlas, ImVec2(kMetaW * 2.0f, kMetaH * 2.0f),
+                         ImVec2((e % 20) / 20.0f, (e / 20) / 22.0f),
+                         ImVec2((e % 20 + 1) / 20.0f, (e / 20 + 1) / 22.0f));
+            ImGui::SameLine();
+            ImGui::TextDisabled("%d", e);
+        }
+        ImGui::SetNextItemWidth(160.0f);
+        ImGui::SliderFloat("Tile zoom", &g_decor_zoom, 1.0f, 6.0f, "%.1fx");
+        ImGui::SetItemTooltip("Bigger tiles; the list scrolls sideways. Drag the list's\n"
+                              "bottom edge to make it taller.");
+        decor_grid("##decor_table", atlas, 0, kTableMetas, 300.0f);
         if (SDL_Texture* dt = detail_atlas(g_ren)) {
             ImGui::TextDisabled("This map's own tiles");
             decor_grid("##decor_detail", dt, kTableMetas, (int)g_doc.detail.size(), 60.0f);
@@ -3506,7 +3622,8 @@ void lb_leveledit_draw(SDL_Renderer* ren) {
         //   ent TEAM ROLE X Y   one more unit or building; ROLE is hero builder melee
         //                       ranged mounted transport special base harvester mine
         //                       farm barracks factory tower tower2 tower3 shipyard
-        //   water X0 Y0 X1 Y1   a rectangle of water
+        //   water X0 Y0 X1 Y1   a rectangle of water (also mountain, stone, trees, gravel)
+        //   bridge X Y H        a bridge site (H 1 horizontal, 0 vertical)
         // Each team's own blueprint for a role is what spawns (its army).
         if (const char* spec = std::getenv("LB_EDITOR_TESTMAP")) {
             static const char* const kRoles[] = {"hero", "builder", "melee", "ranged", "mounted",
@@ -3545,13 +3662,25 @@ void lb_leveledit_draw(SDL_Renderer* ren) {
                             g_doc.m.events[i].ents.push_back(ent(b, c, a, (uint8_t)r, 1));
                             ++made;
                         }
-                } else if (!std::strcmp(word, "water") &&
-                           std::sscanf(l.c_str(), "water %d %d %d %d", &a, &b, &c, &d) == 4) {
+                } else if ((!std::strcmp(word, "water") || !std::strcmp(word, "mountain") ||
+                            !std::strcmp(word, "stone") || !std::strcmp(word, "trees") ||
+                            !std::strcmp(word, "gravel")) &&
+                           std::sscanf(l.c_str(), "%*s %d %d %d %d", &a, &b, &c, &d) == 4) {
+                    const Material m = word[0] == 'w' ? kMatWater : word[0] == 'm' ? kMatMountain
+                                     : word[0] == 's' ? kMatStone : word[0] == 'g' ? kMatGravel : kMatTrees;
                     for (int y = std::min(b, d); y <= std::max(b, d); ++y)
-                        for (int x = std::min(a, c); x <= std::max(a, c); ++x) set_cell(x, y, kMatWater);
+                        for (int x = std::min(a, c); x <= std::max(a, c); ++x) set_cell(x, y, m);
+                } else if (!std::strcmp(word, "mine") && std::sscanf(l.c_str(), "mine %d %d", &a, &b) == 2) {
+                    ensure_mine_groups();   // mine X Y: a mine spot (group 1, as stock maps)
+                    g_doc.m.mines[1].push_back({(uint8_t)a, (uint8_t)b});
+                } else if (!std::strcmp(word, "bridge") &&
+                           std::sscanf(l.c_str(), "bridge %d %d %d", &a, &b, &c) == 3) {
+                    // bridge X Y H: a bridge site, H 1 horizontal, 0 vertical
+                    marker_group(c ? 7 : 8).m.push_back({(uint8_t)a, (uint8_t)b, 0});
                 }
             }
             retile(0, 0, g_doc.m.w - 1, g_doc.m.h - 1);
+            stamp_mines();   // and the bridge sites' posts
             std::snprintf(g_doc.name, sizeof g_doc.name, "%s", name.c_str());
             std::fprintf(stderr, "[lb_editor] test aid: test map \"%s\" %dx%d, %d entries, %s\n", g_doc.name,
                          g_doc.m.w, g_doc.m.h, made, save_folder() ? "saved" : "NOT saved");

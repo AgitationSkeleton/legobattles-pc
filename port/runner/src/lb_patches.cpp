@@ -5184,6 +5184,43 @@ void hotwire_tags_override(void) {
     wrap_start(w, kHotwireTags | 1u);
 }
 
+// BR-0052 / BR-0059 / BR-0061 (docs/471): A UNIT IN NO OCCUPANCY LAYER.
+//
+// FUN_0200159C(out, holder) (ARM, 19 calls, all dispatched) gives a
+// blueprint's occupancy layers: +0x1A (the editors' "Building collision") |
+// (+0x1B ? 2) | (+0x1C ? 4). A unit whose three are all 0 stands in no layer,
+// so everything that finds units through the occupancy grid -- the stylus,
+// the enemy's targeting, the view's drawing -- never meets it: invisible,
+// unkillable, selectable only by select-all, yet moving and shooting
+// (reproduced: the reporter's Transport Tank with +0x1A poked to 0). Players
+// reach it by unticking Building collision on a custom unit or in Balance.
+// docs/410 met the same with the Wolf (stock 0,0,0), fixed there by a data
+// layer. Here a UNIT (category 0..6) that would get no layer gets layer 1,
+// the ground layer every stock unit has; the function is otherwise the
+// cartridge's, instruction for instruction.
+constexpr uint32_t kOccLayers = 0x0200159Cu;   // arm
+void occ_layers_override(void) {
+    const uint32_t out = g_cpu.R[0];
+    const uint32_t rec = bus_read_u32(g_cpu.R[1] + 4u);
+    const uint32_t a = bus_read_u8(rec + 0x1Au), b = bus_read_u8(rec + 0x1Bu), c = bus_read_u8(rec + 0x1Cu);
+    uint32_t m = a | (b ? 2u : 0u) | (c ? 4u : 0u);
+    if (!m && bus_read_u8(rec + 0x5Cu) <= 6u) {
+        m = 1u;
+        static uint32_t said[8] = {};
+        static int n = 0;
+        bool seen = false;
+        for (int i = 0; i < n; ++i) seen = seen || said[i] == rec;
+        if (!seen && n < 8) {
+            said[n++] = rec;
+            std::fprintf(stderr, "[lb_layers] blueprint record %08X has no occupancy layer "
+                         "(Building collision off): given the ground layer so it can be seen\n", (unsigned)rec);
+            std::fflush(stderr);
+        }
+    }
+    bus_write_u8(out, (uint8_t)m);
+    lb_override_return();
+}
+
 void passability_override(void) {
     // The path finder asks this for every cell it looks at, so the lifted
     // body is looked up once (lb_dispatch_original's memo is 64 entries and
@@ -5199,6 +5236,121 @@ void passability_override(void) {
             lb_override_return();
             return;
         }
+    }
+    if (original) original();
+}
+
+// BR-0053 (docs/471): MOUNTAINS NEED ONE AREA, NOT JUST ONE PASSABLE CELL.
+//
+// passability_override makes class 5 passable for a unit whose +0x79 is 1,
+// but movement is also held to the mover's plane C AREA (map+0x2EC, an
+// 8-connected labelling of plane A: grass, trees and stone one family,
+// mountain its own, water its own -- docs/445). The destination picker
+// FUN_0207F1B4 hands its cell search the mover's area key and the step and
+// placement tests (FUN_02001938) compare areas, so a target across a cliff
+// was snapped back to the unit's own side: a flagged unit walked to the edge
+// and stopped (measured with a custom builder, a stock hero poked to +0x79,
+// and the reporter's custom transport).
+//
+// Measured live: relabelling plane C so the land on both sides and the
+// mountain between share one area let the flagged transport cross the whole
+// strip, while an unflagged hero ordered the same way still stopped at the
+// edge -- the per-cell passability test is what keeps everyone else off.
+//
+// So, once per battle and only when some loaded blueprint has the flag,
+// every 8-connected group of land+mountain cells (classes 0, 1, 2, 5) takes
+// the smallest existing area label in the group. No label is invented and
+// water is untouched. Every machine has the same records (the host's) and
+// the same map, so the relabelling is identical everywhere.
+extern "C" int lb_cunits_count(void);              // lb_cunits.cpp
+static bool any_mountains_blueprint() {
+    const uint32_t data = bus_read_u32(0x02150948u);
+    if (!guest_ptr(data)) return false;
+    const int n = 551 + 3 * lb_cunits_count();
+    for (int bp = 0; bp < n && bp < 2048; ++bp) {
+        const uint32_t h = bus_read_u32(data + 4u * (uint32_t)bp);
+        if (!guest_ptr(h)) continue;
+        if (cap_flag(bus_read_u32(h + 8u), kCapMountains)) return true;
+    }
+    return false;
+}
+static void apply_mountain_areas() {
+    static uint32_t done_map = 0;   // reset whenever no battle is live
+    int cx = 0, cy = 0;
+    if (!lb_field_camera(&cx, &cy)) { done_map = 0; return; }   // battles only
+    const uint32_t map = bus_read_u32(0x02156CB0u);   // FUN_02057F38's map
+    if (!guest_ptr(map) || map == done_map) return;
+    done_map = map;
+    if (!any_mountains_blueprint()) return;
+    const int w = bus_read_u8(map + 0x14u), h = bus_read_u8(map + 0x15u);
+    const uint32_t A = bus_read_u32(map + 0x2E8u), C = bus_read_u32(map + 0x2ECu);
+    if (w <= 0 || h <= 0 || !guest_ptr(A) || !guest_ptr(C)) return;
+    const size_t cells = (size_t)w * (size_t)h;
+    std::vector<uint8_t> a(cells), c(cells);
+    for (size_t i = 0; i < cells; ++i) {
+        a[i] = (uint8_t)bus_read_u8(A + (uint32_t)i);
+        c[i] = (uint8_t)bus_read_u8(C + (uint32_t)i);
+    }
+    auto land = [&](size_t i) { return a[i] == 0u || a[i] == 1u || a[i] == 2u || a[i] == 5u; };
+    std::vector<int> comp(cells, -1);
+    std::vector<size_t> stack, members;
+    int changed = 0, groups = 0;
+    for (size_t s0 = 0; s0 < cells; ++s0) {
+        if (comp[s0] >= 0 || !land(s0)) continue;
+        members.clear();
+        stack.assign(1, s0);
+        comp[s0] = groups;
+        uint8_t lo = c[s0];
+        while (!stack.empty()) {
+            const size_t i = stack.back();
+            stack.pop_back();
+            members.push_back(i);
+            lo = std::min(lo, c[i]);
+            const int x = (int)(i % (size_t)w), y = (int)(i / (size_t)w);
+            for (int dy = -1; dy <= 1; ++dy)
+                for (int dx = -1; dx <= 1; ++dx) {
+                    const int nx = x + dx, ny = y + dy;
+                    if ((!dx && !dy) || nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+                    const size_t j = (size_t)ny * (size_t)w + (size_t)nx;
+                    if (comp[j] < 0 && land(j)) { comp[j] = groups; stack.push_back(j); }
+                }
+        }
+        ++groups;
+        for (size_t i : members)
+            if (c[i] != lo) { bus_write_u8(C + (uint32_t)i, lo); ++changed; }
+    }
+    std::fprintf(stderr, "[lb_cap] mountains: a blueprint has the flag; %d plane C cell(s) joined "
+                 "their neighbouring land area (%d land group(s))\n", changed, groups);
+    std::fflush(stderr);
+}
+
+// BR-0029 (docs/471): SAVE ON THE PAUSE MENU'S OPTIONS CRASHED A BATTLE.
+//
+// Options' Save (FUN_020AD95C) stores the language picked in its list and
+// sets this+0x85 when it differs from the loaded one (FUN_020ACF4C;
+// 0x02153794). The screen's update, Options::v05 (FUN_020AD5D8, Thumb, only
+// reached through its vtable word 0x0214BC94), then reloads the text bank
+// and rebuilds the FRONT END's fonts (FUN_020E427C(1)): new font objects
+// whose blocks stay unwritten until an async load lands, installed over the
+// battle's. The pause menu's text draw (FUN_0200B964 via 0x020E9A24) reads
+// one on the next frame -- it checks the manager, not the font's loaded flag
+// (+0x10) -- and followed garbage: reproduced 5 of 5 (Start, Options, Save,
+// with or without touching the sliders, any display mode, any mods), which
+// is the report's "crashed when lowering volume". A cartridge bug.
+//
+// In a battle the reload is skipped: +0x85 is cleared before the original
+// runs. The language is still saved and is applied at the next profile load
+// (ProfileSelect::v05 does the same reload safely in the front end).
+constexpr uint32_t kOptionsUpdate = 0x020AD5D8u;   // thumb
+void options_update_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kOptionsUpdate);
+    const uint32_t self = g_cpu.R[0];
+    int cx = 0, cy = 0;
+    if (guest_ptr(self) && bus_read_u8(self + 0x85u) && lb_field_camera(&cx, &cy)) {
+        bus_write_u8(self + 0x85u, 0u);
+        std::fprintf(stderr, "[lb_options] in a battle: the language/font reload after Save is left for the "
+                     "next profile load (BR-0029)\n");
+        std::fflush(stderr);
     }
     if (original) original();
 }
@@ -6527,6 +6679,103 @@ extern "C" unsigned lb_level_pick(unsigned salt) {
     h ^= h >> 12; h *= 0x297A2D39u;
     h ^= h >> 15;
     return h;
+}
+
+// ---- SG-0077 (docs/471): MORE THAN 10 MINE SPOTS ---------------------------
+//
+// Map::LoadMines (0x020A3B5C, Thumb; r0 the map, r1 the 'MINE' chunk) reads
+// the four groups of (x, y) pairs into a 10-entry array of 8-byte points
+// inline in the map object (map+0x258, a vtable word then x at +4, y at +5;
+// built by the constructor's array ctor at 0x020A2772) with the count, a u8,
+// at map+0x2C0. `cmp count,#10; bcs` (0x020A3B8E) skips spot 11 on -- across
+// all groups -- but keeps reading, so the file parses and the rest are
+// silently unusable. Every reader goes through count() 0x020A3F44 and
+// get(i) 0x020A3F84 (= map+0x258+i*8), all dispatched; the array cannot grow
+// in place (a container follows at +0x2A8).
+//
+// So with the setting live: this loader is the cartridge's, step for step,
+// for the first 10 spots (same inline entries, same count), and spots 11..32
+// go to a block in the run of zeros above the heap (after the teal block and
+// the row table, docs/412 and 460), claimed only while all zeros. get(i) for
+// i >= 10 on that map answers the block. A map with 10 spots or fewer --
+// every stock map -- never touches it, so its play is unchanged.
+namespace {
+constexpr uint32_t kMinesLoad = 0x020A3B5Cu;   // thumb
+constexpr uint32_t kMinesGet = 0x020A3F84u;    // thumb
+constexpr uint32_t kMinesExt = 0x023F9A00u;    // kTealBase + 0x200
+constexpr int kMinesStock = 10, kMinesMax = 32;
+uint32_t g_mines_map = 0;          // the map whose spots 11.. are in the block
+bool g_mines_dead = false;
+}  // namespace
+extern "C" int lb_many_mines_live(void);   /* lb_overlay.cpp */
+
+void mines_load_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kMinesLoad);
+    const uint32_t map = g_cpu.R[0];
+    if (!lb_many_mines_live() || g_mines_dead || !guest_ptr(map) || !guest_ptr(g_cpu.R[1])) {
+        if (map == g_mines_map) g_mines_map = 0;
+        if (original) original();
+        return;
+    }
+    // The block: ours (a previous map's) or all zeros, else leave it alone.
+    if (!g_mines_map) {
+        for (uint32_t i = 0; i < (uint32_t)(kMinesMax - kMinesStock) * 8u; ++i)
+            if (bus_read_u8(kMinesExt + i)) {
+                g_mines_dead = true;
+                std::fprintf(stderr, "[lb_mines] the block at %08X is in use: maps keep 10 mine spots\n",
+                             kMinesExt);
+                std::fflush(stderr);
+                if (original) original();
+                return;
+            }
+    }
+    for (uint32_t i = 0; i < (uint32_t)(kMinesMax - kMinesStock) * 8u; ++i) bus_write_u8(kMinesExt + i, 0u);
+    const uint32_t base = map + 0x258u, cnt = map + 0x2C0u;
+    const uint32_t vt = bus_read_u32(base);   // the points' vtable, from the constructor
+    uint32_t q = g_cpu.R[1] + 4u;
+    int dropped = 0;
+    while (bus_read_u8(q) != 0x21u) {
+        const uint32_t n = bus_read_u8(q + 1u);
+        q += 2u;
+        for (uint32_t k = 0; k < n; ++k) {
+            const uint8_t x = (uint8_t)bus_read_u8(q), y = (uint8_t)bus_read_u8(q + 1u);
+            q += 2u;
+            const uint32_t c = bus_read_u8(cnt);
+            if ((int)c >= kMinesMax) { ++dropped; continue; }
+            const uint32_t e = c < (uint32_t)kMinesStock ? base + c * 8u : kMinesExt + (c - kMinesStock) * 8u;
+            if (c >= (uint32_t)kMinesStock) bus_write_u32(e, vt);
+            bus_write_u8(e + 4u, x);
+            bus_write_u8(e + 5u, y);
+            bus_write_u8(cnt, (uint8_t)(c + 1u));
+        }
+    }
+    const int total = (int)bus_read_u8(cnt);
+    g_mines_map = total > kMinesStock ? map : 0u;
+    if (total > kMinesStock || dropped) {
+        std::fprintf(stderr, "[lb_mines] %d mine spot(s) on this map (%d past the cartridge's 10)%s\n", total,
+                     total > kMinesStock ? total - kMinesStock : 0, dropped ? "; more than 32 dropped" : "");
+        std::fflush(stderr);
+    }
+    g_cpu.R[0] = q + 1u;   // past the '!'
+    lb_override_return();
+}
+
+void mines_get_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kMinesGet);
+    const uint32_t i = g_cpu.R[1];
+    if (g_mines_map && g_cpu.R[0] == g_mines_map && i >= (uint32_t)kMinesStock && i < (uint32_t)kMinesMax) {
+        static int said = 0;   // the first few, with the caller (a check that consumers reach them)
+        if (said < 4) {
+            ++said;
+            std::fprintf(stderr, "[lb_mines] spot %u read from the extra block (LR %08X)\n", (unsigned)i,
+                         (unsigned)g_cpu.R[14]);
+            std::fflush(stderr);
+        }
+        g_cpu.R[0] = kMinesExt + (i - kMinesStock) * 8u;
+        lb_override_return();
+        return;
+    }
+    if (original) original();
 }
 
 void map_parse_override(void) {
@@ -8907,6 +9156,8 @@ const NdsDispatchEntry kOverrideTable[] = {
        passable to a unit with the Mountains capability; every other call is a
        pure tail call. docs/463. */
     {kPassability, 0u, passability_override, nullptr},     /* 0x02001510 */
+    /* ARM. BR-0061: a unit always stands in an occupancy layer. */
+    {kOccLayers, 0u, occ_layers_override, nullptr},        /* 0x0200159C */
     {kEbpLoaded, 0u, ebp_loaded_override, nullptr},        /* 0x02001EE0 */
     /* ARM. THE DECOMPILATION'S FIRST GRADED FUNCTION, not a patch. With
        LB_SHADOW unset this delegates to the cartridge and only counts; with
@@ -9028,6 +9279,9 @@ const NdsDispatchEntry kOverrideTable[] = {
        slots, patched once before its terrain draws. docs/387. */
     {kFillWindow, 1u, fill_window_override, nullptr},      /* 0x020A3234 */
     {kMapParse, 1u, map_parse_override, nullptr},          /* 0x020A369C */
+    /* Thumb. SG-0077: spots 11..32 of a map's mines. */
+    {kMinesLoad, 1u, mines_load_override, nullptr},        /* 0x020A3B5C */
+    {kMinesGet, 1u, mines_get_override, nullptr},          /* 0x020A3F84 */
     /* Thumb. The floating number: a Gold Brick's, else a pure tail call.
        docs/416. */
     {kFloatNumber, 1u, float_number_override, nullptr},    /* 0x020A6680 */
@@ -9046,6 +9300,8 @@ const NdsDispatchEntry kOverrideTable[] = {
     /* ARM. The "view is at rest" test, answered for the placement tick's own
        call only, in the adaptive view; otherwise a pure tail call. */
     {kRestCheck, 0u, rest_check_override, nullptr},        /* 0x020AC240 */
+    /* Thumb. BR-0029: no font reload after Options' Save in a battle. */
+    {kOptionsUpdate, 1u, options_update_override, nullptr}, /* 0x020AD5D8 */
     /* Observer only, and only speaks with LB_MARKERLOG=1. */
     /* Thumb. Free Play's opponent mapper: Custom and Random answer 133 and
        queue their army; the six factions are a pure tail call. docs/384. */
@@ -9157,7 +9413,7 @@ const NdsDispatchEntry kOverrideTable[] = {
 // Compile-time guard so this cannot regrow. A runtime check would report the
 // fault after shipping; this refuses to build. Every future entry must be
 // inserted in address order or the build stops here with this message.
-static_assert(kRosterBuild < kPassability && kPassability < kEbpLoaded &&
+static_assert(kRosterBuild < kPassability && kPassability < kOccLayers && kOccLayers < kEbpLoaded &&
               kEbpLoaded < kRegistryFind &&
               kRegistryFind < kBillboardDraw && kBillboardDraw < kFeCard &&
               kSelRect < kReadyToggle && kReadyToggle < kMainMenuUpdate &&
@@ -9193,10 +9449,10 @@ static_assert(kRosterBuild < kPassability && kPassability < kEbpLoaded &&
               kCastSpell < kTileGather &&
               kTileGather < kTeamAddBricks && kTeamAddBricks < kAiMineScore && kAiMineScore < kSetMusicSide &&
               kSetMusicSide < kAiQueueBuild && kAiQueueBuild < kFillWindow && kFillWindow < kMapParse &&
-              kMapParse < kFloatNumber && kFloatNumber < kTouchRect &&
+              kMapParse < kMinesLoad && kMinesLoad < kMinesGet && kMinesGet < kFloatNumber && kFloatNumber < kTouchRect &&
               kTouchRect < kMoveIssue &&
               kMoveIssue < kHotwireTags && kHotwireTags < kClickDispatch && kClickDispatch < kSelRect &&
-              kSelRect < kRestCheck && kRestCheck < kReadyToggle &&
+              kSelRect < kRestCheck && kRestCheck < kOptionsUpdate && kOptionsUpdate < kReadyToggle &&
               kSelRect < kMarkerPlace && kMarkerPlace < kWidgetRect &&
               kWidgetRect < kWidgetSetPos && kWidgetSetPos < kSplitArray &&
               kSplitArray < kGetMs &&
@@ -13902,13 +14158,18 @@ static void apply_touch_extension(void) {
     // LB_TOUCHEXT=0 turns it off, which is how the control above was run.
     if (const char* v = std::getenv("LB_TOUCHEXT"))
         if (v[0] == '0') return;
-    if (!lb_setting_enhanced()) return;
 
     static int state = 0;             // 0 = untried, 1 = patched, -1 = refused
     static int waited = 0;
     // docs/396: a game reset reloads the ARM9 image, and these sites with it.
     static unsigned gen = 0;
     if (gen != g_boot_gen) { gen = g_boot_gen; state = 0; waited = 0; }
+    // BR-0056: a switch to DS Vanilla does not unpatch. The readers stay
+    // repointed at kTouchSlot / kTouchYSlot, so returning here froze them at
+    // the last Enhanced click and no tap reached the game. Patched, the slots
+    // keep being fed -- with the native coordinate, as Vanilla has no band.
+    const bool vanilla = !lb_setting_enhanced();
+    if (vanilla && state != 1) return;
     if (state == 0) {
         const int total = (int)(sizeof kTouchPatches /
                                 sizeof kTouchPatches[0]);
@@ -14007,6 +14268,7 @@ static void apply_touch_extension(void) {
     const bool in_battle = lb_field_camera(&cx, &cy);
     int x = (forced != INT32_MIN && in_battle && g_native_touch_down)
                 ? forced : g_ext_touch_x;
+    if (vanilla) x = INT32_MIN;   // BR-0056
     // Nothing to say: hand the game back the native x the runner delivered, so
     // menus, the route, and every click inside the band behave exactly as they
     // always did. NOT the struct's own +0x0A -- see g_native_touch_x.
@@ -14034,7 +14296,7 @@ static void apply_touch_extension(void) {
     //
     // No LB_TOUCH_FORCE twin: the force exists to isolate coordinate delivery
     // from the click mapping, and one axis already does that.
-    int y = g_ext_touch_y;
+    int y = vanilla ? INT32_MIN : g_ext_touch_y;   // BR-0056
     // The fallback is the NATIVE row the runner delivered, not +0x0C. Reading
     // +0x0C back stopped being valid the moment 0203DD20 was repointed -- the
     // guest's writer now fills +0x0C FROM this slot, so a fallback that read it
@@ -14170,10 +14432,11 @@ static void apply_touch_extension(void) {
             {
                 const int sw = (int)nds_gpu3d_output_width();
                 const int sh = (int)nds_gpu3d_output_height();
-                const int sx = x + (sw > 256 ? lb_shown_band_x() : 0);
-                const int sy = y + (sh > 192 ? lb_shown_band_y() : 0);
-                const int pw = sw > 256 ? sw : 256;
-                const int ph = sh > 192 ? sh : 192;
+                const bool wide = !vanilla;   // BR-0056: Vanilla shows the native panel
+                const int sx = x + (wide && sw > 256 ? lb_shown_band_x() : 0);
+                const int sy = y + (wide && sh > 192 ? lb_shown_band_y() : 0);
+                const int pw = wide && sw > 256 ? sw : 256;
+                const int ph = wide && sh > 192 ? sh : 192;
                 const uint8_t px = sx <= 8 ? 0u : sx >= pw - 8 ? 0xFFu : 0x80u;
                 const uint8_t py = sy <= 8 ? 0u : sy >= ph - 8 ? 0xBFu : 0x60u;
                 bus_write_u8(obj + 0x16u, px);
@@ -18453,6 +18716,7 @@ extern "C" void lb_patches_on_vblank(void) {
     entity_log();
     effect_log();
     apply_touch_extension();
+    apply_mountain_areas();   /* BR-0053 */
     // The "Hotwire anything (cheat)" combo entry, which had an
     // accessor and no caller until the vanilla rule above was located.
     apply_hotwire_anything();

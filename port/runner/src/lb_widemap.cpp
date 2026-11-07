@@ -280,8 +280,14 @@ uint32_t occupant(int x, int y, int want, int map_w, int map_h) {
     if (static_cast<int16_t>(
             bus_read_u16(grid + 0x84u + 2u * uint32_t(y))) == 0)
         return 0u;
-    const uint32_t idx =
-        uint32_t(x) + bus_read_u16(0x02155230u + 2u * uint32_t(y));
+    // BR-0054/0058: the row table's address as FUN_0207E16C reads it, from its
+    // literal. apply_tall_maps (docs/460) moves the table to 0x023F9900 on
+    // every map; the fixed 0x02155230 this used read the abandoned (zeroed)
+    // copy, so every row looked up row 0 and no wall or bridge was stamped in
+    // the band -- they popped in and out with the native 256 columns.
+    const uint32_t rowtab = bus_read_u32(0x0207E188u);
+    if (!main_ram(rowtab)) return 0u;
+    const uint32_t idx = uint32_t(x) + bus_read_u16(rowtab + 2u * uint32_t(y));
     const uint32_t states = bus_read_u32(grid + 0x70u);
     if (!main_ram(states)) return 0u;
     const uint8_t kinds = bus_read_u8(0x02128010u + bus_read_u8(0x0214AD08u));

@@ -210,6 +210,10 @@ struct Settings {
     int quick_bind[12] = {SDL_SCANCODE_1, SDL_SCANCODE_2, SDL_SCANCODE_3, SDL_SCANCODE_4,
                           SDL_SCANCODE_5, SDL_SCANCODE_6, SDL_SCANCODE_7, SDL_SCANCODE_8,
                           SDL_SCANCODE_9, SDL_SCANCODE_SPACE, SDL_SCANCODE_B, 0};
+    // SG-0074: each shortcut's mouse button too (SDL button numbers 2..5:
+    // middle, right, Mouse 4, Mouse 5; 0 = none). Right-click deselects,
+    // Mouse 5 opens the blue menu and Mouse 4 the second one, as before.
+    int quick_mouse[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, SDL_BUTTON_RIGHT, SDL_BUTTON_X2, SDL_BUTTON_X1};
     int force_tileset = 0;
     // docs/383: Space and right-click deselect,
     // Mouse 5 opens the blue brick menu and Mouse 4 the red/yellow/white one.
@@ -306,6 +310,7 @@ struct Settings {
     // docs/406: the Earth/Alien attack spell's EMP disables transports too
     // (lb_patches.cpp, kEmpTransports). Online, the host's.
     bool emp_transports = false;
+    bool many_mines = true;   // SG-0077: up to 32 mine spots a map
     // docs/453 (SG-0044): a hero stunned by ESP/EMP can still cast spells
     // (lb_patches.cpp, entity_state_override). Online, the host's.
     bool stun_cast = false;
@@ -707,6 +712,9 @@ extern "C" void lb_settings_save(void) {
         std::string q;
         for (int i = 0; i < 12; ++i) q += (i ? "," : "") + std::to_string(g_set.quick_bind[i]);
         o += "  \"quick_bind\": \"" + q + "\",\n";
+        std::string m;   // SG-0074
+        for (int i = 0; i < 12; ++i) m += (i ? "," : "") + std::to_string(g_set.quick_mouse[i]);
+        o += "  \"quick_mouse\": \"" + m + "\",\n";
     }
     std::snprintf(buf, sizeof buf, "  \"force_tileset\": %d,\n",
                   g_set.force_tileset); o += buf;
@@ -762,6 +770,8 @@ extern "C" void lb_settings_save(void) {
                   g_set.hotwire_transport); o += buf;
     std::snprintf(buf, sizeof buf, "  \"emp_transports\": %s,\n",
                   g_set.emp_transports ? "true" : "false"); o += buf;   // docs/406
+    std::snprintf(buf, sizeof buf, "  \"many_mines\": %s,\n",
+                  g_set.many_mines ? "true" : "false"); o += buf;   // SG-0077
     std::snprintf(buf, sizeof buf, "  \"stun_cast\": %s,\n",
                   g_set.stun_cast ? "true" : "false"); o += buf;   // docs/453
     std::snprintf(buf, sizeof buf, "  \"phantom_guard\": %s,\n",
@@ -1012,6 +1022,20 @@ extern "C" void lb_settings_load(void) {
         if (n == 12)
             for (int i = 0; i < 12; ++i) g_set.quick_bind[i] = v[i];
     }
+    {   // SG-0074: the shortcuts' mouse buttons, the same shape; 2..5 or 0
+        char q[160] = "";
+        json_get_str(s, "quick_mouse", q, sizeof q);
+        int v[12], n = 0;
+        for (const char* c = q; *c && n < 12;) {
+            char* end = nullptr;
+            const long x = std::strtol(c, &end, 10);
+            if (end == c) break;
+            v[n++] = (x >= SDL_BUTTON_MIDDLE && x <= SDL_BUTTON_X2) ? (int)x : 0;
+            c = *end == ',' ? end + 1 : end;
+        }
+        if (n == 12)
+            for (int i = 0; i < 12; ++i) g_set.quick_mouse[i] = v[i];
+    }
     if (g_set.mod_palette < 0 || g_set.mod_palette > 4) g_set.mod_palette = 0;
     if (g_set.force_tileset < 0 || g_set.force_tileset > 4) g_set.force_tileset = 0;
     json_get_bool(s, "quick_keys", &g_set.quick_keys);   // docs/383, default on
@@ -1047,6 +1071,7 @@ extern "C" void lb_settings_load(void) {
     json_get_bool(s, "hotwire_neutrals", &g_set.hotwire_neutrals);   // SG-0045
     json_get_int(s, "hotwire_transport", &g_set.hotwire_transport);
     json_get_bool(s, "emp_transports", &g_set.emp_transports);   // docs/406
+    json_get_bool(s, "many_mines", &g_set.many_mines);           // SG-0077
     json_get_bool(s, "stun_cast", &g_set.stun_cast);             // docs/453
     json_get_bool(s, "phantom_guard", &g_set.phantom_guard);     // docs/469
     json_get_bool(s, "ai_hero_rebuild", &g_set.ai_hero_rebuild);
@@ -1351,6 +1376,16 @@ int g_rebinding_pad = -1;    // action waiting for a PAD BUTTON, or -1
 bool g_rebinding_chat = false;   // docs/415: the chat key waits for a key
 bool g_rebinding_swap = false;   // SG-0012: the swap key waits for a key
 int g_rebinding_quick = -1;      // SG-0049: the shortcut waiting for a key, or -1
+int g_rebinding_quick_mouse = -1;   // SG-0074: the shortcut waiting for a mouse button
+const char* mouse_button_name(int b) {
+    switch (b) {
+        case SDL_BUTTON_MIDDLE: return "Middle click";
+        case SDL_BUTTON_RIGHT: return "Right click";
+        case SDL_BUTTON_X1: return "Mouse 4";
+        case SDL_BUTTON_X2: return "Mouse 5";
+        default: return "(no mouse)";
+    }
+}
 std::atomic<int> g_screens_swapped{0};   // SG-0012: this session's swap state
 bool g_chat_eat_text = false;    // docs/415: swallow the opening key's text
 
@@ -2030,6 +2065,16 @@ void tab_balance_spells() {
     if (lb_rules_host_flags() >= 0)
         ImGui::TextDisabled("In this lobby, the host's: %s",
                             lb_emp_transports_live() ? "On" : "Off");
+    ImGui::Spacing();
+    // SG-0077 (docs/471): Map::LoadMines keeps 10 spots and drops the rest.
+    ImGui::Checkbox("More Than 10 Mine Spots", &g_set.many_mines);
+    help("A map can have up to 32 mine, quarry or well cap spots. Off: the\n"
+         "game's own limit of 10; spots past the tenth are not usable.\n"
+         "Stock maps have 10 or fewer, so they play the same either way.\n"
+         "Online, the host's setting applies.");
+    badge(WIRED);
+    if (lb_rules_host_flags() >= 0)
+        ImGui::TextDisabled("In this lobby, the host's: %s", lb_many_mines_live() ? "On" : "Off");
     ImGui::Spacing();
 
     // docs/453 (SG-0044): the stun is a freeze order in the unit's order
@@ -3063,7 +3108,8 @@ void tab_input() {
     // callback for the button (lb_patches.cpp, view_update_override).
     ImGui::Checkbox("Battle shortcuts", &g_set.quick_keys);
     help("Right-click also deselects. Mouse 5 (forward) opens the blue brick\n"
-         "menu and Mouse 4 (back) the red, yellow or white one.\n"
+         "menu and Mouse 4 (back) the red, yellow or white one; change\n"
+         "them under Shortcut keys.\n"
          "Item keys pick that item from the red, yellow or white brick menu\n"
          "(a building or spell, left to right); with Shift, items 10-18.\n"
          "The keypad's digits always work too. Keys bound to DS buttons keep\n"
@@ -3077,16 +3123,32 @@ void tab_input() {
             const char* name = g_rebinding_quick == i ? "press a key..."
                                : g_set.quick_bind[i] ? SDL_GetScancodeName((SDL_Scancode)g_set.quick_bind[i])
                                                      : "(none)";
-            if (ImGui::Button(name, ImVec2(120.0f * g_ui_scale, 0))) g_rebinding_quick = i;
+            if (ImGui::Button(name, ImVec2(120.0f * g_ui_scale, 0))) {
+                g_rebinding_quick = i;
+                g_rebinding_quick_mouse = -1;
+            }
+            ImGui::SameLine();
+            // SG-0074: and a mouse button (middle, right, Mouse 4, Mouse 5).
+            const char* mname = g_rebinding_quick_mouse == i ? "press a button..."
+                                : mouse_button_name(g_set.quick_mouse[i]);
+            if (ImGui::Button(mname, ImVec2(120.0f * g_ui_scale, 0))) {
+                g_rebinding_quick_mouse = i;
+                g_rebinding_quick = -1;
+            }
             ImGui::SameLine();
             ImGui::TextUnformatted(kQuickNames[i]);
             ImGui::PopID();
         }
         if (ImGui::Button("Default keys")) {
             const Settings d;
-            for (int i = 0; i < 12; ++i) g_set.quick_bind[i] = d.quick_bind[i];
+            for (int i = 0; i < 12; ++i) {
+                g_set.quick_bind[i] = d.quick_bind[i];
+                g_set.quick_mouse[i] = d.quick_mouse[i];
+            }
         }
-        ImGui::TextDisabled("Click a key to change it; Esc cancels, Delete clears.");
+        ImGui::TextDisabled("Click a key or mouse button to change it; Esc cancels,\n"
+                            "Delete clears. The left button is the touch screen and\n"
+                            "cannot be bound.");
         ImGui::TreePop();
     }
     // SG-0027: pause and frame advance, for slow play and tool-assisted runs.
@@ -9428,9 +9490,18 @@ extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
             }
         }
         if (pt_state == 1) {
-            const LbTeam mine = team_of(pt_v);
+            // Not team_of: it swaps an invalid team for the King default, and a
+            // custom unit (551+) is not a candidate until its cartridge rebuild.
+            LbTeam mine;
+            for (int i = 0; i < LB_TEAM_SLOTS; ++i) mine.pick[i] = (unsigned short)pt_v[i];
             char why[160] = "";
+            static char said[160] = "";
             if (lb_teams_set_team(&mine, why, (int)sizeof why)) pt_state = 2;
+            else if (std::strcmp(why, said) != 0) {   // a test aid's refusal, once per reason
+                std::snprintf(said, sizeof said, "%s", why);
+                std::fprintf(stderr, "[lb_teams] LB_PLAYER_TEAM not set yet: %s\n", why);
+                std::fflush(stderr);
+            }
         }
         const LbTeam enemy = team_of(g_set.enemy_team);
         lb_teams_set_enemy(&enemy);
@@ -9537,10 +9608,12 @@ bool quick_event(const SDL_Event* event, const ImGuiIO& io) {
                  quick_digit(event->key.keysym.scancode);
     } else if ((event->type == SDL_MOUSEBUTTONDOWN ||
                 event->type == SDL_MOUSEBUTTONUP) && !io.WantCaptureMouse) {
+        // SG-0074: as bound (by default right-click deselects, Mouse 5 opens
+        // the blue menu, Mouse 4 the second one).
         const int b = event->button.button;
-        if (b == SDL_BUTTON_RIGHT) action = kQuickDeselect;
-        else if (b == SDL_BUTTON_X2) action = kQuickBlue;     // Mouse 5
-        else if (b == SDL_BUTTON_X1) action = kQuickSecond;   // Mouse 4
+        for (int i = 0; i < 12 && action == kQuickNone; ++i)
+            if (b != SDL_BUTTON_LEFT && g_set.quick_mouse[i] == b)
+                action = i < 9 ? kQuickItem + 1 + i : i == 9 ? kQuickDeselect : i == 10 ? kQuickBlue : kQuickSecond;
         if (action != kQuickNone && event->type == SDL_MOUSEBUTTONUP)
             return true;   // the release of a shortcut button: nothing more
     }
@@ -9563,6 +9636,35 @@ extern "C" bool lb_overlay_event(const SDL_Event* event) {
     if (event->type == SDL_KEYDOWN && g_chat_eat_text &&
         (int)event->key.keysym.scancode != g_set.chat_key)
         g_chat_eat_text = false;
+
+    // SG-0074: a shortcut's mouse rebind takes the next middle, right, Mouse 4
+    // or Mouse 5 press; a left click elsewhere cancels it, Esc too, Delete clears.
+    if (g_rebinding_quick_mouse >= 0 && g_rebinding_quick_mouse < 12) {
+        if (event->type == SDL_MOUSEBUTTONDOWN && event->button.button != SDL_BUTTON_LEFT) {
+            const int b = event->button.button;
+            if (b >= SDL_BUTTON_MIDDLE && b <= SDL_BUTTON_X2) {
+                for (int i = 0; i < 12; ++i)
+                    if (i != g_rebinding_quick_mouse && g_set.quick_mouse[i] == b)
+                        g_set.quick_mouse[i] = 0;   // one button, one shortcut
+                g_set.quick_mouse[g_rebinding_quick_mouse] = b;
+            }
+            g_rebinding_quick_mouse = -1;
+            return true;
+        }
+        if (event->type == SDL_MOUSEBUTTONUP && event->button.button != SDL_BUTTON_LEFT) return true;
+        if (event->type == SDL_KEYDOWN && event->key.repeat == 0) {
+            if (event->key.keysym.scancode == SDL_SCANCODE_DELETE)
+                g_set.quick_mouse[g_rebinding_quick_mouse] = 0;
+            if (event->key.keysym.scancode == SDL_SCANCODE_DELETE ||
+                event->key.keysym.sym == SDLK_ESCAPE) {
+                g_rebinding_quick_mouse = -1;
+                return true;
+            }
+        }
+        if (event->type == SDL_MOUSEBUTTONDOWN && event->button.button == SDL_BUTTON_LEFT &&
+            !ImGui::IsAnyItemHovered())
+            g_rebinding_quick_mouse = -1;
+    }
 
     if (event->type == SDL_KEYDOWN && event->key.repeat == 0) {
         const SDL_Keycode k = event->key.keysym.sym;
@@ -10442,6 +10544,22 @@ extern "C" int lb_setting_emp_transports(void) {
     return forced >= 0 ? forced : (g_set.emp_transports ? 1 : 0);
 }
 
+// SG-0077: this machine's choice (LB_MANY_MINES=0|1 forces it); a match runs
+// lb_many_mines_live: the host's online (an older host sends no bit: off).
+extern "C" int lb_setting_many_mines(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_MANY_MINES");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.many_mines ? 1 : 0);
+}
+extern "C" int lb_many_mines_live(void) {
+    const int host = lb_rules_host_flags();
+    if (host >= 0) return (host & LB_RULE_MANY_MINES) ? 1 : 0;
+    return lb_setting_many_mines();
+}
+
 // docs/453: this machine's "stunned heroes can cast" choice (LB_STUN_CAST=0|1
 // forces it). The patch runs with lb_stun_cast_live() (lb_patches.cpp): a
 // replay's, else the host's online, else this.
@@ -10531,7 +10649,8 @@ extern "C" int lb_rules_local_flags(void) {
            (lb_setting_creatures() ? LB_RULE_CREATURES : 0) |   // docs/410
            (lb_setting_teal() ? LB_RULE_TEAL : 0) |             // docs/412
            (lb_setting_stun_cast() ? LB_RULE_STUN_CAST : 0) |   // docs/453
-           (lb_setting_phantom_guard() ? 0 : LB_RULE_OWN_CHEATS);   // docs/469
+           (lb_setting_phantom_guard() ? 0 : LB_RULE_OWN_CHEATS) |  // docs/469
+           (lb_setting_many_mines() ? LB_RULE_MANY_MINES : 0);       // SG-0077
 }
 
 // docs/412: Teal team colour. LB_TEAL=0|1 forces it (LB_TEST_TEAL=1 too).
@@ -11245,6 +11364,7 @@ extern "C" const char* lb_net_lobby_options_json(void) {
     kv.push_back({"Transport occupants", pick(kTransport, 3, g_set.hotwire_transport)});
     kv.push_back({"Hotwire neutrals in missions", g_set.hotwire_neutrals ? "On" : "Off"});
     kv.push_back({"EMP disables transports", g_set.emp_transports ? "On" : "Off"});
+    kv.push_back({"More than 10 mine spots", g_set.many_mines ? "On" : "Off"});   // SG-0077
     kv.push_back({"Prevent phantom ties", g_set.phantom_guard ? "On" : "Off"});   // docs/469
     kv.push_back({"Stunned heroes can cast", g_set.stun_cast ? "On" : "Off"});
     kv.push_back({"AI rebuilds its hero", g_set.ai_hero_rebuild ? "On" : "Off"});
