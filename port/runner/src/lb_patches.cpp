@@ -5240,89 +5240,26 @@ void passability_override(void) {
     if (original) original();
 }
 
-// BR-0053 (docs/471): MOUNTAINS NEED ONE AREA, NOT JUST ONE PASSABLE CELL.
+// BR-0053 / BR-0062 (docs/471): MOUNTAINS, PER UNIT.
 //
 // passability_override makes class 5 passable for a unit whose +0x79 is 1,
-// but movement is also held to the mover's plane C AREA (map+0x2EC, an
-// 8-connected labelling of plane A: grass, trees and stone one family,
-// mountain its own, water its own -- docs/445). The destination picker
-// FUN_0207F1B4 hands its cell search the mover's area key and the step and
-// placement tests (FUN_02001938) compare areas, so a target across a cliff
-// was snapped back to the unit's own side: a flagged unit walked to the edge
-// and stopped (measured with a custom builder, a stock hero poked to +0x79,
-// and the reporter's custom transport).
+// but movement is also held to the mover's plane C AREA (map+0x2EC; a
+// mountain strip is its own area, docs/445): the destination picker
+// FUN_0207F1B4 hands its cell search the mover's area key (6th argument,
+// sp+4) and the per-cell check FUN_02001938 compares each cell's area with
+// the key in r3. For a flagged unit both keys are pointed at the cartridge's
+// own "no area" key constant (0x02149308: the key vtable, area 0xFF, the
+// literal at 0x02080890), so it may cross; every other unit keeps the stock
+// areas.
 //
-// Measured live: relabelling plane C so the land on both sides and the
-// mountain between share one area let the flagged transport cross the whole
-// strip, while an unflagged hero ordered the same way still stopped at the
-// edge -- the per-cell passability test is what keeps everyone else off.
-//
-// So, once per battle and only when some loaded blueprint has the flag,
-// every 8-connected group of land+mountain cells (classes 0, 1, 2, 5) takes
-// the smallest existing area label in the group. No label is invented and
-// water is untouched. Every machine has the same records (the host's) and
-// the same map, so the relabelling is identical everywhere.
-extern "C" int lb_cunits_count(void);              // lb_cunits.cpp
-static bool any_mountains_blueprint() {
-    const uint32_t data = bus_read_u32(0x02150948u);
-    if (!guest_ptr(data)) return false;
-    const int n = 551 + 3 * lb_cunits_count();
-    for (int bp = 0; bp < n && bp < 2048; ++bp) {
-        const uint32_t h = bus_read_u32(data + 4u * (uint32_t)bp);
-        if (!guest_ptr(h)) continue;
-        if (cap_flag(bus_read_u32(h + 8u), kCapMountains)) return true;
-    }
-    return false;
-}
-static void apply_mountain_areas() {
-    static uint32_t done_map = 0;   // reset whenever no battle is live
-    int cx = 0, cy = 0;
-    if (!lb_field_camera(&cx, &cy)) { done_map = 0; return; }   // battles only
-    const uint32_t map = bus_read_u32(0x02156CB0u);   // FUN_02057F38's map
-    if (!guest_ptr(map) || map == done_map) return;
-    done_map = map;
-    if (!any_mountains_blueprint()) return;
-    const int w = bus_read_u8(map + 0x14u), h = bus_read_u8(map + 0x15u);
-    const uint32_t A = bus_read_u32(map + 0x2E8u), C = bus_read_u32(map + 0x2ECu);
-    if (w <= 0 || h <= 0 || !guest_ptr(A) || !guest_ptr(C)) return;
-    const size_t cells = (size_t)w * (size_t)h;
-    std::vector<uint8_t> a(cells), c(cells);
-    for (size_t i = 0; i < cells; ++i) {
-        a[i] = (uint8_t)bus_read_u8(A + (uint32_t)i);
-        c[i] = (uint8_t)bus_read_u8(C + (uint32_t)i);
-    }
-    auto land = [&](size_t i) { return a[i] == 0u || a[i] == 1u || a[i] == 2u || a[i] == 5u; };
-    std::vector<int> comp(cells, -1);
-    std::vector<size_t> stack, members;
-    int changed = 0, groups = 0;
-    for (size_t s0 = 0; s0 < cells; ++s0) {
-        if (comp[s0] >= 0 || !land(s0)) continue;
-        members.clear();
-        stack.assign(1, s0);
-        comp[s0] = groups;
-        uint8_t lo = c[s0];
-        while (!stack.empty()) {
-            const size_t i = stack.back();
-            stack.pop_back();
-            members.push_back(i);
-            lo = std::min(lo, c[i]);
-            const int x = (int)(i % (size_t)w), y = (int)(i / (size_t)w);
-            for (int dy = -1; dy <= 1; ++dy)
-                for (int dx = -1; dx <= 1; ++dx) {
-                    const int nx = x + dx, ny = y + dy;
-                    if ((!dx && !dy) || nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
-                    const size_t j = (size_t)ny * (size_t)w + (size_t)nx;
-                    if (comp[j] < 0 && land(j)) { comp[j] = groups; stack.push_back(j); }
-                }
-        }
-        ++groups;
-        for (size_t i : members)
-            if (c[i] != lo) { bus_write_u8(C + (uint32_t)i, lo); ++changed; }
-    }
-    std::fprintf(stderr, "[lb_cap] mountains: a blueprint has the flag; %d plane C cell(s) joined "
-                 "their neighbouring land area (%d land group(s))\n", changed, groups);
-    std::fflush(stderr);
-}
+// 0.4.11 merged plane C itself (land and mountain into one area) once a
+// flagged blueprint was loaded. That let the flagged units cross, but it
+// also stopped the area check from cutting short EVERY other unit's order
+// across a cliff, so the pathfinder searched whole maps for routes nobody
+// could walk, ran its own heap dry (FUN_0204CDA8 on pathfinder+4 returned 0)
+// and FUN_02080D48 wrote through the null pointer into ITCM: BR-0062, a
+// 3-player match on Avast with a flagged custom unit loaded.
+constexpr uint32_t kNoAreaKey = 0x02149308u;   // vtable 0x021491B0, area 0xFF
 
 // BR-0029 (docs/471): SAVE ON THE PAUSE MENU'S OPTIONS CRASHED A BATTLE.
 //
@@ -5469,6 +5406,23 @@ void mark_load_override(void) {
     w.c = need;
     g_cpu.R[1] = kMarkCopy;
     wrap_start(w, kMarkLoad | 1u);
+}
+
+constexpr uint32_t kMovePickDest = 0x0207F1B4u;   // arm
+constexpr uint32_t kCellCheck = 0x02001938u;      // arm
+static bool holder_mountains(uint32_t holder) {
+    return guest_ptr(holder) && cap_flag(bus_read_u32(holder + 4u), kCapMountains);
+}
+void move_dest_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kMovePickDest);
+    if (holder_mountains(g_cpu.R[2]) && bus_read_u32(kNoAreaKey) == 0x021491B0u)
+        bus_write_u32(g_cpu.R[13] + 4u, kNoAreaKey);   // its own stack argument
+    if (original) original();
+}
+void cell_check_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kCellCheck);
+    if (holder_mountains(g_cpu.R[0]) && bus_read_u32(kNoAreaKey) == 0x021491B0u) g_cpu.R[3] = kNoAreaKey;
+    if (original) original();
 }
 
 void emp_victims_override(void) {
@@ -8473,8 +8427,12 @@ std::mutex g_ptint_mu;
 PortraitTint g_ptint;
 
 // Head pixel masks for HeadRule region 2: 24 rows, bit x = column x.
-constexpr uint32_t kHeadMasks[1][24] = {
+constexpr uint32_t kHeadMasks[3][24] = {
     {0x000000u, 0x000000u, 0x00FC00u, 0x01FF00u, 0x03FFC0u, 0x03FFC0u, 0x07FFE0u, 0x07FFE0u, 0x07FFE0u, 0x07FFE0u, 0x07FFE0u, 0x040060u, 0x040060u, 0x040060u, 0x040060u, 0x07FFE0u, 0x07FBE0u, 0x0FFBF0u, 0x1FFBF8u, 0x0FF1F0u, 0x07E0C0u, 0x030000u, 0x008000u, 0x000000u},   // ninja_cowl
+    // SG-0080: the Wolf's and the Shark's side profiles (their icons share every
+    // grey with the backdrop; the outline is what separates them).
+    {0x000000u, 0x000000u, 0x038000u, 0x078000u, 0x0F8000u, 0x0F8000u, 0x1FF000u, 0x1FF800u, 0x3FF800u, 0x3FFC00u, 0x7FFE00u, 0x7FFF00u, 0x7F9FF0u, 0x7F9FF0u, 0x7FFFF0u, 0x7FFFE0u, 0x3FFFE0u, 0x3FFFC0u, 0x1FFFC0u, 0x0FE000u, 0x07C000u, 0x038000u, 0x008000u, 0x000000u},   // wolf
+    {0x000000u, 0x000000u, 0x000000u, 0x07E000u, 0x0FF800u, 0x1FFE00u, 0x3FFF80u, 0x3FFFE0u, 0x7FFFF8u, 0x7E7FFEu, 0x7F9FFEu, 0x7FA7FEu, 0x7FDFFEu, 0x7FFFF8u, 0x7FFFF0u, 0x7FFFE0u, 0x3FFFC0u, 0x3FFE00u, 0x1FFC00u, 0x0FE000u, 0x000000u, 0x000000u, 0x000000u, 0x000000u},   // shark
 };
 
 // {blueprint, kind (0 add, 1 exclude), region (0 all, 1 the rectangle
@@ -8537,6 +8495,24 @@ constexpr HeadRule kHeadRules[] = {
     {179, 0, 1, 0, 17, 23, 23, 3, 0x0209u},
     {179, 0, 1, 0, 17, 23, 23, 3, 0x02CEu},
     {179, 0, 1, 0, 17, 23, 23, 3, 0x03B9u},
+    {169, 0, 2, 1, 0, 0, 0, 3, 0x294Au},   // SG-0080: Wolf: its profile (kHeadMasks[1]), not the backdrop
+    {169, 0, 2, 1, 0, 0, 0, 3, 0x4A52u},
+    {169, 0, 2, 1, 0, 0, 0, 3, 0x5EF7u},
+    {169, 0, 2, 1, 0, 0, 0, 3, 0x7FFFu},
+    {155, 0, 2, 2, 0, 0, 0, 3, 0x294Au},   // SG-0080: Shark: its profile (kHeadMasks[2]), not the backdrop
+    {155, 0, 2, 2, 0, 0, 0, 3, 0x4A52u},
+    {155, 0, 2, 2, 0, 0, 0, 3, 0x5EF7u},
+    {155, 0, 2, 2, 0, 0, 0, 3, 0x7FFFu},
+    {153, 0, 0, 0, 0, 0, 0, 3, 0x006Au},   // SG-0080: Monkey: the brown fur and its rim lighting (brown is never the frame)
+    {153, 0, 0, 0, 0, 0, 0, 3, 0x00CEu},
+    {153, 0, 0, 0, 0, 0, 0, 3, 0x0113u},
+    {153, 0, 0, 0, 0, 0, 0, 3, 0x01BBu},
+    {153, 0, 0, 0, 0, 0, 0, 3, 0x02FFu},
+    {138, 0, 0, 0, 0, 0, 0, 3, 0x006Au},   // SG-0080: Robot: the orange parts, neck included (orange is never the frame)
+    {138, 0, 0, 0, 0, 0, 0, 3, 0x00CEu},
+    {138, 0, 0, 0, 0, 0, 0, 3, 0x0113u},
+    {138, 0, 0, 0, 0, 0, 0, 3, 0x01BBu},
+    {138, 0, 0, 0, 0, 0, 0, 3, 0x02FFu},
 };
 
 bool head_rule_region(const HeadRule& r, int x, int y) {
@@ -9274,6 +9250,8 @@ const NdsDispatchEntry kOverrideTable[] = {
     {kPassability, 0u, passability_override, nullptr},     /* 0x02001510 */
     /* ARM. BR-0061: a unit always stands in an occupancy layer. */
     {kOccLayers, 0u, occ_layers_override, nullptr},        /* 0x0200159C */
+    /* ARM. BR-0053: a mountains unit's cell check takes no area. */
+    {kCellCheck, 0u, cell_check_override, nullptr},        /* 0x02001938 */
     {kEbpLoaded, 0u, ebp_loaded_override, nullptr},        /* 0x02001EE0 */
     /* ARM. THE DECOMPILATION'S FIRST GRADED FUNCTION, not a patch. With
        LB_SHADOW unset this delegates to the cartridge and only counts; with
@@ -9373,6 +9351,8 @@ const NdsDispatchEntry kOverrideTable[] = {
     {kCastSpell, 0u, cast_spell_override, nullptr},        /* 0x0207B9C0 */
     /* Observer only, and only speaks with LB_GATHERLOG=1. docs/357. */
     {kTileGather, 0u, tile_gather_observer, nullptr},      /* 0x0207E9B4 */
+    /* ARM. BR-0053: a mountains unit's order takes no area. */
+    {kMovePickDest, 0u, move_dest_override, nullptr},      /* 0x0207F1B4 */
     /* ARM. A team's bricks: a Gold Brick's worth, else a pure tail call.
        docs/416. */
     {kTeamAddBricks, 0u, team_add_bricks_override, nullptr}, /* 0x020866E0 */
@@ -9530,7 +9510,7 @@ const NdsDispatchEntry kOverrideTable[] = {
 // Compile-time guard so this cannot regrow. A runtime check would report the
 // fault after shipping; this refuses to build. Every future entry must be
 // inserted in address order or the build stops here with this message.
-static_assert(kRosterBuild < kPassability && kPassability < kOccLayers && kOccLayers < kEbpLoaded &&
+static_assert(kRosterBuild < kPassability && kPassability < kOccLayers && kOccLayers < kCellCheck && kCellCheck < kEbpLoaded &&
               kEbpLoaded < kRegistryFind &&
               kRegistryFind < kBillboardDraw && kBillboardDraw < kFeCard &&
               kSelRect < kReadyToggle && kReadyToggle < kMainMenuUpdate &&
@@ -9564,7 +9544,7 @@ static_assert(kRosterBuild < kPassability && kPassability < kOccLayers && kOccLa
               kHealTick < kHotWireTick &&
               kHotWireTick < kCastGround && kCastGround < kCastSpell &&
               kCastSpell < kTileGather &&
-              kTileGather < kTeamAddBricks && kTeamAddBricks < kAiMineScore && kAiMineScore < kSetMusicSide &&
+              kTileGather < kMovePickDest && kMovePickDest < kTeamAddBricks && kTeamAddBricks < kAiMineScore && kAiMineScore < kSetMusicSide &&
               kSetMusicSide < kAiQueueBuild && kAiQueueBuild < kFillWindow && kFillWindow < kMapParse &&
               kMapParse < kMinesLoad && kMinesLoad < kMarkLoad && kMarkLoad < kMinesGet && kMinesGet < kFloatNumber && kFloatNumber < kTouchRect &&
               kTouchRect < kMoveIssue &&
@@ -18858,7 +18838,6 @@ extern "C" void lb_patches_on_vblank(void) {
     entity_log();
     effect_log();
     apply_touch_extension();
-    apply_mountain_areas();   /* BR-0053 */
     // The "Hotwire anything (cheat)" combo entry, which had an
     // accessor and no caller until the vanilla rule above was located.
     apply_hotwire_anything();

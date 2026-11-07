@@ -9472,6 +9472,40 @@ extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
     {
         // docs/410: LB_ENEMY_TEAM=<9 blueprints, the slots in order> sets the
         // Custom opponent's army once, for a headless test. Test aid only.
+        static bool icons_done = false;
+        if (const char* p = icons_done ? nullptr : std::getenv("LB_DUMP_ICONS")) {
+            unsigned int probe[576];
+            if (lb_teams_hud_icon_rgba(0, probe)) icons_done = true;
+            if (icons_done) {
+                // Test aid (SG-0080): LB_DUMP_ICONS=<bp>,<bp>... writes each unit's
+                // 24x24 HUD icon to icon_<bp>.ppm in the working folder, plus a
+                // line per colour (DS 15-bit) with its pixel count and box.
+                int bp = 0, used = 0;
+                while (std::sscanf(p, "%d%n", &bp, &used) == 1) {
+                    p += used;
+                    if (*p == ',') ++p;
+                    unsigned int px[576];
+                    if (!lb_teams_hud_icon_rgba(bp, px)) {
+                        std::fprintf(stderr, "[lb_icons] %d: no icon\n", bp);
+                        continue;
+                    }
+                    char name[32];
+                    std::snprintf(name, sizeof name, "icon_%d.ppm", bp);
+                    if (FILE* f = std::fopen(name, "wb")) {
+                        std::fprintf(f, "P6 24 24 255\n");
+                        for (int i = 0; i < 576; ++i) {
+                            const unsigned c = px[i];
+                            const unsigned char rgb[3] = {(unsigned char)(c & 0xFF), (unsigned char)((c >> 8) & 0xFF),
+                                                          (unsigned char)((c >> 16) & 0xFF)};
+                            std::fwrite(rgb, 1, 3, f);
+                        }
+                        std::fclose(f);
+                    }
+                    std::fprintf(stderr, "[lb_icons] %d written to %s\n", bp, name);
+                }
+                std::fflush(stderr);
+            }
+            }
         static bool enemy_env = false;
         if (!enemy_env) {
             enemy_env = true;

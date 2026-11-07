@@ -286,8 +286,16 @@ export function validateTbp(t) {
 //
 // A PNG of the terrain, 2 px a cell, for the moderator: drawn from the parsed
 // planes, never from anything the client drew.
-const COLOURS = { 0: [70, 150, 60], 2: [150, 140, 120], 3: [50, 105, 200], 5: [110, 80, 60] };
-async function previewPng(A, D, w, h) {
+// Each world's terrain in its own tileset's colours (the average of the
+// level editor's material swatches, which draw the world's real tiles):
+// plane A class 0 grass, 2 stone, 3 water, 5 mountain; then trees.
+const WORLD_COLOURS = [
+  { 0: [41, 157, 39], 2: [130, 169, 115], 3: [37, 130, 222], 5: [230, 222, 205], trees: [43, 127, 13] },   // King
+  { 0: [0, 215, 33], 2: [244, 179, 67], 3: [88, 242, 211], 5: [11, 103, 39], trees: [14, 113, 8] },       // Pirate
+  { 0: [150, 32, 26], 2: [184, 107, 45], 3: [123, 221, 61], 5: [98, 32, 16], trees: [36, 92, 55] },        // Mars
+];
+async function previewPng(A, D, w, h, world) {
+  const COLOURS = WORLD_COLOURS[world] || WORLD_COLOURS[0];
   const trees = new Uint8Array(w * h);
   let at = 0, on = 0;
   for (const r of D) {
@@ -301,7 +309,7 @@ async function previewPng(A, D, w, h) {
     raw[row] = 0;
     for (let x = 0; x < W; ++x) {
       const i = ((y / S) | 0) * w + ((x / S) | 0);
-      const c = trees[i] ? [25, 95, 30] : COLOURS[A[i]] || [0, 0, 0];
+      const c = trees[i] ? COLOURS.trees : COLOURS[A[i]] || [0, 0, 0];
       raw.set(c, row + 1 + x * 3);
     }
   }
@@ -666,7 +674,7 @@ export class Levels extends DurableObject {
       owner, addr, now, map, tbp.length ? tbp : null);
     const row = this.sql.exec('SELECT * FROM levels WHERE hash = ?', hash).toArray()[0];
     this.sql.exec('UPDATE levels SET mini = ? WHERE id = ?', miniNcgr(v.map.A, v.map.D, v.map.w, v.map.h), row.id);
-    const png = await previewPng(v.map.A, v.map.D, v.map.w, v.map.h);
+    const png = await previewPng(v.map.A, v.map.D, v.map.w, v.map.h, v.map.world);
     const msg = await this.post(levelEmbed(row, status), levelButtons(row, status), png);
     if (msg) this.sql.exec('UPDATE levels SET message = ? WHERE id = ?', msg, row.id);
     return json(200, { ok: true, id: row.id, status });
