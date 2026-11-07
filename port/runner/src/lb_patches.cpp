@@ -1174,6 +1174,229 @@ static bool issue_waiting_to_die(uint32_t entity) {
     return ok;
 }
 
+// ---- TEST AID (docs/469): SPAWN A UNIT, THE GAME'S OWN WAY -----------------
+//
+// LB_TEST_DRIVE_FILE's `spawn BP OWNER X Y [N]` builds a CreateUnitFactionCommand
+// (type 3) with FUN_020053F4 (ARM; r0 the session's sink, r1 -> the owner
+// byte, r2 the blueprint WRAPPER from the array at 0x02150944, r3 -> a tile
+// position object {vtable 0x0214FDF4, x at +4, y at +5}; stack: +0x3C, the
+// count at +0x3D, +0x3E -- the cheat path passes 0, 1, 100) and submits it
+// with FUN_020EB910, the queue every player input goes through. Its executor
+// (FUN_02083E64) makes N units with FUN_0205D7F0 at the tile. Being a command,
+// it runs on the same step on every machine of a match; online, spawn only
+// the local player's own units (FUN_020A5D50, the game's spawn helper, makes
+// the same rule). Test aid only: nothing else issues it.
+//
+// DELIVERY: two guest calls (construct, submit), NOT nested call_guest
+// -- docs/241/243 measured that every dispatch can slice-yield and a nested
+// chain loses its place (the first try here unwound at construct). Each call
+// is dispatched with LR = the view update (0x020DD708, Thumb), so its return
+// re-enters view_update_override, recognised by SP == the SP the call got
+// (the docs/383 pattern, as g_aic does); the result in r0 feeds the next step.
+// After the submit the update runs as it was called.
+constexpr uint32_t kMakeSpawnCmd = 0x020053F4u;   // arm
+constexpr uint32_t kTilePosVtable = 0x0214FDF4u;
+constexpr uint32_t kSpawnCarrier = 0x020DD708u;   // the view update (thumb)
+struct SpawnReq { int bp = -1, owner = 0, x = 0, y = 0, n = 1; };
+std::atomic<int> g_spawn_pending{0};
+SpawnReq g_spawn;
+struct SpawnChain {
+    int step = 0;                 // 0 idle; 2 construct out; 3 submit out
+    uint32_t r[4] = {}, r12 = 0, lr = 0, sp = 0, sp_call = 0, wrapper = 0;
+    const char* what = "spawn";   // which request the chain carries (its log)
+} g_spc;
+
+// `cast CASTER_SLOT SPELL_ID none|unit TARGET_SLOT|pt X Y` (docs/469): a
+// CastSpellCommand (type 0x10) the way the UI's issuer FUN_020A94DC makes it --
+// FUN_02005640 (a point, a tile position object), FUN_0200568C (a unit, its
+// two-byte handle) or FUN_020056D8 (no target), each (player slot, -> the
+// caster's handle, the spell record, [target]), all ARM, then the submit. The
+// spell record is FUN_02002AF8's: id * 0x14 + [0x02002B08] (the id is its
+// first byte, which is what the command serializes). Its executor
+// (FUN_020843AC) validates it as a real cast (FUN_0207B90C/B9C0/BA60), so
+// mana, range and target rules are the game's own.
+struct CastReq { int caster = -1, spell = 0, kind = 2, target = -1, x = 0, y = 0; };
+std::atomic<int> g_cast_pending{0};
+CastReq g_cast;
+
+static bool spawn_ram(uint32_t p) { return p >= 0x02000000u && p < 0x02400000u; }
+
+static void spawn_dispatch(uint32_t fn) {
+    g_cpu.R[13] = g_spc.sp_call;
+    g_cpu.R[14] = kSpawnCarrier | 1u;
+    g_cpu.R[15] = fn;
+    runtime_dispatch_with_exchange(fn);
+}
+
+static void spawn_restore(void (*original)(void)) {
+    g_spc.step = 0;
+    for (int i = 0; i < 4; ++i) g_cpu.R[i] = g_spc.r[i];
+    g_cpu.R[12] = g_spc.r12;
+    g_cpu.R[14] = g_spc.lr;
+    g_cpu.R[13] = g_spc.sp;
+    if (original) original();
+}
+
+static void spawn_say(const char* what) {
+    if (!std::strcmp(g_spc.what, "cast"))
+        std::fprintf(stderr, "[lb_cast_aid] spell %d by slot %d (kind %d, target %d / %d,%d): %s\n", g_cast.spell,
+                     g_cast.caster, g_cast.kind, g_cast.target, g_cast.x, g_cast.y, what);
+    else
+        std::fprintf(stderr, "[lb_spawn] blueprint %d x%d for owner %d at %d,%d: %s\n", g_spawn.bp,
+                     g_spawn.n, g_spawn.owner, g_spawn.x, g_spawn.y, what);
+    std::fflush(stderr);
+}
+
+static uint32_t spawn_player_slot(int owner) {   // [[0x0215540C]+8][owner] + 0x10, or ~0
+    const uint32_t pm = bus_read_u32(0x0215540Cu);
+    const uint32_t parr = spawn_ram(pm) ? bus_read_u32(pm + 8u) : 0u;
+    const uint32_t pcount = spawn_ram(pm) ? bus_read_u32(pm + 0xCu) : 0u;
+    if (!spawn_ram(parr) || owner < 0 || (uint32_t)owner >= pcount) return ~0u;
+    const uint32_t player = bus_read_u32(parr + 4u * (uint32_t)owner);
+    return spawn_ram(player) ? bus_read_u32(player + 0x10u) : ~0u;
+}
+
+static bool spawn_not_local(uint32_t slot) {     // online: only the local player's commands
+    const uint32_t ctx = bus_read_u32(0x020A1870u);
+    return spawn_ram(ctx) && bus_read_u8(ctx + 0x70u) && bus_read_u32(ctx + 0x64u) != slot;
+}
+
+static void spawn_save_regs() {
+    for (int i = 0; i < 4; ++i) g_spc.r[i] = g_cpu.R[i];
+    g_spc.r12 = g_cpu.R[12];
+    g_spc.lr = g_cpu.R[14];
+    g_spc.sp = g_cpu.R[13];
+    g_spc.sp_call = (g_spc.sp - 0x60u) & ~7u;
+}
+
+static uint32_t spawn_live_entity(int slot) {    // pool slot -> live entity, or 0
+    const uint32_t pool = bus_read_u32(0x02155028u);
+    if (!spawn_ram(pool) || slot < 0 || (uint32_t)slot >= bus_read_u32(pool + 0xCu)) return 0u;
+    const uint32_t e = bus_read_u32(bus_read_u32(pool + 8u) + 4u * (uint32_t)slot);
+    return spawn_ram(e) && bus_read_u8(e + 0x227u) ? e : 0u;
+}
+
+// A queued cast: 1 = the chain started (return), 0 = nothing to do.
+static int cast_begin() {
+    g_cast_pending.store(0);
+    g_spc.what = "cast";
+    const CastReq& q = g_cast;
+    const uint32_t caster = spawn_live_entity(q.caster);
+    if (!caster) { spawn_say("no such caster"); return 0; }
+    const uint32_t slot = spawn_player_slot(bus_read_u8(caster + 0xE4u));
+    if (slot == ~0u) { spawn_say("no such player"); return 0; }
+    if (spawn_not_local(slot)) { spawn_say("not the local player's (online, only your own units)"); return 0; }
+    const uint32_t spells = bus_read_u32(0x02002B08u);
+    if (!spawn_ram(spells) || q.spell < 0 || q.spell > 0xFF) { spawn_say("no spell table"); return 0; }
+    const uint32_t spell = spells + (uint32_t)q.spell * 0x14u;
+    uint32_t target = 0;
+    if (q.kind == 1 && !(target = spawn_live_entity(q.target))) { spawn_say("no such target"); return 0; }
+    spawn_save_regs();
+    const uint32_t hc = g_spc.sp_call + 0x20u, ht = g_spc.sp_call + 0x24u, pos = g_spc.sp_call + 0x28u;
+    bus_write_u8(hc, (uint8_t)q.caster);
+    bus_write_u8(hc + 1u, bus_read_u8(caster + 0xDDu));
+    uint32_t fn = 0x020056D8u, r3 = 0;               // none
+    if (q.kind == 1) {                               // a unit
+        bus_write_u8(ht, (uint8_t)q.target);
+        bus_write_u8(ht + 1u, bus_read_u8(target + 0xDDu));
+        fn = 0x0200568Cu;
+        r3 = ht;
+    } else if (q.kind == 0) {                        // a point
+        bus_write_u32(pos, kTilePosVtable);
+        bus_write_u8(pos + 4u, (uint8_t)q.x);
+        bus_write_u8(pos + 5u, (uint8_t)q.y);
+        bus_write_u8(pos + 6u, 0u);
+        bus_write_u8(pos + 7u, 0u);
+        fn = 0x02005640u;
+        r3 = pos;
+    }
+    g_cpu.R[0] = slot;
+    g_cpu.R[1] = hc;
+    g_cpu.R[2] = spell;
+    g_cpu.R[3] = r3;
+    g_spc.step = 2;
+    spawn_dispatch(fn);
+    return 1;
+}
+
+// 1 = this entry was the chain's (handled; return), 0 = run the update as usual.
+static int spawn_step(void (*original)(void), bool other_busy) {
+    if (g_spc.step) {
+        if (g_cpu.R[13] != g_spc.sp_call) return 0;   // another entry; keep waiting
+        if (g_spc.step == 2) {                          // the command in r0
+            if (!g_cpu.R[0]) { spawn_say("allocation failed"); spawn_restore(original); return 1; }
+            g_spc.step = 3;
+            spawn_dispatch(kSubmitCmd | 1u);
+            return 1;
+        }
+        spawn_say("submitted");
+        spawn_restore(original);
+        return 1;
+    }
+    if (other_busy) return 0;
+    if (g_cast_pending.load()) return cast_begin();
+    if (!g_spawn_pending.load()) return 0;
+    g_spawn_pending.store(0);
+    g_spc.what = "spawn";
+    const SpawnReq& q = g_spawn;
+    // THE BLUEPRINT IS A LOADED FACTION'S UNIT SLOT, not the template in the
+    // PtrArray at 0x02150944. The command is serialized even offline
+    // (CreateUnitFactionCommand v03/v04): +0x30 goes out as the slot's +0xC
+    // (its faction) and [[slot+4]+4] (the unit id) and comes back through
+    // FUN_02002438, a search of that faction's 26 slots (+8). A template's +0xC
+    // is not a faction, so the read-back walked code (the first try). The
+    // factions are FUN_020029DC's: [0x02150968+0x40][id] for stock armies,
+    // [0x02150968+0x64][id-0x82] for custom ones; only the armies in play are
+    // loaded, so only their units can be spawned.
+    uint32_t wrapper = 0;
+    for (const uint32_t off : {0x40u, 0x64u}) {
+        const uint32_t t = bus_read_u32(0x02150968u + off);
+        const uint32_t n = off == 0x40u ? 0x82u : 0x10u;
+        for (uint32_t i = 0; spawn_ram(t) && i < n && !wrapper; ++i) {
+            const uint32_t f = bus_read_u32(t + 4u * i);
+            const uint32_t arr = spawn_ram(f) ? bus_read_u32(f + 8u) : 0u;
+            for (uint32_t k = 0; spawn_ram(arr) && k < 26u; ++k) {
+                const uint32_t s = bus_read_u32(arr + 4u * k);
+                const uint32_t rec = spawn_ram(s) ? bus_read_u32(s + 4u) : 0u;
+                if (spawn_ram(rec) && bus_read_u32(s + 0xCu) == f && bus_read_u16(rec + 4u) == (uint32_t)q.bp) {
+                    wrapper = s;
+                    break;
+                }
+            }
+        }
+    }
+    if (!wrapper) { spawn_say("no loaded army has that blueprint"); return 0; }
+    // r0: the owner's player slot, FUN_020851F8(player) = player+0x10, as
+    // FUN_020A5D50 passes it (players: [[0x0215540C]+8][owner]).
+    const uint32_t sink = spawn_player_slot(q.owner);
+    if (sink == ~0u) { spawn_say("no such player"); return 0; }
+    // Online FUN_020A5D50 issues only when this slot is the session's own
+    // (FUN_020A186C's static object, a literal at 0x020A1870: +0x70 the
+    // multiplayer flag, +0x64 the local slot); the aid keeps that rule.
+    if (spawn_not_local(sink)) { spawn_say("not the local player's (online, only your own units)"); return 0; }
+    g_spc.wrapper = wrapper;
+    spawn_save_regs();
+    // Above sp_call: the stack arguments (+0..+0xB), the position object
+    // (+0x20) and the owner byte (+0x30), all below the caller's frame.
+    const uint32_t pos = g_spc.sp_call + 0x20u, own = g_spc.sp_call + 0x30u;
+    bus_write_u32(pos + 0u, kTilePosVtable);
+    bus_write_u8(pos + 4u, (uint8_t)q.x);
+    bus_write_u8(pos + 5u, (uint8_t)q.y);
+    bus_write_u8(pos + 6u, 0u);
+    bus_write_u8(pos + 7u, 0u);
+    bus_write_u32(own, (uint32_t)(uint8_t)q.owner);
+    bus_write_u32(g_spc.sp_call + 0u, 0u);
+    bus_write_u32(g_spc.sp_call + 4u, (uint32_t)std::clamp(q.n, 1, 20));
+    bus_write_u32(g_spc.sp_call + 8u, 100u);
+    g_cpu.R[0] = sink;
+    g_cpu.R[1] = own;
+    g_cpu.R[2] = wrapper;
+    g_cpu.R[3] = pos;
+    g_spc.step = 2;
+    spawn_dispatch(kMakeSpawnCmd);
+    return 1;
+}
+
 // docs/392: the hotwired transport's occupants, one hop each (set_owner_override).
 constexpr uint32_t kKillEntity = 0x0205E78Cu;          // arm: (entity, flag)
 constexpr uint32_t kHotwireSetOwnerRet = 0x02078DE4u;  // HotWireSpell::v03's lr
@@ -4335,6 +4558,8 @@ extern "C" int ai_opp_kill_step(void (*original)(void));   // docs/414 test aid
 void view_update_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kViewUpdate);
     if (ai_opp_kill_step(original)) return;
+    // docs/469 test aid: a queued `spawn`, three calls returning into here.
+    if (spawn_step(original, g_qc.active)) return;
     if (g_mm_log > 0 && --g_mm_log == 0 && quick_log()) {
         // Where the tap left the camera and the widened surface (LB_QUICKLOG).
         int cx = 0, cy = 0, mw = 0, mh = 0;
@@ -4794,6 +5019,170 @@ constexpr uint32_t kCapMountains = 0x79u, kCapHotwire = 0x7Au, kCapEmp = 0x7Bu,
 static bool cap_flag(uint32_t record, uint32_t off) {
     return guest_ptr(record) && bus_read_u8(record + off) == 1u;
 }
+// SG-0073 (docs/470): the spell bytes' third value, 2 = always affected.
+static bool cap_always(uint32_t record, uint32_t off) {
+    return guest_ptr(record) && bus_read_u8(record + off) == 2u;
+}
+
+// ---- SG-0073 (docs/470): WRAPPERS THAT RUN CODE AFTER A CARTRIDGE FUNCTION ---
+//
+// The override calls the cartridge's function with LR pointing back at itself
+// (docs/383, as the category cloak of docs/438 does), so it sees the return,
+// with no nested guest call; the return is recognised by the stack pointer it
+// was given. Only for functions with no stack arguments.
+constexpr uint32_t kEmpCollect = 0x020775F0u;    // arm: EAttackSpell's victim collector
+constexpr uint32_t kHotwireTags = 0x020A9B7Cu;   // thumb: an entity's target tags
+struct CallWrap {
+    bool active = false, calling = false;
+    uint32_t sp_call = 0, sp = 0, lr = 0;
+    uint32_t a = 0, b = 0, c = 0;                // what the after-step needs
+    uint32_t rec[64] = {};
+    uint8_t old[64] = {};
+    int n = 0;
+};
+CallWrap g_wrap_collect, g_wrap_tags;
+
+static void wrap_start(CallWrap& w, uint32_t target_with_mode) {
+    w.lr = g_cpu.R[14];
+    w.sp = g_cpu.R[13];
+    w.sp_call = (g_cpu.R[13] - 8u) & ~7u;
+    w.active = true;
+    w.calling = true;
+    g_cpu.R[13] = w.sp_call;
+    g_cpu.R[14] = target_with_mode;   // the return lands back in the override
+    g_cpu.R[15] = target_with_mode & ~1u;
+    runtime_dispatch_with_exchange(target_with_mode);
+}
+// 1: the entry was the wrapper's own call (handled) ; 2: the function returned
+// (do the after-step, then wrap_finish) ; 0: not wrapping.
+static int wrap_state(CallWrap& w, void (*original)(void)) {
+    if (!w.active) return 0;
+    if (g_cpu.R[13] != w.sp_call) {     // another entry: not ours
+        if (original) original();
+        return 1;
+    }
+    if (w.calling) {
+        w.calling = false;
+        if (original) original();
+        return 1;
+    }
+    return 2;
+}
+static void wrap_finish(CallWrap& w) {
+    g_cpu.R[14] = w.lr;
+    g_cpu.R[13] = w.sp;
+    w.active = false;
+    lb_override_return();   // r0, the function's result, is left as it returned
+}
+
+// "EMP Disables Transports" (docs/406), the value the match runs: a replay's,
+// else the host's online, else this machine's.
+extern "C" int lb_demo_play_emp_transports(void);
+extern "C" int lb_emp_transports_live(void);
+static bool emp_transports_effective() {
+    const int played = lb_demo_play_emp_transports();
+    return (played >= 0 ? played : lb_emp_transports_live()) != 0;
+}
+
+// The collector reads each unit's category from its blueprint record
+// ([[e+0x160]+8]+0x5C): EMP (spell +0x74 clear) takes category 6, ESP takes
+// below 5 (its re-hit pass below 3 and 4). For the length of the call:
+//  - EMP: a transport (5) reads as 6 when EMP Disables Transports is on --
+//    what docs/406's byte patch did (both its sites were `cmpne r0,#5`), which
+//    an override here would bypass, so the patch now stays stock and this
+//    does it; and a unit whose EMP byte is 2 ("always") reads as 6;
+//  - ESP: a unit whose ESP byte is 2 reads as 2 when it is 5 or above.
+// Nothing to change: a pure tail call, as before.
+void emp_collect_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kEmpCollect);
+    CallWrap& w = g_wrap_collect;
+    const int st = wrap_state(w, original);
+    if (st == 1) return;
+    if (st == 2) {
+        for (int i = w.n - 1; i >= 0; --i) bus_write_u8(w.rec[i] + 0x5Cu, w.old[i]);
+        w.n = 0;
+        wrap_finish(w);
+        return;
+    }
+    const uint32_t spell = g_cpu.R[0];
+    const bool esp = guest_ptr(spell) && bus_read_u8(spell + 0x74u) != 0u;
+    const bool transports = !esp && emp_transports_effective();
+    w.n = 0;
+    const uint32_t pool = bus_read_u32(kEntityPoolPtr);
+    const uint32_t arr = guest_ptr(pool) ? bus_read_u32(pool + 8u) : 0u;
+    const int32_t cnt = guest_ptr(pool) ? (int32_t)bus_read_u32(pool + 0xCu) : 0;
+    for (int32_t i = 0; guest_ptr(arr) && i < cnt && i < 4096 && w.n < 64; ++i) {
+        const uint32_t e = bus_read_u32(arr + 4u * (uint32_t)i);
+        if (!guest_ptr(e) || !bus_read_u8(e + 0x227u)) continue;
+        const uint32_t rec = unit_blueprint(e);
+        if (!rec) continue;
+        const uint8_t cat = bus_read_u8(rec + 0x5Cu);
+        int want = -1;
+        if (esp) {
+            if (cat >= 5u && cap_always(rec, kCapEsp)) want = 2;
+        } else {
+            if (cat == 5u && transports) want = 6;
+            if (cat != 6u && cap_always(rec, kCapEmp)) want = 6;
+        }
+        if (want < 0) continue;
+        bool seen = false;
+        for (int k = 0; k < w.n; ++k) seen = seen || w.rec[k] == rec;
+        if (seen) continue;
+        w.rec[w.n] = rec;
+        w.old[w.n] = cat;
+        ++w.n;
+    }
+    if (!w.n) {
+        if (original) original();
+        return;
+    }
+    for (int i = 0; i < w.n; ++i)
+        bus_write_u8(w.rec[i] + 0x5Cu, esp ? 2u : 6u);
+    wrap_start(w, kEmpCollect);
+}
+
+// The stylus's target filter (FUN_020A9350) takes a Hotwire target only with
+// tags 0x2B (an enemy's) and 0x3B, which this function gives category 5 and 6
+// alone (docs/392); r0 is the tag bitset, r1 -> the entity's handle, r2 picks
+// the second tag set (0x3B there is 0x5A). A unit whose Hotwire byte is 2
+// ("always") gets 0x3B (0x5A) as well, after the function: nothing else of
+// its tags changes. The simulation takes any category (docs/236).
+void hotwire_tags_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kHotwireTags);
+    CallWrap& w = g_wrap_tags;
+    const int st = wrap_state(w, original);
+    if (st == 1) return;
+    if (st == 2) {
+        const uint32_t tag = w.c ? 0x5Au : 0x3Bu;
+        // Whatever it returned: the entity was checked on the way in.
+        if (check_in_ram(w.a)) {
+            const uint32_t word = w.a + 4u * (tag >> 5);
+            bus_write_u32(word, bus_read_u32(word) | (1u << (tag & 31u)));
+        }
+        wrap_finish(w);
+        return;
+    }
+    const uint32_t e = check_in_ram(g_cpu.R[1]) ? unit_resolve(g_cpu.R[1]) : 0u;
+    {
+        static const bool clog = std::getenv("LB_CAST_LOG") != nullptr;
+        static int said = 0;
+        if (clog && said < 40) {
+            ++said;
+            std::fprintf(stderr, "[lb_hwtags] r0 %08X r1 %08X r2 %u -> entity %08X always %d\n",
+                         (unsigned)g_cpu.R[0], (unsigned)g_cpu.R[1], (unsigned)g_cpu.R[2], (unsigned)e,
+                         e ? (int)cap_always(unit_blueprint(e), kCapHotwire) : -1);
+            std::fflush(stderr);
+        }
+    }
+    if (!e || !cap_always(unit_blueprint(e), kCapHotwire)) {
+        if (original) original();
+        return;
+    }
+    w.a = g_cpu.R[0];
+    w.b = g_cpu.R[1];
+    w.c = g_cpu.R[2];
+    wrap_start(w, kHotwireTags | 1u);
+}
 
 void passability_override(void) {
     // The path finder asks this for every cell it looks at, so the lifted
@@ -4819,6 +5208,18 @@ void emp_victims_override(void) {
     const uint32_t spell = g_cpu.R[0];
     const uint32_t list = guest_ptr(spell) ? bus_read_u32(spell + 0x54u) : 0u;
     const uint32_t n = guest_ptr(spell) ? bus_read_u32(spell + 0x58u) : 0u;
+    {   // LB_CAST_LOG (docs/469): each ESP/EMP tick whose victim count changed.
+        static const bool clog = std::getenv("LB_CAST_LOG") != nullptr;
+        static uint32_t last_spell = 0, last_n = ~0u;
+        if (clog && (spell != last_spell || n != last_n)) {
+            last_spell = spell;
+            last_n = n;
+            std::fprintf(stderr, "[lb_eattack] %s %08X: %u victim record(s)\n",
+                         guest_ptr(spell) && bus_read_u8(spell + 0x74u) ? "ESP" : "EMP", (unsigned)spell,
+                         (unsigned)n);
+            std::fflush(stderr);
+        }
+    }
     if (guest_ptr(list) && n <= 256u) {
         const uint32_t cap = bus_read_u8(spell + 0x74u) ? kCapEsp : kCapEmp;
         for (uint32_t i = 0; i < n; ++i) {
@@ -6874,8 +7275,9 @@ void cast_spell_override(void) {
         const bool neutral_ok = human && e &&
                                 bus_read_u8(e + 0xE4u) != caster_owner &&
                                 !owner_has_ai(bus_read_u8(e + 0xE4u));
+        // SG-0073: a unit marked Hotwire "always" is a fair target.
         if (e && cat != kCategoryTransport && cat != 6u && !neutral_ok &&
-            check_in_ram(nul)) {
+            !cap_always(unit_blueprint(e), kCapHotwire) && check_in_ram(nul)) {
             static int said = 0;
             if (said < 5) {
                 ++said;
@@ -8590,6 +8992,9 @@ const NdsDispatchEntry kOverrideTable[] = {
     /* ARM. The EMP/ESP tick's stun step: victims whose blueprint is EMP or
        ESP immune are marked done first; otherwise a pure tail call. docs/463. */
     {kEmpApply, 0u, emp_victims_override, nullptr},        /* 0x02077510 */
+    /* ARM. EAttackSpell's victim collector: transports and "always" units read
+       as the spell's category for the call (SG-0073, docs/470). */
+    {kEmpCollect, 0u, emp_collect_override, nullptr},      /* 0x020775F0 */
     {kHealTick, 0u, heal_tick_override, nullptr},          /* 0x02078770 */
     {kHotWireTick, 0u, hotwire_tick_override, nullptr},    /* 0x02078D5C */
     /* ARM. The cast validator's only caller: "Patch the glitch" refuses a
@@ -8631,6 +9036,8 @@ const NdsDispatchEntry kOverrideTable[] = {
     {kTouchRect, 1u, touch_rect_observer, nullptr},        /* 0x020A8794 */
     /* Observer only, and only speaks with LB_ORDERLOG=1. See docs/238. */
     {kMoveIssue, 1u, move_issue_observer, nullptr},        /* 0x020A8F28 */
+    /* Thumb. A Hotwire "always" unit gets the Hotwire tag (SG-0073, docs/470). */
+    {kHotwireTags, 1u, hotwire_tags_override, nullptr},    /* 0x020A9B7C */
     /* Observer only, and only speaks with LB_CLICKDISPATCH=1. Item #4. */
     {kClickDispatch, 1u, click_dispatch_observer, nullptr}, /* 0x020AA8D4 */
     /* Sign-extends the drag rect's three register arguments before the guest
@@ -8780,7 +9187,7 @@ static_assert(kRosterBuild < kPassability && kPassability < kEbpLoaded &&
               kRegisterMissions < kGfxTransfer &&
               kGfxTransfer < kImageXfer && kImageXfer < kSetOwner &&
               kSetOwner < kSetHp && kSetHp < kApplyDamage &&
-              kApplyDamage < kEmpApply && kEmpApply < kHealTick &&
+              kApplyDamage < kEmpApply && kEmpApply < kEmpCollect && kEmpCollect < kHealTick &&
               kHealTick < kHotWireTick &&
               kHotWireTick < kCastGround && kCastGround < kCastSpell &&
               kCastSpell < kTileGather &&
@@ -8788,7 +9195,7 @@ static_assert(kRosterBuild < kPassability && kPassability < kEbpLoaded &&
               kSetMusicSide < kAiQueueBuild && kAiQueueBuild < kFillWindow && kFillWindow < kMapParse &&
               kMapParse < kFloatNumber && kFloatNumber < kTouchRect &&
               kTouchRect < kMoveIssue &&
-              kMoveIssue < kClickDispatch && kClickDispatch < kSelRect &&
+              kMoveIssue < kHotwireTags && kHotwireTags < kClickDispatch && kClickDispatch < kSelRect &&
               kSelRect < kRestCheck && kRestCheck < kReadyToggle &&
               kSelRect < kMarkerPlace && kMarkerPlace < kWidgetRect &&
               kWidgetRect < kWidgetSetPos && kWidgetSetPos < kSplitArray &&
@@ -9528,6 +9935,7 @@ static int drive_entity_screen(const char* kind, int n, int* sx, int* sy, uint32
         else if (!std::strcmp(kind, "hero")) hit = cat == 0u;
         else if (!std::strcmp(kind, "bp")) hit = idx == (unsigned)n;
         else if (!std::strcmp(kind, "cat")) hit = cat == (unsigned)n;
+        else if (!std::strcmp(kind, "slot")) hit = i == n;   // the handle's high byte (lockstep: same unit everywhere)
         if (!hit) continue;
         *sx = ((int32_t)bus_read_u32(e + 0xECu) >> 12) - 29 - cx;
         *sy = ((int32_t)bus_read_u32(e + 0xF0u) >> 12) - 1 - cy;
@@ -9536,6 +9944,9 @@ static int drive_entity_screen(const char* kind, int n, int* sx, int* sy, uint32
     }
     return 0;
 }
+extern "C" void lb_touch_set_extended(int x);     /* below */
+extern "C" void lb_touch_set_extended_y(int y);
+extern "C" void lb_touch_clear_extended(void);
 extern "C" void lb_test_drive(void) {
     static const char* file = std::getenv("LB_TEST_DRIVE_FILE");
     if (!file) return;
@@ -9544,15 +9955,55 @@ extern "C" void lb_test_drive(void) {
     static int tx = 0, ty = 0;
     static char hold_kind[32] = "";   // camhold: the camera stays on this unit
     static int hold_n = 0;
+    static unsigned watch_left = 0;               // frozenwatch: frames still to watch
+    static unsigned frozen_since[4096] = {};      // per pool slot: tick+1 the freeze began, 0 none
     ++tick;
+    // `frozenwatch N` (docs/469): every frame for N frames, each entity whose
+    // order slot (+0xF8) holds a FreezeEntityCommand (vtable 0x02149C18, the
+    // ESP/EMP freeze) -- when it starts and how many frames it lasts, which
+    // a sample every few frames cannot measure.
+    if (watch_left) {
+        --watch_left;
+        const uint32_t pool = bus_read_u32(kEntityPoolPtr);
+        const uint32_t array = guest_ptr(pool) ? bus_read_u32(pool + 8u) : 0u;
+        const int32_t count = guest_ptr(pool) ? (int32_t)bus_read_u32(pool + 0xCu) : 0;
+        for (int32_t i = 0; guest_ptr(array) && i < count && i < 4096; ++i) {
+            const uint32_t e = bus_read_u32(array + (uint32_t)i * 4u);
+            const uint32_t order = guest_ptr(e) ? bus_read_u32(e + 0xF8u) : 0u;
+            const bool frozen = guest_ptr(e) && bus_read_u8(e + 0x227u) && guest_ptr(order) &&
+                                bus_read_u32(order) == 0x02149C18u;
+            if (frozen && !frozen_since[i]) {
+                frozen_since[i] = tick + 1u;
+                const uint32_t bp = unit_blueprint(e);
+                std::fprintf(stderr, "[lb_frozen] tick %u: slot %d (owner %u, bp %u) FROZEN\n", tick, i,
+                             bus_read_u8(e + 0xE4u), bp ? (unsigned)bus_read_u16(bp + 4u) : 0u);
+            } else if (!frozen && frozen_since[i]) {
+                std::fprintf(stderr, "[lb_frozen] tick %u: slot %d thawed after %u frames%s\n", tick, i,
+                             tick + 1u - frozen_since[i], guest_ptr(e) && bus_read_u8(e + 0x227u) ? "" : " (gone)");
+                frozen_since[i] = 0;
+            }
+        }
+        if (!watch_left) std::fprintf(stderr, "[lb_frozen] watch over at tick %u\n", tick);
+        std::fflush(stderr);
+    }
     if (hold_kind[0]) {
         int sx = 0, sy = 0, cx = 0, cy = 0;
         if (lb_field_camera(&cx, &cy) && drive_entity_screen(hold_kind, hold_n, &sx, &sy, nullptr))
             lb_field_camera_write(cx + sx - 128, cy + sy - 96);
     }
     if (down_left) {
-        if (--down_left == 0) nds_set_touch((uint16_t)tx, (uint16_t)ty, false);
-        else nds_set_touch((uint16_t)tx, (uint16_t)ty, true);
+        // A point past the native 256x192 goes out of band, as a mouse click
+        // on the widened field does (lb_touch_set_extended: one delivery each,
+        // so every frame of the tap sets it again).
+        if (tx < 0 || tx > 255 || ty < 0 || ty > 191) {
+            lb_touch_set_extended(tx);
+            lb_touch_set_extended_y(ty);
+        } else {
+            lb_touch_clear_extended();
+        }
+        const uint16_t nx = (uint16_t)std::clamp(tx, 0, 255), ny = (uint16_t)std::clamp(ty, 0, 191);
+        if (--down_left == 0) nds_set_touch(nx, ny, false);
+        else nds_set_touch(nx, ny, true);
         return;
     }
     if ((tick % 20u) == 0u) {
@@ -9583,7 +10034,7 @@ extern "C" void lb_test_drive(void) {
     } else if (!std::strcmp(w, "tapent")) {
         int dx = 0, dy = 0, n = 0, got = 0;
         got = std::sscanf(cmd.c_str(), "tapent %31s %d %d", k, &dx, &dy);
-        if (!std::strcmp(k, "bp") || !std::strcmp(k, "cat"))
+        if (!std::strcmp(k, "bp") || !std::strcmp(k, "cat") || !std::strcmp(k, "slot"))
             got = std::sscanf(cmd.c_str(), "tapent %31s %d %d %d", k, &n, &dx, &dy) - 1;
         int sx = 0, sy = 0;
         if (got >= 1 && drive_entity_screen(k, n, &sx, &sy, nullptr)) {
@@ -9596,6 +10047,29 @@ extern "C" void lb_test_drive(void) {
         hold_n = 0;
         if (std::sscanf(cmd.c_str(), "camhold %31s %d", k, &hold_n) >= 1) std::strcpy(hold_kind, k);
         if (!std::strcmp(k, "off")) hold_kind[0] = 0;
+    } else if (!std::strcmp(w, "spawn")) {   // spawn BP OWNER X Y [N] (tiles; docs/469)
+        int n = 1, y = 0;
+        if (std::sscanf(cmd.c_str(), "spawn %d %d %d %d %d", &a, &b, &c, &y, &n) >= 4) {
+            g_spawn.bp = a; g_spawn.owner = b; g_spawn.x = c; g_spawn.y = y; g_spawn.n = n;
+            g_spawn_pending.store(1);
+        }
+    } else if (!std::strcmp(w, "cast")) {   // cast CASTER_SLOT SPELL none | unit SLOT | pt X Y (docs/469)
+        int x2 = 0, y2 = 0;
+        char kk[16] = "";
+        if (std::sscanf(cmd.c_str(), "cast %d %d %15s %d %d", &a, &b, kk, &x2, &y2) >= 3) {
+            g_cast.caster = a;
+            g_cast.spell = b;
+            g_cast.kind = !std::strcmp(kk, "unit") ? 1 : !std::strcmp(kk, "pt") ? 0 : 2;
+            g_cast.target = x2;
+            g_cast.x = x2;
+            g_cast.y = y2;
+            g_cast_pending.store(1);
+        }
+    } else if (!std::strcmp(w, "frozenwatch")) {
+        if (std::sscanf(cmd.c_str(), "frozenwatch %d", &a) == 1 && a > 0) {
+            watch_left = (unsigned)a;
+            std::fprintf(stderr, "[lb_frozen] watching %d frames from tick %u\n", a, tick);
+        }
     } else if (!std::strcmp(w, "owner")) {
         if (std::sscanf(cmd.c_str(), "owner %d", &a) == 1 && a >= 0 && a < 8) g_drive_owner = (unsigned)a;
     } else if (!std::strcmp(w, "quick")) {
@@ -9614,12 +10088,20 @@ extern "C" void lb_test_drive(void) {
             const uint32_t bp = unit_blueprint(e);
             if (!bp) continue;
             // The handle LB_TEST_ADOPT_FILE takes: the pool index, then +0xDD.
-            std::fprintf(stderr, "[lb_drive]   %08X handle %04X bp %u cat %u screen %d,%d hp %u\n", e,
+            // "FROZEN" when its order slot (+0xF8) holds a FreezeEntityCommand
+            // (vtable 0x02149C18): an ESP or EMP victim (docs/469).
+            const uint32_t order = bus_read_u32(e + 0xF8u);
+            const bool frozen = guest_ptr(order) && bus_read_u32(order) == 0x02149C18u;
+            // A hero's mana is +0x1A2 (FUN_0207B830 spends it on a cast).
+            char mana[24] = "";
+            if (bus_read_u8(bp + 0x5Cu) == 0u)
+                std::snprintf(mana, sizeof mana, " mana %u", (unsigned)bus_read_u16(e + 0x1A2u));
+            std::fprintf(stderr, "[lb_drive]   %08X handle %04X bp %u cat %u screen %d,%d hp %u%s%s\n", e,
                          (unsigned)(((uint32_t)i << 8) | bus_read_u8(e + 0xDDu)),
                          (unsigned)bus_read_u16(bp + 4u), (unsigned)bus_read_u8(bp + 0x5Cu),
                          ((int32_t)bus_read_u32(e + 0xECu) >> 12) - 29 - cx,
                          ((int32_t)bus_read_u32(e + 0xF0u) >> 12) - 1 - cy,
-                         (unsigned)bus_read_u16(e + 0x1A0u));
+                         (unsigned)bus_read_u16(e + 0x1A0u), mana, frozen ? " FROZEN" : "");
         }
     }
 }
@@ -14893,12 +15375,14 @@ static void apply_emp_transports(void) {
     }
     if (ready != n) return;           // not loaded yet, or not this build
 
+    // SG-0073 (docs/470): the collector is now overridden (emp_collect_override),
+    // which runs the lifted, unpatched body, so the words stay stock and the
+    // wrapper does what they did. A stale patched word is put back.
     for (const HotwirePatch& p : kEmpTransports)
-        bus_write_u32(p.addr, want ? p.want : p.stock);
+        bus_write_u32(p.addr, p.stock);
     applied = want;
-    std::fprintf(stderr, "[lb_emp] EMP on transports %s (%08X)\n",
-                 want ? "ON: category 5 is collected too" : "off",
-                 kEmpTransports[0].addr);
+    std::fprintf(stderr, "[lb_emp] EMP on transports %s (the collector's wrapper)\n",
+                 want ? "ON: category 5 is collected too" : "off");
     std::fflush(stderr);
 }
 

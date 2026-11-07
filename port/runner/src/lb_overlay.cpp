@@ -309,6 +309,11 @@ struct Settings {
     // docs/453 (SG-0044): a hero stunned by ESP/EMP can still cast spells
     // (lb_patches.cpp, entity_state_override). Online, the host's.
     bool stun_cast = false;
+    // docs/469: Prevent Phantom Ties. On (default): online, every machine
+    // plays the host's cheats (BR-0011). Off: each its own, as on a DS --
+    // where two machines' Super Magic / Far Reaching differ, ESP and EMP
+    // stun for different lengths and the match splits (a phantom tie).
+    bool phantom_guard = true;
     // docs/406: the AI rebuilds its hero after every death, not once
     // (lb_patches.cpp, kAiHeroRebuild). Offline only.
     bool ai_hero_rebuild = false;
@@ -759,6 +764,8 @@ extern "C" void lb_settings_save(void) {
                   g_set.emp_transports ? "true" : "false"); o += buf;   // docs/406
     std::snprintf(buf, sizeof buf, "  \"stun_cast\": %s,\n",
                   g_set.stun_cast ? "true" : "false"); o += buf;   // docs/453
+    std::snprintf(buf, sizeof buf, "  \"phantom_guard\": %s,\n",
+                  g_set.phantom_guard ? "true" : "false"); o += buf;   // docs/469
     std::snprintf(buf, sizeof buf, "  \"ai_hero_rebuild\": %s,\n",
                   g_set.ai_hero_rebuild ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"ai_more_mines\": %s,\n",
@@ -1041,6 +1048,7 @@ extern "C" void lb_settings_load(void) {
     json_get_int(s, "hotwire_transport", &g_set.hotwire_transport);
     json_get_bool(s, "emp_transports", &g_set.emp_transports);   // docs/406
     json_get_bool(s, "stun_cast", &g_set.stun_cast);             // docs/453
+    json_get_bool(s, "phantom_guard", &g_set.phantom_guard);     // docs/469
     json_get_bool(s, "ai_hero_rebuild", &g_set.ai_hero_rebuild);
     json_get_bool(s, "ai_more_mines", &g_set.ai_more_mines);   // SG-0032
     json_get_bool(s, "ai_cross_fire", &g_set.ai_cross_fire);   // SG-0051
@@ -2942,7 +2950,7 @@ void tab_cheats() {
     // guess. Verified live: setting flags[0] revealed the whole minimap.
     // BR-0011: the host's cheats ride in the rules datagram's S page, and a
     // joiner plays with those, not its own.
-    ImGui::TextDisabled("Online, the host's cheats apply to everyone.");
+    ImGui::TextDisabled("Online, the host's cheats apply to everyone (Multiplayer: Prevent Phantom Ties).");
     ImGui::Spacing();
     const bool cheat_lock = host_locked();
     host_lock_note(cheat_lock);
@@ -3216,6 +3224,19 @@ void tab_multiplayer() {
     ImGui::Checkbox("Show the Lobby's Server", &g_set.lobby_server_label);
     help("While hosting or joined, a line in the lobby names the server it is on.");
     badge(WIRED);
+
+    // docs/469: the phantom tie. ESP's and EMP's stun length (Super Magic) and
+    // every spell's range (Far Reaching) read the machine's OWN cheat flags, so
+    // two DSes with different cheats run the same command differently.
+    ImGui::Checkbox("Prevent Phantom Ties", &g_set.phantom_guard);
+    help("A phantom tie is the two games of a match drifting apart. One cause\n"
+         "is measured: spell stun length and range follow each machine's own\n"
+         "cheats, so two players with different cheats see different fights.\n"
+         "On (default): everyone plays the host's cheats. Off: each machine\n"
+         "plays its own, as on a DS. As a host, yours applies to the lobby.");
+    badge(WIRED);
+    if (lb_rules_host_flags() >= 0)
+        ImGui::TextDisabled("In this lobby, the host's: %s", lb_phantom_guard_live() ? "On" : "Off");
 
     // docs/400: the known servers by name; Custom shows the fields.
     {
@@ -7307,6 +7328,34 @@ void bal_flag(int rec, int field, bool locked) {
     ImGui::PopID();
 }
 
+// SG-0073 (docs/470): a spell byte, Normal / Immune / Always (0, 1, 2).
+void bal_tri(int rec, int field, bool locked) {
+    static const char* const kTri[3] = {"Normal", "Immune", "Always"};
+    const int live = lb_balance_value(rec, field);
+    const int custom = lb_balance_custom_get(rec, field);
+    const int cur = live >= 0 && live <= 2 ? live : 0;
+    ImGui::PushID(rec * 32 + field);
+    if (custom >= 0) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.82f, 0.25f, 1.0f));
+    ImGui::BeginDisabled(locked || live < 0);
+    ImGui::SetNextItemWidth(84.0f);
+    if (ImGui::BeginCombo("##t", kTri[cur])) {
+        for (int s = 0; s < 3; ++s)
+            if (ImGui::Selectable(kTri[s], s == cur)) bal_set(rec, field, s);
+        ImGui::EndCombo();
+    }
+    ImGui::EndDisabled();
+    if (custom >= 0) {
+        ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered()) {
+            const int b = lb_balance_base(rec, field);
+            ImGui::SetTooltip("Yours. Original: %s. Right-click to restore.", kTri[b >= 0 && b <= 2 ? b : 0]);
+        }
+        if (!locked && ImGui::IsItemClicked(ImGuiMouseButton_Right))
+            bal_set(rec, field, -1);
+    }
+    ImGui::PopID();
+}
+
 // The lock and the hint, above each table.
 bool bal_header(bool picks = false) {
     if (!lb_patches_blueprint_base()) {
@@ -7574,7 +7623,8 @@ void tab_balance_traits() {
                 // docs/463: Mountains, Hotwire/EMP/ESP immune, Build effect.
                 for (int k = 0; k < 4; ++k) {
                     ImGui::TableNextColumn();
-                    bal_flag(rec, LB_BAL_PORT_FIELD0 + k, locked);
+                    if (k == 0) bal_flag(rec, LB_BAL_PORT_FIELD0 + k, locked);
+                    else bal_tri(rec, LB_BAL_PORT_FIELD0 + k, locked);   // SG-0073
                 }
                 ImGui::TableNextColumn();
                 bal_cell(LB_BAL_UNITS, rec, LB_BAL_PORT_FIELD0 + 4, locked);
@@ -10404,6 +10454,26 @@ extern "C" int lb_setting_stun_cast(void) {
     return forced >= 0 ? forced : (g_set.stun_cast ? 1 : 0);
 }
 
+// docs/469: Prevent Phantom Ties, this machine's choice (LB_PHANTOM_GUARD=0|1
+// forces it). What a match runs is lb_phantom_guard_live: the host's online.
+extern "C" int lb_setting_phantom_guard(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_PHANTOM_GUARD");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.phantom_guard ? 1 : 0);
+}
+
+// Joined: the host's (its flags carry LB_RULE_OWN_CHEATS when it is Off; an
+// older host never sets it, so shared cheats, as before). Not joined: this
+// machine's, which is what it sends as a host.
+extern "C" int lb_phantom_guard_live(void) {
+    const int host = lb_rules_host_flags();
+    if (host >= 0) return (host & LB_RULE_OWN_CHEATS) ? 0 : 1;
+    return lb_setting_phantom_guard();
+}
+
 // docs/408: LB_TRANSPORT_RELEASE=0|1 forces it.
 extern "C" int lb_setting_transport_release(void) {
     { LbHostSettings h; if (lb_rules_host_settings(&h) >= 0) return h.transport_release; }   // BR-0011
@@ -10460,7 +10530,8 @@ extern "C" int lb_rules_local_flags(void) {
     return (lb_setting_emp_transports() ? LB_RULE_EMP_TRANSPORTS : 0) |
            (lb_setting_creatures() ? LB_RULE_CREATURES : 0) |   // docs/410
            (lb_setting_teal() ? LB_RULE_TEAL : 0) |             // docs/412
-           (lb_setting_stun_cast() ? LB_RULE_STUN_CAST : 0);    // docs/453
+           (lb_setting_stun_cast() ? LB_RULE_STUN_CAST : 0) |   // docs/453
+           (lb_setting_phantom_guard() ? 0 : LB_RULE_OWN_CHEATS);   // docs/469
 }
 
 // docs/412: Teal team colour. LB_TEAL=0|1 forces it (LB_TEST_TEAL=1 too).
@@ -10665,7 +10736,12 @@ extern "C" int lb_setting_cheat(int index) {
     // docs/406: a replay runs on the recording's cheats (from sets=3).
     const int played = lb_demo_play_cheats();
     if (played >= 0) return (played >> index) & 1;
-    { LbHostSettings h; if (lb_rules_host_settings(&h) >= 0) return (int)((h.cheats >> index) & 1u); }   // BR-0011
+    // BR-0011: joined, the host's -- unless the host turned Prevent Phantom
+    // Ties off (docs/469), when each machine plays its own, as on a DS.
+    if (lb_phantom_guard_live()) {
+        LbHostSettings h;
+        if (lb_rules_host_settings(&h) >= 0) return (int)((h.cheats >> index) & 1u);
+    }
     if (forced & (1u << index)) return 1;
     return g_set.cheat[index] ? 1 : 0;
 }
@@ -10673,7 +10749,7 @@ extern "C" int lb_setting_cheat(int index) {
 extern "C" int lb_setting_cheat_count(void) { return kCheatCount; }
 // BR-0011: joined, the host's cheats apply and the cartridge's own are held off.
 extern "C" int lb_setting_cheats_locked(void) {
-    return lb_rules_host_settings(nullptr) >= 0 ? 1 : 0;
+    return lb_rules_host_settings(nullptr) >= 0 && lb_phantom_guard_live() ? 1 : 0;   // docs/469
 }
 
 // docs/406: the cheats as a mask, bit i = flags[i], as recordings carry them.
@@ -11169,6 +11245,7 @@ extern "C" const char* lb_net_lobby_options_json(void) {
     kv.push_back({"Transport occupants", pick(kTransport, 3, g_set.hotwire_transport)});
     kv.push_back({"Hotwire neutrals in missions", g_set.hotwire_neutrals ? "On" : "Off"});
     kv.push_back({"EMP disables transports", g_set.emp_transports ? "On" : "Off"});
+    kv.push_back({"Prevent phantom ties", g_set.phantom_guard ? "On" : "Off"});   // docs/469
     kv.push_back({"Stunned heroes can cast", g_set.stun_cast ? "On" : "Off"});
     kv.push_back({"AI rebuilds its hero", g_set.ai_hero_rebuild ? "On" : "Off"});
     kv.push_back({"AI builds more mines", g_set.ai_more_mines ? "On" : "Off"});

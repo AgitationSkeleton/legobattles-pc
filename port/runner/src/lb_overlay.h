@@ -800,6 +800,12 @@ void         lb_rules_incoming(const unsigned char* buf, int len,
 #define LB_RULE_CREATURES      0x02   /* docs/410 */
 #define LB_RULE_TEAL           0x04   /* docs/412: colour 6 is offered */
 #define LB_RULE_STUN_CAST      0x08   /* docs/453: a stunned hero can cast */
+/* docs/469: Prevent Phantom Ties OFF -- each machine plays its own cheats (the
+   cartridge's way). Set means OFF, so an older host (no bit) keeps BR-0011's
+   shared cheats, which is what it always did. */
+#define LB_RULE_OWN_CHEATS     0x10
+int          lb_setting_phantom_guard(void);   /* this machine's choice */
+int          lb_phantom_guard_live(void);      /* the host's online, else this */
 int          lb_rules_local_flags(void);   /* this machine's (lb_overlay) */
 int          lb_rules_host_flags(void);    /* the host's; -1 unless joined */
 int          lb_setting_emp_transports(void);

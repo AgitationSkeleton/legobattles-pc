@@ -611,9 +611,11 @@ const Field kFields[] = {
 // 3 for the construction style), or 0 for any other field. A template's stock
 // 0xA2 is neither, so it shows, and saves, as 0.
 int port_field_max(const char* key) {
-    if (!std::strcmp(key, "mountains") || !std::strcmp(key, "hotwire_immune") ||
-        !std::strcmp(key, "emp_immune") || !std::strcmp(key, "esp_immune"))
-        return 1;
+    if (!std::strcmp(key, "mountains")) return 1;
+    // SG-0073 (docs/470): 0 normal, 1 immune, 2 always affected.
+    if (!std::strcmp(key, "hotwire_immune") || !std::strcmp(key, "emp_immune") ||
+        !std::strcmp(key, "esp_immune"))
+        return 2;
     return !std::strcmp(key, "construction_style") ? 3 : 0;
 }
 long fold_port_value(const char* key, long v) {
@@ -624,9 +626,18 @@ const char* port_field_tip(const char* key) {
     if (!std::strcmp(key, "mountains"))
         return "Can walk over mountains and cliffs (terrain class 5), which no unit can in the\n"
                "stock game. Give it Land as well. Online, every player has the same record.";
-    if (!std::strcmp(key, "hotwire_immune")) return "The Hotwire spell cannot take this unit.";
-    if (!std::strcmp(key, "emp_immune")) return "The EMP spell skips this unit.";
-    if (!std::strcmp(key, "esp_immune")) return "The ESP spell skips this unit.";
+    if (!std::strcmp(key, "hotwire_immune"))
+        return "Normal: the stock rule (Hotwire takes an enemy transport or special).\n"
+               "Immune: the Hotwire spell cannot take this unit.\n"
+               "Always: Hotwire can take it whatever its kind.";
+    if (!std::strcmp(key, "emp_immune"))
+        return "Normal: the stock rule (EMP stuns specials).\n"
+               "Immune: the EMP spell skips this unit.\n"
+               "Always: EMP stuns it whatever its kind.";
+    if (!std::strcmp(key, "esp_immune"))
+        return "Normal: the stock rule (ESP stuns heroes, builders, foot and mounted units).\n"
+               "Immune: the ESP spell skips this unit.\n"
+               "Always: ESP stuns it whatever its kind.";
     return "The brick animation shown while this unit is trained.\n"
            "Auto: its faction's (a custom unit is Human). Skeleton is the Wizards', Alien the Aliens'.";
 }
@@ -1446,6 +1457,15 @@ bool draw_named_field(size_t i, const std::vector<Rec>& rs) {
         if (pmax == 1) {
             bool on = g_edit.field[i] == 1;
             if (ImGui::Checkbox(key, &on)) g_edit.field[i] = on ? 1 : 0;
+        } else if (pmax == 2) {   // SG-0073: Normal / Immune / Always
+            static const char* const kTri[3] = {"Normal", "Immune", "Always"};
+            const int cur = (int)std::clamp<long>(g_edit.field[i], 0, 2);
+            ImGui::SetNextItemWidth(180.0f);
+            if (ImGui::BeginCombo(key, kTri[cur])) {
+                for (int s = 0; s < 3; ++s)
+                    if (ImGui::Selectable(kTri[s], s == cur)) g_edit.field[i] = s;
+                ImGui::EndCombo();
+            }
         } else {
             static const char* const kStyle[4] = {"Auto", "Human", "Skeleton", "Alien"};
             const int cur = (int)std::clamp<long>(g_edit.field[i], 0, 3);

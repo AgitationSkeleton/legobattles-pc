@@ -601,8 +601,10 @@ const Field kFields[] = {
     {"defogged_area", 0x71, 1, 255},
     // docs/463: the port's capability bytes, in the record's padding. 1 is on;
     // a template's stock 0xA2 reads as off, and a value above `max` is clamped.
-    {"mountains", 0x79, 1, 1}, {"hotwire_immune", 0x7A, 1, 1}, {"emp_immune", 0x7B, 1, 1},
-    {"esp_immune", 0x22, 1, 1}, {"construction_style", 0x23, 1, 3},
+    // SG-0073 (docs/470): the three spell bytes are 0 normal, 1 immune, 2 always
+    // affected.
+    {"mountains", 0x79, 1, 1}, {"hotwire_immune", 0x7A, 1, 2}, {"emp_immune", 0x7B, 1, 2},
+    {"esp_immune", 0x22, 1, 2}, {"construction_style", 0x23, 1, 3},
 };
 bool name_ok(const std::string& n) {
     if (n.empty() || n.size() > 24) return false;

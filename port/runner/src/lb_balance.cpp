@@ -281,9 +281,10 @@ const BalField kUnitFields[] = {
     // lb_patches.cpp reads them (cap_flag). A value is on only at exactly 1, so
     // the stock 0xA2 reads as off/auto (lb_balance_value folds it to 0).
     {"Mountains", 0x79, 1, 0, 1},            // terrain class 5 is passable
-    {"Hotwire immune", 0x7A, 1, 0, 1},       // the Hotwire spell cannot take it
-    {"EMP immune", 0x7B, 1, 0, 1},           // the EMP (EAttackSpell, +0x74 clear) skips it
-    {"ESP immune", 0x22, 1, 0, 1},           // the ESP (EAttackSpell, +0x74 set) skips it
+    // SG-0073 (docs/470): these three are 0 normal, 1 immune, 2 always affected.
+    {"Hotwire immune", 0x7A, 1, 0, 2},       // the Hotwire spell cannot take it / always can
+    {"EMP immune", 0x7B, 1, 0, 2},           // the EMP (EAttackSpell, +0x74 clear) skips it / always takes it
+    {"ESP immune", 0x22, 1, 0, 2},           // the ESP (EAttackSpell, +0x74 set) skips it / always takes it
     {"Construction style", 0x23, 1, 0, 3},   // training effect: 0 auto, 1 human, 2 skeleton, 3 alien
 };
 constexpr int kPortField0 = 26;   // the first of them (lb_overlay.h LB_BAL_PORT_FIELD0)

@@ -31,6 +31,7 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <atomic>
 #include <map>
 #include <mutex>
@@ -3495,6 +3496,67 @@ void lb_leveledit_draw(SDL_Renderer* ren) {
         if (const char* want = std::getenv("LB_EDITOR_OPEN"))
             for (int k = 0; k < (int)(sizeof kStock / sizeof kStock[0]); ++k)
                 if (std::strcmp(kStock[k].stem, want) == 0) load_stock(k);
+        // Test aid (docs/469): LB_EDITOR_TESTMAP=<spec file> builds a small
+        // test map and saves it as a mod map, so a mechanic can be staged with
+        // the units already beside each other. One command per line:
+        //   size W H            (32..128; default 32x32)
+        //   world 0|1|2         King, Pirate, Mars
+        //   name TEXT           the level's name (default "Test Map")
+        //   start TEAM X Y      a player's start: base, barracks, farm, hero, 2 builders
+        //   ent TEAM ROLE X Y   one more unit or building; ROLE is hero builder melee
+        //                       ranged mounted transport special base harvester mine
+        //                       farm barracks factory tower tower2 tower3 shipyard
+        //   water X0 Y0 X1 Y1   a rectangle of water
+        // Each team's own blueprint for a role is what spawns (its army).
+        if (const char* spec = std::getenv("LB_EDITOR_TESTMAP")) {
+            static const char* const kRoles[] = {"hero", "builder", "melee", "ranged", "mounted",
+                                                 "transport", "special", "base", "harvester", "mine",
+                                                 "farm", "barracks", "factory", "tower", "tower2",
+                                                 "tower3", "shipyard"};
+            std::ifstream f(spec);
+            std::string line;
+            int w = 32, h = 32, world = 0;
+            std::string name = "Test Map";
+            std::vector<std::string> body;
+            while (std::getline(f, line)) {
+                char word[32] = "";
+                if (std::sscanf(line.c_str(), "%31s", word) != 1 || word[0] == '#') continue;
+                if (!std::strcmp(word, "size")) std::sscanf(line.c_str(), "size %d %d", &w, &h);
+                else if (!std::strcmp(word, "world")) std::sscanf(line.c_str(), "world %d", &world);
+                else if (!std::strcmp(word, "name") && line.size() > 5) name = line.substr(5);
+                else body.push_back(line);
+            }
+            new_map(w, h, std::clamp(world, 0, 2));
+            int made = 0;
+            for (const std::string& l : body) {
+                char word[32] = "", role[32] = "";
+                int a = 0, b = 0, c = 0, d = 0;
+                std::sscanf(l.c_str(), "%31s", word);
+                if (!std::strcmp(word, "start") && std::sscanf(l.c_str(), "start %d %d %d", &a, &b, &c) == 3) {
+                    lvl::Event e;
+                    e.ents = start_layout(b, c, a, g_doc.m.h);
+                    g_doc.m.events.push_back(std::move(e));
+                    ++made;
+                } else if (!std::strcmp(word, "ent") &&
+                           std::sscanf(l.c_str(), "ent %d %31s %d %d", &a, role, &b, &c) == 4) {
+                    for (int r = 0; r < (int)(sizeof kRoles / sizeof kRoles[0]); ++r)
+                        if (!std::strcmp(role, kRoles[r])) {
+                            const int i = loose_event(true);
+                            g_doc.m.events[i].ents.push_back(ent(b, c, a, (uint8_t)r, 1));
+                            ++made;
+                        }
+                } else if (!std::strcmp(word, "water") &&
+                           std::sscanf(l.c_str(), "water %d %d %d %d", &a, &b, &c, &d) == 4) {
+                    for (int y = std::min(b, d); y <= std::max(b, d); ++y)
+                        for (int x = std::min(a, c); x <= std::max(a, c); ++x) set_cell(x, y, kMatWater);
+                }
+            }
+            retile(0, 0, g_doc.m.w - 1, g_doc.m.h - 1);
+            std::snprintf(g_doc.name, sizeof g_doc.name, "%s", name.c_str());
+            std::fprintf(stderr, "[lb_editor] test aid: test map \"%s\" %dx%d, %d entries, %s\n", g_doc.name,
+                         g_doc.m.w, g_doc.m.h, made, save_folder() ? "saved" : "NOT saved");
+            std::fflush(stderr);
+        }
         // Test aid (BR-0039, docs/460): LB_EDITOR_GROW=WxH grows the opened map
         // to that size, its last 8 rows and columns and everything new grass
         // inside a tree border, and saves it as a mod map ("Grown WxH").
