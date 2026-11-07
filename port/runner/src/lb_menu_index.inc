@@ -57,6 +57,7 @@
 {"Enhancements", "Gameplay", "The AI Rebuilds Its Hero Every Time", "Normally the computer rebuilds its hero only once. On, it rebuilds it after every death. Free Play only."},
 {"Enhancements", "Gameplay", "The AI Builds More Mines And Bridges", "Normally the computer builds one mine and one or two bridges. On, it builds a mine at every free mine spot it can reach and up to three bridges. Free Play only."},
 {"Enhancements", "Gameplay", "The AI Builds Bridges On Any Map", "Normally the computer builds bridges only on maps that cut the land into five or more pieces, and then only when it needs one. On, it also bridges maps that do not need transports, once it has the builders, and keeps going up to eight bridg"},
+{"Enhancements", "Gameplay", "The AI Builds Shipyards On Any Map", "The computer builds a shipyard only at the map's own AI build sites, and some maps with water have none, so armies whose special units are boats (Clipper, Brickbeard's Bounty, ...) never field them there. On, such a map gets build sites bes"},
 {"Enhancements", "Gameplay", "AI Plays My Side (Spectate)", "The computer plays your side too, and you watch with the map revealed. You can still give orders. From the next battle. Free Play only, not online."},
 {"Enhancements", "Gameplay", "Make All Builders The Same", ""},
 {"Enhancements", "Gameplay", "Gold Rush target", "Bricks needed to win a Gold Rush match. Default 10,000. Online, the host's applies. Ctrl+click to type a number."},

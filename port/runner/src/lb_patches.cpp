@@ -5355,6 +5355,122 @@ void options_update_override(void) {
     if (original) original();
 }
 
+// ---- SG-0078 (docs/471): AI SHIPYARD SITES ON MAPS WITH NONE -----------------
+//
+// The AI places a shipyard (and other buildings) at a group-6 marker of the
+// map's MARK chunk: FUN_02093AF8 walks map+0x368[6] and skips sites near a
+// building of the kind or in another area. Seven stock Free Play maps with
+// water have no group-6 marker, so an army whose special units are boats
+// never builds a shipyard there. With the setting on (Free Play, offline;
+// recorded, demo kind 25), Map::LoadMarkers (0x020A3D8C, Thumb; r0 the map,
+// r1 the chunk 'MARK' 'L' id n {x,y,flag}*n ... '!') is handed a copy of the
+// chunk with a group-6 record added -- sites on tree-free land with 3+ ground
+// and 3+ water cells in their 3x3, 12 apart, up to 10, the level editor's
+// rule -- and the original runs on it unchanged; its return is moved back
+// into the real file. The copy lives in the zero run above the heap
+// (0x023F9C00, docs/412's run), claimed only while zero and cleared after.
+// A map that has any group-6 marker is untouched.
+constexpr uint32_t kMarkLoad = 0x020A3D8Cu;   // thumb
+constexpr uint32_t kMarkCopy = 0x023F9C00u;
+constexpr uint32_t kMarkCopyMax = 0x1000u;
+extern "C" int lb_demo_play_ai_shipyards(void);
+extern "C" int lb_setting_ai_shipyards(void);
+extern "C" int lb_net_guest_state(void);   /* src/lb_net.cpp */
+extern "C" int lb_ai_shipyards_live(void) {
+    if (lb_net_guest_state() > 0) return 0;
+    return lb_setting_ai_shipyards();
+}
+CallWrap g_wrap_mark;
+void mark_load_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kMarkLoad);
+    CallWrap& w = g_wrap_mark;
+    const int st = wrap_state(w, original);
+    if (st == 1) return;
+    if (st == 2) {
+        for (uint32_t i = 0; i < w.c; ++i) bus_write_u8(kMarkCopy + i, 0u);
+        g_cpu.R[0] = w.b;   // past the real chunk's '!'
+        wrap_finish(w);
+        return;
+    }
+    const int played = lb_demo_play_ai_shipyards();
+    const bool on = played >= 0 ? played != 0 : lb_ai_shipyards_live() != 0;
+    const uint32_t map = g_cpu.R[0], chunk = g_cpu.R[1];
+    if (!on || !guest_ptr(map) || !guest_ptr(chunk)) {
+        if (original) original();
+        return;
+    }
+    // Walk the real chunk: its end, and whether group 6 has any marker.
+    uint32_t q = chunk + 4u;
+    bool has6 = false;
+    while (bus_read_u8(q) != 0x21u && q - chunk < kMarkCopyMax) {
+        const uint32_t id = bus_read_u8(q + 1u), n = bus_read_u8(q + 2u);
+        if (id == 6u && n) has6 = true;
+        q += 3u + 3u * n;
+    }
+    const uint32_t end = q;   // the '!'
+    if (has6 || bus_read_u8(end) != 0x21u) {
+        if (original) original();
+        return;
+    }
+    // Sites, from the planes LoadTerrain already filled (A at map+0x2E8;
+    // classes 0 grass, 1 trees, 2 stone, 3 water, 5 mountain).
+    const int w8 = bus_read_u8(map + 0x14u), h8 = bus_read_u8(map + 0x15u);
+    const uint32_t A = bus_read_u32(map + 0x2E8u);
+    std::vector<std::pair<int, int>> sites;
+    if (guest_ptr(A) && w8 > 2 && h8 > 2) {
+        auto a = [&](int x, int y) { return (int)bus_read_u8(A + (uint32_t)(y * w8 + x)); };
+        for (int y = 1; y < h8 - 1 && sites.size() < 10; ++y)
+            for (int x = 1; x < w8 - 1 && sites.size() < 10; ++x) {
+                const int c = a(x, y);
+                if (c != 0 && c != 2) continue;   // tree-free land
+                int ground = 0, water = 0;
+                for (int dy = -1; dy <= 1; ++dy)
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        const int k = a(x + dx, y + dy);
+                        ground += k == 0 || k == 2;
+                        water += k == 3;
+                    }
+                if (ground < 3 || water < 3) continue;
+                bool near = false;
+                for (const auto& s : sites) near = near || (std::abs(s.first - x) < 12 && std::abs(s.second - y) < 12);
+                if (!near) sites.push_back({x, y});
+            }
+    }
+    const uint32_t size = end - chunk;   // tag and records, without the '!'
+    const uint32_t need = size + 3u + 3u * (uint32_t)sites.size() + 1u;
+    bool free_block = need <= kMarkCopyMax;
+    for (uint32_t i = 0; free_block && i < need; ++i) free_block = bus_read_u8(kMarkCopy + i) == 0u;
+    if (sites.empty() || !free_block) {
+        static bool said = false;
+        if (!said) {
+            said = true;
+            std::fprintf(stderr, "[lb_yards] %s\n", sites.empty() ? "no water beside land: no sites added"
+                                                                  : "scratch block in use: no sites added");
+            std::fflush(stderr);
+        }
+        if (original) original();
+        return;
+    }
+    for (uint32_t i = 0; i < size; ++i) bus_write_u8(kMarkCopy + i, (uint8_t)bus_read_u8(chunk + i));
+    uint32_t o = kMarkCopy + size;
+    bus_write_u8(o++, (uint8_t)bus_read_u8(chunk + 4u) == 0x21u ? 0x4Cu : (uint8_t)bus_read_u8(chunk + 4u));   // 'L'
+    bus_write_u8(o++, 6u);
+    bus_write_u8(o++, (uint8_t)sites.size());
+    for (const auto& s : sites) {
+        bus_write_u8(o++, (uint8_t)s.first);
+        bus_write_u8(o++, (uint8_t)s.second);
+        bus_write_u8(o++, 0u);
+    }
+    bus_write_u8(o++, 0x21u);
+    std::fprintf(stderr, "[lb_yards] the map has no AI build sites (group 6): %d added beside water\n",
+                 (int)sites.size());
+    std::fflush(stderr);
+    w.b = end + 1u;
+    w.c = need;
+    g_cpu.R[1] = kMarkCopy;
+    wrap_start(w, kMarkLoad | 1u);
+}
+
 void emp_victims_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kEmpApply);
     const uint32_t spell = g_cpu.R[0];
@@ -9281,6 +9397,7 @@ const NdsDispatchEntry kOverrideTable[] = {
     {kMapParse, 1u, map_parse_override, nullptr},          /* 0x020A369C */
     /* Thumb. SG-0077: spots 11..32 of a map's mines. */
     {kMinesLoad, 1u, mines_load_override, nullptr},        /* 0x020A3B5C */
+    {kMarkLoad, 1u, mark_load_override, nullptr},          /* 0x020A3D8C */
     {kMinesGet, 1u, mines_get_override, nullptr},          /* 0x020A3F84 */
     /* Thumb. The floating number: a Gold Brick's, else a pure tail call.
        docs/416. */
@@ -9449,7 +9566,7 @@ static_assert(kRosterBuild < kPassability && kPassability < kOccLayers && kOccLa
               kCastSpell < kTileGather &&
               kTileGather < kTeamAddBricks && kTeamAddBricks < kAiMineScore && kAiMineScore < kSetMusicSide &&
               kSetMusicSide < kAiQueueBuild && kAiQueueBuild < kFillWindow && kFillWindow < kMapParse &&
-              kMapParse < kMinesLoad && kMinesLoad < kMinesGet && kMinesGet < kFloatNumber && kFloatNumber < kTouchRect &&
+              kMapParse < kMinesLoad && kMinesLoad < kMarkLoad && kMarkLoad < kMinesGet && kMinesGet < kFloatNumber && kFloatNumber < kTouchRect &&
               kTouchRect < kMoveIssue &&
               kMoveIssue < kHotwireTags && kHotwireTags < kClickDispatch && kClickDispatch < kSelRect &&
               kSelRect < kRestCheck && kRestCheck < kOptionsUpdate && kOptionsUpdate < kReadyToggle &&
@@ -15883,6 +16000,31 @@ static void apply_ai_hero_rebuild(void) {
     std::fflush(stderr);
 }
 
+// SG-0078 (docs/471): the shipyard planner FUN_0209578C also wants 4 or more
+// group-6 sites (`cmp r0,#4; bcs` at 0x020957E0/E2, else return 0). With the
+// setting on, any number passes (`b`, the same target); with none, the site
+// search FUN_02093AF8 fails as it always did. The sites themselves are
+// mark_load_override's. Free Play only; demo kind 25.
+constexpr HalfWordPatch kAiShipyards = {0x020957E2u, 0xD202u, 0xE002u};
+extern "C" int lb_demo_play_ai_shipyards(void);
+extern "C" int lb_ai_shipyards_live(void);
+static void apply_ai_shipyards(void) {
+    static int applied = 0;
+    static unsigned gen = 0;
+    if (gen != g_boot_gen) { gen = g_boot_gen; applied = 0; }
+    const int played = lb_demo_play_ai_shipyards();
+    const int want = (played >= 0 ? played : lb_ai_shipyards_live()) ? 1 : 0;
+    if (want == applied) return;
+    const HalfWordPatch& q = kAiShipyards;
+    const uint32_t got = bus_read_u16(q.addr);
+    if (got != q.stock && got != q.want) return;   // not loaded, or not this build
+    bus_write_u16(q.addr, want ? q.want : q.stock);
+    applied = want;
+    std::fprintf(stderr, "[lb_yards] the AI builds shipyards with fewer than 4 sites: %s (%08X)\n",
+                 want ? "ON" : "off", q.addr);
+    std::fflush(stderr);
+}
+
 // BR-0040 (docs/464): A HERO ITEM THAT CANNOT BE BUILT STOPS THE BUILDERS.
 // FUN_02094A9C wipes L28 (FUN_0208CB5C: the available AND the used vector)
 // and queues the hero item (priority 100) alone; the builder planner
@@ -18726,6 +18868,7 @@ extern "C" void lb_patches_on_vblank(void) {
     lb_ar_apply_frame();   // SG-0035: Action Replay codes (recordings do not carry them)
     apply_ai_cheats();
     apply_ai_hero_rebuild();
+    apply_ai_shipyards();   /* SG-0078 */
     apply_ai_hero_unstick();          // BR-0040
     apply_ai_more_mines();            // SG-0032, SG-0071
     apply_ai_hero_multi();

@@ -255,6 +255,7 @@ int g_rec_stun = 0, g_demo_stun = 0;       // kind 21, docs/453: stunned heroes 
 int g_rec_mines = 0, g_demo_mines = 0;     // kind 22, SG-0032: the AI builds more mines (0 stock)
 int g_rec_cross = 0, g_demo_cross = 0;     // kind 23, SG-0051: the computers hunt each other (0 stock)
 int g_rec_bridges = 0, g_demo_bridges = 0; // kind 24, SG-0071: the AI bridges any map (0 stock)
+int g_rec_yards = 0, g_demo_yards = 0;     // kind 25, SG-0078: AI shipyard sites on any map (0 stock)
 // BR-0011: kinds 14 and 15, the attack boost and the healing fix, from
 // `sets=4`; a recording before it leaves them to this machine (-1).
 int g_rec_atk = 0, g_demo_atk = -1;
@@ -326,6 +327,7 @@ bool load(const char* path) {
     g_demo_mines = 0;             // and the stock one mine (SG-0032)
     g_demo_cross = 0;             // and computers that hunt only the player (SG-0051)
     g_demo_bridges = 0;           // and bridges only where the AI needs them (SG-0071)
+    g_demo_yards = 0;             // and the map's own AI sites (SG-0078)
     g_demo_atk = g_demo_heal = -1;   // BR-0011: and this machine's
     g_demo_fw = g_demo_fh = 0;    // docs/409: and the window's own field
     g_demo_has_rtc = false;       // and the clock the replaying run has
@@ -629,6 +631,9 @@ extern "C" int lb_demo_play_ai_cross(void) {   // SG-0051
 extern "C" int lb_demo_play_ai_bridges(void) {   // SG-0071
     return (g_mode == Mode::Play || g_replay_done) ? g_demo_bridges : -1;
 }
+extern "C" int lb_demo_play_ai_shipyards(void) {   // SG-0078
+    return (g_mode == Mode::Play || g_replay_done) ? g_demo_yards : -1;
+}
 extern "C" int lb_demo_play_ai_opp(void) {   // docs/414
     return (g_mode == Mode::Play || g_replay_done) ? g_demo_aiopp : -1;
 }
@@ -696,6 +701,7 @@ extern "C" void lb_demo_start_record(const char* path) {
     g_rec_mines = 0;              // SG-0032
     g_rec_cross = 0;              // SG-0051
     g_rec_bridges = 0;            // SG-0071
+    g_rec_yards = 0;              // SG-0078
     g_rec_atk = g_rec_heal = 0;
     g_rec_fw = g_rec_fh = 0;      // docs/409: the first frame writes the size
     // docs/396: a session on the PC's clock records the guest clock as it
@@ -882,7 +888,7 @@ extern "C" void lb_demo_tick(void) {
             emit(e);
         }
         // docs/388: and the settings a replay takes from the recording.
-        const int now[25] = {lb_setting_force_tileset(),
+        const int now[26] = {lb_setting_force_tileset(),
                             lb_setting_level_palette(),
                             lb_setting_music_mode(),
                             lb_cage_fix_live() ? 1 : 0,
@@ -906,16 +912,17 @@ extern "C" void lb_demo_tick(void) {
                             lb_stun_cast_live(),                    // docs/453
                             lb_ai_more_mines_live(),                // SG-0032
                             lb_ai_cross_live(),                     // SG-0051
-                            lb_ai_bridges_live()};                  // SG-0071
-        int* const was[25] = {&g_rec_tileset, &g_rec_palette, &g_rec_music,
+                            lb_ai_bridges_live(),                   // SG-0071
+                            lb_ai_shipyards_live()};                // SG-0078
+        int* const was[26] = {&g_rec_tileset, &g_rec_palette, &g_rec_music,
                               &g_rec_cage, &g_rec_ownhero, &g_rec_oppdef,
                               &g_rec_hwtransport, &g_rec_hwmode, &g_rec_emp,
                               &g_rec_cheats, &g_rec_aicheats, &g_rec_aihero,
                               &g_rec_trel, &g_rec_crea, &g_rec_atk, &g_rec_heal,
                               &g_rec_cslot, &g_rec_aiopp, &g_rec_gold,
                               &g_rec_tabs, &g_rec_hwneut, &g_rec_stun, &g_rec_mines, &g_rec_cross,
-                              &g_rec_bridges};
-        for (int k = 0; k < 25; ++k) {
+                              &g_rec_bridges, &g_rec_yards};
+        for (int k = 0; k < 26; ++k) {
             if (now[k] == *was[k]) continue;
             *was[k] = now[k];
             const Event e{g_frame, 's', k, now[k], 0, 0};
@@ -979,6 +986,7 @@ extern "C" void lb_demo_tick(void) {
             else if (e.a == 22) g_demo_mines = e.b ? 1 : 0;   // SG-0032
             else if (e.a == 23) g_demo_cross = e.b ? 1 : 0;   // SG-0051
             else if (e.a == 24) g_demo_bridges = e.b ? 1 : 0;   // SG-0071
+            else if (e.a == 25) g_demo_yards = e.b ? 1 : 0;     // SG-0078
             else if (e.a == 17) g_demo_aiopp = (e.b & 0x7FFC) | ((e.b & 3) > 1 ? 1 : (e.b & 3));   // at most one extra (docs/414)   // docs/414
         } else if (e.kind == 'b') {   /* docs/404: a Balance tab value */
             lb_balance_custom_play_set(e.a, e.b, e.c);

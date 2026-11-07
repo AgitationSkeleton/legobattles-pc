@@ -842,6 +842,9 @@ int          lb_demo_play_ai_opp(void);
 int          lb_setting_ai_bridges(void);      /* SG-0071 */
 int          lb_demo_play_ai_bridges(void);
 int          lb_ai_bridges_live(void);
+int          lb_setting_ai_shipyards(void);    /* SG-0078 */
+int          lb_demo_play_ai_shipyards(void);
+int          lb_ai_shipyards_live(void);
 int          lb_setting_ai_cross_fire(void);   /* SG-0051 */
 int          lb_demo_play_ai_cross(void);
 int          lb_ai_cross_live(void);

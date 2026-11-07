@@ -325,6 +325,7 @@ struct Settings {
     bool ai_more_mines = false;     // SG-0032 (docs/444): the AI builds more mines and bridges
     bool ai_cross_fire = false;     // SG-0051 (docs/457): the computers attack each other
     bool ai_bridges = false;        // SG-0071 (docs/464): the AI builds bridges even where it needs none
+    bool ai_shipyards = false;      // SG-0078 (docs/471): AI build sites beside water on maps with none
     // docs/408: a hotwired transport stops taking its old owner's orders
     // (lb_patches.cpp, release_stolen_transport).
     bool transport_release = false;
@@ -784,6 +785,8 @@ extern "C" void lb_settings_save(void) {
                   g_set.ai_cross_fire ? "true" : "false"); o += buf;   // SG-0051
     std::snprintf(buf, sizeof buf, "  \"ai_bridges\": %s,\n",
                   g_set.ai_bridges ? "true" : "false"); o += buf;   // SG-0071
+    std::snprintf(buf, sizeof buf, "  \"ai_shipyards\": %s,\n",
+                  g_set.ai_shipyards ? "true" : "false"); o += buf;   // SG-0078
     std::snprintf(buf, sizeof buf, "  \"transport_release\": %s,\n",
                   g_set.transport_release ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"creatures\": %s,\n",
@@ -1078,6 +1081,7 @@ extern "C" void lb_settings_load(void) {
     json_get_bool(s, "ai_more_mines", &g_set.ai_more_mines);   // SG-0032
     json_get_bool(s, "ai_cross_fire", &g_set.ai_cross_fire);   // SG-0051
     json_get_bool(s, "ai_bridges", &g_set.ai_bridges);         // SG-0071
+    json_get_bool(s, "ai_shipyards", &g_set.ai_shipyards);     // SG-0078
     json_get_bool(s, "transport_release", &g_set.transport_release);
     json_get_bool(s, "creatures", &g_set.creatures);   // docs/410
     json_get_bool(s, "creature_tint", &g_set.creature_tint);   // docs/437
@@ -1871,6 +1875,15 @@ void tab_enhancements() {
          "On, it also bridges maps that do not need transports, once it\n"
          "has the builders, and keeps going up to eight bridges. Free\n"
          "Play only.");
+    badge(WIRED);
+    // SG-0078 (docs/471): the AI's shipyard needs a group-6 build site; seven
+    // stock Free Play maps with water have none.
+    ImGui::Checkbox("The AI Builds Shipyards On Any Map", &g_set.ai_shipyards);
+    help("The computer builds a shipyard only at the map's own AI build\n"
+         "sites, and some maps with water have none, so armies whose\n"
+         "special units are boats (Clipper, Brickbeard's Bounty, ...)\n"
+         "never field them there. On, such a map gets build sites beside\n"
+         "its water. Free Play only.");
     badge(WIRED);
     // SG-0002: AI vs AI.
     ImGui::Checkbox("AI Plays My Side (Spectate)", &g_set.ai_spectate);
@@ -10613,6 +10626,16 @@ extern "C" int lb_setting_ai_more_mines(void) {
     return forced >= 0 ? forced : (g_set.ai_more_mines ? 1 : 0);
 }
 
+// SG-0078: LB_AI_SHIPYARDS=0|1 forces it.
+extern "C" int lb_setting_ai_shipyards(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_AI_SHIPYARDS");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.ai_shipyards ? 1 : 0);
+}
+
 // SG-0071: LB_AI_BRIDGES=0|1 forces it.
 extern "C" int lb_setting_ai_bridges(void) {
     static int forced = -2;
@@ -11371,6 +11394,7 @@ extern "C" const char* lb_net_lobby_options_json(void) {
     kv.push_back({"AI builds more mines", g_set.ai_more_mines ? "On" : "Off"});
     kv.push_back({"Computers attack each other", g_set.ai_cross_fire ? "On" : "Off"});   // SG-0051
     kv.push_back({"AI bridges any map", g_set.ai_bridges ? "On" : "Off"});               // SG-0071
+    kv.push_back({"AI shipyards any map", g_set.ai_shipyards ? "On" : "Off"});           // SG-0078
     kv.push_back({"Hotwired transports leave", g_set.transport_release ? "On" : "Off"});
     kv.push_back({"Attack boost reaches ranged",
                   g_set.attack_boost_ranged >= 2 ? "On, no blast"
