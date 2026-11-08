@@ -65,6 +65,7 @@ void lb_teams_army_scroll(int rows);
 int lb_widemap_cam_px(int* x, int* y);     /* src/lb_widemap.cpp */
 }
 namespace { void draw_army_scroll(); }   // docs/450, below
+namespace { void draw_store_prices(); }  // SG-0099 (docs/482), below
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -356,6 +357,26 @@ struct Settings {
     // 0 the default, else 1 + the Team Builder slot (0 Hero, 2 Close Combat,
     // 3 Ranged, 4 Mounted, 5/6/7 Special One/Two/Three). Online, the host's.
     int  creature_slot[4] = {0, 0, 0, 0};
+    // SG-0098 (docs/480): each creature's "Unlocked with" (Wolf, Robot, Shark,
+    // Monkey, creature_slot's order): a stock unit whose unlock it follows on
+    // the army screen, as a custom unit's unlocked_with does (SG-0096); 0
+    // always available (the default, as before). This machine's own: it only
+    // limits what this save may pick, never the simulation.
+    int  creature_unlock[4] = {0, 0, 0, 0};
+    // SG-0102 (docs/480): studs credited to the profile for a won Free Play
+    // battle (0 off, the default). Offline, not spectated, no cheat on.
+    int  free_play_win_studs = 0;
+    // SG-0081 (docs/483): the start the player's army takes in Free Play,
+    // 0 Automatic (the game's own deal, the default) or start 1..4.
+    int  start_position = 0;
+    // SG-0104 (docs/480): stock units the Randomizer opponent never fields,
+    // "bp,bp,..." like banned_units. Free Play only; empty = vanilla.
+    char random_army_bans[512] = "";
+    // SG-0099 (docs/482): LEGO Store prices of your own, "unit:price,..." by
+    // stock unit index (its minifig card's price, +0x68). Empty: the
+    // cartridge's prices. Front end only: it changes what the store asks
+    // from this save's studs, never a battle.
+    char store_prices[1024] = "";
     int  attack_boost_ranged = 0;  // 0 vanilla, 1 ranged units benefit too
     bool fix_hotwired_healing = false;
     // docs/385: the monkey cage (cosmetic, this machine only), on by default.
@@ -443,6 +464,8 @@ struct Settings {
     int  cunit_volume = 100;       // BR-0047: custom unit sounds, percent of the normalised level
     bool own_research_sound = true;   // BR-0067: research chimes only for this player's own army
     bool hide_fogged_specials = true; // BR-0063: enemy specials hidden while their cell is fogged
+    bool big_sprite_pool = true;      // docs/479: sheets past the DS's 33 slots get slots of their own
+    bool native_logic = true;         // docs/479: hot cartridge routines as host code (game speed)
 
     // Cosmetic, CLIENT-LOCAL (docs/356): what this machine's text calls the
     // Space Criminal Leader -- 0 the cartridge's own words, 1 Kranxx,
@@ -818,6 +841,15 @@ extern "C" void lb_settings_save(void) {
     std::snprintf(buf, sizeof buf, "  \"creature_slots\": [%d, %d, %d, %d],\n",
                   g_set.creature_slot[0], g_set.creature_slot[1],
                   g_set.creature_slot[2], g_set.creature_slot[3]); o += buf;   // docs/436
+    std::snprintf(buf, sizeof buf, "  \"creature_unlock_with\": [%d, %d, %d, %d],\n",
+                  g_set.creature_unlock[0], g_set.creature_unlock[1],
+                  g_set.creature_unlock[2], g_set.creature_unlock[3]); o += buf;   // SG-0098
+    std::snprintf(buf, sizeof buf, "  \"free_play_win_studs\": %d,\n",
+                  g_set.free_play_win_studs); o += buf;                            // SG-0102
+    std::snprintf(buf, sizeof buf, "  \"start_position\": %d,\n",
+                  g_set.start_position); o += buf;                                 // SG-0081
+    json_put_str(o, "random_army_bans", g_set.random_army_bans, true);             // SG-0104
+    json_put_str(o, "store_prices", g_set.store_prices, true);                     // SG-0099
     std::snprintf(buf, sizeof buf, "  \"attack_boost_ranged\": %d,\n",
                   g_set.attack_boost_ranged); o += buf;
     std::snprintf(buf, sizeof buf, "  \"fix_hotwired_healing\": %s,\n",
@@ -877,6 +909,10 @@ extern "C" void lb_settings_save(void) {
                   g_set.own_research_sound ? "true" : "false"); o += buf;   // BR-0067
     std::snprintf(buf, sizeof buf, "  \"hide_fogged_specials\": %s,\n",
                   g_set.hide_fogged_specials ? "true" : "false"); o += buf;   // BR-0063
+    std::snprintf(buf, sizeof buf, "  \"big_sprite_pool\": %s,\n",
+                  g_set.big_sprite_pool ? "true" : "false"); o += buf;   // docs/479
+    std::snprintf(buf, sizeof buf, "  \"native_logic\": %s,\n",
+                  g_set.native_logic ? "true" : "false"); o += buf;      // docs/479
     std::snprintf(buf, sizeof buf, "  \"criminal_leader_name\": %d,\n",
                   g_set.criminal_leader_name); o += buf;
     std::snprintf(buf, sizeof buf, "  \"plantation_name\": %d,\n",
@@ -1116,6 +1152,15 @@ extern "C" void lb_settings_load(void) {
     json_get_ints(s, "creature_slots", g_set.creature_slot, 4);   // docs/436
     for (int& c : g_set.creature_slot)
         if (c < 0 || c > 8 || c <= 2) c = 0;   // 1 + slot; Hero (1) and Builder (2) are not offered
+    json_get_ints(s, "creature_unlock_with", g_set.creature_unlock, 4);   // SG-0098
+    for (int& u : g_set.creature_unlock)
+        if (u < 0 || u > 181) u = 0;   // a stock unit (the getter refuses a creature)
+    json_get_int(s, "free_play_win_studs", &g_set.free_play_win_studs);   // SG-0102
+    g_set.free_play_win_studs = std::max(0, std::min(10000, g_set.free_play_win_studs));
+    json_get_int(s, "start_position", &g_set.start_position);             // SG-0081
+    if (g_set.start_position < 0 || g_set.start_position > 4) g_set.start_position = 0;
+    json_get_str(s, "random_army_bans", g_set.random_army_bans, sizeof g_set.random_army_bans);   // SG-0104
+    json_get_str(s, "store_prices", g_set.store_prices, sizeof g_set.store_prices);   // SG-0099
     json_get_int(s, "attack_boost_ranged", &g_set.attack_boost_ranged);
     if (g_set.attack_boost_ranged == 1) g_set.attack_boost_ranged = 2;   // BR-0019: the old "On"
     json_get_bool(s, "fix_hotwired_healing", &g_set.fix_hotwired_healing);
@@ -1155,6 +1200,8 @@ extern "C" void lb_settings_load(void) {
     json_get_int(s, "cunit_volume", &g_set.cunit_volume);   // BR-0047
     json_get_bool(s, "own_research_sound", &g_set.own_research_sound);   // BR-0067
     json_get_bool(s, "hide_fogged_specials", &g_set.hide_fogged_specials);   // BR-0063
+    json_get_bool(s, "big_sprite_pool", &g_set.big_sprite_pool);             // docs/479
+    json_get_bool(s, "native_logic", &g_set.native_logic);                   // docs/479
     g_set.cunit_volume = std::max(0, std::min(200, g_set.cunit_volume));
     // A file written before this key existed keeps the default (off).
     json_get_int(s, "criminal_leader_name", &g_set.criminal_leader_name);
@@ -1627,6 +1674,14 @@ void tab_display() {
          "fog. On, one is drawn only when the ground it stands on is in sight,\n"
          "as for every other unit. Off, as on the DS. Only you see it.");
     badge(WIRED);
+    // docs/479: the DS has 33 unit sprite slots; a big match can want more.
+    ImGui::Checkbox("Larger Sprite Pool", &g_set.big_sprite_pool);
+    help("The DS has room for 33 unit sprite sheets. With three armies, creatures\n"
+         "or custom units a match can need more, and the game then drew the units\n"
+         "that did not fit with another unit's sprites. On, every sheet gets a slot\n"
+         "of its own. Off, as on the DS: the armies share the sheets they have in\n"
+         "common. Takes effect at the next battle. Only you see it.");
+    badge(WIRED);
 
     // docs/434 (BR-0003): the 3D layer drawn at a higher resolution, so the
     // models are sharp when the picture is shown larger than the game draws it.
@@ -1887,6 +1942,36 @@ void tab_enhancements() {
          "Custom is the Team Builder's enemy team; Randomizer is a new\n"
          "army each match.");
     badge(WIRED);
+    // SG-0105 (docs/480): the Random map entry of docs/429, also offered here
+    // beside the other Free Play choices (the same setting as Balance > Ban
+    // Maps' "Add Random to the map lists").
+    ImGui::Checkbox("Random Map in the Map Lists", &g_set.random_maps);
+    help("Adds \"Random\" at the top of the Free Play and multiplayer map\n"
+         "lists. It picks one of the listed maps that isn't banned (Balance >\n"
+         "Ban Maps), mod maps included. Online, the host picks and everyone\n"
+         "plays that map. Same setting as Ban Maps' \"Add Random\".");
+    badge(WIRED);
+    // SG-0102 (docs/480): studs for a won Free Play battle.
+    ImGui::SetNextItemWidth(120.0f * g_ui_scale);
+    if (ImGui::InputInt("Studs for Free Play Wins", &g_set.free_play_win_studs, 50, 500))
+        g_set.free_play_win_studs = std::max(0, std::min(10000, g_set.free_play_win_studs));
+    help("Adds this many studs to your profile each time you win a Free Play\n"
+         "battle. 0: off (the game gives none). Not given online, while the\n"
+         "computer plays your side, or with any red brick cheat on. The game\n"
+         "holds at most 65,535 studs.");
+    badge(WIRED);
+    draw_store_prices();   // SG-0099 (docs/482)
+    // SG-0081 (docs/483): stage 3 of the match setup deals the starts.
+    {
+        const char* starts[] = {"Automatic", "Start 1", "Start 2", "Start 3", "Start 4"};
+        if (g_set.start_position < 0 || g_set.start_position > 4) g_set.start_position = 0;
+        ImGui::SetNextItemWidth(160.0f * g_ui_scale);
+        ImGui::Combo("Start Position", &g_set.start_position, starts, IM_ARRAYSIZE(starts));
+        help("Where your army starts in Free Play. Automatic: the game's own\n"
+             "choice. A start the map does not have becomes its last one.\n"
+             "The computers take the other starts. Not used online.");
+        badge(WIRED);
+    }
     ImGui::Separator();
 
     // docs/406: FUN_0208A5C0 freed a dead hero's build record from the army
@@ -1955,6 +2040,24 @@ void tab_enhancements() {
          "builds a transport only when it needs to cross water, and uses\n"
          "the slot for a siege unit instead. Transports it already has are\n"
          "kept. Free Play only.");
+    badge(WIRED);
+    // docs/479: late in a big match the cartridge needs more than the DS's
+    // processor, and the whole game slows down (docs/475). The hottest
+    // routines run as PC code, with the same results.
+    ImGui::Checkbox("Native Game Logic", &g_set.native_logic);
+    help("Late in big battles the game needs more than the DS's processor\n"
+         "and runs slower than normal speed. On, the busiest parts of the\n"
+         "game's own logic run as PC code, with exactly the same results,\n"
+         "so the game keeps its normal speed. Off, the DS's timing.\n"
+         "Online, the host's choice is used. Replays keep the choice they\n"
+         "were recorded with.");
+    {
+        const int live = lb_native_logic_live();
+        if (live != (g_set.native_logic ? 1 : 0)) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("(host: %s)", live ? "On" : "Off");
+        }
+    }
     badge(WIRED);
     // SG-0002: AI vs AI.
     ImGui::Checkbox("AI Plays My Side (Spectate)", &g_set.ai_spectate);
@@ -4173,6 +4276,154 @@ void team_screen(LbTeam* team, int* slot, float s) {
     ImGui::Dummy(ImVec2(236.0f * s, 1.0f));
 }
 
+// SG-0099 (docs/482): the store_prices list, parsed. unit -> price.
+std::vector<std::pair<int, int>> store_prices_parse(const char* text) {
+    std::vector<std::pair<int, int>> v;
+    for (const char* p = text; p && *p;) {
+        int unit = -1, price = -1, used = 0;
+        if (std::sscanf(p, "%d:%d%n", &unit, &price, &used) == 2 && unit >= 0 && unit < 182 &&
+            price >= 1 && price <= 65535) {
+            bool dup = false;
+            for (auto& e : v)
+                if (e.first == unit) { e.second = price; dup = true; }
+            if (!dup) v.push_back({unit, price});
+        }
+        while (*p && *p != ',') ++p;
+        if (*p) ++p;
+    }
+    return v;
+}
+
+// SG-0099 (docs/482): a price of your own for each unit the LEGO Store sells.
+// The store reads its minifig card's +0x68 (FUN_020CEE4C's test,
+// FUN_020CEFB8's purchase); lb_patches.cpp writes these there.
+void draw_store_prices() {
+    if (!ImGui::CollapsingHeader("LEGO Store Prices")) return;
+    help("What the LEGO Store asks for each unit, in studs. Empty: the game's\n"
+         "price. Applies to the store screens at once. Only this save's studs\n"
+         "are affected, so it needs no host and no replay. Units with no\n"
+         "price in the game (the King's starting army) are not listed.");
+    badge(WIRED);
+    std::vector<std::pair<int, int>> list = store_prices_parse(g_set.store_prices);
+    bool changed = false;
+    int shown = 0;
+    if (ImGui::BeginTable("##storeprices", 3,
+                          ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
+                              ImGuiTableFlags_SizingFixedFit,
+                          ImVec2(0.0f, 260.0f * g_ui_scale))) {
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableSetupColumn("Unit");
+        ImGui::TableSetupColumn("Game's price");
+        ImGui::TableSetupColumn("Yours");
+        ImGui::TableHeadersRow();
+        for (int unit = 0; unit < 182; ++unit) {
+            const int stock = lb_store_stock_price(unit);
+            if (stock <= 0) continue;
+            ++shown;
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(lb_teams_unit_name(unit));
+            ImGui::TableNextColumn();
+            ImGui::Text("%d", stock);
+            ImGui::TableNextColumn();
+            auto it = std::find_if(list.begin(), list.end(), [&](const std::pair<int, int>& e) { return e.first == unit; });
+            int v = it != list.end() ? it->second : 0;
+            ImGui::PushID(unit);
+            ImGui::SetNextItemWidth(90.0f * g_ui_scale);
+            if (ImGui::InputInt("##sp", &v, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue)) {
+                v = std::max(0, std::min(65535, v));
+                if (it != list.end()) list.erase(it);
+                if (v > 0) list.push_back({unit, v});
+                changed = true;
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("0 or empty: the game's price (%d).", stock);
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    if (!shown)
+        ImGui::TextDisabled("The prices appear once the game has loaded its unit data.");
+    if (ImGui::Button("Game's prices##sp")) {
+        list.clear();
+        changed = true;
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("%d price(s) of your own.", (int)list.size());
+    if (changed) {
+        std::sort(list.begin(), list.end());
+        std::string o;
+        for (const auto& e : list) {
+            if (!o.empty()) o += ',';
+            o += std::to_string(e.first) + ":" + std::to_string(e.second);
+        }
+        std::snprintf(g_set.store_prices, sizeof g_set.store_prices, "%s", o.c_str());
+    }
+}
+
+// SG-0104 (docs/480): the units the Randomizer opponent never fields, as a
+// grid of heads like Ban Units; a click toggles one. Stock units and the
+// creatures only (a custom unit's id moves when the set changes, BR-0066).
+void draw_random_army_bans() {
+    if (!ImGui::CollapsingHeader("Never in Random Armies")) return;
+    help("Units the Randomizer opponent never fields (Free Play, and Computer\n"
+         "Player 3 on Randomizer). Click a unit to keep it out; click again\n"
+         "to allow it. If every unit of a slot is kept out, that slot draws\n"
+         "from all of them. Your own team and online games are not affected.");
+    badge(WIRED);
+    std::vector<int> list;
+    for (const char* p = g_set.random_army_bans; *p;) {
+        const int bp = std::atoi(p);
+        if (bp >= 0 && bp < 192) list.push_back(bp);
+        while (*p && *p != ',') ++p;
+        if (*p) ++p;
+    }
+    const float size = 24.0f * g_ui_scale;
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(1.0f, 1.0f));
+    const float pitch = size + 2.0f + ImGui::GetStyle().ItemSpacing.x;
+    int per_row = (int)(ImGui::GetContentRegionAvail().x / pitch);
+    if (per_row < 4) per_row = 4;
+    bool changed = false;
+    for (int slot = 0; slot < LB_TEAM_SLOTS; ++slot) {
+        ImGui::TextDisabled("%s", lb_teams_slot_label(slot));
+        const int n = lb_teams_slot_count(slot);
+        int shown = 0;
+        for (int k = 0; k < n; ++k) {
+            const int bp = lb_teams_slot_unit(slot, k);
+            if (bp < 0 || bp >= 192) continue;
+            if (shown++ % per_row) ImGui::SameLine();
+            auto it = std::find(list.begin(), list.end(), bp);
+            const bool out = it != list.end();
+            char id[16];
+            std::snprintf(id, sizeof id, "##rab%d", bp);
+            if (unit_button(id, bp, size, out, out ? 10.0f / 31.0f : 1.0f, false)) {
+                if (out) list.erase(it);
+                else list.push_back(bp);
+                changed = true;
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s%s", lb_teams_unit_name(bp),
+                                  out ? "\nNever in random armies" : "");
+        }
+    }
+    ImGui::PopStyleVar();
+    if (ImGui::Button("Allow all##rab")) {
+        list.clear();
+        changed = true;
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("%d unit(s) kept out.", (int)list.size());
+    if (changed) {
+        std::sort(list.begin(), list.end());
+        std::string o;
+        for (int bp : list) {
+            if (!o.empty()) o += ',';
+            o += std::to_string(bp);
+        }
+        std::snprintf(g_set.random_army_bans, sizeof g_set.random_army_bans, "%s", o.c_str());
+    }
+}
+
 void tab_team_builder() {
     if (!tab_begin("Team Builder")) return;
     static int slot = 0, preset = 0;
@@ -4245,6 +4496,7 @@ void tab_team_builder() {
         ImGui::EndDisabled();
         ImGui::EndDisabled();
     }
+    draw_random_army_bans();   // SG-0104
     ImGui::Separator();
 
     // docs/410: the neutral creatures as army units, at real prices.
@@ -4324,6 +4576,40 @@ void tab_team_builder() {
         help("Which army slot each creature uses. The Wolf, Robot and Monkey\n"
              "can be Close Combat, Ranged or Mounted; the Shark only a Special.\n"
              "Needs the option above. Online, the host's setting applies.");
+        badge(WIRED);
+        // SG-0098 (docs/480): each creature unlocked with a stock unit, as a
+        // custom unit's "Unlocked with" (SG-0096). lb_teams_unit_state reads it.
+        ImGui::SeparatorText("Creature Unlocks");
+        ImGui::BeginDisabled(!g_set.creatures);
+        for (int i = 0; i < 4; ++i) {
+            int& cur = g_set.creature_unlock[i];
+            const std::string shown_name = cur > 0
+                ? std::string(lb_teams_unit_name(cur)) + " (" + std::to_string(cur) + ")"
+                : std::string("None (always available)");
+            char label[64];
+            std::snprintf(label, sizeof label, "%s unlocked with", kWho[i]);
+            ImGui::SetNextItemWidth(220.0f * g_ui_scale);
+            if (ImGui::BeginCombo(label, shown_name.c_str())) {
+                if (ImGui::Selectable("None (always available)##cu", cur == 0)) cur = 0;
+                for (int s = 0; s < LB_TEAM_SLOTS; ++s) {
+                    const int n = lb_teams_slot_count(s);
+                    for (int k = 0; k < n; ++k) {
+                        const int bp = lb_teams_slot_unit(s, k);
+                        if (bp <= 0 || bp > 181 || bp == 169 || bp == 138 || bp == 155 || bp == 153)
+                            continue;   // stock units with a minifig only
+                        const std::string nm = std::string(lb_teams_unit_name(bp)) + " (" +
+                                               std::to_string(bp) + ")##cu" + std::to_string(bp);
+                        if (ImGui::Selectable(nm.c_str(), cur == bp)) cur = bp;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+        }
+        ImGui::EndDisabled();
+        help("A creature can be picked on the army screen only once the unit\n"
+             "named here is unlocked on your save, like a custom unit's\n"
+             "\"Unlocked with\". None: always available, as before. The\n"
+             "computer's armies are not limited. Only your save is affected.");
         badge(WIRED);
     }
     ImGui::Separator();
@@ -4836,6 +5122,38 @@ void draw_umb_popup(bool idle) {
     lb_maps_umb_get(g_set.unit_map_bans, bp, toks, sizeof toks);
     std::string cur = toks;
     bool changed = false;
+    // SG-0103 (docs/483): whole map categories, as tokens of the same list
+    // (lb_mapbans.cpp classifies the match's map from its file).
+    {
+        auto has = [&](const char* tok) {
+            std::vector<std::string> v;
+            tok_split(cur, '+', &v);
+            return std::find(v.begin(), v.end(), std::string(tok)) != v.end();
+        };
+        auto put = [&](const char* tok, bool on) {
+            std::vector<std::string> v;
+            tok_split(cur, '+', &v);
+            auto it = std::find(v.begin(), v.end(), std::string(tok));
+            if (on && it == v.end()) v.push_back(tok);
+            if (!on && it != v.end()) v.erase(it);
+            cur.clear();
+            for (const std::string& t : v) {
+                if (!cur.empty()) cur += '+';
+                cur += t;
+            }
+            changed = true;
+        };
+        bool land = has("cL"), water = has("cW"), large = has("cX");
+        if (ImGui::Checkbox("All Land Maps", &land)) put("cL", land);
+        help("Banned on every map that is not a water map, mod maps included.");
+        if (ImGui::Checkbox("All Water Maps", &water)) put("cW", water);
+        help("Banned on every map where a tenth or more of the ground is\n"
+             "water, mod maps included.");
+        if (ImGui::Checkbox("All Large Maps (128)", &large)) put("cX", large);
+        help("Banned on every map 128 tiles wide or tall (no stock map is).\n"
+             "Online, the host's choices apply.");
+        badge(WIRED);
+    }
     ImGui::BeginChild("##umbmaps", ImVec2(340.0f * g_ui_scale, 280.0f * g_ui_scale), true);
     const int count = lb_maps_count();
     for (int i = 0; i < count; ++i) {
@@ -4878,7 +5196,7 @@ void tab_ban_units() {
     const bool joined = net == 9 || net == 6 || net == 7 || net == 5 || net == 12;
     guide("Banned units can't be used in games you host; a player who brings one gets "
           "King's unit instead. Click a unit to ban it everywhere, right-click to ban it "
-          "on some maps. Online, the host's bans apply.");
+          "on some maps or kinds of map (land, water, large). Online, the host's bans apply.");
     ImGui::TextDisabled("The King team is the default and can't be banned.");
     unsigned char bits[24];
     bans_bits(bits);
@@ -7511,6 +7829,71 @@ void bal_tri(int rec, int field, bool locked) {
     ImGui::PopID();
 }
 
+// docs/481: a three-way port byte with its own value names (Trained at, Speed
+// icon, Transport): 0 Automatic and two forced values. `usable` false draws it
+// greyed out (Trained at for a unit no factory or shipyard lists).
+void bal_pick3(int rec, int field, const char* const names[3], bool locked, bool usable) {
+    const int live = lb_balance_value(rec, field);
+    const int custom = lb_balance_custom_get(rec, field);
+    const int cur = live >= 0 && live <= 2 ? live : 0;
+    ImGui::PushID(rec * 64 + field);
+    if (custom >= 0) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.82f, 0.25f, 1.0f));
+    ImGui::BeginDisabled(locked || live < 0 || !usable);
+    ImGui::SetNextItemWidth(118.0f);
+    if (ImGui::BeginCombo("##p3", names[cur])) {
+        for (int s = 0; s < 3; ++s)
+            if (ImGui::Selectable(names[s], s == cur)) bal_set(rec, field, s);
+        ImGui::EndCombo();
+    }
+    ImGui::EndDisabled();
+    if (custom >= 0) {
+        ImGui::PopStyleColor();
+        if (ImGui::IsItemHovered()) {
+            const int b = lb_balance_base(rec, field);
+            ImGui::SetTooltip("Yours. Original: %s. Right-click to restore.", names[b >= 0 && b <= 2 ? b : 0]);
+        }
+        if (!locked && ImGui::IsItemClicked(ImGuiMouseButton_Right))
+            bal_set(rec, field, -1);
+    }
+    ImGui::PopID();
+}
+
+// docs/482 (SG-0097): a damage bonus against structures. Stored 0 for
+// Automatic, else LB_BAL_BONUS_ZERO + bonus; shown as "Auto" or a signed
+// number. `stock` names what Automatic does for this unit (tooltip).
+void bal_bonus(int rec, int field, bool locked, const char* stock) {
+    const int live = lb_balance_value(rec, field);
+    const int custom = lb_balance_custom_get(rec, field);
+    const bool autom = live < 1 || live > LB_BAL_BONUS_MAX;
+    ImGui::PushID(rec * 64 + field);
+    if (custom >= 0) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.82f, 0.25f, 1.0f));
+    ImGui::BeginDisabled(locked || live < 0);
+    if (autom) {
+        if (ImGui::Button("Auto##bb", ImVec2(64.0f, 0.0f))) bal_set(rec, field, LB_BAL_BONUS_ZERO);
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Automatic: %s\nClick to set a number of your own.", stock);
+    } else {
+        int b = live - LB_BAL_BONUS_ZERO;
+        ImGui::SetNextItemWidth(46.0f);
+        if (ImGui::InputInt("##bb", &b, 0, 0, ImGuiInputTextFlags_EnterReturnsTrue)) {
+            b = std::max(1 - LB_BAL_BONUS_ZERO, std::min(LB_BAL_BONUS_MAX - LB_BAL_BONUS_ZERO, b));
+            bal_set(rec, field, b + LB_BAL_BONUS_ZERO);
+        }
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("%+d against every building, wall, gate and bridge.\n"
+                              "Automatic would be: %s\n"
+                              "Right-click to restore; A sets Automatic.", b, stock);
+        ImGui::SameLine(0.0f, 2.0f);
+        if (ImGui::SmallButton("A##bba")) bal_set(rec, field, 0);
+    }
+    ImGui::EndDisabled();
+    if (custom >= 0) {
+        ImGui::PopStyleColor();
+        if (!locked && ImGui::IsItemClicked(ImGuiMouseButton_Right)) bal_set(rec, field, -1);
+    }
+    ImGui::PopID();
+}
+
 // The lock and the hint, above each table.
 bool bal_header(bool picks = false) {
     if (!lb_patches_blueprint_base()) {
@@ -7636,7 +8019,8 @@ void tab_balance_traits() {
             "Land", "Water", "Trees", "Bld collision", "Land<->water", "Not water-only",
             "Hitbox", "Uninteract.", "Speed: none", "Projectile", "AI priority",
             "Defogged", "Mountains", "Hotwire imm.", "EMP imm.", "ESP imm.",
-            "Build effect"};
+            "Build effect", "Trained at", "Speed icon", "Transport",
+            "Melee vs bldg", "Shot vs bldg"};
         static const char* const kTips[] = {
             "Can walk on land.",
             "Can enter water. Ticking Land or Water also sets the next three "
@@ -7663,8 +8047,34 @@ void tab_balance_traits() {
             "The EMP skips it (specials, and transports with EMP Disables Transports).",
             "The ESP skips it (the ESP stuns heroes, builders and soldiers).",
             "The brick animation shown while this unit is trained: 0 automatic "
-            "(its faction's), 1 human, 2 skeleton (the Wizards'), 3 alien."};
-        const int nc = 17;
+            "(its faction's), 1 human, 2 skeleton (the Wizards'), 3 alien.",
+            // docs/481 (SG-0100, SG-0101, SG-0106).
+            "Transports and siege/special units only. Automatic: a unit that moves "
+            "only on water comes from the Shipyard, any other from the Special "
+            "Factory. Special Factory / Shipyard: only that building lists it, for "
+            "you and the computer. Where it comes out still follows its movement: "
+            "give a Shipyard unit Water and a Special Factory unit Land.",
+            "The icon over the unit while it is speed-boosted. Automatic: wheels "
+            "for transports and siege/special units, legs for every other unit.",
+            "Whether it may board a transport. Automatic: any unit that cannot "
+            "enter water may (flyers and ships cannot). Can board / Cannot board "
+            "force it either way. A transport still holds at most 4 foot, mounted "
+            "and hero units and 2 siege/special units.",
+            // docs/482 (SG-0097).
+            "Melee damage against buildings, walls, gates and bridges, added to "
+            "Melee damage (a hit never does less than 1). Automatic: the game's "
+            "own table -- builders +20 against every building, heroes +15 against "
+            "a Base, foot, ranged and mounted units -10 against most buildings, "
+            "campaign heroes and creatures 0. A number here replaces that table "
+            "for every building. Ranged units do not use it.",
+            "Added to the damage of this unit's projectiles when they land on a "
+            "building, wall, gate or bridge (in an explosion, scaled down with "
+            "the distance like the rest of it). Automatic: nothing, as in the "
+            "game. A shot whose shooter has died on the way gets no bonus."};
+        static const char* const kTrainedNames[3] = {"Automatic", "Special Factory", "Shipyard"};
+        static const char* const kIconNames[3] = {"Automatic", "Legs", "Wheels"};
+        static const char* const kBoardNames[3] = {"Automatic", "Can board", "Cannot board"};
+        const int nc = 22;
         if (ImGui::BeginTable("baltraits", 2 + nc,
                               ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                                   ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY |
@@ -7783,6 +8193,25 @@ void tab_balance_traits() {
                 }
                 ImGui::TableNextColumn();
                 bal_cell(LB_BAL_UNITS, rec, LB_BAL_PORT_FIELD0 + 4, locked);
+                // docs/481: Trained at (categories 5/6 only), Speed icon, Transport.
+                const int cat = lb_balance_record_category(rec);
+                ImGui::TableNextColumn();
+                bal_pick3(rec, LB_BAL_PORT_FIELD0 + 5, kTrainedNames, locked, cat == 5 || cat == 6);
+                ImGui::TableNextColumn();
+                bal_pick3(rec, LB_BAL_PORT_FIELD0 + 6, kIconNames, locked, true);
+                ImGui::TableNextColumn();
+                bal_pick3(rec, LB_BAL_PORT_FIELD0 + 7, kBoardNames, locked, true);
+                // docs/482 (SG-0097): Melee vs bldg, Shot vs bldg.
+                char stock[128] = "the game's table";
+                int lo = 0, hi = 0;
+                if (lb_stock_building_bonus(rec, &lo, &hi)) {
+                    if (lo == hi) std::snprintf(stock, sizeof stock, "%+d against the factions' buildings (the game's table)", lo);
+                    else std::snprintf(stock, sizeof stock, "%+d to %+d against the factions' buildings (the game's table; walls, gates, bridges 0)", lo, hi);
+                }
+                ImGui::TableNextColumn();
+                bal_bonus(rec, LB_BAL_PORT_FIELD0 + 8, locked, stock);
+                ImGui::TableNextColumn();
+                bal_bonus(rec, LB_BAL_PORT_FIELD0 + 9, locked, "no bonus (the game has none for projectiles)");
             }
             ImGui::EndTable();
         }
@@ -9530,6 +9959,24 @@ extern "C" int lb_setting_notify_sound(void) { return g_set.notify_sound; }
 extern "C" int lb_setting_notify_volume(void) { return g_set.notify_volume; }
 
 // BR-0047: custom unit sound volume, 0..200 percent. LB_CUNIT_VOLUME forces it.
+// docs/479: LB_NATIVE_LOGIC=0|1 forces it.
+extern "C" int lb_setting_native_logic(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_NATIVE_LOGIC");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.native_logic ? 1 : 0);
+}
+// docs/479: LB_BIG_SPRITE_POOL=0|1 forces it.
+extern "C" int lb_setting_big_sprite_pool(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_BIG_SPRITE_POOL");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.big_sprite_pool ? 1 : 0);
+}
 // BR-0063: LB_HIDE_FOGGED_SPECIALS=0|1 forces it.
 extern "C" int lb_setting_hide_fogged_specials(void) {
     static int forced = -2;
@@ -11033,7 +11480,8 @@ extern "C" int lb_rules_local_flags(void) {
            (lb_setting_teal() ? LB_RULE_TEAL : 0) |             // docs/412
            (lb_setting_stun_cast() ? LB_RULE_STUN_CAST : 0) |   // docs/453
            (lb_setting_phantom_guard() ? 0 : LB_RULE_OWN_CHEATS) |  // docs/469
-           (lb_setting_many_mines() ? LB_RULE_MANY_MINES : 0);       // SG-0077
+           (lb_setting_many_mines() ? LB_RULE_MANY_MINES : 0) |      // SG-0077
+           (lb_setting_native_logic() ? LB_RULE_NATIVE_LOGIC : 0);   // docs/479
 }
 
 // docs/412: Teal team colour. LB_TEAL=0|1 forces it (LB_TEST_TEAL=1 too).
@@ -11135,6 +11583,88 @@ extern "C" int lb_setting_creature_slots(void) {
     if (forced >= 0) return forced;
     return g_set.creature_slot[0] | (g_set.creature_slot[1] << 4) |
            (g_set.creature_slot[2] << 8) | (g_set.creature_slot[3] << 12);
+}
+
+// SG-0098 (docs/480): the stock unit whose unlock creature `unit` (169 Wolf,
+// 138 Robot, 155 Shark, 153 Monkey) follows on the army screen, or 0 (always
+// available). Never a creature or a custom unit: lb_teams_unit_state answers
+// for the unit named, and a creature's own answer would be "always".
+// LB_CREATURE_UNLOCK=w,r,s,m forces the four (stock indices, 0 none).
+extern "C" int lb_setting_creature_unlock_with(int unit) {
+    static const int kUnit[4] = {169, 138, 155, 153};   // creature_unlock's order
+    static int forced[4] = {-2, -2, -2, -2};
+    if (forced[0] == -2) {
+        for (int& f : forced) f = -1;
+        if (const char* v = std::getenv("LB_CREATURE_UNLOCK"))
+            std::sscanf(v, "%d,%d,%d,%d", &forced[0], &forced[1], &forced[2], &forced[3]);
+    }
+    for (int i = 0; i < 4; ++i) {
+        if (unit != kUnit[i]) continue;
+        const int u = forced[i] >= 0 ? forced[i] : g_set.creature_unlock[i];
+        if (u <= 0 || u > 181) return 0;
+        for (int c : kUnit)
+            if (u == c) return 0;
+        return u;
+    }
+    return 0;
+}
+
+// SG-0102 (docs/480): the studs a won Free Play battle credits, 0 off.
+// LB_FREE_PLAY_WIN_STUDS=<n> forces it (test aid).
+extern "C" int lb_setting_free_play_win_studs(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_FREE_PLAY_WIN_STUDS");
+        forced = v ? std::max(0, std::min(10000, std::atoi(v))) : -1;
+    }
+    return forced >= 0 ? forced : g_set.free_play_win_studs;
+}
+
+// SG-0081 (docs/483): the Free Play start the player chose, 0 Automatic or
+// 1..4. LB_START_POSITION=<0..8> forces it (test aid; past the map's starts
+// the patch clamps, with a log line).
+extern "C" int lb_setting_start_position(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_START_POSITION");
+        forced = v ? std::max(0, std::min(8, std::atoi(v))) : -1;
+    }
+    return forced >= 0 ? forced : g_set.start_position;
+}
+
+// SG-0104 (docs/480): is stock unit `bp` kept out of the Randomizer
+// opponent's army? LB_RANDOM_ARMY_BANS=<bp,bp,...> forces the list.
+extern "C" int lb_setting_random_army_banned(int bp) {
+    static int forced = -2;
+    static std::string forced_list;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_RANDOM_ARMY_BANS");
+        forced = v ? 1 : 0;
+        if (v) forced_list = v;
+    }
+    const char* p = forced ? forced_list.c_str() : g_set.random_army_bans;
+    while (*p) {
+        if (*p >= '0' && *p <= '9' && std::atoi(p) == bp) return 1;
+        while (*p && *p != ',') ++p;
+        if (*p) ++p;
+    }
+    return 0;
+}
+
+// SG-0099 (docs/482): this machine's LEGO Store price for stock unit `unit`,
+// or -1 for the game's. LB_STORE_PRICES="unit:price,..." forces the list
+// (a test aid).
+extern "C" int lb_setting_store_price(int unit) {
+    static int forced = -2;
+    static std::string forced_list;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_STORE_PRICES");
+        forced = v ? 1 : 0;
+        if (v) forced_list = v;
+    }
+    for (const auto& e : store_prices_parse(forced ? forced_list.c_str() : g_set.store_prices))
+        if (e.first == unit) return e.second;
+    return -1;
 }
 
 // The "Fix Hotwired Healing" checkbox had NO getter: nothing in the port could
@@ -11748,6 +12278,7 @@ extern "C" const char* lb_net_lobby_options_json(void) {
     kv.push_back({"Hotwire neutrals in missions", g_set.hotwire_neutrals ? "On" : "Off"});
     kv.push_back({"EMP disables transports", g_set.emp_transports ? "On" : "Off"});
     kv.push_back({"More than 10 mine spots", g_set.many_mines ? "On" : "Off"});   // SG-0077
+    kv.push_back({"Native game logic", g_set.native_logic ? "On" : "Off"});       // docs/479
     kv.push_back({"Prevent phantom ties", g_set.phantom_guard ? "On" : "Off"});   // docs/469
     kv.push_back({"Stunned heroes can cast", g_set.stun_cast ? "On" : "Off"});
     kv.push_back({"AI rebuilds its hero", g_set.ai_hero_rebuild ? "On" : "Off"});

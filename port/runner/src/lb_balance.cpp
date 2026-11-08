@@ -286,6 +286,28 @@ const BalField kUnitFields[] = {
     {"EMP immune", 0x7B, 1, 0, 2},           // the EMP (EAttackSpell, +0x74 clear) skips it / always takes it
     {"ESP immune", 0x22, 1, 0, 2},           // the ESP (EAttackSpell, +0x74 set) skips it / always takes it
     {"Construction style", 0x23, 1, 0, 3},   // training effect: 0 auto, 1 human, 2 skeleton, 3 alien
+    // docs/481: three more, APPENDED (31..33) so stored indices keep their
+    // meaning. Padding again: +0x5B, +0x5A and +0x0A are 0xA2 in all 182 stock
+    // records and no bundled pack writes another value there (checked over
+    // every run in lb_balance_data.h). 0 (or the stock 0xA2) is Automatic.
+    {"Trained at", 0x5B, 1, 0, 2},           // SG-0100: 1 Special Factory, 2 Shipyard (categories 5/6)
+    {"Speed icon", 0x5A, 1, 0, 2},           // SG-0101: 1 legs (effect 4), 2 wheels (effect 0xD)
+    {"Transport", 0x0A, 1, 0, 2},            // SG-0106: 1 can board, 2 cannot board a transport
+    // docs/482 (SG-0097): damage against structures (categories 7..0x13),
+    // APPENDED (34, 35). 0 is Automatic; 1..160 is a bonus of value - 80
+    // (-79..+80), so 80 is "no bonus". +0x0B is the last 0xA2 padding byte
+    // of the record; +0x57 is the padding byte of the last 4-byte entry of
+    // the array at +0x2C, 0xA1 in all 182 stock records. No bundled pack
+    // writes either (checked over every run in lb_balance_data.h). Both
+    // stock fills (0xA2 = 162, 0xA1 = 161) are above the max, so they fold
+    // to Automatic (fold_port).
+    //   34 Melee vs buildings: replaces the cartridge's matchup table value
+    //      (FUN_02002B18) in the melee damage FUN_0205CC88 for a structure
+    //      target (lb_patches.cpp melee_matchup_override);
+    //   35 Shot vs buildings: added to a projectile's roll when it lands on
+    //      a structure (apply_damage_observer); the cartridge has none.
+    {"Melee vs buildings", 0x0B, 1, 0, 160},
+    {"Shot vs buildings", 0x57, 1, 0, 160},
 };
 constexpr int kPortField0 = 26;   // the first of them (lb_overlay.h LB_BAL_PORT_FIELD0)
 // docs/408: +0x70/+0x72 are NOT a copy of +0x6C/+0x6E. The hit (FUN_0206E408,

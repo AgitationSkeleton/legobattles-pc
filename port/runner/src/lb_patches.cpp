@@ -52,6 +52,7 @@ extern "C" {
 
 extern "C" int lb_band_left(int output_width);   /* src/lb_widemap.cpp */
 extern "C" void lb_cunits_tick(void);             /* src/lb_cunits.cpp, docs/448 */
+bool lb_mods_blueprint_own(std::vector<uint8_t>* out);   /* src/lb_mods.cpp: the cartridge's Entities.ebp */
 extern "C" int lb_cunits_test_pick(void);         /* src/lb_cunits.cpp, docs/448 test aid */
 extern "C" int lb_cunits_test_field(void);        /* src/lb_cunits.cpp, docs/448 test aid */
 extern "C" int lb_cunits_lobby_ok(void);          /* src/lb_cunits.cpp, docs/448 */
@@ -1793,6 +1794,180 @@ uint32_t resolve_handle_kind(uint32_t handle_addr, uint8_t want_kind) {
     return entity;
 }
 
+// ── SG-0097 (docs/482): damage against structures, per unit ──────────────────
+//
+// THE CARTRIDGE'S RULE (read). A melee blow's damage before armour is
+// func_0205CC88(attacker + 0x164, target->+0x160):
+//
+//   0205CC90  ldr r2,[r4,#4] ; ldr r2,[r2,#4] ; ldrh r0,[r2,#4]   attacker record +4
+//   0205CC94  ldr r0,[r1,#4] ; ldrh r1,[r0,#4]                    target record +4
+//   0205CCA4  bl  func_02002B18                                   matchup(a, t)
+//   0205CCA8  ldrh r1,[r4,#0xC] ; add ; cmp #1 ; movlt #1          max(1, damage + matchup)
+//
+// func_02002B18 is a static table, not blueprint data: a byte per record
+// index for the attacker's class (0x021414CC, 40 classes, 0xFF none) and for
+// the target's (0x021416F4, 0xFF none), and a signed byte matrix at
+// 0x0214191C indexed target_class * [0x021414C8] (40) + attacker_class. Its
+// structure entries are the numbers players measured: every builder +20
+// against every building (categories 7..16), each faction's two heroes +15
+// against a Base (category 7) only, foot, ranged and mounted units -10
+// against the Base, Mill, Mine, Farm, Barracks, Special Factory and
+// Shipyard. Only records 0..7, 20..27, 40..48, 60..68, 80..82 and 100..102
+// have an attacker class; campaign heroes and creatures get 0. The record
+// index is the record's +0x04, which a custom unit's battle record keeps
+// from its template (lb_cunits.cpp), so custom units inherit the template's.
+//
+// Callers of func_0205CC88: only func_0205F0F0 (a `bx r12` through the
+// literal 0x0205F100), which FUN_0205079C's melee hit calls, and four
+// near-identical 1 KB functions (FUN_020631D4, FUN_020651D0, FUN_02066DD0,
+// FUN_0206FF04) that divide a health by it both ways round -- by their shape
+// an exchange estimate (who wins a fight), inferred, not traced to a caller.
+// So a value here changes the blow and that estimate alike.
+//
+// The ranged path never reads the table: a projectile's roll is its own
+// record's +0x6C/+0x6E (hit) or +0x70/+0x72 (impact, blast), handed to
+// ApplyDamage (0x0206E970) unchanged. So there is no stock projectile bonus.
+//
+// THE PORT'S TWO BYTES (Balance unit fields 34, 35; unit.json
+// "melee_vs_buildings", "shot_vs_buildings"): 0 or the stock padding is
+// Automatic; 1..160 is a bonus of value - 80.
+//   +0x0B  melee: for a structure target, the bonus REPLACES the table's
+//          value in func_0205CC88 (the result keeps its max(1, ...) floor);
+//   +0x57  shot: added to the roll ApplyDamage gets for a structure target
+//          (see apply_damage_observer).
+// "Structure" is the cartridge's own building test: category 7..0x13, the
+// switch at 0x02050A7C (FUN_0205079C) and in Sim::AttackAction::virtual_02.
+constexpr uint32_t kMeleeMatchup   = 0x0205CC88u;   // arm, leaf
+constexpr uint32_t kBlastApplyRet  = 0x0206E890u;   // func_0206E60C's bl at 0x0206E88C
+constexpr uint32_t kMeleeBldgOff   = 0x0Bu;
+constexpr uint32_t kShotBldgOff    = 0x57u;
+constexpr int kBldgBonusZero = 80, kBldgBonusMax = 160;   // lb_overlay.h LB_BAL_BONUS_*
+
+bool bldg_ram(uint32_t p) { return p >= 0x02000000u && p < 0x02400000u; }
+bool bldg_category(uint8_t cat) { return cat >= 7u && cat <= 0x13u; }
+// The forced bonus in a record's byte, or false for Automatic.
+bool bldg_bonus(uint32_t record, uint32_t off, int* bonus) {
+    if (!bldg_ram(record)) return false;
+    const int v = (int)bus_read_u8(record + off);
+    if (v < 1 || v > kBldgBonusMax) return false;
+    *bonus = v - kBldgBonusZero;
+    return true;
+}
+
+// func_0205CC88: r0 the attacker's Sim::MagicInfluencedUnitStats (entity
+// +0x164; its +4 is the blueprint holder, its +0xC the buffed melee damage),
+// r1 the target's blueprint holder. With the attacker's +0x0B set and a
+// structure target, answered here with the cartridge's own arithmetic and
+// the forced bonus in place of the table's; otherwise a pure tail call.
+void melee_matchup_override() {
+    const uint32_t stats = g_cpu.R[0], tholder = g_cpu.R[1];
+    const uint32_t aholder = bldg_ram(stats) ? bus_read_u32(stats + 4u) : 0u;
+    const uint32_t arec = bldg_ram(aholder) ? bus_read_u32(aholder + 4u) : 0u;
+    const uint32_t trec = bldg_ram(tholder) ? bus_read_u32(tholder + 4u) : 0u;
+    int bonus = 0;
+    if (bldg_ram(trec) && bldg_bonus(arec, kMeleeBldgOff, &bonus) &&
+        bldg_category(bus_read_u8(trec + 0x5Cu))) {
+        int32_t dmg = (int32_t)bus_read_u16(stats + 0xCu) + bonus;
+        if (dmg < 1) dmg = 1;
+        g_cpu.R[0] = (uint32_t)dmg & 0xFFFFu;
+        static unsigned said = 0;
+        const unsigned n = ++said;
+        if ((n & (n - 1u)) == 0u)   // 1, 2, 4, 8, ...
+            std::fprintf(stderr,
+                         "[lb_bldgdmg] melee: record %u hits a category %u structure with "
+                         "%+d (per-unit setting; damage %u before armour; %u so far)\n",
+                         (unsigned)bus_read_u16(arec + 4u), (unsigned)bus_read_u8(trec + 0x5Cu),
+                         bonus, (unsigned)g_cpu.R[0], n);
+        lb_override_return();
+        return;
+    }
+    void (*original)(void) = lb_dispatch_original(0, kMeleeMatchup);
+    if (original) {
+        original();
+        return;
+    }
+    std::fprintf(stderr, "[lb_patch] melee matchup: no original to call\n");
+}
+
+// The table's value for record `a` against record `t` (a read of what
+// func_02002B18 computes), for the menus. 0 where either has no class.
+int matchup_table(int a, int t) {
+    const uint32_t tc = bus_read_u8(0x021416F4u + (uint32_t)t);
+    const uint32_t ac = bus_read_u8(0x021414CCu + (uint32_t)a);
+    if (tc == 0xFFu || ac == 0xFFu) return 0;
+    const uint32_t stride = bus_read_u8(0x021414C8u);
+    return (int)(int8_t)bus_read_u8(0x0214191Cu + tc * stride + ac);
+}
+
+}  // namespace
+
+// docs/482: the cartridge's own melee bonus of stock record `rec` against the
+// stock structures (records 0..181 of category 7..0x13): the least and the
+// most. Returns 0 when the table cannot be read yet.
+extern "C" int lb_stock_building_bonus(int rec, int* lo, int* hi) {
+    const uint32_t base = lb_patches_blueprint_base();
+    if (!base || rec < 0 || rec >= 182) return 0;
+    int mn = 0x7FFF, mx = -0x7FFF;
+    for (int t = 0; t < 182; ++t) {
+        if (!bldg_category(bus_read_u8(base + 4u + (uint32_t)t * 0x7Cu + 0x5Cu))) continue;
+        // The six factions' buildings only: walls, gates, bridges and the
+        // campaign's structures have no target class, so every unit does 0
+        // to them, which would hide the numbers that matter.
+        if (bus_read_u8(0x021416F4u + (uint32_t)t) == 0xFFu) continue;
+        const int v = matchup_table(rec, t);
+        mn = std::min(mn, v);
+        mx = std::max(mx, v);
+    }
+    if (mn > mx) mn = mx = 0;
+    if (lo) *lo = mn;
+    if (hi) *hi = mx;
+    return 1;
+}
+
+namespace {
+
+// docs/482: the shooter's "Shot vs buildings" for a projectile landing on a
+// structure, added to the roll in r2/r3 (min, max). r0 is the damage command
+// (+0x24 the projectile's handle), r1 the target's handle. The projectile's
+// +0x164 is its shooter's handle; a shot whose shooter is gone gets no bonus.
+// In the blast (lr 0x0206E890) the roll is already scaled by distance
+// (func_0206E60C, 20.12 factor per ring), so the bonus is scaled by the same
+// ratio: roll max / the record's impact max. Equal shifts of min and max
+// keep max - min, so the applier's one random draw (FUN_020833E4, taken only
+// when max > min) is drawn exactly as before unless the floor at 0 bites.
+void shot_bldg_bonus(uint32_t lr) {
+    const bool site = lr == kRangedApplyRet || lr == kImpactApplyRet1 ||
+                      lr == kImpactApplyRet2 || lr == kBlastApplyRet;
+    if (!site) return;
+    const uint32_t proj = resolve_handle_kind(g_cpu.R[0] + 0x24u, 1u);
+    if (!proj) return;
+    const uint32_t shooter = resolve_handle_kind(proj + 0x164u, 0u);
+    if (!shooter) return;
+    const uint32_t sdef = bus_read_u32(shooter + 0x160u);
+    const uint32_t srec = bldg_ram(sdef) ? bus_read_u32(sdef + 8u) : 0u;
+    int bonus = 0;
+    if (!bldg_bonus(srec, kShotBldgOff, &bonus) || bonus == 0) return;
+    const uint32_t target = resolve_handle_kind(g_cpu.R[1], 0u);
+    if (!target || !bldg_category(entity_category(target))) return;
+    if (lr == kBlastApplyRet) {
+        const uint32_t pdef = bus_read_u32(proj + 0x160u);
+        const uint32_t prec = bldg_ram(pdef) ? bus_read_u32(pdef + 8u) : 0u;
+        const int32_t full = prec ? (int32_t)bus_read_u16(prec + 0x72u) : 0;
+        if (full > 0) bonus = (int)((int64_t)bonus * (int64_t)g_cpu.R[3] / full);
+    }
+    const int32_t lo = (int32_t)g_cpu.R[2] + bonus, hi = (int32_t)g_cpu.R[3] + bonus;
+    g_cpu.R[2] = (uint32_t)std::max<int32_t>(0, lo);
+    g_cpu.R[3] = (uint32_t)std::max<int32_t>((int32_t)g_cpu.R[2], hi);
+    static unsigned said = 0;
+    const unsigned n = ++said;
+    if ((n & (n - 1u)) == 0u)   // 1, 2, 4, 8, ...
+        std::fprintf(stderr,
+                     "[lb_bldgdmg] shot: record %u's projectile lands on a category %u "
+                     "structure with %+d (lr %08X; roll now %u..%u; %u so far)\n",
+                     (unsigned)bus_read_u16(srec + 4u), (unsigned)entity_category(target), bonus,
+                     lr, g_cpu.R[2], g_cpu.R[3], n);
+}
+
 void apply_damage_observer() {
     // A SECOND guest-call context for the kill self-test (it does nothing
     // unless a developer armed it). set_owner_override fires on entity SPAWN,
@@ -1913,6 +2088,10 @@ void apply_damage_observer() {
             }
         }
     }
+
+    // docs/482 (SG-0097): the shooter's "Shot vs buildings", after the boost.
+    // Host reads only, and nothing changes unless that byte is set.
+    shot_bldg_bonus(lr);
 
     // LB_DMGLOG=<n>: say the first n damage applications (docs/433): the call
     // site (lr), the roll as it goes in (after any boost), what was added,
@@ -3024,10 +3203,22 @@ void native_fmul(uint32_t a0, uint32_t a1, uint32_t* r0, uint32_t* r1) {
 // write R1, because R1 is the caller's and the cartridge's own version leaves
 // whatever its scratch left there (docs/333 -- reading that scratch is what
 // made a correct function fail 635 of 635 calls).
+// docs/479: Native Game Logic serves two leaves graded PASS in
+// docs/data/native_status.tsv natively: the divide (a 30-100 instruction
+// loop; 67,395 calls, no disagreement) and the registry lookup (a list walk;
+// 1,470). The split-array read also passed, but it is eight instructions: an
+// override costs the host more than it saves the guest (as EntityAtTile did).
+// The soft-float trio was refused as too thinly sampled and stays the
+// cartridge's.
+static bool native_logic_effective(void);
+static bool graded_pass_native(uint32_t addr) {
+    return (addr == 0x0211FDB4u || addr == 0x02016A00u) && native_logic_effective();
+}
 #define LB_GRADED_LEAF(FN, ID, ADDR, NAME, RESC, NATIVE, A0, A1)            \
     void FN(void) {                                                         \
         const int mode = lb_shadow_mode();                                  \
-        const bool nat = mode == kLbShadowNative;                           \
+        const bool nat = mode == kLbShadowNative ||                         \
+                         (mode != kLbShadowVerify && graded_pass_native(ADDR)); \
         lb_shadow_note(NAME, nat ? 1 : 0);                                  \
         if (mode == kLbShadowVerify && !g_probing)                          \
             shadow_record(ID, ADDR, NAME, NAME "/sweep", RESC, NATIVE,      \
@@ -3385,54 +3576,8 @@ void get_ms_override(void) {
 // per frame and per caller, how many tiles are scanned. Observer only: it
 // reads the rectangle and runs the cartridge's function unchanged.
 constexpr uint32_t kTileGather = 0x0207E9B4u;   // arm
-void tile_gather_observer(void) {
-    static const bool on = std::getenv("LB_GATHERLOG") != nullptr;
-    if (on) {
-        struct Site { uint32_t lr; uint64_t calls, tiles; };
-        static Site sites[8];
-        static uint32_t last_vb = 0, frames = 0;
-        static uint64_t calls = 0, tiles = 0;
-        const uint32_t rect = g_cpu.R[2];
-        const int x0 = bus_read_u8(rect + 0x08u), x1 = bus_read_u8(rect + 0x10u);
-        const int y0 = bus_read_u8(rect + 0x09u), y1 = bus_read_u8(rect + 0x11u);
-        const uint64_t area = (x1 >= x0 && y1 >= y0)
-            ? uint64_t(x1 - x0 + 1) * uint64_t(y1 - y0 + 1) : 0u;
-        const uint32_t lr = g_cpu.R[14];
-        ++calls;
-        tiles += area;
-        for (Site& s : sites) {
-            if (s.lr == lr || s.lr == 0u) {
-                s.lr = lr;
-                ++s.calls;
-                s.tiles += area;
-                break;
-            }
-        }
-        const uint32_t vb = bus_read_u32(kVBlankCounter);
-        if (vb != last_vb) {
-            last_vb = vb;
-            if (++frames == 300u) {
-                std::fprintf(stderr,
-                             "[lb_gather] 300 VBlanks: %.1f calls, %.0f tiles "
-                             "scanned per VBlank; by caller:",
-                             calls / 300.0, tiles / 300.0);
-                for (const Site& s : sites)
-                    if (s.lr)
-                        std::fprintf(stderr, " %08X %.1f calls %.0f tiles;",
-                                     (unsigned)s.lr, s.calls / 300.0,
-                                     s.tiles / 300.0);
-                std::fprintf(stderr, " (last rect x %d..%d y %d..%d)\n",
-                             x0, x1, y0, y1);
-                std::fflush(stderr);
-                frames = 0;
-                calls = tiles = 0;
-                for (Site& s : sites) s = Site{};
-            }
-        }
-    }
-    void (*original)(void) = lb_dispatch_original(0, kTileGather);
-    if (original) original();
-}
+
+void tile_gather_observer(void);   // docs/479: defined after the call wrappers
 
 // SG-0032 / docs/444: LB_AI_CENSUS=<frames> -- HOW MANY BRIDGES AND MINES DOES
 // EACH AI HAVE, AND WHERE DOES IT TRY TO BUILD THE NEXT ONE? Observer only.
@@ -5048,12 +5193,15 @@ static bool cap_always(uint32_t record, uint32_t off) {
 // was given. Only for functions with no stack arguments.
 constexpr uint32_t kEmpCollect = 0x020775F0u;    // arm: EAttackSpell's victim collector
 constexpr uint32_t kHotwireTags = 0x020A9B7Cu;   // thumb: an entity's target tags
+// docs/481: 160 bytes, so the train list's swap fits every stock transport and
+// special (32 records, 4 bytes each at most) plus the custom units.
+constexpr int kWrapBytes = 160;
 struct CallWrap {
     bool active = false, calling = false;
     uint32_t sp_call = 0, sp = 0, lr = 0;
     uint32_t a = 0, b = 0, c = 0;                // what the after-step needs
-    uint32_t rec[64] = {};
-    uint8_t old[64] = {};
+    uint32_t rec[kWrapBytes] = {};
+    uint8_t old[kWrapBytes] = {};
     int n = 0;
 };
 CallWrap g_wrap_collect, g_wrap_tags;
@@ -5159,6 +5307,723 @@ void research_step_override(void) {
         std::fflush(stderr);
     }
     wrap_start(w, kResearchStep);
+}
+
+// NATIVE GAME LOGIC (docs/479, setting "Native Game Logic", on). Late in a big
+// match the cartridge needs more than the DS's ARM9 has: 0.23 passes per
+// VBlank at a 996x546 surface, the game at under half speed (docs/475). The
+// emulated clock is the DS's; what the PC can do is run the hottest cartridge
+// routines as host code, which costs the emulated CPU nothing, so the game
+// gets its time back. Each native routine computes exactly what the
+// cartridge's does (same results, same memory writes), and answers "cannot"
+// for any state it does not reproduce, so the cartridge runs those itself.
+// It changes timing, so it is a gameplay setting: a replay's choice (demo kind
+// 27; a recording before it plays with it off), else the host's online (rule
+// bit LB_RULE_NATIVE_LOGIC), else this machine's.
+// LB_NATIVE_CHECK=1 runs each native routine read-only beside the cartridge's
+// and logs every difference ([lb_native]); the cartridge's result is kept.
+extern "C" int lb_demo_play_native_logic(void);   // lb_demo.cpp
+extern "C" int lb_setting_native_logic(void);     // lb_overlay.cpp
+extern "C" int lb_native_logic_live(void) {
+    const int host = lb_rules_host_flags();
+    if (host >= 0) return (host & LB_RULE_NATIVE_LOGIC) ? 1 : 0;
+    return lb_setting_native_logic();
+}
+static bool native_logic_effective(void) {
+    const int played = lb_demo_play_native_logic();
+    return (played >= 0 ? played : lb_native_logic_live()) != 0;
+}
+static bool native_check_mode(void) {
+    static const bool on = [] {
+        const char* v = std::getenv("LB_NATIVE_CHECK");
+        return v && v[0] == '1';
+    }();
+    return on;
+}
+
+// FUN_0207E9B4(grid, list, rect, mask*, [sp] team*): THE ENTITY GATHER.
+//   list (+0x24 count, 16 inline handles at +4; +0x28 an overflow vector,
+//   count +0x30) is emptied (FUN_020EF220); then for y = rect[9]..rect[0x11]
+//   whose row count (s16 grid+0x84+2y) is positive, and x = rect[8]..rect[0x10],
+//   tile idx = x + u16 rowtab[y] (0x02155230), FUN_0207EB78 runs:
+//     if (byte 0x02128010[mask[0]] & byte [grid+0x70][idx]):
+//       for layer l < 3 with mask[0] bit l, L = grid + 0x24*l:
+//         ((byte [[L+4]+4][idx] & byte 0x02128018[L[0]]) >> L[8]) == 1 ->
+//         handle h at [L+0x10] + 2*idx; entity = slot h[0] of the entity
+//         array ([0x02155028] +8, count +0xC) when its +0xDD byte is h[1]
+//         (else FUN_02087350 rewrites h to the none handle);
+//         an entity not yet taken (+0x15A == 0) whose owner (+0xE4) is
+//         team[0], or any when team[0] is the none team (0x02155420), is
+//         taken (+0x15A = 1) and its handle appended (FUN_020EF244).
+//   Finally every taken entity's +0x15A goes back to 0; r0 = the count.
+// Net writes: the counts and the handles.
+//
+// PAST 16 HANDLES the list's vector (+0x28: data +0x2C, count +0x30, capacity
+// in bytes +0x34, growth +0x38, growable byte +0x3C) takes the rest. The
+// cartridge's clear (FUN_020EC7B0) FREES a growable vector's buffer and the
+// next push reallocates it (FUN_020ECA5C -> FUN_0204CAAC) -- guest heap calls
+// on every large gather, which host code cannot make. So the native gather
+// gives such a list a buffer of its own in the zero run above the heap
+// (kGatherBufs, 512 bytes = 256 handles, every entity there can be, as a
+// handle's index is a byte) and marks the vector not growable: the
+// cartridge's clear then only zeroes the count, its push never reallocates
+// (256 always fits), and nothing ever frees it. A list whose vector holds a
+// buffer of the cartridge's own is left to the cartridge. "Cannot" also for a
+// stale handle, or a bound of 255 (the cartridge's byte loop would wrap).
+constexpr uint32_t kGatherBufs = 0x023FB800u;   // 32 x 512 bytes, to 0x023FF800
+constexpr int kGatherBufN = 32;
+constexpr uint32_t kGatherBufBytes = 512u;
+uint32_t g_gather_buf_owner[kGatherBufN] = {};
+bool g_gather_buf_dead = false;
+static bool gather_buf_ours(uint32_t data) {
+    return data >= kGatherBufs && data < kGatherBufs + kGatherBufN * kGatherBufBytes;
+}
+// The buffer for this list: its own, else a free one claimed (only while all
+// zeros: the run is nobody's that is known), else 0.
+static uint32_t gather_buf_for(uint32_t list) {
+    int free_slot = -1;
+    for (int i = 0; i < kGatherBufN; ++i) {
+        if (g_gather_buf_owner[i] == list) return kGatherBufs + (uint32_t)i * kGatherBufBytes;
+        if (!g_gather_buf_owner[i] && free_slot < 0) free_slot = i;
+    }
+    if (free_slot < 0 || g_gather_buf_dead) return 0u;
+    const uint32_t b = kGatherBufs + (uint32_t)free_slot * kGatherBufBytes;
+    for (uint32_t k = 0; k < kGatherBufBytes; k += 4u)
+        if (bus_read_u32(b + k) != 0u) {
+            g_gather_buf_dead = true;
+            std::fprintf(stderr, "[lb_native] the gather buffers' memory (%08X) is in use: large gathers stay the cartridge's\n", b);
+            return 0u;
+        }
+    g_gather_buf_owner[free_slot] = list;
+    return b;
+}
+struct GatherOut { int n = 0; uint8_t h[256][2] = {}; };
+static bool g_gather_trace = false;
+// dry: LB_NATIVE_CHECK's read-only run, which compares whatever the vector holds.
+static bool gather_native(uint32_t grid, uint32_t list, uint32_t rect, uint32_t maskp,
+                          uint32_t teamp, GatherOut& o, bool dry = false) {
+    o.n = 0;
+    // The list, rect, mask and team are often the caller's locals: on the
+    // guest stack, in DTCM, which guest_ptr (main RAM) refuses.
+    if (!guest_ptr(grid) || !list || !rect || !maskp || !teamp) return false;
+    if (!dry) {   // the vector: empty with no buffer, or one of ours
+        const uint32_t data = bus_read_u32(list + 0x2Cu);
+        if (data != 0u && !gather_buf_ours(data)) return false;
+        if (data == 0u && bus_read_u32(list + 0x30u) != 0u) return false;
+    }
+    const unsigned x0 = bus_read_u8(rect + 0x08u), x1 = bus_read_u8(rect + 0x10u);
+    const unsigned y0 = bus_read_u8(rect + 0x09u), y1 = bus_read_u8(rect + 0x11u);
+    if (x1 == 255u || y1 == 255u) return false;
+    // Every table through the literal word the cartridge's code loads, as
+    // the code is NOW: the port moves some (the row table, BR-0039 docs/460).
+    const uint32_t rowtab = bus_read_u32(0x0207E188u);        // FUN_0207E16C
+    const uint32_t gmtab = bus_read_u32(0x0207E404u);         // FUN_0207E3F4
+    const uint32_t lmtab = bus_read_u32(0x0207E42Cu);         // FUN_0207E41C
+    const uint32_t nonep = bus_read_u32(0x0208763Cu);         // FUN_02087634
+    const uint32_t eholder = bus_read_u32(0x0205C9F8u);       // FUN_0205C9B4
+    if (!guest_ptr(rowtab) || !guest_ptr(gmtab) || !guest_ptr(lmtab) || !guest_ptr(nonep) || !guest_ptr(eholder))
+        return false;
+    const uint32_t occ = bus_read_u32(grid + 0x70u);
+    const unsigned m0 = bus_read_u8(maskp);
+    const unsigned gm = bus_read_u8(gmtab + m0);
+    const unsigned team = bus_read_u8(teamp), none_team = bus_read_u8(nonep);
+    const uint32_t etab = bus_read_u32(eholder + 4u);
+    if (!guest_ptr(etab)) return false;
+    const int32_t ecount = (int32_t)bus_read_u32(etab + 0xCu);
+    const uint32_t earr = bus_read_u32(etab + 8u);
+    struct Layer { uint32_t bits, hgrid; unsigned mask, shift; bool on; } lay[3];
+    for (unsigned l = 0; l < 3u; ++l) {
+        const uint32_t L = grid + 0x24u * l;
+        lay[l].on = (m0 >> l) & 1u;
+        if (!lay[l].on) continue;
+        lay[l].bits = bus_read_u32(bus_read_u32(L + 4u) + 4u);
+        lay[l].mask = bus_read_u8(lmtab + bus_read_u8(L));
+        lay[l].shift = bus_read_u8(L + 8u);
+        lay[l].hgrid = bus_read_u32(L + 0x10u);
+    }
+    bool taken[256] = {};
+    int t_rows = 0, t_occ = 0, t_v1 = 0;
+    for (unsigned y = y0; y <= y1; ++y) {
+        if ((int16_t)bus_read_u16(grid + 0x84u + 2u * y) <= 0) continue;
+        ++t_rows;
+        uint32_t idx = x0 + bus_read_u16(rowtab + 2u * y);
+        for (unsigned x = x0; x <= x1; ++x, ++idx) {
+            if (!(gm & bus_read_u8(occ + idx))) continue;
+            ++t_occ;
+            for (unsigned l = 0; l < 3u; ++l) {
+                if (!lay[l].on) continue;
+                const int v = (int)(bus_read_u8(lay[l].bits + idx) & lay[l].mask) >> lay[l].shift;
+                if (g_gather_trace && t_occ <= 3)
+                    std::fprintf(stderr, "[lb_native]   tile %u,%u idx %u occ %02X layer %u bits %02X mask %02X shift %u -> %d\n",
+                                 x, y, idx, bus_read_u8(occ + idx), l, bus_read_u8(lay[l].bits + idx),
+                                 lay[l].mask, lay[l].shift, v);
+                if (v != 1) continue;
+                ++t_v1;
+                const uint32_t hp = lay[l].hgrid + 2u * idx;
+                const unsigned h0 = bus_read_u8(hp), h1 = bus_read_u8(hp + 1u);
+                if ((int32_t)h0 >= ecount) return false;
+                const uint32_t e = bus_read_u32(earr + 4u * h0);
+                if (!e || bus_read_u8(e + 0xDDu) != h1) return false;
+                if (bus_read_u8(e + 0x15Au) != 0u) continue;
+                if (taken[h0]) continue;    // one entity per slot index
+                if (team != none_team && bus_read_u8(e + 0xE4u) != team) continue;
+                if (o.n == 256) return false;
+                taken[h0] = true;
+                o.h[o.n][0] = (uint8_t)h0;
+                o.h[o.n][1] = (uint8_t)h1;
+                ++o.n;
+            }
+        }
+    }
+    if (g_gather_trace) {
+        std::fprintf(stderr, "[lb_native]   grid %08X rect x %u..%u y %u..%u mask %02X gm %02X team %u none %u "
+                     "occ %08X rows %d occ-hits %d v1 %d taken %d\n", grid, x0, x1, y0, y1, m0, gm, team,
+                     none_team, occ, t_rows, t_occ, t_v1, o.n);
+        std::fprintf(stderr, "[lb_native]   rowtab:");
+        for (unsigned y = 0; y < 6u; ++y) std::fprintf(stderr, " %u", bus_read_u16(rowtab + 2u * y));
+        std::fprintf(stderr, "; rows>0:");
+        for (unsigned y = y0; y <= y1; ++y)
+            if ((int16_t)bus_read_u16(grid + 0x84u + 2u * y) > 0)
+                std::fprintf(stderr, " %u(%d)", y, (int16_t)bus_read_u16(grid + 0x84u + 2u * y));
+        int nz = 0, first = -1;
+        for (unsigned i = 0; i < 4096u; ++i)
+            if (bus_read_u8(occ + i) & gm) { ++nz; if (first < 0) first = (int)i; }
+        std::fprintf(stderr, "; occ&gm nonzero %d of 4096, first at %d\n", nz, first);
+    }
+    return true;
+}
+static uint64_t g_native_calls[8], g_native_fallbacks[8];
+static void native_count_log(int which, const char* name, bool ok) {
+    ++g_native_calls[which];
+    if (!ok) ++g_native_fallbacks[which];
+    if ((g_native_calls[which] & (which == 0 ? 0x7FFFull : 0x3FFFFFull)) == 0u) {
+        std::fprintf(stderr, "[lb_native] %s: %llu calls, %llu run by the cartridge\n", name,
+                     (unsigned long long)g_native_calls[which], (unsigned long long)g_native_fallbacks[which]);
+        std::fflush(stderr);
+    }
+}
+static bool gather_native_apply(void) {
+    GatherOut o;
+    const uint32_t list = g_cpu.R[1];
+    const bool ok = gather_native(g_cpu.R[0], list, g_cpu.R[2], g_cpu.R[3],
+                                  bus_read_u32(g_cpu.R[13]), o);
+    uint32_t data = ok ? bus_read_u32(list + 0x2Cu) : 0u;
+    // Past 16: the vector, in this list's own buffer (see kGatherBufs).
+    if (ok && o.n > 16 && data == 0u) {
+        data = gather_buf_for(list);
+        if (data) {
+            bus_write_u32(list + 0x2Cu, data);
+            bus_write_u32(list + 0x34u, kGatherBufBytes);   // capacity, bytes
+            bus_write_u8(list + 0x3Cu, 0u);                 // not growable: never freed
+        }
+    }
+    const bool done = ok && (o.n <= 16 || data != 0u);
+    native_count_log(0, "entity gather 0207E9B4", done);
+    if (!done) return false;
+    const int inl = o.n < 16 ? o.n : 16;
+    bus_write_u32(list + 0x24u, (uint32_t)inl);
+    for (int k = 0; k < inl; ++k) {
+        bus_write_u8(list + 4u + 2u * (uint32_t)k, o.h[k][0]);
+        bus_write_u8(list + 5u + 2u * (uint32_t)k, o.h[k][1]);
+    }
+    if (data) {   // ours (gather_native refuses any other); the clear zeroes its count
+        bus_write_u32(list + 0x30u, (uint32_t)(o.n - inl));
+        for (int k = inl; k < o.n; ++k) {
+            bus_write_u8(data + 2u * (uint32_t)(k - inl), o.h[k][0]);
+            bus_write_u8(data + 1u + 2u * (uint32_t)(k - inl), o.h[k][1]);
+        }
+    }
+    g_cpu.R[0] = (uint32_t)o.n;
+    return true;
+}
+// LB_NATIVE_CHECK: the native result, then the cartridge's, compared.
+CallWrap g_wrap_gather;
+GatherOut g_gather_want;
+bool g_gather_want_ok = false;
+unsigned long long g_gather_cyc0 = 0;
+static void gather_check_start(void (*original)(void)) {
+    CallWrap& w = g_wrap_gather;
+    g_gather_want_ok = gather_native(g_cpu.R[0], g_cpu.R[1], g_cpu.R[2], g_cpu.R[3],
+                                     bus_read_u32(g_cpu.R[13]), g_gather_want, true);
+    w.a = g_cpu.R[1];
+    w.rec[0] = g_cpu.R[0];
+    w.rec[2] = g_cpu.R[2];
+    w.rec[3] = g_cpu.R[3];
+    w.rec[4] = bus_read_u32(g_cpu.R[13]);
+    const uint32_t a5 = bus_read_u32(g_cpu.R[13]);
+    g_gather_cyc0 = g_runtime_cycles;
+    w.lr = g_cpu.R[14];
+    w.sp = g_cpu.R[13];
+    w.sp_call = (g_cpu.R[13] - 16u) & ~7u;
+    bus_write_u32(w.sp_call, a5);
+    w.active = true;
+    w.calling = true;
+    g_cpu.R[13] = w.sp_call;
+    g_cpu.R[14] = kTileGather;
+    g_cpu.R[15] = kTileGather;
+    (void)original;
+    runtime_dispatch_with_exchange(kTileGather);
+}
+static void gather_check_finish(void) {
+    CallWrap& w = g_wrap_gather;
+    static uint64_t checked = 0, differ = 0, cannot = 0;
+    ++checked;
+    // Guest ARM9 cycles inside the cartridge's run, by result size, against
+    // the ARM9's whole budget over the same VBlanks (560190 * 2 a VBlank).
+    static unsigned long long cyc_small = 0, cyc_big = 0, n_big = 0;
+    static uint32_t vb0 = 0;
+    const unsigned long long dc = g_runtime_cycles - g_gather_cyc0;
+    const uint32_t got = bus_read_u32(w.a + 0x24u) + bus_read_u32(w.a + 0x30u);
+    if (got > 16u) { cyc_big += dc; ++n_big; } else cyc_small += dc;
+    const uint32_t vb = bus_read_u32(kVBlankCounter);
+    if (!vb0) vb0 = vb;
+    if (vb - vb0 >= 1800u) {
+        const double budget = (double)(vb - vb0) * 560190.0 * 2.0;
+        std::fprintf(stderr, "[lb_native] entity gather cycles: %.1f%% of the ARM9 (%.1f%% in %llu calls over 16, "
+                     "%.1f%% in the rest)\n", 100.0 * (double)(cyc_small + cyc_big) / budget,
+                     100.0 * (double)cyc_big / budget, n_big, 100.0 * (double)cyc_small / budget);
+        std::fflush(stderr);
+        cyc_small = cyc_big = n_big = 0;
+        vb0 = vb;
+    }
+    if (!g_gather_want_ok) {
+        ++cannot;
+    } else {
+        // The cartridge's list as FUN_020EF1E0 reads it: 16 inline, then the vector.
+        const uint32_t list = w.a;
+        const uint32_t inl = bus_read_u32(list + 0x24u), vn = bus_read_u32(list + 0x30u);
+        const uint32_t vdata = bus_read_u32(list + 0x2Cu);
+        bool same = (int)(inl + vn) == g_gather_want.n && (vn == 0u || inl == 16u);
+        for (int k = 0; same && k < g_gather_want.n; ++k) {
+            const uint32_t at = (uint32_t)k < inl ? list + 4u + 2u * (uint32_t)k : vdata + 2u * ((uint32_t)k - inl);
+            same = bus_read_u8(at) == g_gather_want.h[k][0] && bus_read_u8(at + 1u) == g_gather_want.h[k][1];
+        }
+        if (!same) {
+            ++differ;
+            if (differ <= 8u) {
+                std::fprintf(stderr, "[lb_native] DIFFER entity gather: native %d, cartridge %u handles\n",
+                             g_gather_want.n, inl + vn);
+                if (differ <= 3u) {   // the same inputs again, traced
+                    GatherOut t;
+                    g_gather_trace = true;
+                    gather_native(w.rec[0], w.a, w.rec[2], w.rec[3], w.rec[4], t, true);
+                    g_gather_trace = false;
+                }
+                std::fflush(stderr);
+            }
+        }
+    }
+    if ((checked & 0xFFFu) == 0u) {
+        std::fprintf(stderr, "[lb_native] check entity gather: %llu calls, %llu differ, %llu not native\n",
+                     (unsigned long long)checked, (unsigned long long)differ, (unsigned long long)cannot);
+        std::fflush(stderr);
+    }
+}
+
+// FX_Div (0x0210A6F4, ARM): r0 = a, r1 = b (20.12 fixed point). FX_DivAsync
+// (0x0210A7F0) puts the divider in mode 1 (64 / 32 bits): DIVCNT = 1, numerator
+// = a << 32 (low word 0), denominator = b (high word 0); FX_GetDivResult
+// (0x0210A75C) spins on DIVCNT's busy bit and returns the 64-bit quotient
+// rounded: (q + 0x80000) >> 20, low word, leaving r1 = its high word and
+// r2 = q.lo + 0x80000. Every position-to-cell conversion divides by 24 and 16
+// through it (FUN_020085A0 -> FUN_02007B68). The divider is the emulator's
+// (io.cpp finish_div: a zero denominator gives -1 for a numerator >= 0 and 1
+// below, INT64_MIN / -1 gives INT64_MIN), so the same answer is computed here,
+// with no I/O, no busy spin and no slice ended at the divider's deadline. The
+// divider's registers are left as they were: nothing reads them after FX_Div
+// but FX_Div itself.
+constexpr uint32_t kFxDiv = 0x0210A6F4u;
+static uint32_t fxdiv_native(uint32_t a, uint32_t b, uint32_t* r1, uint32_t* r2) {
+    const int64_t num = (int64_t)((uint64_t)a << 32);
+    const int32_t den = (int32_t)b;
+    int64_t q;
+    if (den == 0) q = num < 0 ? 1 : -1;
+    else if (num == INT64_MIN && den == -1) q = INT64_MIN;
+    else q = num / den;
+    const uint64_t r = (uint64_t)q + 0x80000u;
+    *r1 = (uint32_t)(r >> 32);
+    *r2 = (uint32_t)r;
+    return (uint32_t)(r >> 20);
+}
+// FUN_020085A0 (Thumb): r0 = a cell point, r1 = a position (fx32 x at +4, y
+// at +8). It divides x by 24 and y by 16 (FUN_02007B68 -> FUN_02007B78 ->
+// FX_Div, the divisor << 12), and for a positive quotient divides AGAIN (the
+// code recomputes it), keeping (q >> 12) & 0xFF, else 0; then FUN_020F2BBC
+// writes the point: its type word (the literal at 0x020F2BD0), x at +4, y at
+// +5. r0 is the point on return. Native: the same two quotients (fxdiv_native,
+// exact), the same three stores.
+constexpr uint32_t kPosToCell = 0x020085A0u;   // thumb
+CallWrap g_wrap_p2c;
+static void p2c_native(uint32_t pos, uint32_t* type, uint8_t* cx, uint8_t* cy) {
+    uint32_t t1, t2;
+    const int32_t qx = (int32_t)fxdiv_native(bus_read_u32(pos + 4u), 24u << 12, &t1, &t2);
+    const int32_t qy = (int32_t)fxdiv_native(bus_read_u32(pos + 8u), 16u << 12, &t1, &t2);
+    *cx = qx > 0 ? (uint8_t)(qx >> 12) : 0u;
+    *cy = qy > 0 ? (uint8_t)(qy >> 12) : 0u;
+    *type = bus_read_u32(0x020F2BD0u);
+}
+void pos_to_cell_override(void) {
+    CallWrap& w = g_wrap_p2c;
+    const int st = w.active ? wrap_state(w, lb_dispatch_original(0, kPosToCell)) : 0;
+    if (st == 1) return;
+    if (st == 2) {   // LB_NATIVE_CHECK: the point the cartridge wrote, against ours
+        static uint64_t checked = 0, differ = 0;
+        ++checked;
+        const uint32_t pt = w.a;
+        if (bus_read_u32(pt) != w.b || bus_read_u8(pt + 4u) != (w.c & 0xFFu) || bus_read_u8(pt + 5u) != (w.c >> 8)) {
+            if (++differ <= 8u)
+                std::fprintf(stderr, "[lb_native] DIFFER pos-to-cell: native %u,%u, cartridge %u,%u\n", w.c & 0xFFu,
+                             w.c >> 8, bus_read_u8(pt + 4u), bus_read_u8(pt + 5u));
+        }
+        if ((checked & 0xFFFFFu) == 0u)
+            std::fprintf(stderr, "[lb_native] check pos-to-cell: %llu calls, %llu differ\n",
+                         (unsigned long long)checked, (unsigned long long)differ);
+        wrap_finish(w);
+        return;
+    }
+    if (!native_logic_effective() || !g_cpu.R[0] || !g_cpu.R[1]) {
+        if (void (*o)(void) = lb_dispatch_original(0, kPosToCell)) o();
+        return;
+    }
+    const uint32_t pt = g_cpu.R[0];
+    uint32_t type = 0;
+    uint8_t cx = 0, cy = 0;
+    p2c_native(g_cpu.R[1], &type, &cx, &cy);
+    if (native_check_mode()) {
+        w.a = pt;
+        w.b = type;
+        w.c = (uint32_t)cx | ((uint32_t)cy << 8);
+        wrap_start(w, kPosToCell | 1u);
+        return;
+    }
+    bus_write_u32(pt, type);
+    bus_write_u8(pt + 4u, cx);
+    bus_write_u8(pt + 5u, cy);
+    native_count_log(4, "pos-to-cell 020085A0", true);
+    lb_override_return();   // r0 is still the point
+}
+
+CallWrap g_wrap_fxdiv;
+void fxdiv_override(void) {
+    CallWrap& w = g_wrap_fxdiv;
+    const int st = w.active ? wrap_state(w, lb_dispatch_original(0, kFxDiv)) : 0;
+    if (st == 1) return;
+    if (st == 2) {   // LB_NATIVE_CHECK: the cartridge's answer against ours
+        static uint64_t checked = 0, differ = 0;
+        ++checked;
+        if (g_cpu.R[0] != w.c) {
+            ++differ;
+            if (differ <= 8u)
+                std::fprintf(stderr, "[lb_native] DIFFER FX_Div(%08X, %08X): native %08X, cartridge %08X\n",
+                             w.a, w.b, w.c, g_cpu.R[0]);
+        }
+        if ((checked & 0xFFFFu) == 0u)
+            std::fprintf(stderr, "[lb_native] check FX_Div: %llu calls, %llu differ\n",
+                         (unsigned long long)checked, (unsigned long long)differ);
+        wrap_finish(w);
+        return;
+    }
+    if (!native_logic_effective()) {
+        if (void (*o)(void) = lb_dispatch_original(0, kFxDiv)) o();
+        return;
+    }
+    uint32_t r1 = 0, r2 = 0;
+    const uint32_t q = fxdiv_native(g_cpu.R[0], g_cpu.R[1], &r1, &r2);
+    if (native_check_mode()) {
+        w.a = g_cpu.R[0];
+        w.b = g_cpu.R[1];
+        w.c = q;
+        wrap_start(w, kFxDiv);
+        return;
+    }
+    g_cpu.R[0] = q;
+    g_cpu.R[1] = r1;
+    g_cpu.R[2] = r2;
+    g_cpu.R[3] = 0x04000280u;   // as FX_DivAsync leaves it
+    native_count_log(1, "FX_Div 0210A6F4", true);
+    lb_override_return();
+}
+
+// EntityAtTile (0x02087350, ARM; docs/84): r0 = a handle (2 bytes: slot,
+// generation). FUN_0205C9B4 looks slot h[0] up in the entity array
+// ([0x02155028]: +8 the array, +0xC its count) and answers the entity when
+// its +0xDD byte is h[1]; on a miss the none handle (FUN_02087454 through the
+// thunk at 0x020873C4, which leaves r12 = 0x02087454) is copied into h and 0
+// returned. Called from everywhere a unit names another (and through
+// 0x02087404, handle equality, and 0x0205B814, is-none). Every literal is read
+// as the code holds it now.
+constexpr uint32_t kEntityAtTile = 0x02087350u;
+CallWrap g_wrap_eat;
+static bool eat_native(uint32_t h, uint32_t* out_e, uint32_t* r1, uint32_t* r2, uint32_t* r3, bool* miss) {
+    if (bus_read_u32(0x020873CCu) != 0x02087454u) return false;   // the thunk's target
+    const uint32_t holder = bus_read_u32(0x0205C9F8u);
+    const uint32_t nonep = bus_read_u32(0x0208745Cu);
+    if (!guest_ptr(holder) || !guest_ptr(nonep) || !h) return false;
+    const uint32_t tab = bus_read_u32(holder + 4u);
+    if (!guest_ptr(tab)) return false;
+    const unsigned h0 = bus_read_u8(h);
+    const int32_t count = (int32_t)bus_read_u32(tab + 0xCu);
+    uint32_t e = 0;
+    *r3 = tab;
+    if ((int32_t)h0 < count) {
+        e = bus_read_u32(bus_read_u32(tab + 8u) + 4u * h0);
+        if (e) {
+            *r2 = bus_read_u8(e + 0xDDu);
+            *r1 = bus_read_u8(h + 1u);
+            if (*r2 != *r1) e = 0;
+        }
+    }
+    *miss = e == 0;
+    *out_e = e;
+    return true;
+}
+[[maybe_unused]] void entity_at_tile_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kEntityAtTile);
+    CallWrap& w = g_wrap_eat;
+    const int st = wrap_state(w, original);
+    if (st == 1) return;
+    if (st == 2) {   // LB_NATIVE_CHECK
+        static uint64_t checked = 0, differ = 0;
+        ++checked;
+        if (g_cpu.R[0] != w.c) {
+            ++differ;
+            if (differ <= 8u)
+                std::fprintf(stderr, "[lb_native] DIFFER EntityAtTile: native %08X, cartridge %08X\n", w.c, g_cpu.R[0]);
+        }
+        if ((checked & 0xFFFFFu) == 0u)
+            std::fprintf(stderr, "[lb_native] check EntityAtTile: %llu calls, %llu differ\n",
+                         (unsigned long long)checked, (unsigned long long)differ);
+        wrap_finish(w);
+        return;
+    }
+    // NOT part of Native Game Logic: measured late in a three-army match it
+    // cost the host more than it saved the guest (45,000 calls a second of a
+    // ten-instruction function; emulation 12.5 -> 14.2 ms a frame, no gain in
+    // passes). It is NOT in kOverrideTable: a registered override costs a
+    // dispatch lookup on every entry even when it passes through, and this
+    // one is entered 45,000 times a second. To measure it, add the entry
+    // back and set LB_NATIVE_EAT=1.
+    static const bool want = std::getenv("LB_NATIVE_EAT") != nullptr;
+    if (!want || !native_logic_effective()) {
+        if (original) original();
+        return;
+    }
+    const uint32_t h = g_cpu.R[0];
+    uint32_t e = 0, r1 = g_cpu.R[1], r2 = g_cpu.R[2], r3 = g_cpu.R[3];
+    bool miss = false;
+    if (!eat_native(h, &e, &r1, &r2, &r3, &miss)) {
+        if (original) original();
+        return;
+    }
+    if (native_check_mode()) {
+        w.c = e;
+        wrap_start(w, kEntityAtTile);
+        return;
+    }
+    if (miss) {   // the none handle into the caller's
+        const uint32_t nonep = bus_read_u32(0x0208745Cu);
+        bus_write_u8(h, bus_read_u8(nonep));
+        bus_write_u8(h + 1u, bus_read_u8(nonep + 1u));
+        g_cpu.R[1] = bus_read_u8(nonep + 1u);
+        g_cpu.R[12] = 0x02087454u;
+    } else {
+        g_cpu.R[1] = r1;
+        g_cpu.R[2] = r2;
+        g_cpu.R[3] = r3;
+    }
+    g_cpu.R[0] = e;
+    native_count_log(2, "EntityAtTile 02087350", true);
+    lb_override_return();
+}
+
+// FogMap_FillCircle (0x020A16B4, Thumb; docs/63): r0 self, r1 the bit array,
+// r2 w, r3 h; on the stack cx, cy, R, value, ext_x (byte), ext_y (byte). A
+// midpoint circle, four FogMap_FillSpan (0x020A1670) calls a step:
+//   x0 = cx-x, x1 = ext_x+cx+x at y = cy-r and y = cy+r;
+//   x0 = cx-r, x1 = ext_y+cx+r at y = cy+x and y = cy-x;
+// then  if (d + r > 0) { r--; e2 -= 2; d -= e2; }
+//       if (x > d) { x++; e1 += 2; d += e1; }        while r >= x
+// with x = 0, d = 2 - 2R, e1 = 1, e2 = 2R - 1 (every value as the Thumb code
+// keeps it, 32-bit). FillSpan clamps x0 up to 0 and x1 down to w-1 (signed),
+// skips a row outside 0..h-1, and runs x0..x1 unsigned, setting or clearing
+// one bit each (BitArray2D_Set 0x020EEC2C: row [[arr+0x14] + 4y], byte x>>3,
+// bit x&7).
+constexpr uint32_t kFogCircle = 0x020A16B4u;   // thumb
+struct FogRows { uint32_t rows = 0; int32_t h = 0; };
+static void fog_span_native(uint32_t arr, int32_t w, int32_t h, int32_t x0, int32_t x1, int32_t y, bool v,
+                            uint8_t* shadow, int32_t stride) {
+    if (x0 < 0) x0 = 0;
+    if (x1 > w - 1) x1 = w - 1;
+    if (y >= h || y < 0) return;
+    if ((uint32_t)x0 > (uint32_t)x1) return;
+    // The bits x0..x1 of the row, a byte at a time (the same final bytes as
+    // one BitArray2D_Set per bit: each only ors or clears its own bit).
+    const uint32_t row = shadow ? 0u : bus_read_u32(bus_read_u32(arr + 0x14u) + 4u * (uint32_t)y);
+    const uint32_t ux0 = (uint32_t)x0, ux1 = (uint32_t)x1;
+    for (uint32_t byte = ux0 >> 3; byte <= (ux1 >> 3); ++byte) {
+        const uint32_t lo = byte == (ux0 >> 3) ? (ux0 & 7u) : 0u;
+        const uint32_t hi = byte == (ux1 >> 3) ? (ux1 & 7u) : 7u;
+        const uint8_t m = (uint8_t)(((0xFFu << lo) & (0xFFu >> (7u - hi))) & 0xFFu);
+        if (shadow) {
+            uint8_t& b = shadow[(size_t)y * (size_t)stride + byte];
+            b = v ? (uint8_t)(b | m) : (uint8_t)(b & ~m);
+        } else {
+            const uint8_t b = bus_read_u8(row + byte);
+            bus_write_u8(row + byte, v ? (uint8_t)(b | m) : (uint8_t)(b & ~m));
+        }
+    }
+}
+static void fog_circle_native(uint32_t arr, int32_t w, int32_t h, int32_t cx, int32_t cy, int32_t R,
+                              bool v, int32_t ext_x, int32_t ext_y, uint8_t* shadow, int32_t stride) {
+    int32_t r = R, x = 0, e1 = 1, d = (1 - R) * 2, e2 = 2 * R - 1;
+    if (r < 0) return;
+    do {
+        fog_span_native(arr, w, h, cx - x, ext_x + cx + x, cy - r, v, shadow, stride);
+        fog_span_native(arr, w, h, cx - x, ext_x + cx + x, cy + r, v, shadow, stride);
+        fog_span_native(arr, w, h, cx - r, ext_y + cx + r, cy + x, v, shadow, stride);
+        fog_span_native(arr, w, h, cx - r, ext_y + cx + r, cy - x, v, shadow, stride);
+        if (d + r > 0) { --r; e2 -= 2; d -= e2; }
+        if (x > d) { ++x; e1 += 2; d += e1; }
+    } while (r >= x);
+}
+CallWrap g_wrap_fog;
+std::vector<uint8_t> g_fog_want;
+void fog_circle_override(void) {
+    CallWrap& w = g_wrap_fog;
+    const int st = w.active ? wrap_state(w, lb_dispatch_original(0, kFogCircle)) : 0;
+    if (st == 1) return;
+    if (st == 2) {   // LB_NATIVE_CHECK: every row, ours against the cartridge's
+        static uint64_t checked = 0, differ = 0;
+        ++checked;
+        const uint32_t arr = w.a;
+        const int32_t h = (int32_t)w.b, stride = (int32_t)w.c;
+        const uint32_t rows = bus_read_u32(arr + 0x14u);
+        bool same = true;
+        for (int32_t y = 0; same && y < h; ++y) {
+            const uint32_t row = bus_read_u32(rows + 4u * (uint32_t)y);
+            for (int32_t k = 0; same && k < stride; ++k)
+                same = bus_read_u8(row + (uint32_t)k) == g_fog_want[(size_t)y * (size_t)stride + (size_t)k];
+        }
+        if (!same && ++differ <= 8u)
+            std::fprintf(stderr, "[lb_native] DIFFER FogMap_FillCircle\n");
+        if ((checked & 0xFFFu) == 0u)
+            std::fprintf(stderr, "[lb_native] check FogMap_FillCircle: %llu calls, %llu differ\n",
+                         (unsigned long long)checked, (unsigned long long)differ);
+        wrap_finish(w);
+        return;
+    }
+    // Exact (LB_NATIVE_CHECK: 12,288 calls, no difference). The first version
+    // wrote a bit at a time (two debug-bus calls a fog bit); spans are now set
+    // a byte at a time. LB_NATIVE_FOG=0 leaves it to the cartridge.
+    static const bool want = [] {
+        const char* v = std::getenv("LB_NATIVE_FOG");
+        return !(v && v[0] == '0');
+    }();
+    if (!want || !native_logic_effective()) {
+        if (void (*o)(void) = lb_dispatch_original(0, kFogCircle)) o();
+        return;
+    }
+    const uint32_t arr = g_cpu.R[1];
+    const int32_t wd = (int32_t)g_cpu.R[2], h = (int32_t)g_cpu.R[3];
+    const uint32_t sp = g_cpu.R[13];
+    const int32_t cx = (int32_t)bus_read_u32(sp), cy = (int32_t)bus_read_u32(sp + 4u);
+    const int32_t R = (int32_t)bus_read_u32(sp + 8u);
+    const bool v = bus_read_u32(sp + 0xCu) != 0u;
+    const int32_t ex = bus_read_u8(sp + 0x10u), ey = bus_read_u8(sp + 0x14u);
+    if (!guest_ptr(arr) || wd <= 0 || h <= 0 || wd > 4096 || h > 4096 || R > 4096) {
+        if (void (*o)(void) = lb_dispatch_original(0, kFogCircle)) o();
+        return;
+    }
+    if (native_check_mode()) {
+        const int32_t stride = (wd + 7) / 8;
+        g_fog_want.assign((size_t)h * (size_t)stride, 0);
+        const uint32_t rows = bus_read_u32(arr + 0x14u);
+        for (int32_t y = 0; y < h; ++y) {
+            const uint32_t row = bus_read_u32(rows + 4u * (uint32_t)y);
+            for (int32_t k = 0; k < stride; ++k)
+                g_fog_want[(size_t)y * (size_t)stride + (size_t)k] = bus_read_u8(row + (uint32_t)k);
+        }
+        fog_circle_native(arr, wd, h, cx, cy, R, v, ex, ey, g_fog_want.data(), stride);
+        w.a = arr;
+        w.b = (uint32_t)h;
+        w.c = (uint32_t)stride;
+        // Six stack arguments, carried below the stack pointer the call gets.
+        w.lr = g_cpu.R[14];
+        w.sp = sp;
+        w.sp_call = (sp - 32u) & ~7u;
+        for (uint32_t k = 0; k < 6u; ++k) bus_write_u32(w.sp_call + 4u * k, bus_read_u32(sp + 4u * k));
+        w.active = true;
+        w.calling = true;
+        g_cpu.R[13] = w.sp_call;
+        g_cpu.R[14] = kFogCircle | 1u;
+        g_cpu.R[15] = kFogCircle;
+        runtime_dispatch_with_exchange(kFogCircle | 1u);
+        return;
+    }
+    fog_circle_native(arr, wd, h, cx, cy, R, v, ex, ey, nullptr, 0);
+    native_count_log(3, "FogMap_FillCircle 020A16B4", true);
+    lb_override_return();
+}
+
+void tile_gather_observer(void) {
+    if (g_wrap_gather.active) {   // LB_NATIVE_CHECK's return from the cartridge's run
+        const int st = wrap_state(g_wrap_gather, lb_dispatch_original(0, kTileGather));
+        if (st == 1) return;
+        if (st == 2) {
+            gather_check_finish();
+            wrap_finish(g_wrap_gather);
+            return;
+        }
+    }
+    static const bool on = std::getenv("LB_GATHERLOG") != nullptr;
+    if (on) {
+        struct Site { uint32_t lr; uint64_t calls, tiles; };
+        static Site sites[8];
+        static uint32_t last_vb = 0, frames = 0;
+        static uint64_t calls = 0, tiles = 0;
+        const uint32_t rect = g_cpu.R[2];
+        const int x0 = bus_read_u8(rect + 0x08u), x1 = bus_read_u8(rect + 0x10u);
+        const int y0 = bus_read_u8(rect + 0x09u), y1 = bus_read_u8(rect + 0x11u);
+        const uint64_t area = (x1 >= x0 && y1 >= y0)
+            ? uint64_t(x1 - x0 + 1) * uint64_t(y1 - y0 + 1) : 0u;
+        const uint32_t lr = g_cpu.R[14];
+        ++calls;
+        tiles += area;
+        for (Site& s : sites) {
+            if (s.lr == lr || s.lr == 0u) {
+                s.lr = lr;
+                ++s.calls;
+                s.tiles += area;
+                break;
+            }
+        }
+        const uint32_t vb = bus_read_u32(kVBlankCounter);
+        if (vb != last_vb) {
+            last_vb = vb;
+            if (++frames == 300u) {
+                std::fprintf(stderr,
+                             "[lb_gather] 300 VBlanks: %.1f calls, %.0f tiles "
+                             "scanned per VBlank; by caller:",
+                             calls / 300.0, tiles / 300.0);
+                for (const Site& s : sites)
+                    if (s.lr)
+                        std::fprintf(stderr, " %08X %.1f calls %.0f tiles;",
+                                     (unsigned)s.lr, s.calls / 300.0,
+                                     s.tiles / 300.0);
+                std::fprintf(stderr, " (last rect x %d..%d y %d..%d)\n",
+                             x0, x1, y0, y1);
+                std::fflush(stderr);
+                frames = 0;
+                calls = tiles = 0;
+                for (Site& s : sites) s = Site{};
+            }
+        }
+    }
+    if (!on && native_logic_effective()) {
+        if (native_check_mode()) { gather_check_start(nullptr); return; }
+        if (gather_native_apply()) { lb_override_return(); return; }
+    }
+    if (void (*original)(void) = lb_dispatch_original(0, kTileGather)) original();
 }
 
 // BR-0063 (docs/477): ENEMY SPECIALS SEEN IN THE FOG. The field draw
@@ -5389,6 +6254,55 @@ void occ_layers_override(void) {
     lb_override_return();
 }
 
+// SG-0106 (docs/481): WHO MAY BOARD A TRANSPORT, PER UNIT.
+//
+// The cartridge has no category list for boarding. A transport's hold
+// (FUN_020010E0, category 5: 4 places for occupant classes 0-3, 2 for class 4,
+// 6 for class 6; the class is the table at 0x02142920 indexed by category:
+// 0 1 2 3 2 6 4 -- so heroes, builders, foot and mounted share the 4, siege/
+// specials the 2) limits how many, and ONE test says who: "the transport is
+// category 5 and the occupant can stand on water", FUN_02001510(occupant's
+// holder, 3), i.e. its +0x18. It is made in three places, each refusing the
+// boarding when it answers non-zero:
+//   0x02053910  Sim::LoadAction::virtual_02 (0x020537B0), the walk-in step
+//               (`bl 0x02001510` at 0x0205390C; refusal = state 2);
+//   0x0206BC20  Sim::GarrisonEntityCommand::virtual_08 (0x0206BBDC), when the
+//               order starts (`bl` at 0x0206BC1C; refusal = state 3);
+//   0x0205B1C4  FUN_0205B144, the hold's admission test inside the add
+//               (FUN_0205B2FC; `bl` at 0x0205B1C0).
+// (the return addresses; docs/463 already lists those three as direct callers
+// of FUN_02001510, all through runtime_dispatch_literal_call). So stock
+// flyers and ships never board, and every other unit may. The player's order
+// (GarrisonCommand, type 21, from the stylus action 0x14 handler 0x020A905C)
+// and the sim's per-unit order (FUN_02084768) apply no filter of their own.
+// For a unit whose +0x0A is 1 (Can board) passability_override answers 0 at
+// those three sites, and for 2 (Cannot board) it answers 1; anything else (the
+// stock 0xA2) reaches the cartridge's own test. The test is made only for a
+// category 5 carrier, so Cannot board means "no category 5 transport".
+constexpr uint32_t kBoardOff = 0x0Au;
+static bool board_site(uint32_t lr) {
+    lr &= ~1u;
+    return lr == 0x02053910u || lr == 0x0206BC20u || lr == 0x0205B1C4u;
+}
+// The forced answer for an occupant's holder, or -1 for the cartridge's.
+static int board_answer(uint32_t holder) {
+    const uint32_t record = guest_ptr(holder) ? bus_read_u32(holder + 4u) : 0u;
+    if (!guest_ptr(record)) return -1;
+    const uint8_t v = bus_read_u8(record + kBoardOff);
+    if (v != 1u && v != 2u) return -1;
+    static uint32_t said[16] = {};
+    static int n = 0;
+    bool seen = false;
+    for (int i = 0; i < n; ++i) seen = seen || said[i] == record;
+    if (!seen && n < 16) {
+        said[n++] = record;
+        std::fprintf(stderr, "[lb_board] record %08X: %s a transport (per-unit setting, site %08X)\n",
+                     (unsigned)record, v == 1u ? "may board" : "may not board", (unsigned)(g_cpu.R[14] & ~1u));
+        std::fflush(stderr);
+    }
+    return v == 1u ? 0 : 1;
+}
+
 void passability_override(void) {
     // The path finder asks this for every cell it looks at, so the lifted
     // body is looked up once (lb_dispatch_original's memo is 64 entries and
@@ -5405,6 +6319,63 @@ void passability_override(void) {
             return;
         }
     }
+    // SG-0106 (docs/481): boarding, see board_answer below.
+    if (g_cpu.R[1] == 3u && board_site(g_cpu.R[14])) {
+        const int a = board_answer(g_cpu.R[0]);
+        if (a >= 0) {
+            g_cpu.R[0] = (uint32_t)a;
+            lb_override_return();
+            return;
+        }
+    }
+    if (original) original();
+}
+
+// SG-0101 (docs/481): THE SPEED-BOOST ICON, PER UNIT.
+//
+// FUN_0205F6C0 (ARM; r0 the entity) refreshes the icons over a unit when its
+// buffs change (called from FUN_0205F678 when entity+0x226 is set). For the
+// speed slot it reads the category [[e+0x160]+8]+0x5C inline: 5 or 6 adds
+// effect 0xD (`mov r1,#0xd` 0x0205F924, `bl 0x0205FADC` 0x0205F930), anything
+// else effect 4 (0x0205F8F4 / 0x0205F900); the removal path makes the same
+// choice for FUN_0205FB8C (0x0205FA78 with 4, 0x0205FA84 with 0xD). Ids 5, 6,
+// 0x11 and 0xE are the other buff slots and are never touched. The effect ids are the
+// factory keys FUN_020163D0 registers: 4 -> 0x020206A0, which builds a
+// Battles::SpellIconsSpeedEffect (vtable 0x02143BE0; FUN_020200B8 kind 6,
+// icon 0x4D0, the legs), 0xD -> 0x02020AEC, a SpellIconsTradeWindEffect
+// (vtable 0x02143A0C; kind 9, icon 0x4CB, or 0x4B8 for a category 5/6 unit
+// that can enter water -- the ships). The icon ids' pictures were not looked
+// at: "0x4CB is the wheel" is inferred from which stock units show it.
+// FUN_0205FADC(e, id, offset, 100) adds the effect unless one with that id is
+// on the unit; FUN_0205FB8C(e, id) removes it. Both are called only from
+// FUN_0205F6C0, and every call goes through runtime_dispatch_literal_call
+// (lb_arm9_04.c), so these overrides see them all. For a unit whose +0x5A is
+// 1 (legs) or 2 (wheels), id 4/0xD is replaced by the chosen one before the
+// tail call; anything else (the stock 0xA2) is a pure tail call. The add
+// keeps the offset the cartridge computed for its own choice, so a forced
+// icon sits where that unit's own icon would.
+// Not purely cosmetic in principle (the entity keeps the effect handles), but
+// the byte is in the shared blueprint record (Balance set / unit.json), so
+// every machine and a replay make the same choice.
+constexpr uint32_t kSpeedIconAdd = 0x0205FADCu;   // arm
+constexpr uint32_t kSpeedIconDel = 0x0205FB8Cu;   // arm
+constexpr uint32_t kSpeedIconOff = 0x5Au;
+static void speed_icon_swap(uint32_t e) {
+    if (g_cpu.R[1] != 4u && g_cpu.R[1] != 0xDu) return;
+    const uint32_t rec = guest_ptr(e) ? unit_blueprint(e) : 0u;
+    if (!rec) return;
+    const uint8_t v = bus_read_u8(rec + kSpeedIconOff);
+    if (v == 1u) g_cpu.R[1] = 4u;
+    else if (v == 2u) g_cpu.R[1] = 0xDu;
+}
+void speed_icon_add_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kSpeedIconAdd);
+    speed_icon_swap(g_cpu.R[0]);
+    if (original) original();
+}
+void speed_icon_del_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kSpeedIconDel);
+    speed_icon_swap(g_cpu.R[0]);
     if (original) original();
 }
 
@@ -5641,24 +6612,26 @@ static bool ai_owns_built(uint32_t owner, uint32_t kind) {
     }
     return false;
 }
-// SG-0093 (docs/476): A CUSTOM UNIT'S "TRAINED AT" FIELD. unit.json
-// "trained_at" (lb_cunits.cpp) is kept in the record's padding byte +0x5B:
-// 1 Special Factory (kind 12), 2 Shipyard (kind 16); anything else (0, the
-// stock 0xA2) is Auto, the cartridge's rules. It counts only for a custom
-// unit's battle record in category 5 or 6 -- the two categories those
-// buildings list -- so no stock record, or a pack that writes the byte, is
-// affected. Returns the building kind, or 0 for Auto.
+// SG-0093 (docs/476): A UNIT'S "TRAINED AT" FIELD. unit.json "trained_at"
+// (lb_cunits.cpp) is kept in the record's padding byte +0x5B: 1 Special
+// Factory (kind 12), 2 Shipyard (kind 16); anything else (0, the stock 0xA2)
+// is Auto, the cartridge's rules. It counts only for a record in category 5
+// or 6, the two categories those buildings list. Returns the building kind,
+// or 0 for Auto.
+// SG-0100 (docs/481): stock records count too. Their byte is set only by the
+// Balance set in force (Balance > Traits "Trained at", field 31) -- the
+// player's, a replay's or the online host's -- because +0x5B is 0xA2 in all
+// 182 stock records and no bundled pack writes another value there.
 extern "C" int lb_cunits_count(void);                            /* lb_cunits.cpp */
 extern "C" unsigned int lb_cunits_battle_record(int k);
 extern "C" int lb_cunits_of_battle_record(unsigned int rec);
 constexpr uint32_t kTrainedAtOff = 0x5Bu;
-static int trained_at_kind(uint32_t rec, bool known_custom) {
+static int trained_at_kind(uint32_t rec) {
     if (!guest_ptr(rec)) return 0;
     const uint8_t cat = bus_read_u8(rec + 0x5Cu);
     if (cat != 5u && cat != 6u) return 0;
     const uint8_t v = bus_read_u8(rec + kTrainedAtOff);
     if (v != 1u && v != 2u) return 0;
-    if (!known_custom && lb_cunits_of_battle_record(rec) < 0) return 0;
     return v == 1u ? 12 : 16;
 }
 // The player's rule (FUN_020D9844): a shipyard unit is water-only on the surface.
@@ -5672,12 +6645,13 @@ void ai_trainer_kind_override(void) {
     const uint32_t flags = guest_ptr(holder) ? bus_read_u32(holder + 4u) : 0u;   // the cartridge's [r1+4]
     const uint32_t rec = guest_ptr(holder) ? bus_read_u32(holder + 8u) : 0u;     // and [r1+8]
     const uint32_t cat = guest_ptr(rec) ? bus_read_u8(rec + 0x5Cu) : 0xFFu;
-    // SG-0093: a custom unit's own choice wins, whether or not the AI owns
+    // SG-0093: a unit's own choice wins (a custom unit's, or since SG-0100 a
+    // stock unit's from the Balance set), whether or not the AI owns
     // that building yet (the player cannot train it anywhere else either;
     // FUN_0208C564 then answers "not now" until it does, as for a stock ship
     // with no shipyard). Always returns 1, as the cartridge's function does.
     if (g_cpu.R[2] != 0u && (cat == 5u || cat == 6u)) {
-        const int forced = trained_at_kind(rec, false);
+        const int forced = trained_at_kind(rec);
         if (forced) {
             bus_write_u32(g_cpu.R[2], (uint32_t)forced);
             g_cpu.R[0] = 1u;
@@ -5687,7 +6661,8 @@ void ai_trainer_kind_override(void) {
             for (int i = 0; i < n; ++i) seen = seen || said[i] == rec;
             if (!seen && n < 8) {
                 said[n++] = rec;
-                std::fprintf(stderr, "[lb_aitrain] custom record %08X (category %u): trained_at says the %s\n",
+                std::fprintf(stderr, "[lb_aitrain] %s record %08X (category %u): trained_at says the %s\n",
+                             lb_cunits_of_battle_record(rec) >= 0 ? "custom" : "stock",
                              (unsigned)rec, (unsigned)cat, forced == 16 ? "shipyard" : "special factory");
                 std::fflush(stderr);
             }
@@ -5763,32 +6738,44 @@ void train_list_override(void) {
     const bool bld_ok = guest_ptr(bld) || (bld >= 0x027C0000u && bld < 0x02800000u);
     const uint32_t brec = bld_ok ? bus_read_u32(bld + 8u) : 0u;
     const uint32_t kind = guest_ptr(brec) ? bus_read_u8(brec + 0x5Cu) : 0xFFu;
-    const int n = (kind == 12u || kind == 16u) ? lb_cunits_count() : 0;
-    uint8_t newv[64];
+    const bool trainer = kind == 12u || kind == 16u;
+    const int ncu = trainer ? lb_cunits_count() : 0;
+    // SG-0100 (docs/481): the 182 stock records after the custom ones. The
+    // swap is harmless for a record this building's roster does not list:
+    // nothing but this list builder runs while the bytes are swapped.
+    const uint32_t bpbase = trainer ? lb_patches_blueprint_base() : 0u;
+    const int nstock = bpbase ? 182 : 0;
+    uint8_t newv[kWrapBytes];
     w.n = 0;
-    for (int k = 0; k < n; ++k) {
-        const uint32_t rec = lb_cunits_battle_record(k);
-        const int want = trained_at_kind(rec, true);
+    for (int k = 0; k < ncu + nstock; ++k) {
+        const bool custom = k < ncu;
+        const uint32_t rec = custom ? lb_cunits_battle_record(k)
+                                    : bpbase + 4u + (uint32_t)(k - ncu) * 0x7Cu;
+        const int want = trained_at_kind(rec);
         if (!want || (want == 16) == list_rule_shipyard(rec)) continue;
         static const uint8_t kShip[4][2] = {{0x16, 0}, {0x17, 0}, {0x18, 1}, {0x1A, 1}};
         static const uint8_t kFactory[1][2] = {{0x16, 1}};
         const uint8_t(*set)[2] = want == 16 ? &kShip[0] : &kFactory[0];
         const int m = want == 16 ? 4 : 1;
-        if (w.n + m > 64) break;   // 64 bytes: 16 shipyard units per call at the least
+        if (w.n + m > kWrapBytes) break;   // 160 bytes: 40 shipyard units per call at the least
         for (int b = 0; b < m; ++b) {
             w.rec[w.n] = rec + set[b][0];
             w.old[w.n] = bus_read_u8(rec + set[b][0]);
             newv[w.n] = set[b][1];
             ++w.n;
         }
-        static uint32_t said[8] = {};
+        static uint32_t said[16] = {};
         static int ns = 0;
         bool seen = false;
         for (int i = 0; i < ns; ++i) seen = seen || said[i] == rec;
-        if (!seen && ns < 8) {
+        if (!seen && ns < 16) {
             said[ns++] = rec;
-            std::fprintf(stderr, "[lb_trainat] custom unit %d (record %08X): listed at the %s only (trained_at)\n",
-                         k + 1, (unsigned)rec, want == 16 ? "shipyard" : "special factory");
+            if (custom)
+                std::fprintf(stderr, "[lb_trainat] custom unit %d (record %08X): listed at the %s only (trained_at)\n",
+                             k + 1, (unsigned)rec, want == 16 ? "shipyard" : "special factory");
+            else
+                std::fprintf(stderr, "[lb_trainat] stock unit %d (record %08X): listed at the %s only (trained_at)\n",
+                             k - ncu, (unsigned)rec, want == 16 ? "shipyard" : "special factory");
             std::fflush(stderr);
         }
     }
@@ -8100,6 +9087,14 @@ constexpr uint32_t kCreatureSprAnim = 0x0203ABC8u;   // Unit_BuildBillboard (it 
 constexpr uint32_t kCreatureSprLoad = 0x02035F7Cu;
 void creature_sprite_anim_override(void);
 void creature_sprite_load_override(void);
+// The larger sprite pool (docs/479): the slot allocator, the page writer and
+// the level's sprite teardown. Defined with the cloak, below.
+constexpr uint32_t kSprSlotAlloc = 0x0202DD18u;   // arm
+constexpr uint32_t kSprPageWrite = 0x0202E014u;   // arm
+constexpr uint32_t kSprTeardown = 0x0203638Cu;    // arm
+void spr_slot_alloc_override(void);
+void spr_page_write_override(void);
+void spr_teardown_override(void);
 constexpr uint32_t kRegisterMissions = 0x02045E50u;   // thumb
 constexpr uint32_t kRegisterLoop = 0x02045E58u;
 constexpr uint32_t kMissionTable = 0x02147DDCu;
@@ -9670,6 +10665,11 @@ extern "C" void lb_teal_screen_fix(uint32_t screen) {
     }
 }
 
+// SG-0081 (docs/483): the match setup's step (stage 3 deals the starts);
+// start_deal_override is defined beside the Free Play helpers below.
+constexpr uint32_t kStartDeal = 0x020A2DF8u;   // thumb
+void start_deal_override(void);
+
 
 // MUST BE SORTED ASCENDING BY ADDRESS. This is not a style preference.
 //
@@ -9711,6 +10711,10 @@ const NdsDispatchEntry kOverrideTable[] = {
     /* ARM. BR-0053: a mountains unit's cell check takes no area. */
     {kCellCheck, 0u, cell_check_override, nullptr},        /* 0x02001938 */
     {kEbpLoaded, 0u, ebp_loaded_override, nullptr},        /* 0x02001EE0 */
+    /* Thumb. A world position to its tile cell (x/24, y/16 through FX_Div,
+       four divider round trips): with Native Game Logic, here (docs/479).
+       Otherwise a pure tail call. */
+    {kPosToCell, 1u, pos_to_cell_override, nullptr},       /* 0x020085A0 */
     /* ARM. THE DECOMPILATION'S FIRST GRADED FUNCTION, not a patch. With
        LB_SHADOW unset this delegates to the cartridge and only counts; with
        LB_SHADOW=native it runs src/battles/registry.c instead. docs/333. */
@@ -9721,6 +10725,11 @@ const NdsDispatchEntry kOverrideTable[] = {
        owned creature draws with its owner-tinted palette bank (docs/437).
        Otherwise a pure tail call. */
     {kBillboardDraw, 0u, billboard_draw_override, nullptr}, /* 0x0202DA80 */
+    /* ARM. The larger sprite pool (docs/479): a sheet that finds no slot of
+       the 33 goes to the extension table; a page byte for it names its index
+       there. Otherwise pure tail calls. */
+    {kSprSlotAlloc, 0u, spr_slot_alloc_override, nullptr}, /* 0x0202DD18 */
+    {kSprPageWrite, 0u, spr_page_write_override, nullptr}, /* 0x0202E014 */
     {kFeCard, 0u, fe_card_override, nullptr},              /* 0x02030A70 */
     /* ARM. The level load's sprite step: a Mounted (or Hero) creature loads
        as a Close Combat unit (docs/438). */
@@ -9728,6 +10737,9 @@ const NdsDispatchEntry kOverrideTable[] = {
     /* ARM. The level loader ("Maps/" + name + ".map"): an observer that notes
        the map's name for the master server's log (docs/394). */
     {kMapLoad, 0u, map_load_observer, nullptr},            /* 0x02035FAC */
+    /* ARM. The level's sprite teardown: also frees the extension table's
+       sheets (docs/479). Otherwise a pure tail call. */
+    {kSprTeardown, 0u, spr_teardown_override, nullptr},    /* 0x0203638C */
     /* ARM. Runs immediately after the placement painter, from its only
        caller. Harvests the band the painter has just drawn, puts the native
        buffer back, and restores the camera -- all BEFORE the cartridge's own
@@ -9782,9 +10794,20 @@ const NdsDispatchEntry kOverrideTable[] = {
        asked about state 0xB by the HUD or the AI hero answers no (docs/453).
        Otherwise a pure tail call. */
     {kEntityState, 0u, entity_state_override, nullptr},    /* 0x0205A118 */
+    /* ARM, a leaf. The melee damage before armour (func_0205CC88): an
+       attacker whose +0x0B is set hits a structure with its own bonus in
+       place of the matchup table's (SG-0097, docs/482). Otherwise a pure
+       tail call. Reached only through func_0205F0F0's bx r12. */
+    {kMeleeMatchup, 0u, melee_matchup_override, nullptr},  /* 0x0205CC88 */
     /* GRADED, NOT PATCHED. docs/333. */
     {kU16IsSet, 0u, u16_is_set_shadow, nullptr},           /* 0x0205E638 */
     {kSetHp, 0u, set_hp_override, nullptr},                /* 0x0205E7F4 */
+    /* ARM. The speed-boost icon's add and remove, called only from
+       FUN_0205F6C0: a unit whose +0x5A is 1/2 gets the legs (effect 4) or the
+       wheels (effect 0xD) in place of its category's (SG-0101, docs/481).
+       Otherwise a pure tail call. */
+    {kSpeedIconAdd, 0u, speed_icon_add_override, nullptr}, /* 0x0205FADC */
+    {kSpeedIconDel, 0u, speed_icon_del_override, nullptr}, /* 0x0205FB8C */
     /* ARM. Sim::Unit's draw test (vtable +0xC): logs another army's special
        drawn while its cell is fogged (BR-0063, docs/477); the result is the
        cartridge's own. Not during a replay. */
@@ -9844,6 +10867,13 @@ const NdsDispatchEntry kOverrideTable[] = {
     /* Thumb. Observer only (LB_AI_CENSUS): the AI's mine and bridge build
        requests. Registered only with the variable. SG-0032 / docs/444. */
     {kAiQueueBuild, 1u, ai_queue_build_observer, nullptr}, /* 0x02097374 */
+    /* Thumb. FogMap_FillCircle: with Native Game Logic, filled here
+       (docs/479). Otherwise a pure tail call. */
+    {kFogCircle, 1u, fog_circle_override, nullptr},        /* 0x020A16B4 */
+    /* Thumb. The match setup's step: with Start Position set (Free Play,
+       offline), stage 3's deal of the starts is rearranged after it returns
+       (SG-0081, docs/483). Otherwise a pure tail call. */
+    {kStartDeal, 1u, start_deal_override, nullptr},        /* 0x020A2DF8 */
     /* Thumb. The map parser: Force Tileset's name, and each level's world;
        otherwise a pure tail call. docs/387. */
     /* Thumb. Terrain_FillWindow: a forced level's detail cells and blank
@@ -9970,6 +11000,9 @@ const NdsDispatchEntry kOverrideTable[] = {
     {kWhEnd, 0u, vwh_end_override, nullptr},               /* 0x020F4598 */
     /* ARM. A mod map's lobby id, translated to this machine's copy; docs/413. */
     {kLobbyPacket, 0u, lobby_packet_override, nullptr},    /* 0x020F5168 */
+    /* ARM. FX_Div: with Native Game Logic, the quotient computed here, not
+       through the emulated divider (docs/479). Otherwise a pure tail call. */
+    {kFxDiv, 0u, fxdiv_override, nullptr},                 /* 0x0210A6F4 */
     /* ARM. The four WM calls the game makes past WH. docs/423. */
     {kWmConnectedAids, 0u, wm_connected_override, nullptr}, /* 0x02118628 */
     {kWmLinkLevel, 0u, wm_link_override, nullptr},         /* 0x021188C4 */
@@ -9990,8 +11023,10 @@ const NdsDispatchEntry kOverrideTable[] = {
 // fault after shipping; this refuses to build. Every future entry must be
 // inserted in address order or the build stops here with this message.
 static_assert(kRosterBuild < kPassability && kPassability < kOccLayers && kOccLayers < kCellCheck && kCellCheck < kEbpLoaded &&
-              kEbpLoaded < kRegistryFind &&
-              kRegistryFind < kBillboardDraw && kBillboardDraw < kFeCard &&
+              kEbpLoaded < kPosToCell && kPosToCell < kRegistryFind &&
+              kRegistryFind < kBillboardDraw && kBillboardDraw < kSprSlotAlloc &&
+              kSprSlotAlloc < kSprPageWrite && kSprPageWrite < kFeCard &&
+              kMapLoad < kSprTeardown && kSprTeardown < kFpPost &&
               kSelRect < kReadyToggle && kReadyToggle < kMainMenuUpdate &&
               kReadyToggle < kClientLobbyShow &&
               kClientLobbyShow < kClientLobbyTick &&
@@ -10020,6 +11055,8 @@ static_assert(kRosterBuild < kPassability && kPassability < kOccLayers && kOccLa
               kRegisterMissions < kGfxTransfer &&
               kGfxTransfer < kImageXfer && kImageXfer < kSetOwner &&
               kSetOwner < kSetHp && kSetHp < kApplyDamage &&
+              kSetHp < kSpeedIconAdd && kSpeedIconAdd < kSpeedIconDel &&
+              kSpeedIconDel < kUnitDrawTest && kUnitDrawTest < kApplyDamage &&
               kApplyDamage < kResearchStep && kResearchStep < kEmpApply &&
               kEmpApply < kEmpCollect && kEmpCollect < kHealTick &&
               kHealTick < kHotWireTick &&
@@ -10028,7 +11065,7 @@ static_assert(kRosterBuild < kPassability && kPassability < kOccLayers && kOccLa
               kTileGather < kMovePickDest && kMovePickDest < kTeamAddBricks && kTeamAddBricks < kAiMineScore && kAiMineScore < kSetMusicSide &&
               kSetMusicSide < kEntitySound && kEntitySound < kAiTrainerKind &&
               kAiTrainerKind < kAiUpgradePick && kAiUpgradePick < kAiQueueBuild &&
-              kSetMusicSide < kAiQueueBuild && kAiQueueBuild < kFillWindow && kFillWindow < kMapParse &&
+              kSetMusicSide < kAiQueueBuild && kAiQueueBuild < kFogCircle && kFogCircle < kStartDeal && kStartDeal < kFillWindow && kFillWindow < kMapParse &&
               kMapParse < kMinesLoad && kMinesLoad < kMarkLoad && kMarkLoad < kMinesGet && kMinesGet < kFloatNumber && kFloatNumber < kTouchRect &&
               kTouchRect < kMoveIssue &&
               kMoveIssue < kHotwireTags && kHotwireTags < kClickDispatch && kClickDispatch < kSelRect &&
@@ -10043,11 +11080,12 @@ static_assert(kRosterBuild < kPassability && kPassability < kOccLayers && kOccLa
               kWhChildConnect < kWhShared && kWhShared < kWhStep &&
               kWhStep < kWhReset && kWhReset < kWhFinalize &&
               kWhFinalize < kWhEnd && kWhEnd < kLobbyPacket &&
-              kLobbyPacket < kWmConnectedAids &&
+              kLobbyPacket < kFxDiv && kFxDiv < kWmConnectedAids &&
               kWmConnectedAids < kWmLinkLevel && kWmLinkLevel < kWmSetGameInfo &&
               kWmSetGameInfo < kWmSetEntry && kWmSetEntry < kFAdd &&
               kFAdd < kFMul && kFMul < kFSub && kFSub < kDivMod &&
-              kSetOwner < kEntityState && kEntityState < kU16IsSet &&
+              kSetOwner < kEntityState && kEntityState < kMeleeMatchup &&
+              kMeleeMatchup < kU16IsSet &&
               kSetOwner < kU16IsSet && kU16IsSet < kSetHp &&
               kSetHp < kUnitDrawTest && kUnitDrawTest < kListFind && kListFind < kApplyDamage &&
               kFeCard < kCreatureSprLoad && kCreatureSprLoad < kMapLoad &&
@@ -10342,6 +11380,101 @@ void snapshot_same_builders() {
     }
 }
 
+// ── SG-0099 (docs/482): LEGO Store prices ───────────────────────────────────
+//
+// The store sells a unit as its minifig card: a CollectableItemBlueprint
+// (records 209..550 of BP/Entities.ebp, 0x70 bytes, after the 182 units and
+// 27 projectiles) of category 11 (+0x5C), whose +0x60 is the unit's index.
+// Its price is the card's u16 at +0x68, read inline wherever the store needs
+// it, from the holder's record ([holder+8]+0x68):
+//   FUN_020CEE4C   the purchase prompt: price != 0, unlocked, not owned,
+//                  price <= studs (FUN_0204F680, the u16 at 0x02154E54);
+//   FUN_020CEFB8   the purchase: studs = studs - price (FUN_0204FF94), then
+//                  the save;
+//   User::StoreMiniFigs::v09 (0x020CF374), FUN_020CF4D0   the screen's
+//                  "can afford" marks and the price text;
+//   FUN_020CE964   the list: tests price == 0 together with the unlock
+//                  test (FUN_020EB658), so 0 reads as "not for sale".
+// The other store screens (concept art FUN_020CB78C/FUN_020CB8FC, hints,
+// maps) read the same +0x68 of their own items and are not touched here.
+// No pack writes a card (they end before 0x6468, the first card), and the
+// battle code was not seen reading a category 11 card's +0x68 (inferred from
+// the Ghidra corpus: every reader found is a store screen).
+//
+// So a price of the player's is that word, written in RAM; the card keeps its
+// stock word otherwise. Only cards whose stock price is above 0 are offered:
+// 0 means "not for sale" to FUN_020CE964. Front end only -- it changes what
+// this save's studs buy, never the simulation -- so no replay event, host
+// rule or online field carries it.
+struct StoreCard { int rec = -1, stock = -1; };
+std::vector<StoreCard> g_store_cards;          // by stock unit index, once loaded
+std::atomic<bool> g_store_cards_loaded{false};
+std::mutex g_store_cards_mu;
+constexpr uint32_t kCardsFirst = 4u + 182u * 0x7Cu + 27u * 0x74u;   // record 209
+bool store_cards_load() {
+    if (g_store_cards_loaded.load()) return true;
+    std::lock_guard<std::mutex> lock(g_store_cards_mu);
+    if (g_store_cards_loaded.load()) return true;
+    std::vector<uint8_t> f;
+    if (!lb_mods_blueprint_own(&f)) return false;   // the ROM is not loaded yet
+    std::vector<StoreCard> cards(182);
+    for (int rec = 209; rec < 551; ++rec) {
+        const size_t r = kCardsFirst + (size_t)(rec - 209) * 0x70u;
+        if (r + 0x70u > f.size()) break;
+        if (f[r + 0x5Cu] != 11u) continue;
+        const uint32_t unit = (uint32_t)f[r + 0x60u] | ((uint32_t)f[r + 0x61u] << 8) |
+                              ((uint32_t)f[r + 0x62u] << 16) | ((uint32_t)f[r + 0x63u] << 24);
+        if (unit >= 182u) continue;
+        cards[unit].rec = rec;
+        cards[unit].stock = (int)(f[r + 0x68u] | (f[r + 0x69u] << 8));
+    }
+    g_store_cards = std::move(cards);
+    g_store_cards_loaded.store(true);
+    return true;
+}
+
+}  // namespace
+
+// lb_overlay.h: the cartridge's price of stock unit `unit`, or -1 when it has
+// no card or the card's price is 0 (not sold). The menu's thread may call it.
+extern "C" int lb_store_stock_price(int unit) {
+    if (unit < 0 || unit >= 182 || !store_cards_load()) return -1;
+    const StoreCard& c = g_store_cards[(size_t)unit];
+    return c.rec >= 0 && c.stock > 0 ? c.stock : -1;
+}
+
+namespace {
+
+// Every 10 frames once the blueprints have settled: each sold card's price
+// is the player's (lb_setting_store_price) or the cartridge's. Nothing is
+// read or written while no price was ever set.
+void store_prices_tick() {
+    static unsigned frame = 0u;
+    static bool ours = false;   // a price of ours is in RAM
+    if (++frame % 10u != 0u || !g_blueprint_base || !store_cards_load()) return;
+    bool any = ours;
+    for (int u = 0; u < 182 && !any; ++u)
+        any = g_store_cards[(size_t)u].stock > 0 && lb_setting_store_price(u) > 0;
+    if (!any) return;
+    bool still = false;
+    for (int u = 0; u < 182; ++u) {
+        const StoreCard& c = g_store_cards[(size_t)u];
+        if (c.rec < 0 || c.stock <= 0) continue;
+        const uint32_t r = g_blueprint_base + kCardsFirst + (uint32_t)(c.rec - 209) * 0x70u;
+        // The card this expects, or leave it: another layout (a mod) is not ours to edit.
+        if (bus_read_u8(r + 0x5Cu) != 11u || bus_read_u32(r + 0x60u) != (uint32_t)u) continue;
+        const int set = lb_setting_store_price(u);
+        const int want = set > 0 ? set : c.stock;
+        still = still || set > 0;
+        const int now = (int)bus_read_u16(r + 0x68u);
+        if (now == want) continue;
+        bus_write_u16(r + 0x68u, (uint16_t)want);
+        std::fprintf(stderr, "[lb_store] unit %d (card %d): price %d -> %d (%s)\n", u, c.rec, now, want,
+                     set > 0 ? "yours" : "the game's");
+    }
+    ours = still;
+}
+
 // docs/386: THE BLOCK IS NOT FINISHED WHEN IT IS FOUND. The fingerprint
 // (record 62) matches while later records are still being written: a
 // snapshot taken at discovery held other bytes for records 145..199, and
@@ -10572,6 +11705,10 @@ void cloak_set(CatCloak& c, bool on) {
 // The three-way state machine shared by both wrappers. `target` is the
 // overridden function; `args` is how many stack words to carry (0 or 1).
 // Returns true when it handled the entry (the caller must return).
+static bool spr_ext_is_live(void);   // docs/479, below
+static void spr_ext_reset(void);
+static bool spr_ext_go_live(void);
+extern "C" int lb_setting_big_sprite_pool(void);   // lb_overlay.cpp
 bool cloak_enter(CatCloak& c, uint32_t target, void (*original)(void), bool per_entity) {
     if (c.active) {
         if (g_cpu.R[13] != c.sp_call) {   // another entry: not ours
@@ -10611,7 +11748,19 @@ bool cloak_enter(CatCloak& c, uint32_t target, void (*original)(void), bool per_
     bool share = false;
     if (!per_entity) {
         const int sets = sprite_sets_wanted();
-        share = sets > 9 && bus_read_u32(kSession + 0x74u) != 0u;
+        // The larger pool (docs/479) gives every army its own sheets; the
+        // sharing below is only the fallback with that setting off.
+        share = sets > 9 && bus_read_u32(kSession + 0x74u) != 0u && !lb_setting_big_sprite_pool();
+        if (sets > 9 && !share)
+            std::fprintf(stderr, "[lb_sprpool] the armies want %d three-sheet sprite sets, the pool holds 9: "
+                         "the rest go to the extension table (docs/479)\n", sets);
+        // A table left from a level whose teardown never ran: start afresh.
+        // With the setting the table is live for the whole battle, matches
+        // that fit included, so Unit_BuildBillboard keeps one byte state
+        // (its lifted copy in lb_arm9_patched has the depth, cage and
+        // this word together; a mix of them runs in the interpreter).
+        if (spr_ext_is_live()) spr_ext_reset();
+        if (lb_setting_big_sprite_pool()) spr_ext_go_live();
         if (share) {
             std::fprintf(stderr, "[lb_sprpool] the armies want %d three-sheet sprite sets, the pool holds 9: "
                          "sheets are shared between armies for this load (BR-0073)\n", sets);
@@ -10644,6 +11793,236 @@ bool cloak_enter(CatCloak& c, uint32_t target, void (*original)(void), bool per_
     runtime_dispatch_with_exchange(target);
     return true;
 }
+
+// THE LARGER SPRITE POOL (docs/479, setting "Larger Sprite Pool", on).
+//
+// The sprite manager ([0x02151DD8]) holds 51 sheet slots at +4: 0-32 the
+// level's unit pool (11 per army, kinds at 0x02127B28), 33-50 fixed sheets
+// for the interface and effects, and other fields from +0xD0 on, so the pool
+// cannot grow in place. A unit's page bytes ([[e+0xE0]+4]+0x2E+4k, u8) are
+// read against the manager at ONE place, Unit_BuildBillboard 0x0203AD34:
+//     ldr r1,=0x02151DD8 ; ldr r1,[r1] ; add r0,r1,page,lsl#2 ; ldr r5,[r0,#4]
+// When a sheet finds no slot, FUN_0202DD18 returns the overflow word
+// 0x02151DDC (read by nothing else) and the unit is drawn from slot 0.
+//
+// With the setting, such a sheet gets a slot of the EXTENSION TABLE instead,
+// 256 words in the zero run above the heap (kSprExt), index 51 and up. The
+// table is live from each battle's sprite load to its teardown, whether or
+// not a sheet overflows (one byte state for Unit_BuildBillboard; see
+// cloak_enter). While it is live:
+//  - the read becomes `ldr r1,[r1,#4]`, and 0x02151DDC holds kSprExt - 4, so
+//    the draw reads kSprExt[page];
+//  - kSprExt[0..50] mirror the manager's 51 slots, copied at every
+//    Unit_BuildBillboard entry (the only reader), so every other page reads
+//    exactly what it read before;
+//  - the page writer (FUN_0202E014) gives a sheet in the table its index.
+// The level's sprite teardown (FUN_0203638C) frees the table's sheets after
+// its own, through the cartridge's own FUN_0202E528 (each put in the emptied
+// slot 0 and freed there), then puts the instruction and the word back.
+// In a match whose sheets fit, every page reads what it read before.
+constexpr uint32_t kSprMgr = 0x02151DD8u;
+constexpr uint32_t kSprOverflow = 0x02151DDCu;
+constexpr uint32_t kSprExt = 0x023FB000u;          // 256 words, zero run above the heap
+constexpr uint32_t kSprRead = 0x0203AD34u;          // Unit_BuildBillboard's slot read
+constexpr uint32_t kSprReadStock = 0xE5911000u;     // ldr r1,[r1]
+constexpr uint32_t kSprReadExt = 0xE5911004u;       // ldr r1,[r1,#4]
+constexpr uint32_t kSprSlotFree = 0x0202E528u;      // arm: free manager slot r1
+constexpr int kSprMgrSlots = 51, kSprExtMax = 250;
+extern "C" int lb_setting_big_sprite_pool(void);   // lb_overlay.cpp
+struct SprExt {
+    bool live = false;             // the read is patched and the table is in use
+    int n = kSprMgrSlots;          // next free index
+    char name[256][48] = {};       // the sheet each index holds (by file name)
+    int freeing = kSprMgrSlots;    // teardown: next index to free
+};
+SprExt g_sprext;
+static bool spr_ext_is_live(void) { return g_sprext.live; }
+CallWrap g_wrap_sprslot;
+uint32_t g_sprslot_kind = 0;
+char g_sprslot_name[48] = {};
+
+static void spr_string(uint32_t str, char* out, size_t cap) {
+    out[0] = 0;
+    const uint32_t p = guest_ptr(str) ? bus_read_u32(str + 8u) : 0u;
+    if (!guest_ptr(p)) return;
+    size_t i = 0;
+    for (; i + 1 < cap; ++i) {
+        const char c = (char)bus_read_u8(p + (uint32_t)i);
+        if (!c) break;
+        out[i] = c;
+    }
+    out[i] = 0;
+}
+static void spr_ext_mirror(void) {
+    const uint32_t mgr = bus_read_u32(kSprMgr);
+    if (!guest_ptr(mgr)) return;
+    for (uint32_t i = 0; i < (uint32_t)kSprMgrSlots; ++i)
+        bus_write_u32(kSprExt + 4u * i, bus_read_u32(mgr + 4u + 4u * i));
+}
+static bool spr_ext_go_live(void) {
+    if (g_sprext.live) return true;
+    if (bus_read_u32(kSprRead) != kSprReadStock || bus_read_u32(kSprOverflow) != 0u) return false;
+    for (uint32_t i = 0; i < 256u; ++i)   // claimed only while it is all zeros
+        if (bus_read_u32(kSprExt + 4u * i) != 0u) {
+            std::fprintf(stderr, "[lb_sprpool] the extension table's memory (%08X) is in use: not extending\n", kSprExt);
+            return false;
+        }
+    spr_ext_mirror();
+    bus_write_u32(kSprOverflow, kSprExt - 4u);
+    bus_write_u32(kSprRead, kSprReadExt);
+    g_sprext.live = true;
+    g_sprext.n = kSprMgrSlots;
+    return true;
+}
+static void spr_ext_reset(void) {
+    if (g_sprext.live) {
+        if (bus_read_u32(kSprRead) == kSprReadExt) bus_write_u32(kSprRead, kSprReadStock);
+        bus_write_u32(kSprOverflow, 0u);
+        for (uint32_t i = 0; i < 256u; ++i) bus_write_u32(kSprExt + 4u * i, 0u);
+    }
+    g_sprext = SprExt{};
+}
+// The index a sheet object holds in the extension table, or -1.
+static int spr_ext_index(uint32_t sheet) {
+    if (!g_sprext.live || !sheet) return -1;
+    for (int i = kSprMgrSlots; i < g_sprext.n; ++i)
+        if (bus_read_u32(kSprExt + 4u * (uint32_t)i) == sheet) return i;
+    return -1;
+}
+
+void spr_slot_alloc_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kSprSlotAlloc);
+    CallWrap& w = g_wrap_sprslot;
+    const int st = wrap_state(w, original);
+    if (st == 1) return;
+    if (st == 2) {
+        // r0 is the slot's address. The overflow word: give it a table slot,
+        // the same one for the same sheet file.
+        static const bool dbg = std::getenv("LB_SPRPOOL_DEBUG") != nullptr;
+        if (dbg) {
+            std::fprintf(stderr, "[lb_sprpool] alloc \"%s\" kind %u -> %08X (live %d)\n", g_sprslot_name,
+                         g_sprslot_kind, g_cpu.R[0], (int)g_sprext.live);
+            std::fflush(stderr);
+        }
+        // Each such sheet gets its own slot, as the cartridge gives each army
+        // its own copy of a sheet inside the 33.
+        if (g_cpu.R[0] == kSprOverflow) {
+            int idx = -1;
+            if (g_sprext.n < kSprExtMax && spr_ext_go_live()) {
+                idx = g_sprext.n++;
+                std::snprintf(g_sprext.name[idx], sizeof g_sprext.name[idx], "%s", g_sprslot_name);
+                bus_write_u32(kSprExt + 4u * (uint32_t)idx, 0u);
+                std::fprintf(stderr, "[lb_sprpool] sheet \"%s\" (kind %u) found no slot of the 33: "
+                             "extension slot %d (docs/479)\n", g_sprslot_name, g_sprslot_kind, idx);
+                std::fflush(stderr);
+            }
+            if (idx >= 0) g_cpu.R[0] = kSprExt + 4u * (uint32_t)idx;
+        }
+        wrap_finish(w);
+        return;
+    }
+    if (!lb_setting_big_sprite_pool()) {
+        if (original) original();
+        return;
+    }
+    g_sprslot_kind = g_cpu.R[1];
+    spr_string(g_cpu.R[2], g_sprslot_name, sizeof g_sprslot_name);
+    // Two stack arguments (the army, the per-army flag): carried below the
+    // stack pointer the call is given.
+    const uint32_t a5 = bus_read_u32(g_cpu.R[13]), a6 = bus_read_u32(g_cpu.R[13] + 4u);
+    w.lr = g_cpu.R[14];
+    w.sp = g_cpu.R[13];
+    w.sp_call = (g_cpu.R[13] - 16u) & ~7u;
+    bus_write_u32(w.sp_call, a5);
+    bus_write_u32(w.sp_call + 4u, a6);
+    w.active = true;
+    w.calling = true;
+    g_cpu.R[13] = w.sp_call;
+    g_cpu.R[14] = kSprSlotAlloc;
+    g_cpu.R[15] = kSprSlotAlloc;
+    runtime_dispatch_with_exchange(kSprSlotAlloc);
+}
+
+// FUN_0202E014(mgr, sheetA, sheetB, sheetC, team, holder): the 11 page bytes
+// and frame words of the holder's record (+0x2E / +0x30, 4 apart): byte 0 is
+// A's slot, 1-5 B's (else A's), 6-10 C's (else A's); nothing for a category
+// whose flag (0x0214290C) is set. When a sheet is in the extension table this
+// runs here, the same steps with its index; otherwise the cartridge's.
+void spr_page_write_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kSprPageWrite);
+    const uint32_t a = g_cpu.R[1], b = g_cpu.R[2], c = g_cpu.R[3];
+    const int ia = spr_ext_index(a), ib = spr_ext_index(b), ic = spr_ext_index(c);
+    if (ia < 0 && ib < 0 && ic < 0) {
+        if (original) original();
+        return;
+    }
+    const uint32_t mgr = g_cpu.R[0];
+    const uint32_t holder = bus_read_u32(g_cpu.R[13] + 4u);
+    const uint32_t bp = guest_ptr(holder) ? bus_read_u32(holder + 8u) : 0u;
+    const uint32_t rec = guest_ptr(holder) ? bus_read_u32(holder + 4u) : 0u;
+    if (guest_ptr(bp) && guest_ptr(rec) && guest_ptr(mgr)) {
+        const uint32_t cat = bus_read_u8(bp + 0x5Cu);
+        if (bus_read_u8(0x0214290Cu + cat) == 0u) {
+            auto slot = [&](uint32_t sheet, int ext, int dflt) -> int {
+                if (ext >= 0) return ext;
+                for (uint32_t i = 0; i < 33u; ++i)
+                    if (bus_read_u32(mgr + 4u + 4u * i) == sheet) return (int)i;
+                return dflt;
+            };
+            const int pa = slot(a, ia, 0);
+            const int pb = b ? slot(b, ib, pa) : pa;
+            const int pc = c ? slot(c, ic, pa) : pa;
+            const uint32_t frames = 0x02127BACu + cat * 0x1Au;
+            for (uint32_t k = 0; k < 11u; ++k) {
+                const int p = k == 0 ? pa : (k < 6 ? pb : pc);
+                bus_write_u8(rec + 0x2Eu + 4u * k, (uint8_t)p);
+                bus_write_u16(rec + 0x30u + 4u * k, bus_read_u16(frames + 2u * k));
+            }
+        }
+    }
+    lb_override_return();
+}
+
+// The level's sprite teardown: the cartridge's own first (slots 0-33 and
+// 48-50), then each extension sheet freed through FUN_0202E528 in the
+// emptied slot 0, then the read and the overflow word put back.
+CallWrap g_wrap_sprtear;
+void spr_teardown_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kSprTeardown);
+    CallWrap& w = g_wrap_sprtear;
+    const int st = wrap_state(w, original);
+    if (st == 1) return;
+    if (st == 2) {
+        const uint32_t mgr = bus_read_u32(kSprMgr);
+        while (guest_ptr(mgr) && g_sprext.freeing < g_sprext.n) {
+            const int i = g_sprext.freeing++;
+            const uint32_t sheet = bus_read_u32(kSprExt + 4u * (uint32_t)i);
+            bus_write_u32(kSprExt + 4u * (uint32_t)i, 0u);
+            if (!guest_ptr(sheet) || bus_read_u32(mgr + 4u) != 0u) continue;
+            bus_write_u32(mgr + 4u, sheet);
+            g_cpu.R[0] = mgr;
+            g_cpu.R[1] = 0u;
+            g_cpu.R[13] = w.sp_call;
+            g_cpu.R[14] = kSprTeardown;   // the return lands back here, sp == sp_call
+            g_cpu.R[15] = kSprSlotFree;
+            runtime_dispatch_with_exchange(kSprSlotFree);
+            return;
+        }
+        std::fprintf(stderr, "[lb_sprpool] level teardown: %d extension sheet(s) freed, the read put back\n",
+                     g_sprext.n - kSprMgrSlots);
+        std::fflush(stderr);
+        spr_ext_reset();
+        wrap_finish(w);
+        return;
+    }
+    if (!g_sprext.live) {
+        if (original) original();
+        return;
+    }
+    g_sprext.freeing = kSprMgrSlots;
+    wrap_start(w, kSprTeardown);
+}
+
 // Test aid: LB_TEST_FLIP_CAT4=<bp> turns that blueprint's category 3 into 4 once
 // a unit of it stands (an AI that builds it as Ranged, then draws it as Mounted).
 // LB_TEST_FLIP_CAT4=<bp>[:<n>],... : a blueprint in category 2 or 3 becomes 4 once
@@ -11014,6 +12393,7 @@ void creature_sprite_load_override(void) {
 }
 void creature_sprite_anim_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kCreatureSprAnim);
+    if (g_sprext.live) spr_ext_mirror();   // docs/479: the draw reads the table
     cloak_enter(g_cloak_anim, kCreatureSprAnim, original, true);
 }
 }  // namespace
@@ -17112,6 +18492,192 @@ static bool free_play_mission(void) {
 // campaign mission keeps the music the cartridge gives it.
 extern "C" int lb_mission_is_free_play(void) { return free_play_mission() ? 1 : 0; }
 
+// ---- SG-0081 (docs/483): CHOOSING THE START POSITION IN FREE PLAY -----------
+//
+// The match setup's step FUN_020A2DF8 (Thumb; r0 the setup, its stage at
+// +0x104) deals the starts at stage 3 into the byte list at sim+0x31C (an
+// ArrayU8: data +0x320, count +0x324; sim = [0x02156CB0], DAT_020A2F64 + 8),
+// indexed by start, each byte a team handle (team +0x14):
+//  - setup +0x100 clear, FUN_020A2C0C: the team pool [0x0215540C] in order,
+//    one entry per team, so start k goes to team k;
+//  - setup +0x100 set, FUN_020A2C68: one entry per map start (the map record's
+//    +0x158), each the "none" byte (FUN_02087634 -> 0x02155420), then the team
+//    of setup slot i (+0x54 + 4i, -1 empty) written at a random start.
+// Past its count the list reads as none (FUN_020A2DA4), and the base and
+// builders are placed per start from it; the start tile each team got is
+// kept by team handle at sim+0x234/+0x23C (FUN_020A3D0C), which is what
+// aiopp_start_tile aims the computers at, so they follow the new deal.
+//
+// With Start Position set (Free Play, offline; recorded, demo kind 28) the
+// step runs under a CallWrap and, when it returns from stage 3, the list is
+// rearranged: the player's team (the slot whose player id is 0, the human,
+// FUN_0208AF58's rule) at the chosen start, the others at the remaining
+// starts in team order; with the game's random deal on, the player's team
+// just swaps places with whatever held that start. A start past the team
+// count needs the full-length list only the random path builds, so for one
+// the step runs with +0x100 set (put back on return) -- that path draws from
+// the game's random generator, which the recording replays. The list is
+// checked (every team once, nothing else but none) before it is written;
+// anything unexpected leaves the deal alone, with a line saying why.
+// Otherwise a pure tail call.
+constexpr uint32_t kStartSim = 0x02156CB0u;      // [DAT_020A2F64 + 8]
+constexpr uint32_t kTeamPool = 0x0215540Cu;      // +8 teams, +0xC count
+constexpr uint32_t kNoneTeam = 0x02155420u;      // FUN_02087634's byte (DAT_0208763C)
+extern "C" int lb_setting_start_position(void);  // lb_overlay.cpp
+extern "C" int lb_demo_play_start_position(void);   // lb_demo.cpp
+extern "C" int lb_start_position_live(void) {
+    if (lb_net_guest_state() > 0) return 0;      // per player and not a flag: offline only
+    return lb_setting_start_position();
+}
+CallWrap g_wrap_startdeal;
+
+static void start_deal_say(const char* what) {
+    std::fprintf(stderr, "[lb_starts] %s\n", what);
+    std::fflush(stderr);
+}
+
+// The player's team handle and the teams in pool order; false when unreadable.
+static bool start_deal_teams(uint32_t setup, uint8_t* human, uint8_t teams[8], int* nteams) {
+    const uint32_t pool = bus_read_u32(kTeamPool);
+    if (!guest_ptr(pool)) return false;
+    const uint32_t arr = bus_read_u32(pool + 8u);
+    const int t = (int)bus_read_u32(pool + 0xCu);
+    if (!guest_ptr(arr) || t < 1 || t > 8) return false;
+    for (int k = 0; k < t; ++k) {
+        const uint32_t team = bus_read_u32(arr + 4u * (uint32_t)k);
+        if (!guest_ptr(team)) return false;
+        teams[k] = (uint8_t)bus_read_u8(team + 0x14u);
+    }
+    *nteams = t;
+    // The human's slot: player id 0 (a computer is >= 1, an empty slot -1).
+    // Team k is slot k's, the pairing FUN_020A2C68 itself makes.
+    int slot = -1;
+    for (int i = 0; i < 4; ++i)
+        if (bus_read_u32(setup + 0x54u + 4u * (uint32_t)i) == 0u) {
+            if (slot >= 0) return false;          // two humans: not Free Play's setup
+            slot = i;
+        }
+    if (slot < 0 || slot >= t) return false;
+    *human = teams[slot];
+    return true;
+}
+
+static void start_deal_arrange(uint32_t setup, int want, bool was_random) {
+    char msg[192];
+    const uint32_t sim = bus_read_u32(kStartSim);
+    const uint32_t data = guest_ptr(sim) ? bus_read_u32(sim + 0x320u) : 0u;
+    const int n = guest_ptr(sim) ? (int)bus_read_u32(sim + 0x324u) : 0;
+    uint8_t human = 0, teams[8];
+    int t = 0;
+    if (!guest_ptr(data) || n < 1 || n > 8) {
+        start_deal_say("the start list is not readable: the game's deal stands");
+        return;
+    }
+    if (!start_deal_teams(setup, &human, teams, &t)) {
+        start_deal_say("the teams or the player's slot are not readable: the game's deal stands");
+        return;
+    }
+    const uint8_t none = (uint8_t)bus_read_u8(kNoneTeam);
+    uint8_t list[8];
+    for (int j = 0; j < n; ++j) list[j] = (uint8_t)bus_read_u8(data + (uint32_t)j);
+    // Every team exactly once; everything else none.
+    for (int j = 0; j < n; ++j) {
+        int hits = 0;
+        for (int k = 0; k < t; ++k) hits += list[j] == teams[k];
+        if (hits > 1 || (hits == 0 && list[j] != none)) {
+            std::snprintf(msg, sizeof msg, "start %d holds %u, not a team of this match: "
+                          "the game's deal stands", j + 1, (unsigned)list[j]);
+            start_deal_say(msg);
+            return;
+        }
+    }
+    for (int k = 0; k < t; ++k) {
+        int seen = 0;
+        for (int j = 0; j < n; ++j) seen += list[j] == teams[k];
+        if (seen != 1) {
+            std::snprintf(msg, sizeof msg, "team %u is at %d starts: the game's deal stands",
+                          (unsigned)teams[k], seen);
+            start_deal_say(msg);
+            return;
+        }
+    }
+    int c = want - 1;
+    if (c >= n) {
+        std::snprintf(msg, sizeof msg, "start %d asked, the deal has %d: start %d instead",
+                      want, n, n);
+        start_deal_say(msg);
+        c = n - 1;
+    }
+    uint8_t out[8];
+    if (was_random) {   // keep the game's random deal for the others
+        for (int j = 0; j < n; ++j) out[j] = list[j];
+        int p = 0;
+        while (p < n && out[p] != human) ++p;
+        out[p] = out[c];
+        out[c] = human;
+    } else {            // the others at the remaining starts, in team order
+        for (int j = 0; j < n; ++j) out[j] = none;
+        out[c] = human;
+        int j = 0;
+        for (int k = 0; k < t; ++k) {
+            if (teams[k] == human) continue;
+            while (j < n && (j == c || out[j] != none)) ++j;
+            if (j >= n) {
+                start_deal_say("more teams than starts: the game's deal stands");
+                return;
+            }
+            out[j++] = teams[k];
+        }
+    }
+    std::string s;
+    for (int j = 0; j < n; ++j) {
+        bus_write_u8(data + (uint32_t)j, out[j]);
+        char b[16];
+        std::snprintf(b, sizeof b, "%s%u", j ? " " : "", (unsigned)out[j]);
+        s += out[j] == none ? std::string(j ? " -" : "-") : std::string(b);
+    }
+    std::snprintf(msg, sizeof msg, "your team %u starts at start %d of %d (%s deal); "
+                  "teams by start: %s", (unsigned)human, c + 1, n,
+                  was_random ? "random" : "fixed", s.c_str());
+    start_deal_say(msg);
+}
+
+namespace {
+void start_deal_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kStartDeal);
+    CallWrap& w = g_wrap_startdeal;
+    const int st = wrap_state(w, original);
+    if (st == 1) return;
+    if (st == 2) {
+        bus_write_u8(w.a + 0x100u, (uint8_t)w.b);   // the setup's own choice, back
+        start_deal_arrange(w.a, (int)w.c, w.b != 0u);
+        wrap_finish(w);
+        return;
+    }
+    const uint32_t setup = g_cpu.R[0];
+    if (!guest_ptr(setup) || bus_read_u32(setup + 0x104u) != 3u) {
+        if (original) original();
+        return;
+    }
+    const int played = lb_demo_play_start_position();
+    const int want = played >= 0 ? played : lb_start_position_live();
+    if (want <= 0 || lb_net_guest_state() > 0 || !free_play_mission()) {
+        if (original) original();
+        return;
+    }
+    w.a = setup;
+    w.b = bus_read_u8(setup + 0x100u);
+    w.c = (uint32_t)want;
+    // A start past the fixed list (one entry per team) needs the random path.
+    if (!w.b) {
+        const uint32_t pool = bus_read_u32(kTeamPool);
+        const int t = guest_ptr(pool) ? (int)bus_read_u32(pool + 0xCu) : 0;
+        if (t < 1 || want > t) bus_write_u8(setup + 0x100u, 1u);
+    }
+    wrap_start(w, kStartDeal | 1u);
+}
+}  // namespace (SG-0081: start_deal_override is declared in the table's)
+
 // SG-0045: a single-player mission is one that is loaded and is not the
 // multiplayer base class. Free Play, every online match and the mod maps all
 // register through FUN_02045E50 as MultiplayerMissionBase (docs/391), so they
@@ -18657,10 +20223,17 @@ static bool sprite_pages_check(bool first) {
         int used[3] = {0, 0, 0};
         for (uint32_t i = 0; i < 33u; ++i)
             if (bus_read_u32(pool_obj + 4u + 4u * i) != 0u) ++used[i / 11u];
+        // docs/479: with the larger pool the overflow word holds the
+        // extension table's base; its sheets are counted instead.
         const uint32_t over = bus_read_u32(0x02151DDCu);
-        std::fprintf(stderr, "[lb_sprpool] %d of 33 sprite slots used (army ranges %d/%d/%d of 11); the shared overflow slot is %s\n",
-                     used[0] + used[1] + used[2], used[0], used[1], used[2],
-                     over ? "IN USE: a sheet found no slot (see [lb_sprpage])" : "empty");
+        if (over == kSprExt - 4u)
+            std::fprintf(stderr, "[lb_sprpool] %d of 33 sprite slots used (army ranges %d/%d/%d of 11); "
+                         "%d sheet(s) in the extension table\n",
+                         used[0] + used[1] + used[2], used[0], used[1], used[2], g_sprext.n - kSprMgrSlots);
+        else
+            std::fprintf(stderr, "[lb_sprpool] %d of 33 sprite slots used (army ranges %d/%d/%d of 11); the shared overflow slot is %s\n",
+                         used[0] + used[1] + used[2], used[0], used[1], used[2],
+                         over ? "IN USE: a sheet found no slot (see [lb_sprpage])" : "empty");
     }
     // The rosters, as FUN_020353B4 walks them: world [0x0215540C] +8 teams
     // (+0xC count); a team's rosters at +0x70 (+0x74 count); a roster's 26
@@ -18709,6 +20282,12 @@ static bool sprite_pages_check(bool first) {
         // or a triple's first kind when a category 1-3 unit's sheets coincide.
         auto kind = [](uint8_t p) { return p < 33u ? (int)bus_read_u32(0x02127B28u + 4u * p) : -1; };
         const int k0 = kind(pg[0]), k1 = kind(pg[1]), k6 = kind(pg[6]);
+        // docs/479: a page in the extension table names a sheet of its own.
+        auto ext_ok = [](uint8_t p) {
+            return p >= (uint8_t)kSprMgrSlots && g_sprext.live && p < g_sprext.n &&
+                   bus_read_u32(kSprExt + 4u * p) != 0u;
+        };
+        if (ext_ok(pg[0]) || ext_ok(pg[1]) || ext_ok(pg[6])) continue;
         bool ok;
         if (triple) ok = k0 == 1 && k1 == 2 && k6 == 3;
         else if (cat == 0u) ok = k0 == 0;
@@ -18732,6 +20311,68 @@ static bool sprite_pages_check(bool first) {
     std::fflush(stderr);
     return bad_any;
 }
+// SG-0102 (docs/480): STUDS FOR A FREE PLAY WIN. The profile's studs are the
+// u16 at profile 0x02154E08 + 0x4C: FUN_0204F680 reads it, FUN_0204FF94 writes
+// it, the LEGO Store tests a price against it (FUN_020CB78C) and subtracts on
+// a purchase (FUN_020CB8FC), and LegoStoreTop::v12 prints it. Besides the
+// store screens the only writers are the new-profile reset (FUN_0204F4EC), the
+// save loader (FUN_0204F718) and FUN_020088D4's +100 award, which adds to it
+// in place with no clamp -- so a credit made during the battle is not undone by
+// anything at the battle's end, and is saved with the profile's next save.
+// A team's state word +0x9C becomes 2 when it wins (1 defeated, 3 lost, 4 an
+// allied win; FUN_02086770, docs/414, lb_matchpic.cpp's watch_teams); the
+// local player's team is the one at session +100's handle (match_log_tick).
+// Once per battle, Free Play offline only, never while a replay plays, and
+// never in a battle where the computer played the player's side or a red-brick
+// cheat was on at any moment (the cartridge's own flag bytes, so a cheat set on
+// its own cheat screen counts too).
+constexpr uint32_t kProfileStuds = 0x02154E54u;   // 0x02154E08 + 0x4C
+struct StudWin { bool tainted = false, paid = false; const char* why = nullptr; };
+static StudWin g_studwin;
+static void studs_win_begin(void) { g_studwin = StudWin(); }
+static void studs_win_tick(void) {
+    if (g_studwin.paid) return;
+    const char* why = nullptr;
+    if (lb_demo_playing()) why = "a replay";
+    else if (lb_net_guest_state() > 0 || lobby_joined() || lb_net_is_hosting_state()) why = "online";
+    else if (lb_setting_ai_spectate() || g_ai_spectate_on) why = "the computer played your side";
+    else {
+        const uint32_t flags = bus_read_u32(kCheatFlagsPtr);
+        if (guest_ptr(flags)) {
+            const int n = lb_setting_cheat_count();
+            for (int i = 0; i < n && i < 32; ++i)
+                if (bus_read_u8(flags + (uint32_t)i)) { why = "a cheat was on"; break; }
+        }
+    }
+    if (why && !g_studwin.tainted) {
+        g_studwin.tainted = true;
+        g_studwin.why = why;
+    }
+    const int amount = lb_setting_free_play_win_studs();
+    if (amount <= 0) return;
+    const uint32_t h = bus_read_u32(kSession + 100u);
+    const uint32_t team = h < 8u ? aiopp_team(h) : 0u;
+    if (!team) return;
+    const uint32_t st = bus_read_u32(team + 0x9Cu);
+    if (st != 2u && st != 4u) return;
+    g_studwin.paid = true;   // decided either way: once per battle
+    if (!free_play_mission()) return;   // a story mission's own rewards stand
+    if (g_studwin.tainted) {
+        std::fprintf(stderr, "[lb_studs] Free Play win: no studs (%s)\n", g_studwin.why);
+        std::fflush(stderr);
+        return;
+    }
+    const uint32_t before = bus_read_u16(kProfileStuds);
+    const uint32_t after = std::min<uint32_t>(0xFFFFu, before + (uint32_t)amount);   // a u16
+    bus_write_u16(kProfileStuds, after);
+    std::fprintf(stderr, "[lb_studs] Free Play win: +%u studs (%u -> %u)\n",
+                 after - before, before, after);
+    std::fflush(stderr);
+    char note[96];
+    std::snprintf(note, sizeof note, "Free Play win: +%u studs.", after - before);
+    lb_overlay_notice(note);
+}
+
 static void match_log_tick(void) {
     static bool in = false;
     static uint32_t frames = 0;
@@ -18741,10 +20382,18 @@ static void match_log_tick(void) {
     if (now && !in) {
         in = true;
         frames = 0;
+        studs_win_begin();   // SG-0102
         const char* map = lb_level_map_name();
         const char* stem = lb_level_map_stem();
-        std::fprintf(stderr, "[lb_match] start: %s; map \"%s\" (%s)\n", match_kind_text(kb, sizeof kb),
-                     map ? map : "?", stem ? stem : "?");
+        // docs/479: and the two PC-limit settings in force, with where the
+        // gameplay one came from (a replay's, the host's, or this machine's).
+        const int played = lb_demo_play_native_logic();
+        const int host = lb_rules_host_flags();
+        std::fprintf(stderr, "[lb_match] start: %s; map \"%s\" (%s); native game logic %s (%s); larger sprite pool %s\n",
+                     match_kind_text(kb, sizeof kb), map ? map : "?", stem ? stem : "?",
+                     native_logic_effective() ? "on" : "off",
+                     played >= 0 ? "the replay's" : host >= 0 ? "the host's" : "this machine's",
+                     lb_setting_big_sprite_pool() ? "on" : "off");
         // BR-0067: the interface sounds' owner tests compare a team's id byte
         // (+0x14) with the local player's (session +100 -> FUN_02088144).
         std::string ids;
@@ -18771,6 +20420,7 @@ static void match_log_tick(void) {
     }
     if (!in) return;
     ++frames;
+    studs_win_tick();   // SG-0102
     // The pool is seated during the load: check a second in, then every 10 s
     // (units of a kind first trained later are covered then).
     if (frames == 60u) sprite_pages_check(true);
@@ -19918,6 +21568,7 @@ extern "C" void lb_patches_on_vblank(void) {
         snapshot_creatures();   // docs/410
         discovered = true;
     }
+    store_prices_tick();   // SG-0099 (docs/482): the cards, not a battle record
 
     // What the settings want. LB_BALANCE=<slot> applies a balance patch
     // without the UI, so it can be verified headlessly (a test aid, like

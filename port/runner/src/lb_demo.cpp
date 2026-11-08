@@ -256,6 +256,8 @@ int g_rec_mines = 0, g_demo_mines = 0;     // kind 22, SG-0032: the AI builds mo
 int g_rec_cross = 0, g_demo_cross = 0;     // kind 23, SG-0051: the computers hunt each other (0 stock)
 int g_rec_bridges = 0, g_demo_bridges = 0; // kind 24, SG-0071: the AI bridges any map (0 stock)
 int g_rec_yards = 0, g_demo_yards = 0;     // kind 25, SG-0078: AI shipyard sites on any map (0 stock)
+int g_rec_natq = 0, g_demo_natq = 0;     // kind 27, docs/479: Native Game Logic (0 the cartridge timing)
+int g_rec_startpos = 0, g_demo_startpos = 0;   // kind 28, SG-0081: Free Play start position (0 the game's deal)
 int g_rec_aix = 0, g_demo_aix = 0;         // kind 26, docs/472: AI mask (1 finish upgrades, 2 keep bridges, 4 stuck bridges, 8 transports on request (docs/478); 0 stock)
 // BR-0011: kinds 14 and 15, the attack boost and the healing fix, from
 // `sets=4`; a recording before it leaves them to this machine (-1).
@@ -329,6 +331,8 @@ bool load(const char* path) {
     g_demo_cross = 0;             // and computers that hunt only the player (SG-0051)
     g_demo_bridges = 0;           // and bridges only where the AI needs them (SG-0071)
     g_demo_yards = 0;             // and the map's own AI sites (SG-0078)
+    g_demo_natq = 0;              // and the cartridge's own timing (docs/479)
+    g_demo_startpos = 0;          // and the game's own deal of the starts (SG-0081)
     g_demo_aix = 0;               // and the stock tower, bridge-retire and bridge-need rules (docs/472)
     g_demo_atk = g_demo_heal = -1;   // BR-0011: and this machine's
     g_demo_fw = g_demo_fh = 0;    // docs/409: and the window's own field
@@ -482,7 +486,19 @@ void rec_balance_diff(bool initial) {
     const int kinds[2] = {LB_BAL_UNITS, LB_BAL_ATTACKS};
     const int recs = lb_balance_record_count(LB_BAL_UNITS) +
                      lb_balance_record_count(LB_BAL_ATTACKS);
-    const int stride = 32;   // docs/408: attacks have 17 fields, units 15
+    // docs/408: attacks have 17 fields. docs/482: units now have 36, and at
+    // 32 the loop below silently skipped unit fields 32+ (docs/481's Speed
+    // icon and Transport, and docs/482's two building bonuses): they were
+    // never written as `b` lines, so a replay ran them on Automatic.
+    const int stride = 64;
+    if (lb_balance_field_count(LB_BAL_UNITS) > stride || lb_balance_field_count(LB_BAL_ATTACKS) > stride) {
+        static bool said = false;
+        if (!said) {
+            said = true;
+            std::fprintf(stderr, "[lb_demo] more Balance fields than the recorder's stride (%d): "
+                         "the extra fields are not recorded\n", stride);
+        }
+    }
     if (initial || (int)g_rec_bal.size() != recs * stride)
         g_rec_bal.assign((size_t)(recs * stride), -1);
     for (const int kind : kinds) {
@@ -636,6 +652,12 @@ extern "C" int lb_demo_play_ai_bridges(void) {   // SG-0071
 extern "C" int lb_demo_play_ai_shipyards(void) {   // SG-0078
     return (g_mode == Mode::Play || g_replay_done) ? g_demo_yards : -1;
 }
+extern "C" int lb_demo_play_native_logic(void) {   // docs/479
+    return (g_mode == Mode::Play || g_replay_done) ? g_demo_natq : -1;
+}
+extern "C" int lb_demo_play_start_position(void) {   // SG-0081
+    return (g_mode == Mode::Play || g_replay_done) ? g_demo_startpos : -1;
+}
 extern "C" int lb_demo_play_ai_extra(void) {   // docs/472
     return (g_mode == Mode::Play || g_replay_done) ? g_demo_aix : -1;
 }
@@ -708,6 +730,8 @@ extern "C" void lb_demo_start_record(const char* path) {
     g_rec_bridges = 0;            // SG-0071
     g_rec_yards = 0;              // SG-0078
     g_rec_aix = 0;                // docs/472
+    g_rec_natq = 0;               // docs/479
+    g_rec_startpos = 0;           // SG-0081
     g_rec_atk = g_rec_heal = 0;
     g_rec_fw = g_rec_fh = 0;      // docs/409: the first frame writes the size
     // docs/396: a session on the PC's clock records the guest clock as it
@@ -894,7 +918,7 @@ extern "C" void lb_demo_tick(void) {
             emit(e);
         }
         // docs/388: and the settings a replay takes from the recording.
-        const int now[27] = {lb_setting_force_tileset(),
+        const int now[29] = {lb_setting_force_tileset(),
                             lb_setting_level_palette(),
                             lb_setting_music_mode(),
                             lb_cage_fix_live() ? 1 : 0,
@@ -920,16 +944,19 @@ extern "C" void lb_demo_tick(void) {
                             lb_ai_cross_live(),                     // SG-0051
                             lb_ai_bridges_live(),                   // SG-0071
                             lb_ai_shipyards_live(),                 // SG-0078
-                            lb_ai_extra_live()};                    // docs/472
-        int* const was[27] = {&g_rec_tileset, &g_rec_palette, &g_rec_music,
+                            lb_ai_extra_live(),                     // docs/472
+                            lb_native_logic_live(),                 // docs/479
+                            lb_start_position_live()};              // SG-0081
+        int* const was[29] = {&g_rec_tileset, &g_rec_palette, &g_rec_music,
                               &g_rec_cage, &g_rec_ownhero, &g_rec_oppdef,
                               &g_rec_hwtransport, &g_rec_hwmode, &g_rec_emp,
                               &g_rec_cheats, &g_rec_aicheats, &g_rec_aihero,
                               &g_rec_trel, &g_rec_crea, &g_rec_atk, &g_rec_heal,
                               &g_rec_cslot, &g_rec_aiopp, &g_rec_gold,
                               &g_rec_tabs, &g_rec_hwneut, &g_rec_stun, &g_rec_mines, &g_rec_cross,
-                              &g_rec_bridges, &g_rec_yards, &g_rec_aix};
-        for (int k = 0; k < 27; ++k) {
+                              &g_rec_bridges, &g_rec_yards, &g_rec_aix, &g_rec_natq,
+                              &g_rec_startpos};
+        for (int k = 0; k < 29; ++k) {
             if (now[k] == *was[k]) continue;
             *was[k] = now[k];
             const Event e{g_frame, 's', k, now[k], 0, 0};
@@ -994,6 +1021,8 @@ extern "C" void lb_demo_tick(void) {
             else if (e.a == 23) g_demo_cross = e.b ? 1 : 0;   // SG-0051
             else if (e.a == 24) g_demo_bridges = e.b ? 1 : 0;   // SG-0071
             else if (e.a == 25) g_demo_yards = e.b ? 1 : 0;     // SG-0078
+            else if (e.a == 27) g_demo_natq = e.b ? 1 : 0;      // docs/479
+            else if (e.a == 28) g_demo_startpos = (e.b >= 0 && e.b <= 8) ? e.b : 0;   // SG-0081
             else if (e.a == 26) g_demo_aix = e.b & 15;           // docs/472; bit 3 docs/478
             else if (e.a == 17) g_demo_aiopp = (e.b & 0x7FFC) | ((e.b & 3) > 1 ? 1 : (e.b & 3));   // at most one extra (docs/414)   // docs/414
         } else if (e.kind == 'b') {   /* docs/404: a Balance tab value */

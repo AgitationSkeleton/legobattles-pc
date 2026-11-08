@@ -358,8 +358,12 @@ enum { LB_BAL_SPELL_FIELD0 = 10, LB_BAL_SPELLS = 5 };
 // docs/426: units' fields 15..25 are the Traits section (lb_balance.cpp).
 enum { LB_BAL_TRAIT_FIELD0 = 15, LB_BAL_TRAITS = 11, LB_BAL_SPEED_FIELD = 4 };
 // docs/463: units' fields 26..30 are the port's capability bytes (Mountains,
-// Hotwire/EMP/ESP immune, Construction style), kept in the record's padding.
-enum { LB_BAL_PORT_FIELD0 = 26, LB_BAL_PORT_FIELDS = 5 };
+// Hotwire/EMP/ESP immune, Construction style), kept in the record's padding;
+// docs/481 appends 31 Trained at, 32 Speed icon, 33 Transport (boarding);
+// docs/482 34 Melee vs buildings, 35 Shot vs buildings (0 automatic, else
+// a bonus of value - LB_BAL_BONUS_ZERO).
+enum { LB_BAL_PORT_FIELD0 = 26, LB_BAL_PORT_FIELDS = 10 };
+enum { LB_BAL_BONUS_ZERO = 80, LB_BAL_BONUS_MAX = 160 };
 // docs/426: a blueprint diffed against the player's own; fills msg; returns the
 // number of values set, or -1 on failure.
 int lb_balance_import_file(const char* path, char* msg, int msg_cap);
@@ -407,6 +411,14 @@ const char* lb_balance_custom_blocked(void);
 
 // The address docs/95's patch found the in-RAM BPNZ block at, or 0.
 unsigned int lb_patches_blueprint_base(void);
+// docs/482: the cartridge's own melee bonus of stock record `rec` against the
+// stock structures, least and most (its matchup table); 0 when unreadable.
+int lb_stock_building_bonus(int rec, int* lo, int* hi);
+// docs/482 (SG-0099): a stock unit's LEGO Store price as the cartridge has
+// it (its minifig card's +0x68), or -1 when the store does not sell it.
+int lb_store_stock_price(int unit);
+// This machine's price override for stock unit `unit` (1..65535), or -1.
+int lb_setting_store_price(int unit);
 // docs/386: why the balance pack and same-builders cannot change now (a
 // battle, a battle loading, a lobby), or null when they can.
 const char* lb_blueprint_edit_blocked(void);
@@ -807,6 +819,12 @@ void         lb_rules_incoming(const unsigned char* buf, int len,
 /* SG-0077 (docs/471): more than 10 mine spots per map. Set means ON, so an
    older host (no bit) keeps the cartridge's 10, as its own game does. */
 #define LB_RULE_MANY_MINES     0x20
+/* docs/479: Native Game Logic (hot cartridge routines as host code). Set means
+   ON, so an older host (no bit) plays the cartridge's own timing. */
+#define LB_RULE_NATIVE_LOGIC   0x40
+int          lb_setting_native_logic(void);   /* this machine's choice */
+int          lb_native_logic_live(void);      /* the host's online, else this */
+int          lb_demo_play_native_logic(void); /* a replay's (kind 27), else -1 */
 int          lb_setting_many_mines(void);   /* this machine's choice */
 int          lb_many_mines_live(void);      /* the host's online, else this */
 int          lb_setting_phantom_guard(void);   /* this machine's choice */
@@ -897,6 +915,19 @@ int          lb_demo_play_creature_slots(void);
 int          lb_rules_host_creature_slots(void);   /* -1 unless joined */
 int          lb_creature_slots_live(void);
 int          lb_creature_slot(int unit);   /* 0 Hero .. 7, or -1 if not a creature */
+// docs/480: SG-0098, the stock unit whose unlock a creature follows on the
+// army screen (0 always available; this machine's own, never the simulation's).
+int          lb_setting_creature_unlock_with(int unit);
+// SG-0102: the studs a won Free Play battle credits (0 off; offline only).
+int          lb_setting_free_play_win_studs(void);
+// SG-0081 (docs/483): the Free Play start the player chose (0 Automatic, else
+// 1-based), the value a match runs (0 online), and a replay's (kind 28, -1
+// when not replaying).
+int          lb_setting_start_position(void);
+int          lb_start_position_live(void);
+int          lb_demo_play_start_position(void);
+// SG-0104: 1 if stock unit `bp` is kept out of the Randomizer opponent's army.
+int          lb_setting_random_army_banned(int bp);
 // BR-0011 / BR-0015: the rest of what changes the simulation, carried in an
 // 'S' page of the host's rules (lb_teams.cpp). On a joiner these are the
 // host's while joined, else this machine's.

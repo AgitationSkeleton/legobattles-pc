@@ -41,6 +41,8 @@ bool lb_cunits_folder_sheet(const std::string& folder, int tmpl, const std::stri
 bool lb_cunits_folder_bundle(const std::string& folder, std::vector<uint8_t>* out);
 bool lb_cunits_unpack(const std::vector<uint8_t>& bundle, const std::string& folder);
 bool lb_cunits_png_rgba(const std::vector<uint8_t>& png, int* w, int* h, std::vector<uint32_t>* px);
+// BR-0078: model/texture.png onto a model's bytes, as the importer applies it.
+bool lb_cunits_apply_model_texture(std::vector<uint8_t>* nsbmd, const std::vector<uint8_t>& png);
 
 // SG-0061, the lab's Convert tool. An .NCBR (raw or COMP-wrapped, 4bpp, linear
 // or tiled) as 4-bit palette indices; false with `why` set otherwise.

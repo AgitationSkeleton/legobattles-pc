@@ -671,8 +671,24 @@ const Field kFields[] = {
     // (stock 0xA2 in all 182 unit records). Written only when 1 or 2, so a
     // unit left on Auto keeps its template's byte and its record is unchanged.
     {"trained_at", 0x5B, 1, 2},
+    // docs/481: SG-0101 the speed-boost icon (0 auto, 1 legs, 2 wheels; +0x5A)
+    // and SG-0106 boarding a transport (0 auto, 1 can board, 2 cannot; +0x0A).
+    // Padding bytes, 0xA2 in all 182 stock records; written only when nonzero,
+    // like trained_at.
+    {"speed_icon", 0x5A, 1, 2},
+    {"boarding", 0x0A, 1, 2},
+    // docs/482 (SG-0097): damage against structures. 0 automatic (the
+    // cartridge's matchup table for melee, nothing for shots), else
+    // 80 + bonus (1..160 = -79..+80). Padding: +0x0B is 0xA2 and +0x57 is
+    // 0xA1 in all 182 stock records; written only when nonzero.
+    {"melee_vs_buildings", 0x0B, 1, 160},
+    {"shot_vs_buildings", 0x57, 1, 160},
 };
-constexpr int kTrainedAtOff = 0x5B;
+// The "auto" fields: 0 leaves the template's padding byte (0xA2) in place, so
+// a unit left on Automatic has a record byte-identical to before.
+bool auto_when_zero(int off) {
+    return off == 0x5B || off == 0x5A || off == 0x0A || off == 0x0B || off == 0x57;
+}
 bool name_ok(const std::string& n) {
     if (n.empty() || n.size() > 24) return false;
     for (char ch : n)
@@ -800,7 +816,7 @@ bool load_unit(const std::string& folder, const std::string& tag, const std::vec
             long v;
             if (!jnum(j, fb, fe, f.key, &v)) continue;
             v = std::clamp(v, 0L, f.max);
-            if (f.off == kTrainedAtOff && v == 0) continue;   // Auto: the template's byte stays
+            if (auto_when_zero(f.off) && v == 0) continue;   // Auto: the template's byte stays
             for (int i = 0; i < f.width; ++i) e->rec[(size_t)f.off + (size_t)i] = (uint8_t)((unsigned long)v >> (8 * i));
         }
     std::string tasset = pool_str(stock, get32(stock, r + 0x24));
@@ -1763,6 +1779,14 @@ bool lb_cunits_received(uint64_t hash, const std::vector<uint8_t>& b) {
 }
 
 // A PNG as RGBA (0xAABBGGRR), for the community list's pictures.
+// BR-0078 (docs/479): the unit lab's 3D preview applies a folder's
+// model/texture.png to the template's model exactly as the importer does
+// (encode_model_texture), so the preview shows what the battle will.
+bool lb_cunits_apply_model_texture(std::vector<uint8_t>* nsbmd, const std::vector<uint8_t>& png) {
+    Img im;
+    return read_png(png, &im) && encode_model_texture(nsbmd, im);
+}
+
 bool lb_cunits_png_rgba(const std::vector<uint8_t>& png, int* w, int* h, std::vector<uint32_t>* px) {
     Img im;
     if (!read_png(png, &im) || im.w <= 0 || im.h <= 0) return false;
@@ -2075,7 +2099,8 @@ bool lb_cunits_find_reskins(const std::vector<uint8_t>& se, const std::vector<ui
             if (a == b) continue;
             for (int q = 0; q < f.width; ++q) rebuilt[(size_t)f.off + (size_t)q] = pe[r + (size_t)f.off + (size_t)q];
             long v = (long)b;
-            if (f.max <= 3 && v > f.max) v = 0;   // a port capability byte left at the stock 0xA2
+            // A port capability byte left at the stock 0xA2 (0xA1 for +0x57).
+            if ((f.max <= 3 || auto_when_zero(f.off)) && v > f.max) v = 0;
             j += std::string(first ? "\n" : ",\n") + "    \"" + f.key + "\": " + std::to_string(v);
             first = false;
         }

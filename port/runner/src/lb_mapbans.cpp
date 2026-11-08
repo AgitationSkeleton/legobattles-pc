@@ -38,6 +38,9 @@ extern "C" {
 
 extern "C" int lb_mods_players(int k);   /* lb_mods.cpp */
 extern "C" int lb_rules_fresh(void);     /* lb_teams.cpp */
+extern "C" int lb_mods_map_stats(const unsigned char* data, size_t n, int out[10]);   /* lb_mods.cpp */
+bool lb_mods_bundle(unsigned long long hash, std::vector<uint8_t>* map,
+                    std::vector<uint8_t>* detail, std::vector<uint8_t> mini[4]);   /* lb_mods.cpp */
 
 namespace {
 
@@ -56,10 +59,27 @@ struct MapKey {
     unsigned long long hash = 0;
 };
 
+// SG-0103 (docs/483): map categories a unit can be banned on, as bits of
+// UnitMap::cats and as tokens of the unit-on-these-maps list ("177:cW+s4").
+// Land is every map that is not Water; Large is independent of both.
+constexpr uint8_t kCatLand = 1u, kCatWater = 2u, kCatLarge = 4u;
+struct CatTok { const char* tok; uint8_t bit; const char* name; };
+constexpr CatTok kCatToks[3] = {
+    {"cL", kCatLand, "Land maps"},
+    {"cW", kCatWater, "Water maps"},
+    {"cX", kCatLarge, "Large maps (128)"},
+};
+uint8_t cat_of_token(const std::string& t) {
+    for (const CatTok& c : kCatToks)
+        if (t == c.tok) return c.bit;
+    return 0;
+}
+
 struct UnitMap {
     int bp = 0;
     uint32_t stock = 0;
     std::vector<unsigned long long> mods;
+    uint8_t cats = 0;                 // SG-0103: banned on every map of these categories
 };
 
 struct BanSet {
@@ -71,9 +91,11 @@ struct BanSet {
         if (k.stock) return (stock >> (k.stock - 1)) & 1u;
         return std::find(mods.begin(), mods.end(), k.hash) != mods.end();
     }
-    bool unit_banned_on(int bp, const MapKey& k) const {
+    // `cats`: the map's categories (map_cats), 0 when unknown.
+    bool unit_banned_on(int bp, const MapKey& k, uint8_t cats) const {
         for (const UnitMap& u : um) {
             if (u.bp != bp) continue;
+            if (u.cats & cats) return true;
             if (k.stock) return (u.stock >> (k.stock - 1)) & 1u;
             return std::find(u.mods.begin(), u.mods.end(), k.hash) != u.mods.end();
         }
@@ -147,8 +169,9 @@ BanSet parse_sets(const char* maps, const char* umb) {
         for (const std::string& t : toks) {
             MapKey k;
             if (parse_token(t, &k)) add_key(k, &u.stock, &u.mods);
+            else u.cats |= cat_of_token(t);   // SG-0103
         }
-        if (u.stock || !u.mods.empty()) b.um.push_back(std::move(u));
+        if (u.stock || !u.mods.empty() || u.cats) b.um.push_back(std::move(u));
     }
     return b;
 }
@@ -178,6 +201,79 @@ bool key_of_name_id(uint32_t id, MapKey* k) {
 bool key_of_mission(uint32_t mission, MapKey* k) {
     if (mission < 0x02000000u || mission >= 0x02400000u) return false;
     return key_of_name_id(bus_read_u32(mission + 0xF0u), k);
+}
+
+// ---- SG-0103 (docs/483): a map's categories -----------------------------------
+//
+// From the map FILE, so every machine (which has the same stock map in its
+// ROM, or the same mod map by its content hash) puts a map in the same
+// categories, whatever has been loaded yet:
+//   * Water: a tenth or more of the ground-type plane (plane A, docs/15) is
+//     type 3, water. On the 30 stock maps that splits 20 maps with 17-72%
+//     water from 10 with at most 9.3% (The Pond's pond, 7.8%; Ruthless 9.3%;
+//     Proving Grounds 3.9%; seven with none) -- see docs/483's table;
+//   * Land: every map that is not Water;
+//   * Large: 128 or more tiles wide or tall (the game's limit, docs/460; every
+//     stock map is 96 or 64 square).
+// The stock map's file is Maps/<stem>.map of the cartridge as built (the map
+// table entry's +0 names the stem: a slot a mod replaced is classified by what
+// is played); a mod map's bytes come from lb_mods by hash. 0 when unreadable.
+constexpr int kWaterTenths = 1;    // water share, in tenths, from which a map is Water
+constexpr int kLargeSide = 128;
+struct CatCache { MapKey k; uint8_t cats; };
+std::vector<CatCache> g_cat_cache;   // under g_mu
+
+uint8_t classify_bytes(const std::vector<uint8_t>& f, const MapKey& k) {
+    int st[10] = {0};
+    if (f.empty() || !lb_mods_map_stats(f.data(), f.size(), st)) return 0;
+    const long cells = (long)st[0] * (long)st[1];
+    if (cells <= 0) return 0;
+    const bool water = (long)st[7] * 10L >= cells * kWaterTenths;   // st[7]: type 3 cells
+    const bool large = st[0] >= kLargeSide || st[1] >= kLargeSide;
+    const uint8_t cats = (uint8_t)((water ? kCatWater : kCatLand) | (large ? kCatLarge : 0u));
+    std::fprintf(stderr, "[lb_maps] map %s: %dx%d, %ld%% water -> %s%s (SG-0103)\n",
+                 token_of(k).c_str(), st[0], st[1], (long)st[7] * 100L / cells,
+                 water ? "water" : "land", large ? ", large" : "");
+    std::fflush(stderr);
+    return cats;
+}
+
+uint8_t map_cats_locked(const MapKey& k) {
+    for (const CatCache& c : g_cat_cache)
+        if (c.k.stock == k.stock && c.k.hash == k.hash) return c.cats;
+    std::vector<uint8_t> f;
+    if (k.stock >= 1 && k.stock <= kStockMaps) {
+        const uint32_t sp = bus_read_u32(kMapTable + kMapEntry * (uint32_t)(k.stock - 1));
+        char stem[16] = "";
+        if (sp >= 0x02000000u && sp < 0x02400000u)
+            for (int i = 0; i < 15; ++i) {
+                const char ch = (char)bus_read_u8(sp + (uint32_t)i);
+                stem[i] = ch;
+                if (!ch) break;
+            }
+        stem[15] = '\0';
+        if (stem[0]) {
+            const std::string path = std::string("Maps/") + stem + ".map";
+            const int sz = lb_rom_read(path.c_str(), nullptr, 0);
+            if (sz > 0) {
+                f.resize((size_t)sz);
+                lb_rom_read(path.c_str(), f.data(), sz);
+            }
+        }
+    } else if (k.hash) {
+        std::vector<uint8_t> detail, mini[4];
+        if (!lb_mods_bundle(k.hash, &f, &detail, mini)) f.clear();
+    }
+    const uint8_t cats = classify_bytes(f, k);
+    if (!cats) {
+        std::fprintf(stderr, "[lb_maps] map %s: its file is not readable, so no category "
+                     "bans apply to it (SG-0103)\n", token_of(k).c_str());
+        std::fflush(stderr);
+    }
+    // Kept either way (one line per map); lb_maps_forget and a change of the
+    // settings or of the mod maps empty it.
+    g_cat_cache.push_back({k, cats});
+    return cats;
 }
 
 // ---- the English names, from the ROM -------------------------------------------
@@ -333,6 +429,7 @@ extern "C" void lb_maps_set_local(const char* banned_maps, const char* unit_map_
     std::lock_guard<std::mutex> lk(g_mu);
     g_local = std::move(b);
     g_preset_maps = std::move(p);
+    g_cat_cache.clear();   // SG-0103: the mod maps may have changed too
     g_preset_active = preset_active != 0;
     g_local_tourney_team = tourney_team != 0;
     g_random_maps = random_maps != 0;
@@ -428,7 +525,9 @@ extern "C" void lb_maps_names_of(const char* toks, char* out, int cap) {
     const int n = lb_maps_count();
     for (const std::string& tk : v) {
         std::string nm = tk;
-        for (int i = 0; i < n; ++i) {
+        for (const CatTok& c : kCatToks)   // SG-0103: a map category
+            if (tk == c.tok) nm = c.name;
+        for (int i = 0; i < n && nm == tk; ++i) {
             char tok[32], name[64];
             if (lb_maps_entry(i, tok, sizeof tok, name, sizeof name, nullptr) && tk == tok) {
                 nm = name;
@@ -727,6 +826,7 @@ extern "C" void lb_maps_forget(void) {
     g_chosen_ok = false;
     g_recv = BanSet();
     g_recv_ok = false;
+    g_cat_cache.clear();   // SG-0103
     g_recv_tourney_team = false;
     g_recv_seed = 0;
 }
@@ -740,7 +840,12 @@ extern "C" int lb_maps_unit_banned_here(int bp) {
     if (!g_chosen_ok) return 0;
     bool known;
     const BanSet* b = effective_locked(&known, fresh);
-    return known && b->unit_banned_on(bp, g_chosen) ? 1 : 0;
+    if (!known) return 0;
+    // SG-0103: the categories are asked only when some unit has any.
+    bool any_cats = false;
+    for (const UnitMap& u : b->um) any_cats = any_cats || u.cats != 0;
+    const uint8_t cats = any_cats ? map_cats_locked(g_chosen) : 0u;
+    return b->unit_banned_on(bp, g_chosen, cats) ? 1 : 0;
 }
 
 // Does the match run on a random team from a seed, and which seed? 1 and the
@@ -804,6 +909,12 @@ extern "C" int lb_maps_received(char* maps, int mcap, char* umb, int ucap) {
             if (!t.empty()) t += '+';
             t += token_of(MapKey{0, h});
         }
+        for (const CatTok& c : kCatToks)   // SG-0103
+            if (u.cats & c.bit) {
+                if (!t.empty()) t += '+';
+                t += c.tok;
+            }
+        if (t.empty()) continue;
         if (!bs.empty()) bs += ';';
         bs += std::to_string(u.bp) + ":" + t;
     }
@@ -818,7 +929,9 @@ extern "C" int lb_maps_received(char* maps, int mcap, char* umb, int ucap) {
 //   payload); payload = flags (bit 0: every player fields a random team from
 //   the seed), seed (u32), banned stock maps (u32, bit n-1), banned mod maps
 //   (u8 count, u64 hashes), then the units banned on some maps only (u8
-//   count; each: blueprint u8, stock maps u32, u8 count, u64 hashes).
+//   count; each: blueprint u8, stock maps u32, u8 count, u64 hashes), and
+//   (SG-0103, docs/483) when any of those has categories: 'C', the same count
+//   and each one's category bits (1 land, 2 water, 4 large).
 //   Appended after the 'S' page: a build before it reads everything it knows
 //   and ignores the rest.
 
@@ -868,6 +981,18 @@ extern "C" int lb_maps_wire_out(unsigned char* buf, int cap) {
         ++written;
     }
     p[count_at] = (unsigned char)written;
+    // SG-0103 (docs/483): then 'C', a count and each written unit's category
+    // bits, in the list's order. A build before it stops reading after the
+    // list (it never checks the payload's end), so it plays the per-map bans
+    // as before and ignores these; a category-only unit reaches it as a unit
+    // banned on no maps.
+    bool any_cats = false;
+    for (int i = 0; i < written; ++i) any_cats = any_cats || g_local.um[(size_t)i].cats != 0;
+    if (any_cats && n + 2 + written <= (int)sizeof p) {
+        p[n++] = (unsigned char)'C';
+        p[n++] = (unsigned char)written;
+        for (int i = 0; i < written; ++i) p[n++] = g_local.um[(size_t)i].cats;
+    }
     if (4 + n + 4 > cap) return 0;
     buf[0] = 'M';
     buf[1] = 1;
@@ -920,8 +1045,10 @@ extern "C" int lb_maps_wire_in(const unsigned char* p, int len, unsigned sender)
                         if (good && h) b.mods.push_back(h);
                     }
                 } else good = false;
+                std::vector<int> wire_at;   // SG-0103: each kept entry's place in the list
+                int nu = 0;
                 if (good && at < n) {
-                    const int nu = q[at++];
+                    nu = q[at++];
                     for (int i = 0; good && i < nu; ++i) {
                         if (at + 6 > n) { good = false; break; }
                         UnitMap u;
@@ -934,17 +1061,31 @@ extern "C" int lb_maps_wire_in(const unsigned char* p, int len, unsigned sender)
                             good = r64(&hh);
                             if (good && hh) u.mods.push_back(hh);
                         }
-                        if (good && u.bp < 192) b.um.push_back(std::move(u));
+                        if (good && u.bp < 192) {
+                            b.um.push_back(std::move(u));
+                            wire_at.push_back(i);
+                        }
                     }
                 } else good = false;
+                // SG-0103: the category bits, when the host sent them.
+                if (good && at + 2 <= n && q[at] == (unsigned char)'C' && q[at + 1] == nu &&
+                    at + 2 + nu <= n) {
+                    for (size_t e = 0; e < b.um.size(); ++e)
+                        b.um[e].cats = (uint8_t)(q[at + 2 + wire_at[e]] & (kCatLand | kCatWater | kCatLarge));
+                    at += 2 + nu;
+                }
                 ok = good;
             }
         }
     }
     std::lock_guard<std::mutex> lk(g_mu);
+    bool cats_changed = b.um.size() != g_recv.um.size();   // SG-0103
+    for (size_t e = 0; !cats_changed && e < b.um.size(); ++e)
+        cats_changed = b.um[e].cats != g_recv.um[e].cats;
     const bool changed = ok != g_recv_ok || team != g_recv_tourney_team ||
                          seed != g_recv_seed || b.stock != g_recv.stock ||
-                         b.mods != g_recv.mods || b.um.size() != g_recv.um.size();
+                         b.mods != g_recv.mods || b.um.size() != g_recv.um.size() ||
+                         cats_changed;
     if (ok) {
         g_recv = std::move(b);
         g_recv_tourney_team = team;
@@ -956,11 +1097,13 @@ extern "C" int lb_maps_wire_in(const unsigned char* p, int len, unsigned sender)
     }
     g_recv_ok = ok;
     if (changed) {
+        int with_cats = 0;
+        for (const UnitMap& u : g_recv.um) with_cats += u.cats ? 1 : 0;
         std::fprintf(stderr, "[lb_maps] the host's map rules from instance %u: %s%s"
                      "%d stock + %zu mod map(s) banned, %zu unit(s) banned on some "
-                     "maps, seed %u%s\n", sender, ok ? "" : "none (",
+                     "maps (%d by map category), seed %u%s\n", sender, ok ? "" : "none (",
                      ok ? "" : ") ", ok ? __builtin_popcount(g_recv.stock) : 0,
-                     g_recv.mods.size(), g_recv.um.size(), g_recv_seed,
+                     g_recv.mods.size(), g_recv.um.size(), with_cats, g_recv_seed,
                      g_recv_tourney_team ? ", random teams (tourney)" : "");
         std::fflush(stderr);
     }

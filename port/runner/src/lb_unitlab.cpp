@@ -443,9 +443,13 @@ Pic decode_cell(const std::string& base) {
 // 20-22/23-25, data offset bits 0-15 << 3); the palette dictionary's is the
 // palette offset << 3. Measured: format 3 (16 colours) at 32x32. Formats 1-4,
 // 6 and 7 are decoded; 5 (4x4 compressed) is not used by these models.
+Pic decode_model_texture_bytes(const std::vector<uint8_t>& d);
 Pic decode_model_texture(const std::string& asset) {
+    return decode_model_texture_bytes(rom_file(asset + ".nsbmd"));
+}
+// BR-0078: from a model's bytes, so a custom unit's re-skinned model shows its own.
+Pic decode_model_texture_bytes(const std::vector<uint8_t>& d) {
     Pic out;
-    const std::vector<uint8_t> d = rom_file(asset + ".nsbmd");
     if (d.size() < 0x14 || std::memcmp(d.data(), "BMD0", 4) != 0) return out;
     auto u16 = [&](size_t a) { return a + 2 <= d.size() ? (uint32_t)(d[a] | (d[a + 1] << 8)) : 0u; };
     auto u32 = [&](size_t a) { return u16(a) | (u16(a + 2) << 16); };
@@ -609,9 +613,26 @@ const Field kFields[] = {
     // SG-0093 (docs/476): where a transport or special is trained, 0 auto,
     // 1 Special Factory, 2 Shipyard (padding byte, stock 0xA2 reads as 0).
     {"trained_at", 0x5B, 1},
+    // docs/481: the speed-boost icon (SG-0101) and boarding a transport
+    // (SG-0106), 0 automatic and two forced values (padding, stock 0xA2).
+    {"speed_icon", 0x5A, 1}, {"boarding", 0x0A, 1},
+    // docs/482 (SG-0097): damage against structures, 0 automatic, else
+    // 80 + bonus (padding: +0x0B 0xA2, +0x57 0xA1 in every stock record).
+    {"melee_vs_buildings", 0x0B, 1}, {"shot_vs_buildings", 0x57, 1},
     {"display_name_id", 0x06, 2},
 };
 
+// docs/482: a damage bonus against structures is stored as kBonusZero + the
+// bonus (1..kBonusMax); 0 (or the stock padding) is Automatic.
+constexpr int kBonusZero = 80, kBonusMax = 160;
+bool is_bonus_key(const char* key) {
+    return !std::strcmp(key, "melee_vs_buildings") || !std::strcmp(key, "shot_vs_buildings");
+}
+std::string bonus_text(long v) {
+    if (v < 1 || v > kBonusMax) return "Automatic";
+    const long b = v - kBonusZero;
+    return (b >= 0 ? "+" : "") + std::to_string(b);
+}
 // docs/463: the largest value of a capability field (1 for the on/off ones,
 // 3 for the construction style), or 0 for any other field. A template's stock
 // 0xA2 is neither, so it shows, and saves, as 0.
@@ -619,15 +640,22 @@ int port_field_max(const char* key) {
     if (!std::strcmp(key, "mountains")) return 1;
     // SG-0073 (docs/470): 0 normal, 1 immune, 2 always affected.
     if (!std::strcmp(key, "hotwire_immune") || !std::strcmp(key, "emp_immune") ||
-        !std::strcmp(key, "esp_immune") || !std::strcmp(key, "trained_at"))
+        !std::strcmp(key, "esp_immune") || !std::strcmp(key, "trained_at") ||
+        !std::strcmp(key, "speed_icon") || !std::strcmp(key, "boarding"))
         return 2;
+    if (is_bonus_key(key)) return kBonusMax;   // docs/482
     return !std::strcmp(key, "construction_style") ? 3 : 0;
 }
 // The names of a three-way field's values.
 const char* const* port_field_names(const char* key) {
     static const char* const kTri[3] = {"Normal", "Immune", "Always"};
     static const char* const kTrained[3] = {"Automatic", "Special Factory", "Shipyard"};
-    return !std::strcmp(key, "trained_at") ? kTrained : kTri;
+    static const char* const kIcon[3] = {"Automatic", "Legs", "Wheels"};          // docs/481
+    static const char* const kBoard[3] = {"Automatic", "Can board", "Cannot board"};
+    if (!std::strcmp(key, "trained_at")) return kTrained;
+    if (!std::strcmp(key, "speed_icon")) return kIcon;
+    if (!std::strcmp(key, "boarding")) return kBoard;
+    return kTri;
 }
 long fold_port_value(const char* key, long v) {
     const int mx = port_field_max(key);
@@ -658,6 +686,32 @@ const char* port_field_tip(const char* key) {
                "Where it comes out still follows its movement: give a Shipyard unit Water and a\n"
                "Special Factory unit Land, or it may find nowhere to stand when it is trained\n"
                "(the cost is then lost). Not checked in play for every case yet.";
+    if (!std::strcmp(key, "speed_icon"))
+        return "The icon over the unit while it is speed-boosted.\n"
+               "Automatic: the stock rule -- wheels for transports and siege/special units,\n"
+               "legs for every other unit.\n"
+               "Legs / Wheels: that icon whatever its kind. (A ship keeps its own boat icon\n"
+               "under Wheels.)";
+    if (!std::strcmp(key, "melee_vs_buildings"))
+        return "Melee damage against buildings, walls, gates and bridges (docs/482).\n"
+               "Automatic: the game's own table for the unit it was made from -- builders +20\n"
+               "against every building, heroes +15 against a Base, foot, ranged and mounted\n"
+               "units -10 against most buildings, campaign heroes and creatures 0.\n"
+               "A number: added to its melee damage against every structure, in place of\n"
+               "that table (a hit never does less than 1). Ranged units do not use it.";
+    if (!std::strcmp(key, "shot_vs_buildings"))
+        return "Added to its projectiles' damage when they land on a building, wall, gate or\n"
+               "bridge (docs/482). In an explosion it shrinks with the distance like the rest\n"
+               "of the damage. Automatic: nothing, as in the game. A shot whose shooter has\n"
+               "died on the way gets no bonus.";
+    if (!std::strcmp(key, "boarding"))
+        return "Whether it may board a transport.\n"
+               "Automatic: the stock rule -- any unit that cannot enter water may board;\n"
+               "flyers and ships cannot.\n"
+               "Can board: it may board even if it can enter water.\n"
+               "Cannot board: it never boards a transport.\n"
+               "A transport still holds at most 4 hero, builder, foot and mounted units and\n"
+               "2 siege/special units.";
     return "The brick animation shown while this unit is trained.\n"
            "Auto: its faction's (a custom unit is Human). Skeleton is the Wizards', Alien the Aliens'.";
 }
@@ -704,7 +758,14 @@ const HowStep kHowTo[] = {
      "mountains (walk over cliffs) and immunity to Hotwire, EMP and ESP, and a\n"
      "construction style for the brick animation when it is trained. A transport or\n"
      "siege unit can say where it is trained (\"trained_at\": 0 automatic, 1 Special\n"
-     "Factory, 2 Shipyard). The Damage box under the values estimates its damage per\n"
+     "Factory, 2 Shipyard). Any unit can choose its speed-boost icon (\"speed_icon\":\n"
+     "0 automatic, 1 legs, 2 wheels) and whether it may board a transport\n"
+     "(\"boarding\": 0 automatic, 1 can board, 2 cannot board). The same three\n"
+     "choices exist for stock units in Balance > Traits.\n"
+     "Damage against buildings: \"melee_vs_buildings\" and \"shot_vs_buildings\" are\n"
+     "0 for automatic, else 80 plus the bonus (60 = -20, 100 = +20). The Stats tab\n"
+     "shows them as Auto or a signed number; stock units have them in Balance > Traits.\n"
+     "The Damage box under the values estimates its damage per\n"
      "second and how long it takes to beat a few stock units.\n"
      "\"index\" is the unit it was made from:\n"
      "leave it. The other entries (sheets, animations, raw_record) are for reference\n"
@@ -953,6 +1014,63 @@ const Tex& pic_tex(const std::string& key, F make) {
     return g_tex.emplace(key, t).first->second;
 }
 
+fs::path units_root();   // below
+// BR-0078 (docs/479): A CUSTOM UNIT'S ART FOLLOWS ITS FILES. The preview's
+// textures are cached by key, and a custom unit's were keyed by name alone, so
+// an edited PNG never showed until a restart. A folder's key now carries the
+// modification time of the file(s) it was made from; a new time makes a new
+// texture and frees the old one.
+long long file_stamp(const fs::path& p) {
+    std::error_code ec;
+    const auto t = fs::last_write_time(p, ec);
+    return ec ? 0 : (long long)t.time_since_epoch().count();
+}
+template <class F>
+const Tex& stamped_tex(const std::string& base, long long stamp, F make) {
+    const std::string key = base + "@" + std::to_string(stamp);
+    auto it = g_tex.find(key);
+    if (it != g_tex.end()) return it->second;
+    for (auto o = g_tex.begin(); o != g_tex.end();) {   // the same art, older
+        if (o->first.compare(0, base.size() + 1, base + "@") == 0) {
+            if (o->second.t) SDL_DestroyTexture(o->second.t);
+            o = g_tex.erase(o);
+        } else {
+            ++o;
+        }
+    }
+    return pic_tex(key, make);
+}
+// A PNG of a folder as a picture, or empty (fitted to fw x fh by nearest pixel
+// when given, as the importer fits portraits/head.png to 24x24).
+Pic folder_png(const fs::path& p, int fw = 0, int fh = 0) {
+    Pic out;
+    std::vector<uint8_t> b;
+    int w = 0, h = 0;
+    std::vector<uint32_t> px;
+    std::error_code ec;
+    const auto n = fs::file_size(p, ec);
+    if (ec || n == 0 || n > (8u << 20)) return out;
+    std::FILE* f = std::fopen(utf8(p).c_str(), "rb");
+    if (!f) return out;
+    b.resize((size_t)n);
+    const bool ok = std::fread(b.data(), 1, b.size(), f) == b.size();
+    std::fclose(f);
+    if (!ok || !lb_cunits_png_rgba(b, &w, &h, &px) || w <= 0 || h <= 0) return out;
+    if (fw > 0 && fh > 0 && w <= 512 && h <= 512) {
+        out.w = fw;
+        out.h = fh;
+        out.px.assign((size_t)fw * (size_t)fh, 0u);
+        for (int y = 0; y < fh; ++y)
+            for (int x = 0; x < fw; ++x)
+                out.px[(size_t)(y * fw + x)] = px[(size_t)(y * h / fh) * (size_t)w + (size_t)(x * w / fw)];
+        return out;
+    }
+    out.w = w;
+    out.h = h;
+    out.px = std::move(px);
+    return out;
+}
+
 // Eight compass directions from the five stored ones: 0..4 as stored, 5..7
 // mirror 3..1.
 const char* const kCompass[8] = {"N", "NE", "E", "SE", "S", "SW", "W", "NW"};
@@ -967,9 +1085,22 @@ struct View {
 // A custom unit's sheet as the importer will build it (lb_cunits.cpp).
 const Tex& folder_tex(const std::string& folder, int tmpl, const std::string& name, int team) {
     team = team_key(team);
-    const std::string key = "F:" + folder + ":" + name + "#" + std::to_string(team);
+    // BR-0078: keyed by the sheet's files and unit.json, so an edit shows.
+    const fs::path dir = units_root() / fs::u8path(folder);
+    const long long stamp = std::max({file_stamp(dir / "sheets" / (name + ".png")),
+                                      file_stamp(dir / "sheets" / (name + ".ncbr")), file_stamp(dir / "unit.json")});
+    const std::string base = "F:" + folder + ":" + name + "#" + std::to_string(team);
+    const std::string key = base + "@" + std::to_string(stamp);
     auto it = g_tex.find(key);
     if (it != g_tex.end()) return it->second;
+    for (auto o = g_tex.begin(); o != g_tex.end();) {   // the same sheet, older
+        if (o->first.compare(0, base.size() + 1, base + "@") == 0) {
+            if (o->second.t) SDL_DestroyTexture(o->second.t);
+            o = g_tex.erase(o);
+        } else {
+            ++o;
+        }
+    }
     Tex t;
     int w = 0, h = 0;
     std::vector<uint8_t> px;
@@ -1056,6 +1187,44 @@ std::string read_text(const fs::path& p);                       // below
 std::string json_get_s(const std::string& j, const char* key);  // below
 fs::path units_root();                                          // below
 
+// The two cards (the army screen's, the battle's top screen) and the head of
+// a view, on the current line (BR-0078: 3D units show them too).
+void draw_portraits(const View& v, const Rec& r, float z) {
+    // beside them, at the zoom's half (a card is 128x192). BR-0078: a custom
+    // unit shows its own portraits/ files, re-read when they change, else
+    // the template's (as the importer falls back).
+    const fs::path pdir = v.folder.empty() ? fs::path() : units_root() / fs::u8path(v.folder) / "portraits";
+    auto own = [&](const char* file) { return v.folder.empty() ? 0LL : file_stamp(pdir / file); };
+    const long long s_card = own("card.png"), s_top = own("card_top_screen.png"), s_head = own("head.png");
+    const Tex card = s_card ? stamped_tex("Fcard:" + v.folder, s_card, [&] { return folder_png(pdir / "card.png"); })
+                            : pic_tex("card:" + std::to_string(r.index),
+                                      [&] { return decode_cell("UI/FEPlayerCards/" + r.internal); });
+    const Tex top = s_top ? stamped_tex("Ftop:" + v.folder, s_top, [&] { return folder_png(pdir / "card_top_screen.png"); })
+                          : pic_tex("top:" + std::to_string(r.index),
+                                    [&] { return decode_cell("UI/GamePlayerCards/" + r.internal); });
+    const Tex head = s_head ? stamped_tex("Fhead:" + v.folder, s_head, [&] { return folder_png(pdir / "head.png", 24, 24); })
+                            : pic_tex("head:" + std::to_string(r.index), [&] {
+                                  Pic p;
+                                  unsigned int px[576];
+                                  if (lb_teams_head_rgba(r.index, px)) { p.w = p.h = 24; p.px.assign(px, px + 576); }
+                                  return p;
+                              });
+    const float cs = std::max(1.0f, z * 0.5f);
+    for (const Tex* c : {&card, &top}) {
+        if (!c->t) continue;
+        ImGui::SameLine();
+        ImGui::Image((ImTextureID)(intptr_t)c->t, ImVec2(c->w * cs * 0.5f, c->h * cs * 0.5f));
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip(c == &card ? "The army screen's card (portraits/card.png)"
+                                         : "The battle's top-screen card (portraits/card_top_screen.png)");
+    }
+    if (head.t) {
+        ImGui::SameLine();
+        ImGui::Image((ImTextureID)(intptr_t)head.t, ImVec2(24.0f * z * 0.5f, 24.0f * z * 0.5f));
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("The head (portraits/head.png, fitted to 24x24)");
+    }
+}
+
 void draw_view(const View& v, int frame_tick) {
     const std::vector<Rec>& rs = records();
     if (rs.empty()) return;
@@ -1080,13 +1249,36 @@ void draw_view(const View& v, int frame_tick) {
             const std::string a = json_get_s(read_text(units_root() / fs::u8path(v.folder) / "unit.json"), "asset");
             if (a.compare(0, 7, "Models/") == 0) asset = a;
         }
-        if (asset.compare(0, 7, "Models/") == 0) {
-            static std::string held_name;
-            static std::vector<uint8_t> held;
-            if (held_name != asset) {
-                held = rom_file(asset + ".nsbmd");
-                held_name = asset;
+        // BR-0078: a custom unit's model/texture.png on the model, as the
+        // importer applies it, re-read when the file changes.
+        const fs::path tex_png = v.folder.empty() ? fs::path() : units_root() / fs::u8path(v.folder) / "model" / "texture.png";
+        const long long tex_stamp = v.folder.empty() ? 0 : file_stamp(tex_png);
+        const std::string held_key = asset + "|" + v.folder + "@" + std::to_string(tex_stamp);
+        static std::string held_name;
+        static std::vector<uint8_t> held;
+        static bool held_custom = false;
+        if (asset.compare(0, 7, "Models/") == 0 && held_name != held_key) {
+            held = rom_file(asset + ".nsbmd");
+            held_custom = false;
+            if (tex_stamp) {
+                std::vector<uint8_t> png;
+                std::error_code ec;
+                const auto n = fs::file_size(tex_png, ec);
+                std::FILE* f = (!ec && n > 0 && n < (8u << 20)) ? std::fopen(utf8(tex_png).c_str(), "rb") : nullptr;
+                if (f) {
+                    png.resize((size_t)n);
+                    const bool ok = std::fread(png.data(), 1, png.size(), f) == png.size();
+                    std::fclose(f);
+                    std::vector<uint8_t> m = held;
+                    if (ok && lb_cunits_apply_model_texture(&m, png)) {
+                        held = std::move(m);
+                        held_custom = true;
+                    }
+                }
             }
+            held_name = held_key;
+        }
+        if (asset.compare(0, 7, "Models/") == 0) {
             constexpr int kM = 256;
             static SDL_Texture* mtex = nullptr;
             static SDL_Renderer* mren = nullptr;
@@ -1115,9 +1307,20 @@ void draw_view(const View& v, int frame_tick) {
         ImGui::BeginGroup();
         if (asset == r.asset) ImGui::TextWrapped("%s", L.note.c_str());
         else ImGui::TextWrapped("A 3D model (%s, chosen in unit.json): its texture is shown for re-skinning.", asset.c_str());
-        const Tex mt = pic_tex("model:" + asset, [&] { return decode_model_texture(asset); });
+        if (!v.folder.empty() && tex_stamp && !held_custom)
+            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
+                               "model/texture.png could not be applied (it must be the exported texture's size, 16 colours at most).");
+        // The texture as the model now carries it (the folder's, once applied).
+        const Tex mt = held_custom && held_name == held_key
+                           ? stamped_tex("model:" + asset + "|" + v.folder, tex_stamp,
+                                         [&] { return decode_model_texture_bytes(held); })
+                           : pic_tex("model:" + asset, [&] { return decode_model_texture(asset); });
         if (mt.t) ImGui::Image((ImTextureID)(intptr_t)mt.t, ImVec2(mt.w * 2.0f, mt.h * 2.0f));
         ImGui::EndGroup();
+        // BR-0078: the cards and head of a 3D unit too, on a row of their own
+        // (beside the model and its texture they fall off the page).
+        ImGui::Dummy(ImVec2(0.0f, 0.0f));
+        draw_portraits(v, r, g_st.zoom);
         draw_sounds(r);
         ImGui::EndGroup();
         return;
@@ -1148,23 +1351,7 @@ void draw_view(const View& v, int frame_tick) {
         }
     }
     ImGui::Dummy(box);
-    // The card and the head beside it, at the zoom's half (a card is 128x192).
-    const Tex card = pic_tex("card:" + std::to_string(r.index), [&] { return decode_cell("UI/FEPlayerCards/" + r.internal); });
-    const Tex head = pic_tex("head:" + std::to_string(r.index), [&] {
-        Pic p;
-        unsigned int px[576];
-        if (lb_teams_head_rgba(r.index, px)) { p.w = p.h = 24; p.px.assign(px, px + 576); }
-        return p;
-    });
-    if (card.t) {
-        ImGui::SameLine();
-        const float s = std::max(1.0f, z * 0.5f);
-        ImGui::Image((ImTextureID)(intptr_t)card.t, ImVec2(card.w * s * 0.5f, card.h * s * 0.5f));
-    }
-    if (head.t) {
-        ImGui::SameLine();
-        ImGui::Image((ImTextureID)(intptr_t)head.t, ImVec2(24.0f * z * 0.5f, 24.0f * z * 0.5f));
-    }
+    draw_portraits(v, r, z);
     ImGui::TextDisabled("%s, %s (%s%s), %zu frame%s", a.name.c_str(), kCompass[d8], kDirNames[d5],
                         mirror ? " mirrored" : "", fr.size(), fr.size() == 1 ? "" : "s");
     if (!L.note.empty()) ImGui::TextDisabled("%s", L.note.c_str());
@@ -1500,6 +1687,22 @@ bool draw_named_field(size_t i, const std::vector<Rec>& rs) {
     const bool spell = std::strncmp(key, "spell_", 6) == 0;
     // docs/463: the capability fields are a tick box, or a short list.
     if (const int pmax = port_field_max(key)) {
+        if (pmax == kBonusMax) {   // docs/482: Automatic, or a signed bonus
+            bool autom = g_edit.field[i] < 1 || g_edit.field[i] > kBonusMax;
+            ImGui::PushID((int)i);
+            if (ImGui::Checkbox("Auto", &autom)) g_edit.field[i] = autom ? 0 : kBonusZero;
+            ImGui::SetItemTooltip("%s", port_field_tip(key));
+            ImGui::SameLine();
+            ImGui::BeginDisabled(autom);
+            int b = autom ? 0 : (int)g_edit.field[i] - kBonusZero;
+            ImGui::SetNextItemWidth(100.0f);
+            if (ImGui::InputInt(key, &b))
+                g_edit.field[i] = std::clamp(b, 1 - kBonusZero, kBonusMax - kBonusZero) + kBonusZero;
+            ImGui::EndDisabled();
+            ImGui::PopID();
+            ImGui::SetItemTooltip("%s", port_field_tip(key));
+            return true;
+        }
         if (pmax == 1) {
             bool on = g_edit.field[i] == 1;
             if (ImGui::Checkbox(key, &on)) g_edit.field[i] = on ? 1 : 0;
@@ -1571,7 +1774,11 @@ ProjDamage projectile_damage(int p) {
     d.explodes = e[r + 0x6B] != 0;
     return d;
 }
-struct DmgIn { int cat = 0; long melee = 0, spread = 0, interval = 0, proj = 65535; };
+struct DmgIn {
+    int cat = 0;
+    long melee = 0, spread = 0, interval = 0, proj = 65535;
+    long melee_bldg = 0, shot_bldg = 0;   // docs/482: 0 automatic, else 80 + bonus
+};
 void draw_damage(const DmgIn& in) {
     ImGui::SeparatorText("Damage (estimate)");
     const bool ranged = in.proj != 65535;
@@ -1598,6 +1805,21 @@ void draw_damage(const DmgIn& in) {
     ImGui::Text("%s %d-%d per hit (average %.1f), a hit every %ld ticks (%.2f s)", ranged ? "Projectile hit" : "Melee",
                 lo, hi, avg, in.interval, secs);
     ImGui::Text("Damage per second: %.1f  (%.1f to %.1f)", dps, lo / secs, hi / secs);
+    {   // docs/482 (SG-0097): against structures
+        const long code = ranged ? in.shot_bldg : in.melee_bldg;
+        if (code >= 1 && code <= kBonusMax) {
+            const int b = (int)code - kBonusZero;
+            const int blo = ranged ? std::max(0, lo + b) : std::max(1, lo + b);
+            // Melee: the floor of 1 is on melee_damage + bonus (func_0205CC88);
+            // the spread roll is added after it (FUN_0205079C).
+            const int bhi = ranged ? std::max(blo, hi + b) : blo + (hi - lo);
+            ImGui::Text("Against buildings: %d-%d per hit (%+d)", blo, bhi, b);
+        } else if (ranged) {
+            ImGui::TextDisabled("Against buildings: the same (no bonus, as in the game).");
+        } else {
+            ImGui::TextDisabled("Against buildings: the game's own bonus for its starting unit.");
+        }
+    }
     std::string tip =
         "From the values above: average damage x 30 / attack interval. The attack interval is in\n"
         "game ticks, 30 a second. Melee damage is the least a hit does and the spread is added\n"
@@ -1740,6 +1962,8 @@ void draw_edit_fields(const Mine& m, const std::vector<Rec>& rs) {
     d.spread = edit_value("melee_spread");
     d.interval = edit_value("attack_interval");
     d.proj = edit_value("projectile");
+    d.melee_bldg = edit_value("melee_vs_buildings");   // docs/482
+    d.shot_bldg = edit_value("shot_vs_buildings");
     draw_damage(d);
 }
 
@@ -1759,8 +1983,12 @@ void draw_stock_fields(const Rec& r) {
                 ImGui::TextUnformatted(projectile_label((int)v, records()).c_str());
             else if (std::strncmp(kFields[i].key, "spell_", 6) == 0)
                 ImGui::TextUnformatted(spell_label((int)v).c_str());
-            else if (std::strcmp(kFields[i].key, "trained_at") == 0)
-                ImGui::TextUnformatted(port_field_names("trained_at")[std::min<uint32_t>(v, 2u)]);
+            else if (std::strcmp(kFields[i].key, "trained_at") == 0 ||
+                     std::strcmp(kFields[i].key, "speed_icon") == 0 ||
+                     std::strcmp(kFields[i].key, "boarding") == 0)   // docs/481
+                ImGui::TextUnformatted(port_field_names(kFields[i].key)[std::min<uint32_t>(v, 2u)]);
+            else if (is_bonus_key(kFields[i].key))   // docs/482
+                ImGui::TextUnformatted(bonus_text((long)v).c_str());
             else
                 ImGui::Text("%u", (unsigned)v);
         }
@@ -1772,6 +2000,8 @@ void draw_stock_fields(const Rec& r) {
     d.spread = raw_value(r, "melee_spread");
     d.interval = raw_value(r, "attack_interval");
     d.proj = raw_value(r, "projectile");
+    d.melee_bldg = fold_port_value("melee_vs_buildings", raw_value(r, "melee_vs_buildings"));   // docs/482
+    d.shot_bldg = fold_port_value("shot_vs_buildings", raw_value(r, "shot_vs_buildings"));
     draw_damage(d);
 }
 
@@ -2869,6 +3099,21 @@ void lb_unitlab_draw(SDL_Renderer* ren) {
     unitlab_renderer(ren);
     State& s = g_st;
     unet_poll();
+    {   // TEST AID (BR-0078): LB_TEST_LAB_PREVIEW=<folder> previews that custom
+        // unit when the lab first draws, as its Preview button does.
+        static bool once = false;
+        if (!once) {
+            once = true;
+            if (const char* f = std::getenv("LB_TEST_LAB_PREVIEW")) {
+                const Mine m = read_mine(units_root() / fs::u8path(f));
+                if (m.ok) {
+                    s.a.pick = m.tmpl;
+                    s.a.folder = f;
+                    s.a.title = m.name;
+                }
+            }
+        }
+    }
     const std::vector<Rec>& rs = records();
     if (rs.empty()) {
         ImGui::TextDisabled("The cartridge's BP/Entities.ebp could not be read.");

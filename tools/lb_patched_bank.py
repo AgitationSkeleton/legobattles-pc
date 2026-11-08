@@ -40,6 +40,10 @@ OUT_BIN = os.path.join(ROOT, "out", "eur", "arm9", "patched_static_02000000.bin"
 TOML = os.path.join(ROOT, "port", "config", "lb_arm9.toml")
 OUT_TOML = os.path.join(ROOT, "port", "config", "lb_arm9_patched.toml")
 DISPATCH = os.path.join(ROOT, "port", "generated", "lb_arm9_dispatch.c")
+# Patches the port applies only in some matches, which a scan may not see:
+# folded in after every scan. 0203AD34: Unit_BuildBillboard's sprite slot
+# read, while the larger sprite pool's extension table is in use (docs/479).
+EXTRA_WORDS = ["0203AD34=E5911004"]
 
 
 def validation_ranges():
@@ -111,14 +115,46 @@ def scan(port):
         for _a, _s, _m, text in keep:
             fh.write(text if text.endswith("\n") else text + "\n")
     print("wrote %s (sha1 %s) and %s" % (OUT_BIN, sha, OUT_TOML))
+    add(EXTRA_WORDS)
+
+
+def add(words):
+    """Fold patch words the port applies only some of the time (so a scan of
+    one battle may not see them) into the existing patched image and config.
+    words: ["ADDR=WORD", ...] in hex. Adds each word's entry point."""
+    rom = open(ROM_BIN, "rb").read()
+    patched = bytearray(open(OUT_BIN, "rb").read())
+    txt = open(OUT_TOML, encoding="utf-8").read()
+    have = set(int(m.group(1), 16) for m in re.finditer(r"addr\s*=\s*0x([0-9A-Fa-f]+)", txt))
+    _head, eps = entry_points()
+    for w in words:
+        a, v = (int(x, 16) for x in w.split("="))
+        o = a - BASE
+        patched[o:o + 4] = v.to_bytes(4, "little")
+        print("  %08X: %08X -> %08X" % (a, int.from_bytes(rom[o:o + 4], "little"), v))
+        for ea, es, _m, text in eps:
+            if ea <= a < ea + es and ea not in have:
+                txt += text if text.endswith("\n") else text + "\n"
+                have.add(ea)
+                print("  entry point %08X+%X added" % (ea, es))
+    sha = hashlib.sha1(bytes(patched)).hexdigest()
+    txt = re.sub(r'sha1\s*=\s*"[0-9a-f]+"', 'sha1 = "%s"' % sha, txt, count=1)
+    open(OUT_BIN, "wb").write(bytes(patched))
+    with open(OUT_TOML, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(txt)
+    print("wrote %s (sha1 %s) and %s" % (OUT_BIN, sha, OUT_TOML))
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["scan"])
+    ap.add_argument("cmd", choices=["scan", "add"])
     ap.add_argument("--port", type=int, default=19859)
+    ap.add_argument("words", nargs="*", help="add: ADDR=WORD (hex)")
     a = ap.parse_args()
-    scan(a.port)
+    if a.cmd == "add":
+        add(a.words)
+    else:
+        scan(a.port)
 
 
 if __name__ == "__main__":

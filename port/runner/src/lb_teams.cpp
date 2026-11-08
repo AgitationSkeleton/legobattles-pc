@@ -1593,7 +1593,16 @@ extern "C" int lb_teams_unit_state(int bp) {
     const Cand* c = find_cand(bp, nullptr);
     const uint32_t mgr = bus_read_u32(kUnlockMgr);
     if (!c || !guest_ptr(mgr) || !lb_patches_blueprint_base()) return -1;
-    if (!c->minifig) return 2;           // docs/410: a creature, always fieldable
+    if (!c->minifig) {                   // docs/410: a creature, always fieldable...
+        // SG-0098 (docs/480): ...unless the player tied it to a stock unit's
+        // unlock, which it then follows (no buying, as SG-0096's custom units).
+        // The setting never names a creature, so this recursion is one deep.
+        if (const int uw = lb_setting_creature_unlock_with(bp); uw > 0) {
+            const int s = lb_teams_unit_state(uw);
+            return s < 0 ? -1 : s == 0 ? 0 : 2;
+        }
+        return 2;
+    }
     check_table();
     const uint32_t mf = bp_addr(c->minifig);
     const uint32_t bit = bus_read_u16(mf + 0x6Cu);
@@ -2116,7 +2125,10 @@ extern "C" int lb_teams_card_listable(int unit) {
     if (!g_cards_applied) return -1;
     // docs/436: any creature; the screen has already matched the slot to the
     // unit's own category, which the creature layer set from the slot.
-    return unit == 169 || unit == 138 || unit == 155 || unit == 153 ? 1 : -1;
+    if (unit != 169 && unit != 138 && unit != 155 && unit != 153) return -1;
+    // SG-0098 (docs/480): a creature tied to a unit this save has not unlocked
+    // is left out, as a locked custom unit is (SG-0096).
+    return lb_teams_unit_state(unit) == 0 ? 0 : 1;
 }
 extern "C" int lb_teams_card_tier(int unit) {
     if (unit >= 551) {   // docs/448: Special One/Two/Three 1..3, Transport 4 (FUN_020EB21C)
@@ -2126,6 +2138,7 @@ extern "C" int lb_teams_card_tier(int unit) {
     }
     if (!g_cards_applied) return -1;
     const int s = lb_creature_slot(unit);   // Special One/Two/Three = 5/6/7
+    if (s >= 5 && s <= 7 && lb_teams_unit_state(unit) == 0) return 0;   // SG-0098: no slot's tier is 0
     return s >= 5 && s <= 7 ? s - 4 : -1;
 }
 
@@ -2243,6 +2256,43 @@ static void team_to_record(const LbTeam& t, unsigned char rec[20]) {
     rec[0x13] = (unsigned char)(0x7C + (b ? b->faction : 0));
 }
 
+// SG-0104 (docs/480): THE RANDOMIZER OPPONENT'S DRAW. As lb_teams_randomize
+// (any unit, bought or not), but a unit the player keeps out of random armies
+// (lb_setting_random_army_banned) is never drawn. A slot whose every candidate
+// is kept out draws from all of them, so the army is never short a slot. The
+// draw happens on this machine only (Free Play's OpponentSetup, or Computer
+// Player 3); the recording keeps the army it fielded (lb_demo_note_army), so
+// a replay never draws again and needs no setting of its own.
+static void randomize_opponent(LbTeam* t) {
+    static std::mt19937 rng(std::random_device{}());
+    int kept = 0, refilled = 0;
+    for (int s = 0; s < LB_TEAM_SLOTS; ++s) {
+        std::vector<int> pool, all;
+        for (int k = 0; k < slot_total(s); ++k) {
+            const Cand& c = slot_item(s, k);
+            if (!cand_on(c)) continue;   // docs/410
+            all.push_back(c.unit);
+            if (lb_setting_random_army_banned(c.unit)) { ++kept; continue; }
+            pool.push_back(c.unit);
+        }
+        if (pool.empty()) {   // every candidate kept out: ignore the list here
+            pool = all;
+            if (!all.empty()) ++refilled;
+        }
+        if (pool.empty()) pool.push_back(kKingDefault[s]);
+        t->pick[s] = (unsigned short)pool[std::uniform_int_distribution<int>(
+            0, (int)pool.size() - 1)(rng)];
+    }
+    if (kept) {
+        std::fprintf(stderr, "[lb_enemy] Randomizer army: %d candidate(s) kept out "
+                     "(SG-0104)%s; fields %u %u %u %u %u | %u %u %u %u\n", kept,
+                     refilled ? ", a slot with none left drew from all" : "",
+                     t->pick[0], t->pick[1], t->pick[2], t->pick[3], t->pick[4],
+                     t->pick[5], t->pick[6], t->pick[7], t->pick[8]);
+        std::fflush(stderr);
+    }
+}
+
 // The 20-byte record for an opponent: the picks in the army record's layout,
 // +0x12 = 1, and +0x13 the builder's faction. FUN_02000E78 takes the buildings
 // from the builder's faction (FUN_02002C78), and the Start handler names the
@@ -2265,7 +2315,7 @@ extern "C" int lb_teams_enemy_army(int choice, unsigned char rec[20]) {
                          t.pick[5], t.pick[6], t.pick[7], t.pick[8]);
             std::fflush(stderr);
         } else {
-            lb_teams_randomize(&t, 0);
+            randomize_opponent(&t);   // SG-0104
         }
     }
     if (!lb_teams_valid(&t)) lb_teams_king_default(&t);

@@ -16,7 +16,7 @@ entry_pc     = 0x02000800
 authoritative_entry_points = true
 
 [identity]
-sha1 = "0a6ce1836a296806211e7f24ac62a5b26506c73e"
+sha1 = "927c32e05cfa6b36c9e35d4b0984d01b94df66a9"
 
 [[entry_point]]
 addr = 0x0200A350
