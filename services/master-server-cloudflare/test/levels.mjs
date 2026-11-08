@@ -68,6 +68,8 @@ check('the moderator approves', r.status === 200 && r.data.update && /approved/.
 list = await call('/levels/list');
 const row = list.data.levels.find((l) => l.id === id);
 check('an approved level is listed', !!row && row.name === 'Test Pond' && row.players === 4 && row.world === 0, list);
+// SG-0088: the browsers show the upload date from `created` (ms since epoch).
+check('the list row carries its upload time', !!row && Number.isFinite(row.created) && row.created > 1.6e12, row);
 r = await call('/levels/get?id=' + id);
 check('it downloads byte for byte', r.status === 200 && Buffer.from(r.data.map, 'base64').equals(map) &&
       Buffer.from(r.data.tbp, 'base64').equals(tbp), { status: r.status });

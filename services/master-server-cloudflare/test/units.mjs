@@ -107,6 +107,8 @@ let list = await call('/units/list');
 const row = list.data.units.find((u) => u.id === id);
 check('an approved unit is listed', !!row && row.name === 'Red Test' && row.template === unitJson.index &&
       row.category === unitJson.category && row.sounds === sounds.length, list);
+// SG-0088: the browser shows the upload date from `created` (ms since epoch).
+check('the list row carries its upload time', !!row && Number.isFinite(row.created) && row.created > 1.6e12, row);
 check('the category filter keeps it', (await call('/units/list?category=' + unitJson.category)).data.units.some((u) => u.id === id));
 check('another category leaves it out', !(await call('/units/list?category=' + ((unitJson.category + 1) % 20))).data.units.some((u) => u.id === id));
 r = await call('/units/get?id=' + id);

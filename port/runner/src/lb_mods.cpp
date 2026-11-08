@@ -40,6 +40,7 @@
 #include <SDL.h>
 
 #include "lb_cunits.h"   // docs/448: custom units
+#include "lb_xdelta.h"   // docs/474: xdelta patches
 
 #include <algorithm>
 #include <atomic>
@@ -49,7 +50,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <functional>
+#include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -788,7 +792,13 @@ bool lb_mods_blueprint_own(std::vector<uint8_t>* out) {
 // Called with the player's cartridge before it reaches the emulator (main.cpp,
 // apply_hooks.py docs/391). Adds the mods folder's maps; leaves the image
 // untouched when there are none. Returns the number of maps added.
+static int mods_build(std::vector<uint8_t>* rom_p);
 extern "C" int lb_mods_build(std::vector<uint8_t>* rom_p) {
+    const int n = mods_build(rom_p);
+    lb_xdelta_selftest_if_asked();   // docs/474: LB_XDELTA_SELFTEST, once
+    return n;
+}
+static int mods_build(std::vector<uint8_t>* rom_p) {
     std::vector<uint8_t>& rom = *rom_p;
     g_maps.clear();
     if (rom.size() < 0x200) return 0;
@@ -1022,6 +1032,19 @@ extern "C" int lb_mods_players(int k) {
 extern "C" int lb_mods_world(int k) {
     return (k >= 0 && k < (int)g_maps.size()) ? g_maps[(size_t)k].world : 0;
 }
+// docs/474: the stock slot map k was taken from (1..30; 0 for a map folder
+// that names none), and its size in cells.
+extern "C" int lb_mods_slot(int k) {
+    if (k < 0 || k >= (int)g_maps.size()) return 0;
+    const int s = g_maps[(size_t)k].slot;
+    return s >= 1 && s <= 30 ? s : 0;
+}
+extern "C" int lb_mods_dims(int k, int* w, int* h) {
+    *w = *h = 0;
+    if (k < 0 || k >= (int)g_maps.size()) return 0;
+    map_too_big(g_maps[(size_t)k].map, w, h);
+    return *w > 0;
+}
 extern "C" unsigned lb_mods_name_id(int k) {
     return (k >= 0 && k < (int)g_maps.size()) ? g_maps[(size_t)k].name_id : 0u;
 }
@@ -1238,4 +1261,486 @@ extern "C" void lb_mods_rebuild_if_asked(void) {
     std::fprintf(stderr, "[lb_mods] the cartridge rebuilt for the Reset: %zu mod map(s), "
                  "was %zu\n", g_maps.size(), before);
     std::fflush(stderr);
+}
+
+// ---- docs/474: xdelta patches ------------------------------------------------------
+// The export takes the running cartridge (lb_mods_copy_live) or builds one for
+// real hardware (lb_mods_build_slots); the import reads a patched image back
+// into map folders (lb_mods_patch_scan, lb_mods_install_map). lb_xdelta.cpp
+// does the patch format and the jobs.
+
+const std::vector<uint8_t>& lb_mods_original() { return g_pristine_rom; }
+
+bool lb_mods_copy_live(std::vector<uint8_t>* out, const std::function<void()>& also) {
+    std::lock_guard<std::recursive_mutex> lk(g_maps_mu);
+    if (!g_live_rom || g_live_rom->empty()) return false;
+    *out = *g_live_rom;
+    if (also) also();
+    return true;
+}
+
+namespace {
+
+bool parse_image(const std::vector<uint8_t>& rom, Nitro* fs) {
+    if (rom.size() < 0x200) return false;
+    const uint32_t fo = rd32(&rom[0x40]), fs_n = rd32(&rom[0x44]);
+    const uint32_t ao = rd32(&rom[0x48]), as_n = rd32(&rom[0x4C]);
+    if ((uint64_t)fo + fs_n > rom.size() || (uint64_t)ao + as_n > rom.size()) return false;
+    return fs->parse(&rom[fo], fs_n, &rom[ao], as_n);
+}
+
+// Every named file of the image: its path and its id.
+void list_files(const Nitro& fs, int d, const std::string& prefix, std::vector<std::pair<std::string, int>>* out,
+                int depth = 0) {
+    if (depth > 16 || d < 0 || d >= (int)fs.dirs.size()) return;
+    int id = fs.dirs[(size_t)d].first;
+    for (const Entry& e : fs.dirs[(size_t)d].entries) {
+        if (e.dir) list_files(fs, e.sub, prefix + e.name + "/", out, depth + 1);
+        else out->push_back({prefix + e.name, id++});
+    }
+}
+
+std::string lower_s(std::string s) {
+    for (char& c : s) c = (char)std::tolower((unsigned char)c);
+    return s;
+}
+
+// UTF-8 to the language files' Latin-1 ('?' for what it cannot hold).
+std::string to_latin1(const std::string& u) {
+    std::string o;
+    for (size_t i = 0; i < u.size();) {
+        const unsigned char c = (unsigned char)u[i];
+        if (c < 0x80) { o += (char)c; ++i; continue; }
+        if ((c & 0xE0) == 0xC0 && i + 1 < u.size()) {
+            const unsigned cp = ((c & 0x1Fu) << 6) | ((unsigned char)u[i + 1] & 0x3Fu);
+            o += cp < 0x100 ? (char)cp : '?';
+            i += 2;
+            continue;
+        }
+        o += '?';
+        ++i;
+        while (i < u.size() && ((unsigned char)u[i] & 0xC0) == 0x80) ++i;
+    }
+    return o;
+}
+
+// String `id` of a LANG file set to `s` (appended; the old one is left unused).
+bool lng_set(std::vector<uint8_t>* f, uint32_t id, const std::string& s) {
+    if (f->size() < 0x10 || std::memcmp(f->data(), "LANG", 4) != 0) return false;
+    const uint32_t first = rd32(f->data() + 0x0C);
+    const uint32_t count = (first - 0x0Cu) / 4u;
+    if (id >= count || 0x0Cu + 4u * id + 4u > f->size()) return false;
+    wr32(&(*f)[0x0C + 4u * id], (uint32_t)f->size());
+    f->insert(f->end(), s.begin(), s.end());
+    f->push_back(0u);
+    return true;
+}
+
+uint32_t lng_count(const std::vector<uint8_t>& f) {
+    if (f.size() < 0x10 || std::memcmp(f.data(), "LANG", 4) != 0) return 0;
+    return (rd32(f.data() + 0x0C) - 0x0Cu) / 4u;
+}
+
+// A folder name from a map name: letters, digits and a few marks.
+std::string safe_map_folder(const std::string& n) {
+    std::string o;
+    for (char ch : n) {
+        const unsigned char c = (unsigned char)ch;
+        if (c < 0x80 && (std::isalnum(c) || ch == ' ' || ch == '-' || ch == '_' || ch == '\'' || ch == '(' ||
+                         ch == ')' || ch == '!' || ch == '&' || ch == ',' || ch == '.'))
+            o += ch;
+        else if (c >= 0x80 || ch == '/' || ch == ':')
+            o += '_';
+    }
+    while (!o.empty() && (o.back() == ' ' || o.back() == '.')) o.pop_back();
+    while (!o.empty() && o.front() == ' ') o.erase(o.begin());
+    if (o.size() > 48) o.resize(48);
+    return o.empty() ? std::string("Imported map") : o;
+}
+
+uint64_t map_hash(const std::vector<uint8_t>& map, const std::vector<uint8_t>& detail,
+                  const std::vector<uint8_t> mini[4]) {
+    uint64_t h = fnv64(map);
+    h = fnv64(detail, h);
+    for (int k = 0; k < 4; ++k) h = fnv64(mini[k], h);
+    return h;
+}
+
+}  // namespace
+
+bool lb_mods_build_slots(const std::vector<uint8_t>& original, const std::vector<LbSlotPick>& picks,
+                         std::vector<uint8_t>* out, std::string* report) {
+    std::lock_guard<std::recursive_mutex> lk(g_maps_mu);
+    report->clear();
+    Nitro fs;
+    if (!parse_image(original, &fs)) { *report = "Your ROM's file system could not be read."; return false; }
+    bool used[31] = {false};
+    std::vector<LbSlotPick> ok;
+    for (const LbSlotPick& p : picks) {
+        if (p.map < 0 || p.map >= (int)g_maps.size() || p.slot < 1 || p.slot > 30) continue;
+        if (used[p.slot]) {
+            *report = "Two maps were given slot " + std::to_string(p.slot) + "; each slot takes one map.";
+            return false;
+        }
+        used[p.slot] = true;
+        ok.push_back(p);
+    }
+    if (ok.empty()) { *report = "No map was given a slot."; return false; }
+    *out = original;
+    std::vector<uint8_t>& rom = *out;
+    const uint32_t fo = rd32(&rom[0x40]), fs_n = rd32(&rom[0x44]);
+    const uint32_t ao = rd32(&rom[0x48]), as_n = rd32(&rom[0x4C]);
+    uint32_t end = std::max(fo + fs_n, ao + as_n);
+    for (const auto& se : fs.fat) end = std::max(end, se.second);
+    end = (end + 0x1FFu) & ~0x1FFu;
+    std::vector<uint8_t> blob;
+    auto place = [&](const std::vector<uint8_t>& d) {
+        while (blob.size() & 3u) blob.push_back(0xFFu);
+        const uint32_t at = end + (uint32_t)blob.size();
+        blob.insert(blob.end(), d.begin(), d.end());
+        return std::make_pair(at, at + (uint32_t)d.size());
+    };
+    auto replace = [&](const std::string& path, const std::vector<uint8_t>& d) {
+        const int id = fs.find(path);
+        if (id < 0 || (size_t)id >= fs.fat.size() || d.empty()) return false;
+        fs.fat[(size_t)id] = place(d);
+        return true;
+    };
+    std::vector<uint8_t> stock_lng;
+    mem_read(original, fs, "LOC/American_English.lng", &stock_lng);
+    std::vector<std::pair<uint32_t, std::string>> texts;
+    for (const LbSlotPick& p : ok) {
+        const ModMap& m = g_maps[(size_t)p.map];
+        char stem[8];
+        std::snprintf(stem, sizeof stem, "mp%02d", p.slot);
+        // What the slot held, for the report and its warnings.
+        std::vector<uint8_t> was;
+        int sw = 0, sp = 0;
+        const bool had = mem_read(original, fs, std::string("Maps/") + stem + ".map", &was) && map_facts(was, &sw, &sp);
+        bool good = replace(std::string("Maps/") + stem + ".map", m.map) &&
+                    replace(std::string("BP/DetailTiles_") + stem + ".tbp", m.detail);
+        for (int k = 0; k < 4 && good; ++k) good = replace(std::string(stem) + kMiniExt[k], m.mini[k]);
+        if (!good) {
+            *report = std::string("Your ROM has no ") + stem + " files to replace, or map \"" + m.name +
+                      "\" is missing a file.";
+            return false;
+        }
+        const uint32_t name_id = 1242u + 2u * (uint32_t)(p.slot - 1);
+        texts.push_back({name_id, to_latin1(m.name)});
+        texts.push_back({name_id + 1u, to_latin1("A custom map, " + std::to_string(m.players) + " players.")});
+        static const char* const kWorld[3] = {"King", "Pirate", "Mars"};
+        std::string line = "  " + m.name + " -> slot " + stem + " (in place of " +
+                           lng_string(stock_lng, name_id) + ")";
+        if (had && (sp != m.players || sw != m.world))
+            line += std::string("; the game's map table still lists the slot as ") + std::to_string(sp) +
+                    " players, " + kWorld[sw % 3] + " (this map: " + std::to_string(m.players) + ", " +
+                    kWorld[m.world % 3] + ")";
+        int bw = 0, bh = 0;
+        map_too_big(m.map, &bw, &bh);
+        if (bh > 96 || bw > 96)
+            line += "; it is " + std::to_string(bw) + "x" + std::to_string(bh) +
+                    ": larger than 96 cells needs this port's fix (BR-0039) and will fail on a DS";
+        *report += line + "\n";
+    }
+    // The names in every language file (the same ids in each).
+    const int loc = fs.child(0, "LOC");
+    if (loc >= 0) {
+        int id = fs.dirs[(size_t)loc].first;
+        for (const Entry& e : fs.dirs[(size_t)loc].entries) {
+            if (e.dir) continue;
+            const int this_id = id++;
+            if (e.name.size() < 4 || !ci_eq(e.name.substr(e.name.size() - 4), ".lng")) continue;
+            if ((size_t)this_id >= fs.fat.size()) continue;
+            const auto se = fs.fat[(size_t)this_id];
+            if (se.second < se.first || se.second > original.size()) continue;
+            std::vector<uint8_t> f(original.begin() + se.first, original.begin() + se.second);
+            bool any = false;
+            for (const auto& t : texts) any = lng_set(&f, t.first, t.second) || any;
+            if (any) fs.fat[(size_t)this_id] = place(f);
+        }
+    }
+    // The FAT keeps its size and place; the FNT is untouched.
+    for (size_t i = 0; i < fs.fat.size() && 8u * i + 8u <= as_n; ++i) {
+        wr32(&rom[ao + 8u * i], fs.fat[i].first);
+        wr32(&rom[ao + 8u * i + 4u], fs.fat[i].second);
+    }
+    const size_t need = (size_t)end + blob.size();
+    if (need > rom.size()) rom.resize((need + 0x1FFFFu) & ~(size_t)0x1FFFFu, 0xFFu);
+    std::memcpy(&rom[end], blob.data(), blob.size());
+    if (rd32(&rom[0x80]) < need) wr32(&rom[0x80], (uint32_t)need);
+    // The device capacity (128 KB << n) must hold the image on a flash cart.
+    uint8_t cap = 0;
+    while (cap < 15 && ((uint64_t)0x20000u << cap) < rom.size()) ++cap;
+    if (cap > rom[0x14]) rom[0x14] = cap;
+    wr16(&rom[0x15E], header_crc(rom.data()));
+    return true;
+}
+
+bool lb_mods_patch_scan(const std::vector<uint8_t>& orig, const std::vector<uint8_t>& img, LbPatchScan* out,
+                        std::string* why) {
+    *out = LbPatchScan();
+    Nitro of, nf;
+    if (!parse_image(orig, &of)) { *why = "your ROM's file system is unreadable"; return false; }
+    if (!parse_image(img, &nf)) {
+        *why = "it has no file system the port can read (a patch for another game or region?)";
+        return false;
+    }
+    char code[5] = {0, 0, 0, 0, 0};
+    std::memcpy(code, &img[0x0C], 4);
+    if (std::memcmp(&img[0x0C], &orig[0x0C], 4) != 0)
+        out->notes.push_back(std::string("the patched ROM's game code is ") + code + ", not your ROM's");
+    // The header, less the fields a file-system rebuild changes.
+    {
+        bool hdr = false;
+        for (size_t i = 0; i < 0x180; ++i) {
+            if (i == 0x14 || (i >= 0x40 && i < 0x50) || (i >= 0x80 && i < 0x84) || i == 0x15E || i == 0x15F) continue;
+            if (img[i] != orig[i]) hdr = true;
+        }
+        if (hdr) out->notes.push_back("the ROM header changed (code addresses, title or flags): not imported");
+    }
+    auto region_eq = [&](size_t off_field, size_t size_field) {
+        const uint32_t ao = rd32(&orig[off_field]), as = rd32(&orig[size_field]);
+        const uint32_t bo = rd32(&img[off_field]), bs = rd32(&img[size_field]);
+        if (as != bs) return false;
+        if ((uint64_t)ao + as > orig.size() || (uint64_t)bo + bs > img.size()) return false;
+        return std::memcmp(&orig[ao], &img[bo], as) == 0;
+    };
+    if (!region_eq(0x20, 0x2C) || !region_eq(0x30, 0x3C) || !region_eq(0x50, 0x54) || !region_eq(0x58, 0x5C))
+        out->notes.push_back("the game's code (ARM9/ARM7) changed: code changes can't be imported, and maps or "
+                             "units that rely on them may not behave as in the patched ROM");
+    {
+        // Overlays: the files the FNT does not name (ids below the root's first).
+        bool ov = false;
+        const size_t first = of.dirs.empty() ? 0 : of.dirs[0].first;
+        for (size_t i = 0; i < first && i < of.fat.size() && i < nf.fat.size(); ++i) {
+            const auto a = of.fat[i], b = nf.fat[i];
+            if (a.second < a.first || b.second < b.first || a.second - a.first != b.second - b.first ||
+                b.second > img.size() || a.second > orig.size() ||
+                std::memcmp(&orig[a.first], &img[b.first], a.second - a.first) != 0)
+                ov = true;
+        }
+        if (ov) out->notes.push_back("the game's code overlays changed: code changes can't be imported");
+        const uint32_t ba = rd32(&orig[0x68]), bb = rd32(&img[0x68]);
+        if (ba && bb && (uint64_t)ba + 0x840 <= orig.size() && (uint64_t)bb + 0x840 <= img.size() &&
+            std::memcmp(&orig[ba], &img[bb], 0x840) != 0)
+            out->notes.push_back("the ROM's icon or title changed: not imported");
+    }
+    // Every named file that is new or differs.
+    std::vector<std::pair<std::string, int>> ofiles, nfiles;
+    list_files(of, 0, "", &ofiles);
+    list_files(nf, 0, "", &nfiles);
+    std::map<std::string, int> oid;
+    for (const auto& f : ofiles) oid.emplace(lower_s(f.first), f.second);
+    std::vector<std::string> changed;
+    for (const auto& f : nfiles) {
+        if ((size_t)f.second >= nf.fat.size()) continue;
+        const auto b = nf.fat[(size_t)f.second];
+        const auto it = oid.find(lower_s(f.first));
+        if (it != oid.end() && (size_t)it->second < of.fat.size()) {
+            const auto a = of.fat[(size_t)it->second];
+            if (b.second >= b.first && a.second >= a.first && b.second <= img.size() && a.second <= orig.size() &&
+                a.second - a.first == b.second - b.first &&
+                std::memcmp(&orig[a.first], &img[b.first], a.second - a.first) == 0)
+                continue;
+        }
+        changed.push_back(f.first);
+    }
+    std::vector<std::string> consumed;   // lower-case paths a found map used
+    std::vector<uint8_t> new_lng, old_lng;
+    mem_read(img, nf, "LOC/American_English.lng", &new_lng);
+    mem_read(orig, of, "LOC/American_English.lng", &old_lng);
+    auto take = [&](LbPatchMap& m, const std::string& map_path, const std::string& detail_path,
+                    const std::string mini_paths[4]) {
+        if (!mem_read(img, nf, map_path, &m.map)) return false;
+        if (!mem_read(img, nf, detail_path, &m.detail) && !mem_read(orig, of, detail_path, &m.detail)) {
+            // No detail tiles of its own: the loose loader then takes mp01's.
+            m.detail.clear();
+        }
+        for (int k = 0; k < 4; ++k)
+            if (!mem_read(img, nf, mini_paths[k], &m.mini[k]) && !mem_read(orig, of, mini_paths[k], &m.mini[k]))
+                return false;
+        int bw = 0, bh = 0;
+        if (map_too_big(m.map, &bw, &bh)) {
+            out->notes.push_back(map_path + " is " + std::to_string(bw) + "x" + std::to_string(bh) +
+                                 ", larger than the game supports: not imported");
+            return false;
+        }
+        if (!map_facts(m.map, &m.world, &m.players) || m.players < 2) {
+            out->notes.push_back(map_path + " is not a Free Play map the game reads: not imported");
+            return false;
+        }
+        m.hash = map_hash(m.map, m.detail, m.mini);
+        consumed.push_back(lower_s(map_path));
+        consumed.push_back(lower_s(detail_path));
+        for (int k = 0; k < 4; ++k) consumed.push_back(lower_s(mini_paths[k]));
+        return true;
+    };
+    auto is_changed = [&](const std::string& p) {
+        return std::find_if(changed.begin(), changed.end(), [&](const std::string& c) { return ci_eq(c, p); }) !=
+               changed.end();
+    };
+    // 1. Stock slots whose map changed (the community's map patches, our
+    //    hardware export): as the boot scan reads a mod ROM.
+    for (int slot = 1; slot <= 30; ++slot) {
+        char stem[8];
+        std::snprintf(stem, sizeof stem, "mp%02d", slot);
+        const std::string mp = std::string("Maps/") + stem + ".map";
+        const std::string dp = std::string("BP/DetailTiles_") + stem + ".tbp";
+        std::string mini[4];
+        for (int k = 0; k < 4; ++k) mini[k] = std::string(stem) + kMiniExt[k];
+        if (!is_changed(mp)) {
+            bool comp = is_changed(dp);
+            for (int k = 0; k < 4; ++k) comp = comp || is_changed(mini[k]);
+            if (comp) {
+                out->notes.push_back(std::string("slot ") + stem + "'s minimap or detail tiles changed but not its "
+                                     "map: not imported");
+                consumed.push_back(lower_s(dp));
+                for (int k = 0; k < 4; ++k) consumed.push_back(lower_s(mini[k]));
+            }
+            continue;
+        }
+        LbPatchMap m;
+        if (!take(m, mp, dp, mini)) continue;
+        m.slot = slot;
+        m.stem = stem;
+        m.where = std::string("slot ") + stem;
+        const uint32_t nid = 1242u + 2u * (uint32_t)(slot - 1);
+        m.name = lng_string(new_lng, nid);
+        for (char& c : m.name) if (c == '_') c = ' ';
+        const std::string stock_name = lng_string(old_lng, nid);
+        if (m.name.empty() || m.name == stock_name)
+            m.name = (stock_name.empty() ? std::string(stem) : stock_name) + " (mod)";
+        out->maps.push_back(std::move(m));
+    }
+    // 2. The port's own mod maps (a port export): Maps/z/NN.map ... with their
+    //    names at the ids the build appended (docs/391, docs/439, BR-0046: the
+    //    first appended id is left empty, so map k's name is first + 1 + 2k).
+    const uint32_t first_new = lng_count(old_lng);
+    for (int g = 0; g < kStemGroups; ++g) {
+        const char letter = (char)('z' - g);
+        for (int n = 1; n <= kStemGroup; ++n) {
+            char st[8];
+            std::snprintf(st, sizeof st, "%c/%02d", letter, n);
+            const std::string mp = std::string("Maps/") + st + ".map";
+            if (nf.find(mp) < 0) continue;
+            std::string mini[4];
+            for (int k = 0; k < 4; ++k) mini[k] = std::string(st) + kMiniExt[k];
+            LbPatchMap m;
+            if (!take(m, mp, std::string("BP/DetailTiles_") + st + ".tbp", mini)) continue;
+            const uint32_t k = (uint32_t)(g * kStemGroup + n - 1);
+            m.name = first_new ? lng_string(new_lng, first_new + 1u + 2u * k) : std::string();
+            if (m.name.empty()) m.name = std::string("Imported map ") + letter + std::to_string(n);
+            m.stem = "map";
+            m.where = std::string("port map ") + st;
+            out->maps.push_back(std::move(m));
+        }
+    }
+    // 3. Any other NEW .map with its four minimap files beside it or at the
+    //    root (another tool's added map). An edited story map is not one.
+    for (const std::string& c : changed) {
+        const std::string lc = lower_s(c);
+        if (lc.size() < 5 || lc.compare(lc.size() - 4, 4, ".map") != 0 ||
+            std::find(consumed.begin(), consumed.end(), lc) != consumed.end() || oid.count(lc))
+            continue;
+        const size_t sl = c.find_last_of('/');
+        const std::string dir = sl == std::string::npos ? std::string() : c.substr(0, sl + 1);
+        const std::string stem = c.substr(dir.size(), c.size() - dir.size() - 4);
+        std::string mini[4];
+        bool have = true;
+        for (int k = 0; k < 4; ++k) {
+            mini[k] = dir + stem + kMiniExt[k];
+            if (nf.find(mini[k]) < 0) mini[k] = stem + kMiniExt[k];
+            have = have && nf.find(mini[k]) >= 0;
+        }
+        if (!have) continue;
+        LbPatchMap m;
+        if (!take(m, c, "BP/DetailTiles_" + stem + ".tbp", mini)) continue;
+        m.name = stem;
+        m.stem = "map";
+        m.where = "new file " + c;
+        out->maps.push_back(std::move(m));
+    }
+    // What is left: names, units, and the rest.
+    for (const std::string& c : changed) {
+        const std::string lc = lower_s(c);
+        if (std::find(consumed.begin(), consumed.end(), lc) != consumed.end()) continue;
+        if (lc.compare(0, 4, "loc/") == 0 && lc.size() > 8 && lc.compare(lc.size() - 4, 4, ".lng") == 0)
+            out->lng_changed = true;
+        else if (lc == "bp/entities.ebp")
+            out->ebp_changed = true;
+        else if (lc.find("/cu/") != std::string::npos || lc.compare(0, 8, "sprites/") == 0 ||
+                 lc.compare(0, 7, "models/") == 0 || lc.compare(0, 17, "ui/feplayercards/") == 0 ||
+                 lc.compare(0, 19, "ui/gameplayercards/") == 0)
+            out->unit_files.push_back(c);
+        else
+            out->other.push_back(c);
+    }
+    // Same content twice (a map in a slot and in a new file) is one map.
+    std::vector<LbPatchMap> uniq;
+    for (LbPatchMap& m : out->maps)
+        if (std::none_of(uniq.begin(), uniq.end(), [&](const LbPatchMap& u) { return u.hash == m.hash; }))
+            uniq.push_back(std::move(m));
+    out->maps = std::move(uniq);
+    return true;
+}
+
+int lb_mods_install_map(const LbPatchMap& m, bool dry_run, std::string* folder, std::string* why) {
+    namespace fs = std::filesystem;
+    folder->clear();
+    if (lb_mods_find_hash(m.hash) >= 0) return 2;   // already loaded
+    const fs::path base = fs::u8path(lb_mods_dir()) / "maps" / "Imported";
+    const std::string name = safe_map_folder(m.name);
+    // A folder's own hash, its stock fallbacks read from the original image.
+    Nitro own;
+    const bool own_ok = parse_image(g_pristine_rom, &own);
+    auto stock_read = [&](const std::string& p, std::vector<uint8_t>* o) {
+        return own_ok && mem_read(g_pristine_rom, own, p, o);
+    };
+    std::error_code ec;
+    for (int n = 1; n <= 50; ++n) {
+        const std::string dn = n == 1 ? name : name + " (" + std::to_string(n) + ")";
+        const fs::path dir = base / fs::u8path(dn);
+        *folder = "mods/maps/Imported/" + dn;
+        if (fs::exists(dir, ec)) {
+            ModMap have;
+            if (loose_folder_map(dir, stock_read, &have) && have.hash == m.hash) return 2;
+            continue;
+        }
+        if (dry_run) return 1;
+        fs::create_directories(dir, ec);
+        auto put = [&](const std::string& fn, const std::vector<uint8_t>& d) {
+            std::ofstream f(dir / fs::u8path(fn), std::ios::binary | std::ios::trunc);
+            if (!f) return false;
+            f.write((const char*)d.data(), (std::streamsize)d.size());
+            return (bool)f;
+        };
+        bool ok = put(m.stem + ".map", m.map);
+        for (int k = 0; k < 4 && ok; ++k) ok = put(m.stem + kMiniExt[k], m.mini[k]);
+        if (ok && !m.detail.empty()) ok = put("DetailTiles_" + m.stem + ".tbp", m.detail);
+        if (!ok) {
+            *why = "could not write to " + *folder;
+            return 0;
+        }
+        return 1;
+    }
+    *why = "too many folders named " + name;
+    return 0;
+}
+
+std::function<bool(const std::string&, std::vector<uint8_t>*)> lb_mods_image_reader(const std::vector<uint8_t>& image,
+                                                                                      bool unwrap) {
+    auto fs = std::make_shared<Nitro>();
+    const bool ok = parse_image(image, fs.get());
+    const std::vector<uint8_t>* img = &image;
+    return [fs, ok, img, unwrap](const std::string& path, std::vector<uint8_t>* out) {
+        if (!ok || !mem_read(*img, *fs, path, out)) return false;
+        return !unwrap || comp_unwrap(out);
+    };
+}
+
+std::string lb_mods_image_text(const std::vector<uint8_t>& image, uint32_t id) {
+    Nitro fs;
+    std::vector<uint8_t> f;
+    if (!parse_image(image, &fs) || !mem_read(image, fs, "LOC/American_English.lng", &f)) return "";
+    return lng_string(f, id);
 }

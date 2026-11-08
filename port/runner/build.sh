@@ -57,6 +57,9 @@ cp -p "$W/port/runner/src/lb_fxvtables.h" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_hud.cpp" "$TREE/runner/src/"
 # Its own TU on purpose: <windows.h> must not reach lb_overlay.cpp.
 cp -p "$W/port/runner/src/lb_filedlg.cpp" "$TREE/runner/src/"
+# xdelta patches of the ROM: the VCDIFF codec, export and import (docs/474).
+cp -p "$W/port/runner/src/lb_xdelta.cpp" "$TREE/runner/src/"
+cp -p "$W/port/runner/src/lb_xdelta.h" "$TREE/runner/src/"
 # The LB_SAMPLE profiler (docs/349). Its own TU for the same <windows.h> reason.
 cp -p "$W/port/runner/src/lb_prof.cpp" "$TREE/runner/src/"
 # The event pump on its own fiber (docs/385). Its own TU for <windows.h> too.
@@ -155,8 +158,13 @@ echo "== configuring =="
 # and adds the compile definition at CMakeLists:512 that removes the
 # references. Same shape as docs/91: a filter that matches nothing is accepted
 # in silence.
+# The banks' per-access trace event is compiled out unless a build for the
+# deep-trace tools asks for it (apply_hooks, runtime_arm.h, 2026-11-07).
+TRACE_DEF=""
+[ "${LB_KEEP_TRACE_EVENTS:-0}" = "1" ] && TRACE_DEF="-DLB_KEEP_TRACE_EVENTS=1"
 mkdir -p "$BUILD"
 cmake -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_C_FLAGS="$TRACE_DEF" \
       -DCMAKE_CXX_COMPILER=/c/msys64/ucrt64/bin/g++.exe \
       -DCMAKE_C_COMPILER=/c/msys64/ucrt64/bin/gcc.exe \
       -DNDS_BOOTSTRAP_FIRMWARE=ON \

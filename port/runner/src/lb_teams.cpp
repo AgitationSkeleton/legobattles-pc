@@ -248,6 +248,7 @@ extern "C" const char* lb_cunits_name(int k);
 extern "C" int lb_cunits_battle(int k);
 extern "C" int lb_cunits_of_battle(int bp);
 extern "C" int lb_cunits_of_any(int bp);
+extern "C" int lb_cunits_name_id(int bp);   // BR-0064
 extern "C" int lb_cunits_head(int k, unsigned int out[576]);
 // A custom unit (its battle blueprint, lb_cunits_battle) draws its template's head and HUD icon: those tables
 // are keyed by the stock index (docs/448).
@@ -1555,6 +1556,11 @@ extern "C" const char* lb_teams_spell_name(int id) {
 // docs/385: the unit's display-name id (its blueprint's +0x06), -1 if the
 // blueprints are not in RAM.
 extern "C" int lb_teams_unit_name_id(int bp) {
+    // BR-0064: a custom unit (551 and up) has its own name string; without
+    // this the opponent naming (lb_patches.cpp string_from_id_override and
+    // aiopp_hero_text) fell back to the base's faction name ("Earth" and the
+    // like) for a custom hero.
+    if (lb_cunits_of_any(bp) >= 0) return lb_cunits_name_id(bp);
     if (bp < 0 || bp >= 192) return -1;
     const uint32_t rec = bp_addr(bp);
     return rec ? (int)bus_read_u16(rec + 0x06u) : -1;
@@ -2114,12 +2120,41 @@ extern "C" int lb_teams_card_tier(int unit) {
     return s >= 5 && s <= 7 ? s - 4 : -1;
 }
 
+// BR-0066: A CUSTOM UNIT THAT IS GONE STAYS IN THE SAVED ARMY. Custom units
+// are blueprints 551 + n + k (lb_cunits_battle), so unsubscribing one and
+// loading the units again removes its blueprint and moves every other custom
+// id. The profile's army (record 0) keeps the old number, and the army screen
+// then shows a blank slot that will not take a hero. A slot whose custom pick
+// is no longer a unit for that slot goes back to the King army's unit for it,
+// as a new profile has. Stock picks (0..550) are never touched, nor is the
+// record while the army screen is open (it holds its own copies and writes
+// them back on Continue). The cartridge's custom block is built at launch,
+// before any save is read, so the set is final whenever a profile is loaded.
+static void repair_custom_picks() {
+    char name[16];
+    if (lb_net_profile_name(name, (int)sizeof name) <= 0) return;
+    const uint32_t army = bus_read_u32(kArmySlot);
+    if (guest_ptr(army) && bus_read_u32(army + 0x1Cu) != 0u) return;
+    for (int s = 0; s < LB_TEAM_SLOTS; ++s) {
+        const uint32_t at = kArmyRecord + kSlots[s].rec_off;
+        const int pick = (int)bus_read_u16(at);
+        if (pick <= 550) continue;
+        int in = -1;
+        if (find_cand(pick, &in) && in == s) continue;
+        bus_write_u16(at, kKingDefault[s]);
+        std::fprintf(stderr, "[lb_teams] BR-0066: army slot %d held custom blueprint %d, which is not "
+                     "loaded now; reset to %u\n", s, pick, (unsigned)kKingDefault[s]);
+        std::fflush(stderr);
+    }
+}
+
 extern "C" void lb_teams_portrait_tick(void) {
     army_scroll_tick();   // docs/450
     cards_tick();   // docs/430: every frame; it does nothing while the option is off
     static int tick = 0;
     if (++tick < 15) return;
     tick = 0;
+    repair_custom_picks();   // BR-0066
     const uint32_t base = bus_read_u32(kUiTablePtr);
     if (!guest_ptr(base) || bus_read_u16(base) <= 0x4Bu) {
         g_portrait_records = false;

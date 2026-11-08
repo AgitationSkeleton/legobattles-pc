@@ -58,7 +58,11 @@ struct Trigger {
     uint8_t body[10] = {};              // only when flag
 };
 
-struct Marker { uint8_t x, y, flag; };
+// x, y, flag are the file's three bytes (parse/write copy exactly those).
+// `keep` is the level editor's own and is never written: on a bridge site
+// (groups 7/8) it means "keep the terrain", no posts or bank tiles stamped
+// (SG-0085, docs/473).
+struct Marker { uint8_t x, y, flag; uint8_t keep = 0; };
 struct MarkerGroup {
     uint8_t id = 0;                     // 0 trees, 3 build, 6 shipyard, 7/8 bridge
     std::vector<Marker> m;

@@ -60,6 +60,14 @@ std::atomic<uint32_t> g_head{0};       // written by the sampler only
 uint32_t g_flushed = 0;
 
 HANDLE g_target = nullptr;
+// The sampled thread's stack. Every step of the walk checks rsp against it:
+// an unwind through code with stale or missing unwind data can leave rsp
+// anywhere, and RtlVirtualUnwind then faults reading it (a crash of the
+// profiler's own thread, 2026-11-07).
+ULONG_PTR g_stack_lo = 0, g_stack_hi = 0;
+bool on_stack(uint64_t sp, uint64_t bytes) {
+    return sp >= g_stack_lo && sp + bytes <= g_stack_hi;
+}
 uint64_t g_image_lo = 0, g_image_hi = 0, g_image_pref = 0;
 char g_out[MAX_PATH] = "lb_samples.bin";
 unsigned g_period_us = 500;
@@ -125,6 +133,7 @@ void take_sample() {
         for (int i = 0; i < kFrames; ++i) {
             const uint64_t pc = ctx.Rip;
             if (!pc) break;
+            if (!on_stack(ctx.Rsp, 8)) break;
             r.pc[i] = in_image(pc) ? pc - g_image_lo + g_image_pref : pc;
             if (!in_image(pc)) {
                 // A LEAF IN A LIBRARY: memcmp in ucrtbase, a wait in ntdll.
@@ -137,9 +146,10 @@ void take_sample() {
                 if (i != 0) break;
                 const uint64_t* sp = reinterpret_cast<const uint64_t*>(ctx.Rsp);
                 int k = 0;
-                while (k < kScanWords && !(in_image(sp[k]) && after_call(sp[k])))
+                while (k < kScanWords && on_stack(ctx.Rsp + 8u * k, 8) &&
+                       !(in_image(sp[k]) && after_call(sp[k])))
                     ++k;
-                if (k == kScanWords) break;
+                if (k == kScanWords || !on_stack(ctx.Rsp + 8u * k, 8)) break;
                 ctx.Rip = sp[k];
                 ctx.Rsp = reinterpret_cast<uint64_t>(sp + k + 1);
                 continue;
@@ -151,6 +161,15 @@ void take_sample() {
                 ctx.Rip = *reinterpret_cast<const DWORD64*>(ctx.Rsp);
                 ctx.Rsp += 8;
                 continue;
+            }
+            {
+                // A frame-pointer function is unwound from its frame register
+                // (UNWIND_INFO byte 3, low nibble; x64 register numbering is
+                // CONTEXT's Rax..R15 order), so that register must point into
+                // the stack too.
+                const uint8_t* ui = reinterpret_cast<const uint8_t*>(base + fn->UnwindData);
+                const unsigned reg = ui[3] & 0x0Fu;
+                if (reg && !on_stack((&ctx.Rax)[reg], 8)) break;
             }
             PVOID handler_data = nullptr;
             DWORD64 establisher = 0;
@@ -208,6 +227,7 @@ struct Start {
             VirtualAlloc(nullptr, sizeof(Record) * kRing,
                          MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
         if (!g_ring) return;
+        GetCurrentThreadStackLimits(&g_stack_lo, &g_stack_hi);
         if (!DuplicateHandle(GetCurrentProcess(), GetCurrentThread(),
                              GetCurrentProcess(), &g_target,
                              THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT |

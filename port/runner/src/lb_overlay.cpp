@@ -40,6 +40,7 @@
 
 #include "lb_overlay.h"
 #include "lb_field.h"
+#include "lb_xdelta.h"   /* docs/474: Maps > Patches */
 #include "io.h"          /* legobattles-decomp: save manager tab */
 extern "C" {
 #include "runtime_arm.h"   /* SG-0035: bus_read/write for Action Replay */
@@ -326,6 +327,9 @@ struct Settings {
     bool ai_cross_fire = false;     // SG-0051 (docs/457): the computers attack each other
     bool ai_bridges = false;        // SG-0071 (docs/464): the AI builds bridges even where it needs none
     bool ai_shipyards = false;      // SG-0078 (docs/471): AI build sites beside water on maps with none
+    bool ai_finish_upgrades = false; // BR-0070 (docs/472): the AI does not re-order a tower that is upgrading
+    bool ai_keep_bridges = false;   // SG-0089 (docs/472): the AI never retires its bridges
+    bool ai_stuck_bridges = false;  // SG-0090 (docs/472): the AI's need-driven bridges on every map
     // docs/408: a hotwired transport stops taking its old owner's orders
     // (lb_patches.cpp, release_stolen_transport).
     bool transport_release = false;
@@ -787,6 +791,12 @@ extern "C" void lb_settings_save(void) {
                   g_set.ai_bridges ? "true" : "false"); o += buf;   // SG-0071
     std::snprintf(buf, sizeof buf, "  \"ai_shipyards\": %s,\n",
                   g_set.ai_shipyards ? "true" : "false"); o += buf;   // SG-0078
+    std::snprintf(buf, sizeof buf, "  \"ai_finish_upgrades\": %s,\n",
+                  g_set.ai_finish_upgrades ? "true" : "false"); o += buf;   // BR-0070
+    std::snprintf(buf, sizeof buf, "  \"ai_keep_bridges\": %s,\n",
+                  g_set.ai_keep_bridges ? "true" : "false"); o += buf;   // SG-0089
+    std::snprintf(buf, sizeof buf, "  \"ai_stuck_bridges\": %s,\n",
+                  g_set.ai_stuck_bridges ? "true" : "false"); o += buf;   // SG-0090
     std::snprintf(buf, sizeof buf, "  \"transport_release\": %s,\n",
                   g_set.transport_release ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"creatures\": %s,\n",
@@ -1082,6 +1092,9 @@ extern "C" void lb_settings_load(void) {
     json_get_bool(s, "ai_cross_fire", &g_set.ai_cross_fire);   // SG-0051
     json_get_bool(s, "ai_bridges", &g_set.ai_bridges);         // SG-0071
     json_get_bool(s, "ai_shipyards", &g_set.ai_shipyards);     // SG-0078
+    json_get_bool(s, "ai_finish_upgrades", &g_set.ai_finish_upgrades);   // BR-0070
+    json_get_bool(s, "ai_keep_bridges", &g_set.ai_keep_bridges);         // SG-0089
+    json_get_bool(s, "ai_stuck_bridges", &g_set.ai_stuck_bridges);       // SG-0090
     json_get_bool(s, "transport_release", &g_set.transport_release);
     json_get_bool(s, "creatures", &g_set.creatures);   // docs/410
     json_get_bool(s, "creature_tint", &g_set.creature_tint);   // docs/437
@@ -1884,6 +1897,32 @@ void tab_enhancements() {
          "special units are boats (Clipper, Brickbeard's Bounty, ...)\n"
          "never field them there. On, such a map gets build sites beside\n"
          "its water. Free Play only.");
+    badge(WIRED);
+    // BR-0070 (docs/472): the tower-upgrade planner FUN_02095FE4 orders the
+    // nearest tower again while it is still upgrading, which cancels it.
+    ImGui::Checkbox("The AI Finishes Tower Upgrades", &g_set.ai_finish_upgrades);
+    help("The computer keeps choosing the same tower to upgrade, and a\n"
+         "new order cancels the upgrade already running, so long upgrades\n"
+         "(Tower III, more so in FunLite2) rarely finish. On, a tower that\n"
+         "is already upgrading is left alone until it is done. Free Play\n"
+         "only.");
+    badge(WIRED);
+    // SG-0089 (docs/472): FUN_02094758 retires a bridge nobody has touched
+    // for 2200 ticks, every 2200 ticks.
+    ImGui::Checkbox("The AI Keeps Its Bridges", &g_set.ai_keep_bridges);
+    help("Normally the computer retires a bridge that has stood unused for\n"
+         "a while, even one it needs to reach you. On, it never retires a\n"
+         "bridge. Free Play only.");
+    badge(WIRED);
+    // SG-0090 (docs/472): the bridge builder FUN_02095470 returns at once on
+    // a map with fewer than five AI build sites, need or no need.
+    ImGui::Checkbox("The AI Bridges When It Is Stuck", &g_set.ai_stuck_bridges);
+    help("When the computer keeps failing to reach the places it wants to\n"
+         "build or attack, it builds a bridge at the free bridge spot\n"
+         "nearest its goal, but only on maps with many AI build sites. On,\n"
+         "it does this on every map, up to three bridges. It still bridges\n"
+         "only when stuck (Bridges On Any Map bridges anyway). Free Play\n"
+         "only.");
     badge(WIRED);
     // SG-0002: AI vs AI.
     ImGui::Checkbox("AI Plays My Side (Spectate)", &g_set.ai_spectate);
@@ -8897,6 +8936,193 @@ void tab_level_editor() {
     tab_end();
 }
 
+// docs/474: Maps > Patches. xdelta patches of the European ROM (rom/): the mod
+// maps and custom units exported, or someone else's patch imported into
+// mods/maps and mods/units. The work runs on lb_xdelta.cpp's thread.
+extern "C" int lb_pick_xdelta_file(char* buf, int cap, int saving, int kind);   /* lb_filedlg.cpp */
+extern "C" int lb_pick_rom_file(char* buf, int cap);                            /* lb_filedlg.cpp */
+extern "C" int lb_mods_players(int k);                                          /* lb_mods.cpp */
+extern "C" int lb_mods_world(int k);
+extern "C" int lb_mods_slot(int k);
+extern "C" int lb_mods_dims(int k, int* w, int* h);
+extern "C" int lb_cunits_count(void);                                           /* lb_cunits.cpp */
+
+struct XdeltaPage {
+    int mode = 0;                         // 0 for this port, 1 stock slots
+    std::vector<unsigned long long> hashes;   // the map set the rows below are for
+    std::vector<int> slot, w, h;           // per mod map: its slot (0 left out), size
+    std::vector<std::string> slot_names;   // "mp01  <name> (N players)", [0] "Leave out"
+    std::vector<int> slot_players;
+    char path[1024] = "";
+    std::string loading_for;               // the report a Load was pressed for
+};
+XdeltaPage g_xd;
+
+void tab_patches() {
+    if (!tab_begin("Patches")) return;
+    guide("xdelta patches of the European LEGO Battles ROM (the one in rom/). Export your mod maps and "
+          "custom units as a patch to share, or import a patch someone made. Patches work with xdelta3, "
+          "xdeltaUI and DeltaPatcher.");
+    const bool busy = lb_xdelta_busy();
+    const int nmaps = lb_mods_count(), nunits = lb_cunits_count();
+
+    ImGui::SeparatorText("Export");
+    ImGui::RadioButton("For this port", &g_xd.mode, 0);
+    help("The cartridge the game is running now, exactly: every enabled mod map and custom\n"
+         "unit. Players of this port import it below. The added maps and units need this\n"
+         "port's code: on a DS or another emulator the game does not list them.");
+    ImGui::SameLine();
+    ImGui::RadioButton("For a DS or another emulator", &g_xd.mode, 1);
+    help("Mod maps put in place of the game's own Free Play maps (one slot each), with their\n"
+         "names, as the community's map patches do. Plays on real hardware and in any\n"
+         "emulator. Custom units can't go in: they need this port's code.");
+    if (g_xd.mode == 0) {
+        ImGui::TextWrapped("Holds the %d mod map(s) and %d custom unit(s) the game runs now. To change the "
+                           "set, turn maps or units on or off and load them (Load new maps / Load new units "
+                           "now) before exporting.",
+                           nmaps, nunits);
+    } else {
+        bool changed = (int)g_xd.hashes.size() != nmaps;
+        for (int k = 0; !changed && k < nmaps; ++k) changed = g_xd.hashes[(size_t)k] != lb_mods_hash(k);
+        // The slot names come from the game's map table in RAM: read again now
+        // and then, in case the page was opened before the game set it up.
+        static int names_age = 0;
+        if (++names_age >= 120) {
+            names_age = 0;
+            g_xd.slot_names.clear();
+        }
+        if (changed) {
+            g_xd.hashes.assign((size_t)nmaps, 0ull);
+            g_xd.slot.assign((size_t)nmaps, 0);
+            g_xd.w.assign((size_t)nmaps, 0);
+            g_xd.h.assign((size_t)nmaps, 0);
+            bool taken[31] = {false};
+            for (int k = 0; k < nmaps; ++k) {
+                g_xd.hashes[(size_t)k] = lb_mods_hash(k);
+                const int s = lb_mods_slot(k);   // a map from slot NN goes back there
+                if (s >= 1 && s <= 30 && !taken[s]) {
+                    g_xd.slot[(size_t)k] = s;
+                    taken[s] = true;
+                }
+                lb_mods_dims(k, &g_xd.w[(size_t)k], &g_xd.h[(size_t)k]);
+            }
+        }
+        if (g_xd.slot_names.empty()) {
+            g_xd.slot_names.assign(1, "Leave out");
+            g_xd.slot_players.assign(1, 0);
+            for (int s = 1; s <= 30; ++s) {
+                char tok[32], name[64];
+                int pl = 0;
+                name[0] = 0;
+                lb_maps_entry(s - 1, tok, sizeof tok, name, sizeof name, &pl);
+                char b[128];
+                std::snprintf(b, sizeof b, "mp%02d  %s (%d players)", s, name, pl);
+                g_xd.slot_names.push_back(b);
+                g_xd.slot_players.push_back(pl);
+            }
+        }
+        ImGui::TextWrapped("Pick the Free Play map each mod map replaces. The game's own map table keeps "
+                           "the slot's player count, so a slot with the same count is best.");
+        if (nunits) ImGui::TextDisabled("Your %d custom unit(s) are not included: a DS can't run them.", nunits);
+        if (!nmaps) ImGui::TextDisabled("No mod maps are loaded. Download or make some, then Load new maps now.");
+        int used[31] = {0};
+        for (int k = 0; k < nmaps; ++k) ++used[std::clamp(g_xd.slot[(size_t)k], 0, 30)];
+        for (int k = 0; k < nmaps; ++k) {
+            ImGui::PushID(k);
+            int& s = g_xd.slot[(size_t)k];
+            ImGui::SetNextItemWidth(300.0f);
+            if (ImGui::BeginCombo("##xdslot", g_xd.slot_names[(size_t)std::clamp(s, 0, 30)].c_str())) {
+                for (int i = 0; i <= 30; ++i)
+                    if (ImGui::Selectable(g_xd.slot_names[(size_t)i].c_str(), i == s)) s = i;
+                ImGui::EndCombo();
+            }
+            help("The stock Free Play map this one replaces in the patched ROM, or Leave out.");
+            ImGui::SameLine();
+            ImGui::Text("%s  (%d players)", lb_mods_name(k), lb_mods_players(k));
+            if (s >= 1 && s <= 30) {
+                std::string warn;
+                if (used[s] > 1) warn += "Another map has this slot too. ";
+                if (g_xd.slot_players[(size_t)s] && g_xd.slot_players[(size_t)s] != lb_mods_players(k))
+                    warn += "The slot is listed for " + std::to_string(g_xd.slot_players[(size_t)s]) + " players. ";
+                if (g_xd.w[(size_t)k] > 96 || g_xd.h[(size_t)k] > 96)
+                    warn += "Larger than 96 cells: only this port can play it. ";
+                if (!warn.empty()) ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "    %s", warn.c_str());
+            }
+            ImGui::PopID();
+        }
+    }
+    ImGui::BeginDisabled(busy);
+    if (ImGui::Button("Export xdelta patch...")) {
+        std::snprintf(g_xd.path, sizeof g_xd.path, "%s",
+                      g_xd.mode == 0 ? "LEGO Battles port mods.xdelta" : "LEGO Battles custom maps.xdelta");
+        if (lb_pick_xdelta_file(g_xd.path, (int)sizeof g_xd.path, 1, 0)) {
+            if (g_xd.mode == 0) {
+                lb_xdelta_export_port(g_xd.path);
+            } else {
+                std::vector<LbSlotPick> picks;
+                for (int k = 0; k < (int)g_xd.slot.size(); ++k)
+                    if (g_xd.slot[(size_t)k] >= 1) picks.push_back({k, g_xd.slot[(size_t)k]});
+                lb_xdelta_export_slots(g_xd.path, picks);
+            }
+        }
+    }
+    help("Writes an .xdelta file that turns the European LEGO Battles ROM into the ROM above.\n"
+         "Making it takes a few seconds; the game keeps running.");
+    ImGui::EndDisabled();
+
+    ImGui::SeparatorText("Import");
+    ImGui::BeginDisabled(busy);
+    if (ImGui::Button("Import xdelta patch...")) {
+        g_xd.path[0] = 0;
+        if (lb_pick_xdelta_file(g_xd.path, (int)sizeof g_xd.path, 0, 0)) lb_xdelta_import(g_xd.path);
+    }
+    help("Applies a patch made for the European ROM (from this page, or a community map\n"
+         "patch) to your ROM in memory and installs what it changed as mods: its maps in\n"
+         "mods/maps/Imported, its custom units (and re-skinned units) in mods/units.\n"
+         "Your ROM file is not changed. Anything else in the patch is listed, not imported.");
+    const std::string failed = lb_xdelta_failed_patch();
+    if (!failed.empty()) {
+        ImGui::SameLine();
+        if (ImGui::Button("Apply it to another ROM...")) {
+            char rom[1024] = "";
+            if (lb_pick_rom_file(rom, (int)sizeof rom)) lb_xdelta_import(failed, rom);
+        }
+        help("For a patch made for another release (the community's ROM hacks are built on\n"
+             "the USA one): choose that ROM, your own dump of it. The patch is applied to it\n"
+             "in memory and its maps and units are installed the same way. That ROM file is\n"
+             "only read.");
+    }
+    if (lb_xdelta_have_patched()) {
+        ImGui::SameLine();
+        if (ImGui::Button("Save the patched ROM...")) {
+            std::snprintf(g_xd.path, sizeof g_xd.path, "%s", "LEGO Battles (patched).nds");
+            if (lb_pick_xdelta_file(g_xd.path, (int)sizeof g_xd.path, 1, 1)) lb_xdelta_save_patched(g_xd.path);
+        }
+        help("Writes the last imported patch's whole ROM, for another emulator, the mods folder\n"
+             "(its Free Play maps are read from there too) or Balance > Presets' import from a ROM.");
+    }
+    ImGui::EndDisabled();
+
+    if (busy) ImGui::Text("Working... %d%%", lb_xdelta_progress());
+    bool bad = false, installed = false;
+    const std::string msg = lb_xdelta_message(&bad, &installed);
+    if (!msg.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, bad ? ImVec4(1, 0.5f, 0.4f, 1) : ImVec4(0.5f, 1, 0.5f, 1));
+        ImGui::TextWrapped("%s", msg.c_str());
+        ImGui::PopStyleColor();
+    }
+    if (installed && !busy) {
+        if (g_xd.loading_for == msg) {
+            ImGui::TextDisabled("Loading: the game resets to the title screen.");
+        } else if (ImGui::Button("Load new maps and units now")) {
+            if (lb_mods_request_rebuild()) g_xd.loading_for = msg;
+        }
+        help("Resets to the title screen with the imported maps and units in the game.\n"
+             "Ends any match in progress.");
+    }
+    tab_end();
+}
+
 const std::vector<MenuHeader>& menu_headers() {
     static const std::vector<MenuHeader> k = {
         {"Settings", {{"General", "General", tab_general},
@@ -8925,7 +9151,8 @@ const std::vector<MenuHeader>& menu_headers() {
                      {"Scores", "Scores", tab_scores}}},
         {"Maps", {{"Map archive", "Maps", tab_map_archive},
                   {"Community levels", "Community levels", tab_community_levels},
-                  {"Level Editor", "Level Editor", tab_level_editor}}},
+                  {"Level Editor", "Level Editor", tab_level_editor},
+                  {"Patches", "Patches", tab_patches}}},   // docs/474
         {"Tools", {{"Recordings", "Demo", tab_demo},
                    {"Windows", "Windows", section_windows}}},
     };
@@ -10700,6 +10927,36 @@ extern "C" int lb_setting_ai_hero_rebuild(void) {
     return forced >= 0 ? forced : (g_set.ai_hero_rebuild ? 1 : 0);
 }
 
+// BR-0070: LB_AI_FINISH_UPGRADES=0|1 forces it.
+extern "C" int lb_setting_ai_finish_upgrades(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_AI_FINISH_UPGRADES");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.ai_finish_upgrades ? 1 : 0);
+}
+
+// SG-0089: LB_AI_KEEP_BRIDGES=0|1 forces it.
+extern "C" int lb_setting_ai_keep_bridges(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_AI_KEEP_BRIDGES");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.ai_keep_bridges ? 1 : 0);
+}
+
+// SG-0090: LB_AI_STUCK_BRIDGES=0|1 forces it.
+extern "C" int lb_setting_ai_stuck_bridges(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_AI_STUCK_BRIDGES");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.ai_stuck_bridges ? 1 : 0);
+}
+
 // docs/406: the rule flags a host sends its players (lb_teams.cpp).
 extern "C" int lb_rules_local_flags(void) {
     return (lb_setting_emp_transports() ? LB_RULE_EMP_TRANSPORTS : 0) |
@@ -11429,6 +11686,9 @@ extern "C" const char* lb_net_lobby_options_json(void) {
     kv.push_back({"Computers attack each other", g_set.ai_cross_fire ? "On" : "Off"});   // SG-0051
     kv.push_back({"AI bridges any map", g_set.ai_bridges ? "On" : "Off"});               // SG-0071
     kv.push_back({"AI shipyards any map", g_set.ai_shipyards ? "On" : "Off"});           // SG-0078
+    kv.push_back({"AI finishes tower upgrades", g_set.ai_finish_upgrades ? "On" : "Off"});  // BR-0070
+    kv.push_back({"AI keeps its bridges", g_set.ai_keep_bridges ? "On" : "Off"});          // SG-0089
+    kv.push_back({"AI bridges when stuck", g_set.ai_stuck_bridges ? "On" : "Off"});        // SG-0090
     kv.push_back({"Hotwired transports leave", g_set.transport_release ? "On" : "Off"});
     kv.push_back({"Attack boost reaches ranged",
                   g_set.attack_boost_ranged >= 2 ? "On, no blast"

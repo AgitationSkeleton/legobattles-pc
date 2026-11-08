@@ -137,6 +137,51 @@ def apply(recompiler_dir):
     done.append("function_finder.cpp: unconditional B ends a block, not a "
                 "sized function")
 
+    # 3. THE PER-INSTRUCTION CODE-FETCH CHARGE, INLINE AND EXACT (2026-11-07).
+    #    Every lifted instruction called runtime_code_cycles(pc): 8.4% of the
+    #    emulation thread in a late battle. For ARM9 code in main RAM its
+    #    answer depends only on facts known here (Thumb odd halfword -> 0; in
+    #    a cached region, 1 or 3 by whether the fetch address starts a
+    #    32-byte line) and on one run-time state, the latched fetch region,
+    #    which the runner mirrors in g_lb_code_slow (0 = cached, no ITCM over
+    #    main RAM). LB_CODE_CYC / LB_CODE_CYC0 are defined by the runner's
+    #    runtime_arm.h (apply_hooks.py); any other state still calls the
+    #    helper, so the value is the helper's in every case.
+    codegen = os.path.join(recompiler_dir, "armv4t", "arm_codegen.cpp")
+    replace(
+        codegen,
+        "    os << \"    uint32_t \" << code_var << \" = runtime_code_cycles(\"\n"
+        "       << fmt_hex32(ins.pc) << \");\\n\";\n",
+        "    if (ins.pc >= 0x02000000u && ins.thumb && (ins.pc & 2u)) {\n"
+        "        os << \"    uint32_t \" << code_var << \" = LB_CODE_CYC0(\"\n"
+        "           << fmt_hex32(ins.pc) << \");\\n\";\n"
+        "    } else if (ins.pc >= 0x02000000u) {\n"
+        "        const uint32_t lb_fetch = ins.pc + (ins.thumb ? 4u : 8u);\n"
+        "        os << \"    uint32_t \" << code_var << \" = LB_CODE_CYC(\"\n"
+        "           << fmt_hex32(ins.pc) << \", \"\n"
+        "           << ((lb_fetch & 0x1Fu) ? \"1u\" : \"3u\") << \");\\n\";\n"
+        "    } else {\n"
+        "        os << \"    uint32_t \" << code_var << \" = runtime_code_cycles(\"\n"
+        "           << fmt_hex32(ins.pc) << \");\\n\";\n"
+        "    }\n")
+    done.append("arm_codegen.cpp: inline exact code-fetch charge (LB_CODE_CYC)")
+
+    # 4. THE DATA-ACCESS CHARGE, DTCM INLINE (2026-11-07). Every lifted load
+    #    and store called runtime_mem_cycles (4.1% of the emulation thread),
+    #    and the guest's stack is DTCM, where the ARM9 answer is always 1.
+    #    LB_MEM_CYC (the runner's runtime_arm.h) answers 1 inline inside the
+    #    enabled DTCM range and calls the helper everywhere else, so the
+    #    value is the helper's own. Nine emission sites, one shape.
+    with open(codegen, "r", encoding="utf-8") as fh:
+        text = fh.read()
+    old = "{ uint32_t _m = runtime_mem_cycles("
+    n = text.count(old)
+    if n != 9:
+        raise SystemExit("apply_finder_patch: %d runtime_mem_cycles sites (want 9)" % n)
+    with open(codegen, "w", encoding="utf-8") as fh:
+        fh.write(text.replace(old, "{ uint32_t _m = LB_MEM_CYC("))
+    done.append("arm_codegen.cpp: DTCM data-access charge inline (LB_MEM_CYC), %d sites" % n)
+
     return done
 
 

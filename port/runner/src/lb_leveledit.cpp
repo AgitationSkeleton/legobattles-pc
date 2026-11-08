@@ -30,6 +30,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <atomic>
@@ -667,6 +668,7 @@ struct Ui {
     int tool = kToolBrush, material = kMatGrass, brush = 2;
     bool round_brush = true, filled = true;
     int team = 0, building = 0, building_team = 0, marker_group = 0, bridge_len = 6;
+    bool bridge_posts = true;   // SG-0085: new bridge sites get posts and bank tiles (and are carved to fit)
     float zoom = 1.0f;
     ImVec2 pan = ImVec2(0, 0);
     bool dragging = false, painting = false;
@@ -830,41 +832,81 @@ int bridge_len_at(int x, int y, int horizontal) {
 // (group 8) 225 220 on the left, 226 221 on the right -- and the lanes'
 // end cells take 138 / 136 (horizontal) or 86 / 81 (vertical). A post goes
 // only on a water cell, as on every stock map.
-void stamp_bridges() {
+// (docs/473 correction: every Free Play map's site matches this, but 15 of
+// the 91 stampable sites in campaign and test maps do not, e.g. ma1_6, pp3_5,
+// test1; adopt() now keeps those as the cartridge has them.)
+//
+// One site. `dry`: change nothing, only say whether stamping would change a
+// cell (adopt() uses it to keep the terrain of maps made elsewhere, SG-0085).
+bool stamp_bridge(int sx, int sy, bool hz, bool dry) {
     Doc& d = g_doc;
-    for (const lvl::MarkerGroup& g : d.m.markers) {
+    const int dx = hz ? 1 : 0, dy = hz ? 0 : 1, px = hz ? 0 : 1, py = hz ? 1 : 0;
+    const int L = bridge_len_at(sx, sy, hz);
+    if (!L) return false;
+    const int fx = sx, fy = sy, lx = sx + dx * (L - 1), ly = sy + dy * (L - 1);
+    bool differs = false;
+    auto put = [&](int x, int y, uint16_t e) {
+        if (!inside(x, y) || d.m.A[at(x, y)] != lvl::kWater) return;
+        const size_t i = at(x, y);
+        if (d.m.E[i] != e || d.m.B[i] != 0 || d.trees[i] != 0) differs = true;
+        if (dry) return;
+        d.m.E[i] = e;
+        d.m.B[i] = 0;
+        d.trees[i] = 0;
+        mark(x, y, x, y);
+    };
+    const uint16_t post[4] = {(uint16_t)(hz ? 231 : 225), (uint16_t)(hz ? 230 : 220),
+                              (uint16_t)(hz ? 236 : 226), (uint16_t)(hz ? 235 : 221)};
+    const bool posts = inside(fx - px, fy - py) && inside(fx + 2 * px, fy + 2 * py) &&
+                       d.m.A[at(fx - px, fy - py)] == lvl::kWater &&
+                       d.m.A[at(fx + 2 * px, fy + 2 * py)] == lvl::kWater &&
+                       d.m.A[at(lx - px, ly - py)] == lvl::kWater &&
+                       d.m.A[at(lx + 2 * px, ly + 2 * py)] == lvl::kWater;
+    if (!posts) return false;
+    put(fx - px, fy - py, post[0]);
+    put(lx - px, ly - py, post[1]);
+    put(fx + 2 * px, fy + 2 * py, post[2]);
+    put(lx + 2 * px, ly + 2 * py, post[3]);
+    for (int lane = 0; lane < 2; ++lane) {
+        put(fx + px * lane, fy + py * lane, hz ? 138 : 86);
+        put(lx + px * lane, ly + py * lane, hz ? 136 : 81);
+    }
+    return differs;
+}
+
+// Every site, except those set to keep their terrain (SG-0085).
+void stamp_bridges() {
+    for (const lvl::MarkerGroup& g : g_doc.m.markers) {
         if (g.id != 7 && g.id != 8) continue;
-        const bool hz = g.id == 7;
-        const int dx = hz ? 1 : 0, dy = hz ? 0 : 1, px = hz ? 0 : 1, py = hz ? 1 : 0;
-        for (const lvl::Marker& mk : g.m) {
-            const int L = bridge_len_at(mk.x, mk.y, hz);
-            if (!L) continue;
-            const int fx = mk.x, fy = mk.y, lx = mk.x + dx * (L - 1), ly = mk.y + dy * (L - 1);
-            auto put = [&](int x, int y, uint16_t e) {
-                if (!inside(x, y) || d.m.A[at(x, y)] != lvl::kWater) return false;
-                d.m.E[at(x, y)] = e;
-                d.m.B[at(x, y)] = 0;
-                d.trees[at(x, y)] = 0;
-                mark(x, y, x, y);
-                return true;
-            };
-            const uint16_t post[4] = {(uint16_t)(hz ? 231 : 225), (uint16_t)(hz ? 230 : 220),
-                                      (uint16_t)(hz ? 236 : 226), (uint16_t)(hz ? 235 : 221)};
-            const bool posts = inside(fx - px, fy - py) && inside(fx + 2 * px, fy + 2 * py) &&
-                               d.m.A[at(fx - px, fy - py)] == lvl::kWater &&
-                               d.m.A[at(fx + 2 * px, fy + 2 * py)] == lvl::kWater &&
-                               d.m.A[at(lx - px, ly - py)] == lvl::kWater &&
-                               d.m.A[at(lx + 2 * px, ly + 2 * py)] == lvl::kWater;
-            if (!posts) continue;
-            put(fx - px, fy - py, post[0]);
-            put(lx - px, ly - py, post[1]);
-            put(fx + 2 * px, fy + 2 * py, post[2]);
-            put(lx + 2 * px, ly + 2 * py, post[3]);
-            for (int lane = 0; lane < 2; ++lane) {
-                put(fx + px * lane, fy + py * lane, hz ? 138 : 86);
-                put(lx + px * lane, ly + py * lane, hz ? 136 : 81);
-            }
-        }
+        for (const lvl::Marker& mk : g.m)
+            if (!mk.keep) stamp_bridge(mk.x, mk.y, g.id == 7, false);
+    }
+}
+
+// BR-0068: the length THE GAME gives a site. FUN_020A3704 (map load) builds
+// one bridge per group-7/8 marker: BridgeSmall (3 cells), and while the cell
+// just past the span (lane 0 only, terrain class 3 or 4) is water, Medium (6)
+// then Large (9). It tests nothing else: not lane 1, not the far bank, not
+// even the site's own cell. So every marker is a bridge to the game.
+int game_bridge_len(int x, int y, bool hz) {
+    const int dx = hz ? 1 : 0, dy = hz ? 0 : 1;
+    auto water = [&](int cx, int cy) { return inside(cx, cy) && g_doc.m.A[at(cx, cy)] == lvl::kWater; };
+    int L = 3;
+    if (water(x + dx * 3, y + dy * 3)) {
+        L = 6;
+        if (water(x + dx * 6, y + dy * 6)) L = 9;
+    }
+    return L;
+}
+
+// Turns the stamp of every site that would change the map off, so opening a
+// map made in another editor (LegoBattlesMapTool's README has authors draw
+// their own posts) never rewrites its terrain. Stock maps and maps saved by
+// this editor already hold the stamp, so nothing changes for them.
+void keep_foreign_bridge_terrain() {
+    for (lvl::MarkerGroup& g : g_doc.m.markers) {
+        if (g.id != 7 && g.id != 8) continue;
+        for (lvl::Marker& mk : g.m) mk.keep = stamp_bridge(mk.x, mk.y, g.id == 7, true) ? 1 : 0;
     }
 }
 
@@ -1301,7 +1343,7 @@ void copy_selection() {
                 c.mines.push_back({(uint8_t)(p.x - ox), (uint8_t)(p.y - oy)});
     for (const lvl::MarkerGroup& g : d.m.markers)
         for (const lvl::Marker& k : g.m)
-            if (in_sel(k.x, k.y)) c.markers.push_back({g.id, {(uint8_t)(k.x - ox), (uint8_t)(k.y - oy), k.flag}});
+            if (in_sel(k.x, k.y)) c.markers.push_back({g.id, {(uint8_t)(k.x - ox), (uint8_t)(k.y - oy), k.flag, k.keep}});
     for (const lvl::Event& e : d.m.events) {
         for (lvl::Pickup p : e.picks)
             if (in_sel(p.x, p.y)) {
@@ -1403,7 +1445,8 @@ void paste_at(int x, int y, bool undo = true) {
         if (fits(x + p.x, y + p.y, 2, 2)) d.m.mines[1].push_back({(uint8_t)(x + p.x), (uint8_t)(y + p.y)});
     for (const auto& gm : g_clip.markers)
         if (fits(x + gm.second.x, y + gm.second.y, 1, 1))
-            marker_group(gm.first).m.push_back({(uint8_t)(x + gm.second.x), (uint8_t)(y + gm.second.y), gm.second.flag});
+            marker_group(gm.first).m.push_back({(uint8_t)(x + gm.second.x), (uint8_t)(y + gm.second.y), gm.second.flag,
+                                                gm.second.keep});
     if (!g_clip.picks.empty()) {
         const int i = brick_event(true);
         for (lvl::Pickup p : g_clip.picks)
@@ -1493,27 +1536,35 @@ std::vector<Check> run_checks() {
     lvl::Map& m = g_doc.m;
     const int starts = start_count();
     if (starts < 2) out.push_back({true, "A Free Play level needs at least two start bases."});
+    // SG-0086/SG-0087: a start's BUILDINGS on water, mountain or trees still
+    // block sharing; its UNITS there are only a note (custom balance and
+    // puzzle maps start units on water on purpose). Neither lvl::validate nor
+    // the server's validateMap looks at the terrain under entities.
     for (int t = 0; t < 4; ++t) {
         const int i = find_start(t);
         if (i < 0) continue;
+        bool off = false, bad_building = false, odd_unit = false;
         for (const lvl::Entity& e : m.events[i].ents) {
             int w, h;
             footprint(e.type, &w, &h);
+            const bool unit = e.type <= lvl::kSpecial;   // hero, builder, melee, ranged, mounted, transport, special
             for (int y = e.y; y < e.y + h; ++y)
                 for (int x = e.x; x < e.x + w; ++x) {
                     if (!inside(x, y)) {
-                        out.push_back({true, std::string(kTeamNames[t]) + "'s start runs off the map."});
-                        goto next_team;
+                        off = true;
+                        continue;
                     }
                     const uint8_t a = m.A[at(x, y)];
-                    if ((a != lvl::kGrass && a != lvl::kStone) || g_doc.trees[at(x, y)]) {
-                        out.push_back({true, std::string(kTeamNames[t]) +
-                                                 "'s start stands on water, mountain or trees."});
-                        goto next_team;
-                    }
+                    if ((a != lvl::kGrass && a != lvl::kStone) || g_doc.trees[at(x, y)])
+                        (unit ? odd_unit : bad_building) = true;
                 }
         }
-    next_team:;
+        if (off) out.push_back({true, std::string(kTeamNames[t]) + "'s start runs off the map."});
+        else if (bad_building)
+            out.push_back({true, std::string(kTeamNames[t]) + "'s start has a building on water, mountain or trees."});
+        if (!off && odd_unit)
+            out.push_back({false, std::string(kTeamNames[t]) + "'s start has a unit on water, mountain or trees "
+                                  "(allowed; check that it can move)."});
     }
     // Starts must reach each other over land (plane C), or by a bridge site.
     if (starts >= 2) {
@@ -1578,14 +1629,17 @@ std::vector<Check> run_checks() {
     for (const lvl::MarkerGroup& g : m.markers) {
         if (g.id != 7 && g.id != 8) continue;
         for (const lvl::Marker& mk : g.m) {
-            int len = 0;
-            for (int L : {9, 6, 3})
-                if (bridge_ok(mk.x, mk.y, g.id == 7, L, nullptr)) { len = L; break; }
-            if (!len) {
-                char b[160];
-                std::snprintf(b, sizeof b, "The bridge site at %d,%d is not a 3, 6 or 9 cell water crossing.",
-                              mk.x, mk.y);
-                out.push_back({true, b});
+            // BR-0068: the game builds a bridge at every site (game_bridge_len),
+            // so a rough one is a warning, not a refusal; maps from
+            // LegoBattlesMapTool are never validated and can hold such sites.
+            const int L = game_bridge_len(mk.x, mk.y, g.id == 7);
+            std::string why;
+            if (!bridge_ok(mk.x, mk.y, g.id == 7, L, &why)) {
+                char b[256];
+                std::snprintf(b, sizeof b, "The bridge site at %d,%d is not a clean crossing (%s). The game still "
+                              "builds a %d-cell bridge there, which may run aground or strand builders.",
+                              mk.x, mk.y, why.c_str(), L);
+                out.push_back({false, b});
             }
         }
     }
@@ -1660,6 +1714,7 @@ void adopt(lvl::Map&& m, std::vector<Meta>&& detail, const char* name) {
     d.trees = lvl::trees_decode(d.m.D, d.m.w * d.m.h);
     d.detail = std::move(detail);
     d.world = world_of(d.m.tileset);
+    keep_foreign_bridge_terrain();   // SG-0085 / BR-0068
     ensure_mine_groups();
     d.undo.clear();
     d.redo.clear();
@@ -2177,7 +2232,17 @@ void start_upload() {
 struct Row {
     int id = 0, players = 0, world = 0, w = 0, h = 0, downloads = 0, likes = 0;
     std::string name, author, hash;
+    std::string date;   // SG-0088: the upload date, "" when the server sent none
 };
+
+// SG-0088: a list row's `created` (ms since the epoch) as the local date.
+std::string upload_date(double ms) {
+    if (!(ms >= 946684800000.0 && ms <= 4102444800000.0)) return {};   // 2000..2100
+    const std::time_t t = (std::time_t)(ms / 1000.0);
+    char b[16] = "";
+    if (const std::tm* lt = std::localtime(&t)) std::strftime(b, sizeof b, "%Y-%m-%d", lt);
+    return b;
+}
 struct Thumb { SDL_Texture* tex = nullptr; int size = 0; int state = 0; };   // 0 none, 1 asked, 2 ready, 3 failed
 struct Community {
     std::vector<Row> rows;
@@ -2455,6 +2520,7 @@ void net_poll(SDL_Renderer* ren) {
                 r.name = v.str("name").substr(0, 32);
                 r.author = v.str("author").substr(0, 32);
                 r.hash = v.str("hash");
+                r.date = upload_date(v.num("created"));
                 if (r.id > 0) c.rows.push_back(r);
             }
         c.listed = true;
@@ -2600,17 +2666,18 @@ void draw_objects(ImDrawList* dl, SDL_Renderer* ren, ImVec2 o, float cw, float c
             for (const lvl::Marker& k : g.m) {
                 const ImVec2 c(o.x + (k.x + 0.5f) * cw, o.y + (k.y + 0.5f) * ch);
                 if (g.id == 7 || g.id == 8) {
-                    int len = 0;
-                    for (int L : {9, 6, 3})
-                        if (bridge_ok(k.x, k.y, g.id == 7, L, nullptr)) { len = L; break; }
-                    const int L = len ? len : 3;
+                    // BR-0068: drawn at the length the game gives it; green when
+                    // the crossing is clean, orange when the game builds it anyway.
+                    const int L = game_bridge_len(k.x, k.y, g.id == 7);
+                    const bool clean = bridge_ok(k.x, k.y, g.id == 7, L, nullptr);
                     const ImVec2 a(o.x + k.x * cw, o.y + k.y * ch);
                     const ImVec2 b = g.id == 7 ? ImVec2(o.x + (k.x + L) * cw, o.y + (k.y + 2) * ch)
                                                : ImVec2(o.x + (k.x + 2) * cw, o.y + (k.y + L) * ch);
-                    const ImU32 col = len ? IM_COL32(120, 255, 120, 255) : IM_COL32(255, 80, 80, 255);
+                    const ImU32 col = clean ? IM_COL32(120, 255, 120, 255) : IM_COL32(255, 160, 40, 255);
                     dl->AddRectFilled(a, b, (col & 0x00FFFFFFu) | 0x40000000u);
                     dl->AddRect(a, b, col, 0, 0, 2.0f);
-                    dl->AddText(ImVec2(a.x + 2, a.y + 1), col, len ? "Bridge" : "Bridge?");
+                    dl->AddText(ImVec2(a.x + 2, a.y + 1), col,
+                                clean ? (k.keep ? "Bridge (terrain kept)" : "Bridge") : "Bridge (rough)");
                     continue;
                 }
                 const ImU32 col = g.id == 0 ? IM_COL32(60, 255, 60, 220) : g.id == 3 ? IM_COL32(255, 160, 60, 220)
@@ -3041,13 +3108,24 @@ void canvas(SDL_Renderer* ren) {
             const ImVec2 a(o.x + g_ui.drag_x * cw, o.y + g_ui.drag_y * ch);
             const ImVec2 b = horiz ? ImVec2(a.x + L * cw, a.y + 2 * ch) : ImVec2(a.x + 2 * cw, a.y + L * ch);
             dl->AddRectFilled(a, b, ok ? IM_COL32(80, 255, 80, 90) : IM_COL32(255, 80, 80, 90));
-            ImGui::SetTooltip(ok ? "Release to place a %s bridge site" : "%s (release to carve it anyway)",
-                              ok ? (horiz ? "horizontal" : "vertical") : why.c_str());
+            // SG-0085: with "Posts and bank tiles" off the site goes down as
+            // it is: no carving, no stamp. The game still builds its bridge
+            // (game_bridge_len), so the map stays valid.
+            const bool stamp = g_ui.bridge_posts;
+            if (ok)
+                ImGui::SetTooltip("Release to place a %s bridge site%s", horiz ? "horizontal" : "vertical",
+                                  stamp ? "" : " (terrain kept)");
+            else
+                ImGui::SetTooltip(stamp ? "%s (release to carve it anyway)"
+                                        : "%s (release to place it anyway; the terrain is kept)",
+                                  why.c_str());
             if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
                 push_undo();
-                if (!ok) carve_bridge(g_ui.drag_x, g_ui.drag_y, horiz, L);
-                marker_group(horiz ? 7 : 8).m.push_back({(uint8_t)g_ui.drag_x, (uint8_t)g_ui.drag_y, 0});
-                stamp_mines();   // SG-0075: and the site's posts
+                if (!ok && stamp) carve_bridge(g_ui.drag_x, g_ui.drag_y, horiz, L);
+                lvl::Marker mk{(uint8_t)g_ui.drag_x, (uint8_t)g_ui.drag_y, 0};
+                mk.keep = stamp ? 0 : 1;
+                marker_group(horiz ? 7 : 8).m.push_back(mk);
+                stamp_mines();   // SG-0075: and the site's posts (unless kept)
                 g_ui.dragging = false;
             }
         } else {
@@ -3362,8 +3440,41 @@ void panel_objects() {
         ImGui::RadioButton("6", &g_ui.bridge_len, 6);
         ImGui::SameLine();
         ImGui::RadioButton("9", &g_ui.bridge_len, 9);
-        ImGui::TextDisabled("Drag across the water from the first water\ncell. "
-                            "Other widths are carved to fit.");
+        ImGui::Checkbox("Posts and bank tiles", &g_ui.bridge_posts);
+        ImGui::SetItemTooltip("On: a new site gets the stock posts and bank tiles, and a crossing\n"
+                              "of the wrong width is carved to fit. Off: the site is placed as it\n"
+                              "is and the terrain is kept (the game still builds the bridge).");
+        ImGui::TextDisabled(g_ui.bridge_posts ? "Drag across the water from the first water\ncell. "
+                                                "Other widths are carved to fit."
+                                              : "Drag across the water from the first water\ncell. "
+                                                "The terrain is left as it is.");
+        // SG-0085: each site's own switch. Off keeps the terrain under it.
+        int n = 0;
+        for (lvl::MarkerGroup& g : g_doc.m.markers) {
+            if (g.id != 7 && g.id != 8) continue;
+            for (lvl::Marker& mk : g.m) {
+                ImGui::PushID(n++);
+                bool posts = !mk.keep;
+                char label[64];
+                std::snprintf(label, sizeof label, "%s at %d,%d: posts", g.id == 7 ? "Horizontal" : "Vertical",
+                              mk.x, mk.y);
+                if (ImGui::Checkbox(label, &posts)) {
+                    push_undo();
+                    mk.keep = posts ? 0 : 1;
+                    if (!posts) {
+                        const int L = game_bridge_len(mk.x, mk.y, g.id == 7);
+                        const int x1 = g.id == 7 ? mk.x + L : mk.x + 2;
+                        const int y1 = g.id == 7 ? mk.y + 2 : mk.y + L;
+                        retile(mk.x - 1, mk.y - 1, x1, y1);   // the stamped cells back to plain terrain
+                    }
+                    stamp_mines();
+                }
+                ImGui::SetItemTooltip("Off: no posts or bank tiles are stamped at this site, and the\n"
+                                      "terrain round it is kept as painted. Sites in maps made in\n"
+                                      "other editors start off when stamping would change them.");
+                ImGui::PopID();
+            }
+        }
         ImGui::TreePop();
     }
     if (ImGui::TreeNode("AI markers")) {
@@ -3439,9 +3550,13 @@ void panel_view() {
 
 void panel_checks() {
     if (!ImGui::CollapsingHeader("Checks", ImGuiTreeNodeFlags_DefaultOpen)) return;
-    for (const Check& c : run_checks())
-        ImGui::TextColored(c.bad ? ImVec4(1, 0.45f, 0.35f, 1) : ImVec4(0.75f, 0.85f, 0.75f, 1), "%s %s",
-                           c.bad ? "!" : "-", c.text.c_str());
+    // BR-0065: wrapped, so a long message is read in full at any panel width
+    // (TextColored never wraps and the end ran off the panel).
+    for (const Check& c : run_checks()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, c.bad ? ImVec4(1, 0.45f, 0.35f, 1) : ImVec4(0.75f, 0.85f, 0.75f, 1));
+        ImGui::TextWrapped("%s %s", c.bad ? "!" : "-", c.text.c_str());
+        ImGui::PopStyleColor();
+    }
 }
 
 }  // namespace
@@ -3526,10 +3641,10 @@ void lb_community_draw(SDL_Renderer* ren) {
         }
         if (hit) c.pick = c.pick == r.id ? -1 : r.id;
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("%s\nby %s\n%d players, %s, %d x %d\n%d downloads, %d likes%s",
+            ImGui::SetTooltip("%s\nby %s\n%d players, %s, %d x %d\n%d downloads, %d likes%s%s%s",
                               lb_swear_shown(r.name.c_str()), r.author.empty() ? "unknown" : lb_swear_shown(r.author.c_str()),
                               r.players, kWorlds[r.world].name, r.w, r.h, r.downloads, r.likes,
-                              inst ? "\nSubscribed" : "");
+                              r.date.empty() ? "" : "\nUploaded ", r.date.c_str(), inst ? "\nSubscribed" : "");
         std::string nm = lb_swear_shown(r.name.c_str());
         while (nm.size() > 3 && ImGui::CalcTextSize(nm.c_str()).x > tile + 8.0f) nm = nm.substr(0, nm.size() - 4) + "..";
         const float nx = (tile + 8.0f - ImGui::CalcTextSize(nm.c_str()).x) * 0.5f;
@@ -3566,6 +3681,7 @@ void lb_community_draw(SDL_Renderer* ren) {
     ImGui::Text("Players: %d", r.players);
     ImGui::Text("Downloads: %d", r.downloads);
     ImGui::Text("Likes: %d", r.likes);
+    if (!r.date.empty()) ImGui::Text("Uploaded: %s", r.date.c_str());   // SG-0088
     ImGui::Spacing();
     const bool inst = c.installed.count(r.id) != 0;
     ImGui::BeginDisabled(g_net.busy.load());
@@ -3774,8 +3890,11 @@ void lb_leveledit_draw(SDL_Renderer* ren) {
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::TextDisabled("%s%s", lb_swear_shown(g_doc.name), g_doc.dirty ? " *" : "");
-    if (g_ui.status[0])
-        ImGui::TextColored(g_ui.status_bad ? ImVec4(1, 0.5f, 0.4f, 1) : ImVec4(0.5f, 1, 0.5f, 1), "%s", g_ui.status);
+    if (g_ui.status[0]) {   // BR-0065: wrapped, like the Checks list
+        ImGui::PushStyleColor(ImGuiCol_Text, g_ui.status_bad ? ImVec4(1, 0.5f, 0.4f, 1) : ImVec4(0.5f, 1, 0.5f, 1));
+        ImGui::TextWrapped("%s", g_ui.status);
+        ImGui::PopStyleColor();
+    }
     panel_file();
     panel_share();
     panel_open();

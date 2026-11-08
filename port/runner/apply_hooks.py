@@ -2672,8 +2672,137 @@ def apply(runner_dir, imgui_dir):
             "   gate, but the binary grew 154.8 -> 256.4 MB, a full build took\n"
             "   ~110 min, and emulation measured 9.1 -> 9.3..11.1 ms/frame.\n"
             "   Withdrawn; see apply_hooks 0z2. */\n"
+            "\n"
+            "/* THE TRACE EVENT, COMPILED OUT OF THE BANKS (2026-11-07). The\n"
+            "   inline guard above added code at every memory access; this\n"
+            "   removes the call and its argument set-up instead, so the banks\n"
+            "   shrink. runtime_trace_event only feeds the debug server's deep\n"
+            "   trace (watch/drainwatch); nothing in play reads it. A build\n"
+            "   for those tools sets LB_KEEP_TRACE_EVENTS=1 (port/runner/\n"
+            "   build.sh passes it through). */\n"
+            "#if !defined(LB_KEEP_TRACE_EVENTS)\n"
+            "#define runtime_trace_event(...) ((void)0)\n"
+            "#endif\n"
+            "#endif\n"
+            "\n"
+            "/* THE CODE-FETCH CHARGE, INLINE AND EXACT (2026-11-07; the\n"
+            "   recompiler side is port/recomp/apply_finder_patch.py 3).\n"
+            "   For ARM9 code in main RAM the recompiler emits\n"
+            "   LB_CODE_CYC(pc, k) with k this instruction's cost in a cached\n"
+            "   region (1, or 3 at a 32-byte line), and LB_CODE_CYC0(pc) for a\n"
+            "   Thumb odd halfword (0). g_lb_code_slow is 0 exactly when\n"
+            "   runtime_code_cycles(pc) would take its cached path for such a\n"
+            "   pc -- the latched fetch region is cached and no ITCM mapping\n"
+            "   reaches main RAM (bus.cpp keeps it, cp15.cpp clears it on an\n"
+            "   ITCM change) -- so both forms return the helper's own answer.\n"
+            "   The helper's other side effect, g_last_code_pc[0], has no\n"
+            "   reader. Banks for any other CPU keep the call. */\n"
+            "#if defined(NDS_STATIC_CPU) && NDS_STATIC_CPU == 0\n"
+            "extern unsigned char g_lb_code_slow;\n"
+            "#define LB_CODE_CYC(pc, k) (__builtin_expect(g_lb_code_slow, 0) ? runtime_code_cycles(pc) : (k))\n"
+            "#define LB_CODE_CYC0(pc) (0u)\n"
+            "#else\n"
+            "#define LB_CODE_CYC(pc, k) runtime_code_cycles(pc)\n"
+            "#define LB_CODE_CYC0(pc) runtime_code_cycles(pc)\n"
+            "#endif\n"
+            "\n"
+            "/* THE DATA-ACCESS CHARGE, DTCM INLINE (2026-11-07; recompiler\n"
+            "   side: port/recomp/apply_finder_patch.py 4). For the ARM9,\n"
+            "   runtime_mem_cycles answers 1 for any address in the enabled\n"
+            "   DTCM range (its ITCM branch answers 1 too), and the guest's\n"
+            "   stack lives there. g_lb_dtcm_lo/len mirror that range (len 0\n"
+            "   while DTCM is off; cp15.cpp keeps them), so the inline answer\n"
+            "   is the helper's. Its other side effect, g_last_data_addr[0],\n"
+            "   has no reader. Every other access, and every other CPU's bank,\n"
+            "   calls the helper. */\n"
+            "#if defined(NDS_STATIC_CPU) && NDS_STATIC_CPU == 0\n"
+            "extern unsigned int g_lb_dtcm_lo, g_lb_dtcm_len;\n"
+            "static inline uint32_t lb_mem_cyc(uint32_t a, uint32_t w, uint32_t s) {\n"
+            "    return (a - g_lb_dtcm_lo) < g_lb_dtcm_len ? 1u : runtime_mem_cycles(a, w, s);\n"
+            "}\n"
+            "#define LB_MEM_CYC(a, w, s) lb_mem_cyc((a), (w), (s))\n"
+            "#else\n"
+            "#define LB_MEM_CYC(a, w, s) runtime_mem_cycles((a), (w), (s))\n"
             "#endif")
     done.append("runtime_arm.h: inline per-instruction predicates in banks")
+
+    # 0z-code. g_lb_code_slow: the mirror LB_CODE_CYC reads (see runtime_arm.h).
+    bus_cpp = os.path.join(runner_dir, "src", "bus.cpp")
+    replace(bus_cpp,
+            "static void reset_arm9_code_timing() {\n"
+            "    g_arm9_code_timing = {};\n"
+            "    g_arm9_region_code_timing = Arm9CodeTiming::Other;\n"
+            "    g_arm9_region_code_timing_valid = false;\n"
+            "}\n",
+            "/* 2026-11-07: LB_CODE_CYC's fast path (runtime_arm.h). 0 exactly\n"
+            "   when the latched fetch region is cached and no ITCM mapping\n"
+            "   reaches main RAM; recomputed wherever the latch is written. */\n"
+            "extern \"C\" unsigned char g_lb_code_slow = 1;\n"
+            "static void lb_code_note() {\n"
+            "    g_lb_code_slow = (g_arm9_region_code_timing_valid &&\n"
+            "        g_arm9_region_code_timing == Arm9CodeTiming::Cached &&\n"
+            "        (!g_cp15.itcm_enable || g_cp15.itcm_size <= 0x02000000u)) ? 0 : 1;\n"
+            "}\n"
+            "static void reset_arm9_code_timing() {\n"
+            "    g_arm9_code_timing = {};\n"
+            "    g_arm9_region_code_timing = Arm9CodeTiming::Other;\n"
+            "    g_arm9_region_code_timing_valid = false;\n"
+            "    g_lb_code_slow = 1;\n"
+            "}\n")
+    replace(bus_cpp,
+            "    if (!g_arm9_region_code_timing_valid) {\n"
+            "        g_arm9_region_code_timing = arm9_code_timing(addr);\n"
+            "        g_arm9_region_code_timing_valid = true;\n"
+            "    }\n",
+            "    if (!g_arm9_region_code_timing_valid) {\n"
+            "        g_arm9_region_code_timing = arm9_code_timing(addr);\n"
+            "        g_arm9_region_code_timing_valid = true;\n"
+            "        lb_code_note();\n"
+            "    }\n")
+    replace(bus_cpp,
+            "Arm9CodeTiming arm9_latch_code_timing(uint32_t addr) {\n"
+            "    g_arm9_region_code_timing = arm9_code_timing(addr);\n"
+            "    g_arm9_region_code_timing_valid = true;\n",
+            "Arm9CodeTiming arm9_latch_code_timing(uint32_t addr) {\n"
+            "    g_arm9_region_code_timing = arm9_code_timing(addr);\n"
+            "    g_arm9_region_code_timing_valid = true;\n"
+            "    lb_code_note();\n")
+    cp15_cpp_lb = os.path.join(runner_dir, "src", "cp15.cpp")
+    replace(cp15_cpp_lb,
+            "void apply_control(uint32_t v) {\n",
+            "extern \"C\" unsigned char g_lb_code_slow;   /* LB_CODE_CYC, bus.cpp */\n"
+            "/* LB_MEM_CYC's DTCM mirror (runtime_arm.h): [lo, lo+len) while\n"
+            "   DTCM is enabled, len 0 while it is off. g_lb_dtcm_lo/len are\n"
+            "   defined at file scope above (after g_cp15). */\n"
+            "void lb_dtcm_note() {\n"
+            "    g_lb_dtcm_lo = g_cp15.dtcm_base;\n"
+            "    g_lb_dtcm_len = g_cp15.dtcm_enable ? g_cp15.dtcm_size : 0u;\n"
+            "}\n"
+            "void apply_control(uint32_t v) {\n")
+    replace(cp15_cpp_lb,
+            "    g_cp15.itcm_enable  = (v & (1u << 18)) != 0;\n",
+            "    g_cp15.itcm_enable  = (v & (1u << 18)) != 0;\n"
+            "    g_lb_code_slow = 1;   /* LB_CODE_CYC: the ITCM mapping changed */\n"
+            "    lb_dtcm_note();       /* LB_MEM_CYC: DTCM enable */\n")
+    replace(cp15_cpp_lb,
+            "                g_cp15.dtcm_size = tcm_bytes(value);\n",
+            "                g_cp15.dtcm_size = tcm_bytes(value);\n"
+            "                lb_dtcm_note();   /* LB_MEM_CYC */\n")
+    replace(cp15_cpp_lb,
+            "Cp15State g_cp15 = {};\n",
+            "Cp15State g_cp15 = {};\n"
+            "extern \"C\" unsigned int g_lb_dtcm_lo = 0u, g_lb_dtcm_len = 0u;   /* LB_MEM_CYC */\n")
+    replace(cp15_cpp_lb,
+            "    g_cp15 = {};\n"
+            "    // ARM9 powers up",
+            "    g_cp15 = {};\n"
+            "    g_lb_dtcm_lo = 0u; g_lb_dtcm_len = 0u;   /* LB_MEM_CYC: DTCM off */\n"
+            "    // ARM9 powers up")
+    replace(cp15_cpp_lb,
+            "                g_cp15.itcm_size = tcm_bytes(value);\n",
+            "                g_cp15.itcm_size = tcm_bytes(value);\n"
+            "                g_lb_code_slow = 1;   /* LB_CODE_CYC */\n")
+    done.append("bus/cp15: g_lb_code_slow for the inline code-fetch charge")
 
     # 0z2. TRIED AND WITHDRAWN (docs/349): runtime_code_cycles inline in the
     #      banks, plus always_inline on 0z's lb_should_yield.
@@ -7636,6 +7765,8 @@ def apply(runner_dir, imgui_dir):
           # Team Builder and Ban Units (docs/384).
           "src/lb_teams.cpp",
           "src/lb_filedlg.cpp",
+          # xdelta patches of the ROM, export and import (docs/474).
+          "src/lb_xdelta.cpp",
           "src/lb_prof.cpp",
           # The event pump on its own fiber (docs/385), for <windows.h>.
           "src/lb_winloop.cpp",

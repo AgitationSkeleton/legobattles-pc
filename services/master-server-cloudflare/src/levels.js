@@ -31,7 +31,7 @@
 
 import { DurableObject } from 'cloudflare:workers';
 import { hasSwear } from './swear.js';
-import { unitsSetup, unitsFetch, unitsAdmin } from './units.js';
+import { unitsSetup, unitsFetch, unitsAdmin, CATEGORY_NAMES } from './units.js';
 
 const MAX_MAP_BYTES = 200 * 1024;
 const MAX_TBP_ENTRIES = 4096;
@@ -499,10 +499,11 @@ export class Levels extends DurableObject {
     this.sql.exec('CREATE TABLE IF NOT EXISTS config (k TEXT PRIMARY KEY, v TEXT)');
     // Likes: one per player (install-key hash) per level.
     this.sql.exec('CREATE TABLE IF NOT EXISTS likes (level INTEGER, owner TEXT, PRIMARY KEY (level, owner))');
-    for (const col of ['likes INTEGER DEFAULT 0', 'mini BLOB']) {
+    for (const col of ['likes INTEGER DEFAULT 0', 'mini BLOB', 'relayed TEXT']) {
       try { this.sql.exec('ALTER TABLE levels ADD COLUMN ' + col); } catch { /* already there */ }
     }
     unitsSetup(this.sql);
+    try { this.sql.exec('ALTER TABLE units ADD COLUMN relayed TEXT'); } catch { /* already there */ }
   }
   swear(s) { return hasSwear(s, this.env.SWEAR_TEST_WORDS); }
 
@@ -529,6 +530,7 @@ export class Levels extends DurableObject {
   async fetch(request) {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, '');
+    try { await this.armShowcase(); } catch { /* never blocks a request */ }
     try {
       if (request.method === 'GET' && path === '/levels/list') return this.list(url);
       if (request.method === 'GET' && path === '/levels/get') return this.get(url);
@@ -692,6 +694,116 @@ export class Levels extends DurableObject {
     return json(200, { ok: true });
   }
 
+  // ------------------------------------------------------------ showcase --
+  // Every APPROVED level and unit is also posted,
+  // without buttons, to a public channel (SHOWCASE_CHANNEL); one that stops
+  // being approved (unpublished, banned) has that post deleted. An alarm keeps
+  // the two in step a few items at a time, so Discord's per-channel rate limit
+  // is respected, and the first runs after this was deployed forwarded every
+  // level and unit that was already approved (their `relayed` was empty).
+  // `relayed` holds the showcase message id, or 'err' after a refused post
+  // (not retried).
+  showcaseDue() {
+    const q = (t) => this.sql.exec(
+      `SELECT COUNT(*) AS n FROM ${t} WHERE (status = 'approved' AND relayed IS NULL)
+         OR (status != 'approved' AND relayed IS NOT NULL AND relayed != 'err')`).toArray()[0].n;
+    return q('levels') + q('units');
+  }
+
+  async armShowcase() {
+    const env = this.env;
+    if (!env.LEVELS_BOT_TOKEN || !env.SHOWCASE_CHANNEL) return;
+    if (!this.showcaseDue()) return;
+    if ((await this.ctx.storage.getAlarm()) == null) await this.ctx.storage.setAlarm(Date.now() + 1000);
+  }
+
+  async alarm() {
+    const env = this.env;
+    if (!env.LEVELS_BOT_TOKEN || !env.SHOWCASE_CHANNEL) return;
+    let wait;
+    try { wait = await this.syncShowcase(4); } catch { wait = 30000; }
+    if (wait >= 0) await this.ctx.storage.setAlarm(Date.now() + Math.max(1500, wait));
+  }
+
+  // Up to `n` steps; returns ms to wait before the next run, or -1 when done.
+  async syncShowcase(n) {
+    const env = this.env;
+    for (let i = 0; i < n; ++i) {
+      // Deletions first, so an unpublished item leaves the channel promptly.
+      let deleted = false;
+      for (const table of ['levels', 'units']) {
+        const gone = this.sql.exec(`SELECT id, relayed FROM ${table}
+            WHERE status != 'approved' AND relayed IS NOT NULL AND relayed != 'err' LIMIT 1`).toArray()[0];
+        if (!gone) continue;
+        const r = await fetch(`${env.DISCORD_API_BASE || DISCORD}/channels/${env.SHOWCASE_CHANNEL}/messages/${gone.relayed}`, {
+          method: 'DELETE', headers: { Authorization: 'Bot ' + env.LEVELS_BOT_TOKEN } });
+        if (r.status === 429) return retryAfter(r);
+        this.sql.exec(`UPDATE ${table} SET relayed = NULL WHERE id = ?`, gone.id);
+        deleted = true;
+        break;
+      }
+      if (deleted) continue;
+      // Then the oldest approved item without a post, levels and units by age.
+      const lv = this.sql.exec("SELECT * FROM levels WHERE status = 'approved' AND relayed IS NULL ORDER BY created LIMIT 1").toArray()[0];
+      const un = this.sql.exec("SELECT * FROM units WHERE status = 'approved' AND relayed IS NULL ORDER BY created LIMIT 1").toArray()[0];
+      if (!lv && !un) return -1;
+      const table = lv && (!un || lv.created <= un.created) ? 'levels' : 'units';
+      const row = table === 'levels' ? lv : un;
+      const r = table === 'levels' ? await this.showcaseLevel(row) : await this.showcaseUnit(row);
+      if (r.status === 429) return retryAfter(r);
+      let id = 'err';
+      if (r.ok) { const m = await r.json().catch(() => null); if (m && m.id) id = String(m.id); }
+      this.sql.exec(`UPDATE ${table} SET relayed = ? WHERE id = ?`, id, row.id);
+    }
+    return this.showcaseDue() ? 1500 : -1;
+  }
+
+  async showcaseLevel(row) {
+    const tbp = row.tbp ? new Uint8Array(row.tbp) : new Uint8Array(0);
+    const v = validateMap(new Uint8Array(row.map), validateTbp(tbp).count || 0);
+    const png = v.ok ? await previewPng(v.map.A, v.map.D, v.map.w, v.map.h, v.map.world) : null;
+    return this.showcasePost({
+      title: row.name,
+      description: `Community level by ${row.author || 'unknown'}`,
+      color: 0x3ba55d,
+      fields: [
+        { name: 'Players', value: String(row.players), inline: true },
+        { name: 'World', value: WORLD_NAMES[row.world] || '?', inline: true },
+        { name: 'Size', value: `${row.width} x ${row.height}`, inline: true },
+      ],
+      timestamp: new Date(row.created).toISOString(),
+    }, png);
+  }
+
+  showcaseUnit(row) {
+    return this.showcasePost({
+      title: row.name,
+      description: `Custom unit by ${row.author || 'unknown'}${row.credits ? ` (credits: ${row.credits})` : ''}`,
+      color: 0x3ba55d,
+      fields: [
+        { name: 'Kind', value: CATEGORY_NAMES[row.category] || '?', inline: true },
+        { name: 'Sounds', value: String(row.sounds), inline: true },
+      ],
+      timestamp: new Date(row.created).toISOString(),
+    }, row.thumb ? new Uint8Array(row.thumb) : null);
+  }
+
+  // No components: the showcase is for looking, not moderating.
+  showcasePost(embed, png) {
+    const env = this.env;
+    const form = new FormData();
+    if (png) embed.image = { url: 'attachment://preview.png' };
+    form.append('payload_json', JSON.stringify({
+      embeds: [embed], components: [],
+      attachments: png ? [{ id: 0, filename: 'preview.png' }] : [],
+      allowed_mentions: { parse: [] },
+    }));
+    if (png) form.append('files[0]', new Blob([png], { type: 'image/png' }), 'preview.png');
+    return fetch(`${env.DISCORD_API_BASE || DISCORD}/channels/${env.SHOWCASE_CHANNEL}/messages`, {
+      method: 'POST', headers: { Authorization: 'Bot ' + env.LEVELS_BOT_TOKEN }, body: form,
+    });
+  }
+
   // A Discord message in the moderation channel; its id, or '' (no token).
   async post(embed, components, png) {
     const env = this.env;
@@ -760,6 +872,12 @@ export class Levels extends DurableObject {
     }
     return json(200, { ok: true, update: { embeds: [levelEmbed(row, status)], components: levelButtons(row, status) } });
   }
+}
+
+async function retryAfter(r) {
+  const b = await r.json().catch(() => null);
+  const s = b && typeof b.retry_after === 'number' ? b.retry_after : 5;
+  return Math.min(60000, Math.ceil(s * 1000) + 250);
 }
 
 function timingSafeEqual(a, b) {

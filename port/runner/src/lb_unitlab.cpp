@@ -41,6 +41,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <map>
 #include <mutex>
@@ -1992,6 +1993,16 @@ std::string flat_str(const Flat& f, const char* k) {
     auto it = f.find(k);
     return it == f.end() ? std::string() : it->second;
 }
+// SG-0088: a list row's `created` (ms since the epoch; too big for atoi) as
+// the local date, "" when absent or nonsense.
+std::string upload_date(const std::string& ms_text) {
+    const long long ms = std::strtoll(ms_text.c_str(), nullptr, 10);
+    if (ms < 946684800000LL || ms > 4102444800000LL) return {};   // 2000..2100
+    const std::time_t t = (std::time_t)(ms / 1000);
+    char b[16] = "";
+    if (const std::tm* lt = std::localtime(&t)) std::strftime(b, sizeof b, "%Y-%m-%d", lt);
+    return b;
+}
 
 // One request at a time on a worker thread; the page polls the result.
 struct UNet {
@@ -2269,7 +2280,7 @@ bool share_pictures(const Mine& m, const Rec& r, std::vector<uint8_t>* sheet_png
 }
 
 struct Com {
-    struct Row { int id = 0, category = 0, tmpl = 0, sounds = 0, downloads = 0, likes = 0; std::string name, author, credits; };
+    struct Row { int id = 0, category = 0, tmpl = 0, sounds = 0, downloads = 0, likes = 0; std::string name, author, credits, date; };
     std::vector<Row> rows;
     bool listed = false;
     int sort = 0, category = -1;   // -1 all
@@ -2453,6 +2464,7 @@ void unet_poll() {
                 r.name = flat_str(u, "name").substr(0, 24);
                 r.author = flat_str(u, "author").substr(0, 24);
                 r.credits = credits_clean(flat_str(u, "credits"));   // SG-0070; absent from older servers
+                r.date = upload_date(flat_str(u, "created"));          // SG-0088
                 if (r.id > 0 && r.tmpl >= 0 && r.tmpl < 182) c.rows.push_back(r);
                 flat_ws(reply, q);
                 if (q < reply.size() && reply[q] == ',') ++q;
@@ -2579,6 +2591,7 @@ void draw_community(const std::vector<Rec>& rs) {
         ImGui::Text("%s", r.name.c_str());
         ImGui::TextDisabled("by %s, from %s%s", r.author.empty() ? "someone" : r.author.c_str(),
                             rs[(size_t)r.tmpl].name.c_str(), r.sounds ? ", has sounds" : "");
+        if (!r.date.empty()) ImGui::TextDisabled("Uploaded %s", r.date.c_str());   // SG-0088
         if (!r.credits.empty()) ImGui::TextDisabled("Credits: %s", r.credits.c_str());   // SG-0070
         ImGui::TableNextColumn();
         ImGui::Text("%s", r.category >= 0 && r.category < 20 ? kKinds[r.category] : "?");

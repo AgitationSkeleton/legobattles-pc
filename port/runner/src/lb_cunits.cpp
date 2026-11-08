@@ -51,6 +51,7 @@
 
 #include "lb_cunits.h"
 #include "lb_levelmap.h"   // lvl::comp_wrap
+#include "lb_xdelta.h"     // docs/474: units from an xdelta patch
 
 #include <algorithm>
 #include <array>
@@ -533,16 +534,30 @@ bool encode_model_texture(std::vector<uint8_t>* m, const Img& im) {
     const uint32_t p = get32(d, te);
     const int fmt = (int)((p >> 26) & 7), w = 8 << ((p >> 20) & 7), h = 8 << ((p >> 23) & 7);
     const bool clear0 = ((p >> 29) & 1u) != 0;
-    if (fmt != 3 || im.w != w || im.h != h) return false;
+    // BR-0071: the palette formats, not only 16 colours. Every stock model
+    // (all 31) uses fmt 4, 256 colours at 8 bits a texel, so the 16-colour-
+    // only encoder refused every re-skin. fmt 2/3/4 = 4/16/256 colours at
+    // 2/4/8 bits. The colours written are capped by the room this texture's
+    // palette has before the palette block ends, so a re-skin can never
+    // write over the next palette.
+    int bits = 0;
+    if (fmt == 2) bits = 2;
+    else if (fmt == 3) bits = 4;
+    else if (fmt == 4) bits = 8;
+    if (!bits || im.w != w || im.h != h) return false;
     const size_t img = tdata + ((size_t)(p & 0xFFFF) << 3), pal_at = pdata + ((size_t)get16(d, pe) << 3);
-    if (img + (size_t)w * h / 2 > d.size() || pal_at + 32 > d.size()) return false;
-    std::vector<uint32_t> pal = make_palette(im.rgba, 16);
+    const size_t pal_end = pdata + ((size_t)get32(d, b + 0x28) << 3);   // the palette block's size
+    if (img + (size_t)w * h * bits / 8 > d.size() || pal_end > d.size() || pal_at + 8 > pal_end) return false;
+    const size_t ncol = std::min<size_t>((size_t)1 << bits, (pal_end - pal_at) / 2);
+    std::vector<uint32_t> pal = make_palette(im.rgba, ncol);
     if (!clear0) pal.erase(pal.begin());   // colour 0 is a colour when not clear
-    for (size_t i = 0; i < 16; ++i) {
+    for (size_t i = 0; i < ncol; ++i) {
         const uint16_t v = i < pal.size() ? to555(pal[i]) : 0;
         d[pal_at + i * 2] = (uint8_t)v;
         d[pal_at + i * 2 + 1] = (uint8_t)(v >> 8);
     }
+    const int per = 8 / bits;                       // texels a byte
+    const int mask = (1 << bits) - 1;
     for (int i = 0; i < w * h; ++i) {
         int v;
         if (clear0) v = nearest(im.rgba[(size_t)i], pal);
@@ -554,8 +569,10 @@ bool encode_model_texture(std::vector<uint8_t>* m, const Img& im) {
             }
             v = best;
         }
-        uint8_t& dst = d[img + (size_t)i / 2];
-        dst = (i & 1) ? (uint8_t)((dst & 0x0F) | ((v & 15) << 4)) : (uint8_t)((dst & 0xF0) | (v & 15));
+        // Texel i: byte i / per, at bit (i % per) * bits, low texel first.
+        uint8_t& dst = d[img + (size_t)(i / per)];
+        const int sh = (i % per) * bits;
+        dst = (uint8_t)((dst & ~(mask << sh)) | ((v & mask) << sh));
     }
     return true;
 }
@@ -836,7 +853,7 @@ bool load_unit(const std::string& folder, const std::string& tag, const std::vec
         if (!read(tasset + ".nsbmd", &mdl)) { *why = "the template's model is unreadable"; return false; }
         Img im;
         if (slurp(dir / "model" / "texture.png", &mine) && read_png(mine, &im) && !encode_model_texture(&mdl, im))
-            std::fprintf(stderr, "[lb_cunits] %s: model/texture.png is not the template's texture size; ignored\n", folder.c_str());
+            std::fprintf(stderr, "[lb_cunits] %s: model/texture.png could not be applied: it must be exactly the template's texture size (the exported texture.png's size; 32x32 for every stock model); ignored\n", folder.c_str());
         // Raw, as the cartridge ships its models (BMD0/BCA0, no COMP wrapper).
         files->push_back({"Models", tag + ".nsbmd", mdl});
         if (read(tasset + ".nsbca", &anim)) files->push_back({"Models", tag + ".nsbca", anim});
@@ -1109,6 +1126,17 @@ extern "C" void lb_cunits_before_reload(void) {
 extern "C" void lb_cunits_on_reset(void) {
     g_saved.live = false;
     g_pushed_base = 0;
+}
+
+// BR-0064: the display-name id (record +0x06) of custom unit k's blueprint,
+// any of its three, as the registered record in RAM holds it (first_name_id
+// + k when the language files carry the unit's names, else its template's).
+// -1 while the records are not registered.
+extern "C" int lb_cunits_name_id(int bp) {
+    const int k = lb_cunits_of_any(bp);
+    if (k < 0 || !g_saved.live || !g_pushed_base) return -1;
+    const uint32_t rec = g_pushed_base + (uint32_t)g_ents[(size_t)k].rec_off;
+    return (int)bus_read_u16(rec + 0x06u);
 }
 
 // Once a frame (lb_patches.cpp): register the appended records with the game
@@ -1807,3 +1835,212 @@ extern "C" void lb_cunits_lobby_forget(void) {
 
 // 1 when this machine's build matches the host's set (or no host set is known).
 extern "C" int lb_cunits_lobby_ok(void) { return (!g_lobby_has || g_lobby == g_hashes) ? 1 : 0; }
+
+// ---- docs/474: units from an xdelta patch ---------------------------------------
+// lb_xdelta.cpp's import. A port export carries each unit's bundle, installed
+// here as the lobby installs a received one (but in a folder of its own, and
+// enabled). A patch from another tool can only have changed the stock units:
+// one whose sprite sheets changed becomes a custom unit on that template with
+// those sheets (the community's re-skins); stats-only changes are a balance
+// mod and are left to the Balance tab.
+
+namespace {
+
+// `folder` added to mods/units/enabled.txt (once).
+bool enable_folder(const std::string& folder) {
+    std::vector<uint8_t> b;
+    slurp(units_dir() / "enabled.txt", &b, 64u << 10);
+    std::string s(b.begin(), b.end()), line;
+    for (size_t i = 0; i <= s.size(); ++i) {
+        if (i == s.size() || s[i] == '\n' || s[i] == '\r') {
+            while (!line.empty() && line.back() == ' ') line.pop_back();
+            if (line == folder) return true;
+            line.clear();
+        } else {
+            line += s[i];
+        }
+    }
+    if (!s.empty() && s.back() != '\n') s += "\n";
+    s += folder + "\n";
+    std::error_code ec;
+    fs::create_directories(units_dir(), ec);
+    std::FILE* f = std::fopen(utf8(units_dir() / "enabled.txt").c_str(), "wb");
+    if (!f) return false;
+    const bool ok = std::fwrite(s.data(), 1, s.size(), f) == s.size();
+    std::fclose(f);
+    return ok;
+}
+
+uint32_t rec_field(const std::vector<uint8_t>& e, size_t at, int width) {
+    uint32_t v = 0;
+    for (int i = 0; i < width; ++i) v |= (uint32_t)e[at + (size_t)i] << (8 * i);
+    return v;
+}
+
+// A name the unit lab accepts (name_ok): its characters, at most `cap`.
+std::string clean_name(const std::string& s, size_t cap) {
+    std::string o;
+    for (char ch : s) {
+        const unsigned char c = (unsigned char)ch;
+        if (c < 0x80 && (std::isalnum(c) || ch == ' ' || ch == '-' || ch == '\'' || ch == '.' || ch == '!')) o += ch;
+        else if (ch == '_') o += ' ';
+    }
+    while (!o.empty() && o.back() == ' ') o.pop_back();
+    while (!o.empty() && o.front() == ' ') o.erase(o.begin());
+    if (o.size() > cap) o.resize(cap);
+    while (!o.empty() && o.back() == ' ') o.pop_back();
+    return o;
+}
+
+}  // namespace
+
+int lb_cunits_install_bundle(const std::vector<uint8_t>& b, const std::string& want, bool dry_run,
+                             std::string* folder, std::string* why) {
+    folder->clear();
+    if (b.size() < 7 || b.size() > kMaxUnitBundle || std::memcmp(b.data(), "LBUB\x01", 5) != 0) {
+        *why = "not a unit bundle";
+        return 0;
+    }
+    const uint64_t h = fnv64(b);
+    const std::string have = folder_for(h);
+    if (!have.empty() && have.compare(0, 10, "_received/") != 0) {
+        *folder = have;
+        if (!dry_run) enable_folder(have);
+        return 2;
+    }
+    std::string base = safe_folder(want);
+    if (base.empty()) base = "imported";
+    std::string f = base;
+    std::error_code ec;
+    for (int n = 2; fs::exists(units_dir() / fs::u8path(f), ec); ++n) {
+        if (n > 99) { *why = "no free folder name for " + base; return 0; }
+        const std::string suf = "_" + std::to_string(n);
+        f = base.substr(0, 20 - suf.size()) + suf;
+    }
+    *folder = f;
+    if (dry_run) return 1;
+    if (!lb_cunits_unpack(b, f)) {
+        *why = "its files did not pass the checks, or could not be written";
+        return 0;
+    }
+    enable_folder(f);
+    return 1;
+}
+
+int lb_cunits_block_count(const std::vector<uint8_t>& stock_ebp, const std::vector<uint8_t>& patched_ebp) {
+    const size_t at = (stock_ebp.size() + 3u) & ~(size_t)3u;
+    if (patched_ebp.size() < at + 8 || get32(patched_ebp, at) != kMagic) return 0;
+    return (int)get32(patched_ebp, at + 4);
+}
+
+bool lb_cunits_find_reskins(const std::vector<uint8_t>& se, const std::vector<uint8_t>& pe, const LbReader& rs,
+                            const LbReader& rp, const std::function<std::string(uint32_t)>& text,
+                            std::vector<LbReskin>* out, int* records_changed, std::vector<std::string>* notes) {
+    out->clear();
+    *records_changed = 0;
+    if (se.size() < kPool + 4 || pe.size() < kPool + 4 || std::memcmp(se.data(), "BPNZ", 4) != 0 ||
+        std::memcmp(pe.data(), "BPNZ", 4) != 0) {
+        notes->push_back("the patched BP/Entities.ebp has a layout the port does not know: its units were not "
+                         "imported");
+        return false;
+    }
+    constexpr size_t kMaxReskins = 32;
+    int models = 0, cards = 0, capped = 0, partial = 0;
+    for (int i = 0; i < 182; ++i) {
+        const size_t r = 4 + (size_t)i * 0x7C;
+        const std::string sasset = pool_str(se, get32(se, r + 0x24)), passet = pool_str(pe, get32(pe, r + 0x24));
+        const std::string tname = pool_str(se, get32(se, r + 0x00));
+        const bool rec_diff = std::memcmp(&se[r], &pe[r], 0x7C) != 0 || sasset != passet;
+        if (rec_diff) ++*records_changed;
+        // Its cards: noted, not imported (the folder takes them as PNGs).
+        for (const char* parent : {"UI/FEPlayerCards/", "UI/GamePlayerCards/"}) {
+            std::vector<uint8_t> a, b;
+            const std::string p = std::string(parent) + tname + ".NCGR";
+            if (rs(p, &a) && rp(p, &b) && a != b) ++cards;
+        }
+        if (sasset.compare(0, 7, "Models/") == 0) {
+            std::vector<uint8_t> a, b;
+            if (rs(sasset + ".nsbmd", &a) && rp(passet + ".nsbmd", &b) && a != b) ++models;
+            continue;
+        }
+        if (sasset.compare(0, 8, "Sprites/") != 0 || se[r + 0x5C] != pe[r + 0x5C]) continue;
+        const int cat = se[r + 0x5C];
+        const std::string sbase = sasset.substr(8);
+        const std::string pbase = passet.compare(0, 8, "Sprites/") == 0 ? passet.substr(8) : sbase;
+        const std::vector<std::string> sn = sheets_of(cat, sbase), pn = sheets_of(cat, pbase);
+        if (sn.size() != pn.size()) continue;
+        LbReskin k;
+        for (size_t j = 0; j < sn.size(); ++j) {
+            std::vector<uint8_t> a, b;
+            if (!rp("Sprites/" + pn[j] + ".NCBR", &b)) continue;
+            if (rs("Sprites/" + sn[j] + ".NCBR", &a) && a == b) continue;
+            k.files.push_back({"sheets/" + sn[j] + ".NCBR", std::move(b)});
+        }
+        if (k.files.empty()) continue;
+        if (out->size() >= kMaxReskins) { ++capped; continue; }
+        std::string shown = clean_name(text(get16(pe, r + 6)), 24);
+        if (shown.empty()) shown = clean_name(pool_str(pe, get32(pe, r + 0x00)), 24);
+        if (shown.empty()) shown = "Unit " + std::to_string(i);
+        k.index = i;
+        k.name = clean_name(shown, 16) + " - patch";
+        k.folder = safe_folder("p" + std::to_string(i) + "_" + shown);
+        // The fields the lab knows that the patch changed; anything else in
+        // the record cannot be carried by unit.json.
+        std::string j = "{\n  \"format\": \"lb-unit 1\",\n  \"index\": " + std::to_string(i) +
+                        ",\n  \"name\": \"" + k.name + "\",\n  \"display_name\": \"" + shown +
+                        "\",\n  \"note\": \"Imported from an xdelta patch: stock unit " + std::to_string(i) +
+                        " re-skinned.\",\n  \"fields\": {";
+        std::vector<uint8_t> rebuilt(se.begin() + (long)r, se.begin() + (long)r + 0x7C);
+        bool first = true;
+        for (const Field& f : kFields) {
+            const uint32_t a = rec_field(se, r + (size_t)f.off, f.width), b = rec_field(pe, r + (size_t)f.off, f.width);
+            if (a == b) continue;
+            for (int q = 0; q < f.width; ++q) rebuilt[(size_t)f.off + (size_t)q] = pe[r + (size_t)f.off + (size_t)q];
+            long v = (long)b;
+            if (f.max <= 3 && v > f.max) v = 0;   // a port capability byte left at the stock 0xA2
+            j += std::string(first ? "\n" : ",\n") + "    \"" + f.key + "\": " + std::to_string(v);
+            first = false;
+        }
+        j += first ? "}\n}\n" : "\n  }\n}\n";
+        // +0x06 (the name id) and +0x24 (the asset) are the custom unit's own.
+        for (size_t q : {(size_t)6, (size_t)7, (size_t)0x24, (size_t)0x25, (size_t)0x26, (size_t)0x27})
+            rebuilt[q] = pe[r + q];
+        if (std::memcmp(rebuilt.data(), &pe[r], 0x7C) != 0) ++partial;
+        k.files.push_back({"unit.json", std::vector<uint8_t>(j.begin(), j.end())});
+        out->push_back(std::move(k));
+    }
+    if (models)
+        notes->push_back(std::to_string(models) + " stock unit model(s) changed: 3D model re-skins are not imported");
+    if (cards)
+        notes->push_back(std::to_string(cards) + " stock unit card picture(s) changed: cards are not imported "
+                         "(the custom units use their template's)");
+    if (capped)
+        notes->push_back(std::to_string(capped) + " more re-skinned unit(s) left out (at most " +
+                         std::to_string(kMaxReskins) + " per patch)");
+    if (partial)
+        notes->push_back(std::to_string(partial) + " re-skinned unit(s) also changed record bytes the unit lab "
+                         "has no field for; those changes were not carried over");
+    return true;
+}
+
+int lb_cunits_install_reskin(const LbReskin& r, bool dry_run, std::string* folder, std::string* why) {
+    // As a bundle, in make_bundle's order, so its identity is the one a lobby
+    // computes from the folder it becomes.
+    std::vector<std::pair<std::string, std::vector<uint8_t>>> files = r.files;
+    std::sort(files.begin(), files.end(),
+              [](const std::pair<std::string, std::vector<uint8_t>>& a,
+                 const std::pair<std::string, std::vector<uint8_t>>& b) { return a.first < b.first; });
+    std::vector<uint8_t> b = {'L', 'B', 'U', 'B', 1, (uint8_t)files.size(), (uint8_t)(files.size() >> 8)};
+    for (const auto& f : files) {
+        b.push_back((uint8_t)f.first.size());
+        b.push_back((uint8_t)(f.first.size() >> 8));
+        b.insert(b.end(), f.first.begin(), f.first.end());
+        for (int i = 0; i < 4; ++i) b.push_back((uint8_t)(f.second.size() >> (8 * i)));
+        b.insert(b.end(), f.second.begin(), f.second.end());
+    }
+    if (b.size() > kMaxUnitBundle) {
+        *why = "its sheets are over 1 MB";
+        return 0;
+    }
+    return lb_cunits_install_bundle(b, r.folder, dry_run, folder, why);
+}

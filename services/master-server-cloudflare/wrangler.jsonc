@@ -63,7 +63,10 @@
 		"MAX_PLAYERS": "8",
 		// docs/442: the fallback server clients turn to when this Worker cannot
 		// be reached (services/master-server-fallback, on the operator's PC).
-		"FALLBACK_MASTER": "lbfallback.viosarcade.xyz:8787"
+		"FALLBACK_MASTER": "lbfallback.viosarcade.xyz:8787",
+		// Approved community levels and units are also posted here, without
+		// buttons (src/levels.js, showcase).
+		"SHOWCASE_CHANNEL": "1562579248894447756"
 	},
 	// viosarcade.xyz is a zone on this Cloudflare account; the address and
 	// its certificate are made on the first deploy. Plain HTTP on port 80 is

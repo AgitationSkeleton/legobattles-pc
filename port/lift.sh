@@ -74,6 +74,12 @@ run() {  # run <config> <binary> <bank> [shards]
 echo "== $MODE =="
 run "$W/port/config/lb_arm9.toml"        "$W/out/eur/arm9/section_static_02000000.bin" lb_arm9 16
 run "$W/port/config/lb_arm9_itcm.toml"   "$W/out/eur/arm9/section_itcm_01ff8000.bin"   lb_arm9_itcm
+# The functions this port byte-patches, lifted from their patched bytes so
+# they do not fall to the interpreter (tools/lb_patched_bank.py scan makes the
+# config and image from a live battle).
+if [ -f "$W/port/config/lb_arm9_patched.toml" ]; then
+    run "$W/port/config/lb_arm9_patched.toml" "$W/out/eur/arm9/patched_static_02000000.bin" lb_arm9_patched
+fi
 run "$W/port/config/lb_arm7_static.toml" "$W/out/eur/arm7/section_static_02380000.bin" lb_arm7_static
 run "$W/port/config/lb_arm7_wram.toml"   "$W/out/eur/arm7/section_wram_037f8000.bin"   lb_arm7_wram
 run "$W/port/config/lb_arm7_mainram.toml" "$W/out/eur/arm7/section_mainram_027e0000.bin" lb_arm7_mainram

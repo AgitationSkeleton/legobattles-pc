@@ -3347,6 +3347,22 @@ constexpr uint32_t kLoopT1Ret = 0x020F6908u;      // NitroMain: t1, after the ta
 
 void get_ms_override(void) {
     const uint32_t lr = g_cpu.R[14];
+    if (lr == kLoopT1Ret) {
+        // [lb_passes]: game-loop passes per VBlank, logged every 1800
+        // VBlanks. 0.50 is the full 30 Hz; lower means the task list ran
+        // past two frames (the cartridge is CPU-bound and slows down).
+        static uint32_t passes = 0u, vb0 = 0u, t1_last = 0u, slow = 0u;
+        const uint32_t vb = bus_read_u32(kVBlankCounter);
+        if (!vb0) vb0 = vb;
+        ++passes;
+        if (t1_last && vb - t1_last > 2u) ++slow;
+        t1_last = vb;
+        if (vb - vb0 >= 1800u) {
+            std::fprintf(stderr, "[lb_passes] %.3f passes per VBlank (%u passes, %u longer than 2 VBlanks)\n",
+                         (double)passes / (double)(vb - vb0), passes, slow);
+            passes = 0u; slow = 0u; vb0 = vb;
+        }
+    }
     if ((lr == kLoopT0Ret || lr == kLoopT1Ret) && lb_cadence_effective() == 30) {
         const uint64_t t = (uint64_t)bus_read_u32(kVBlankCounter) * 17u;
         g_cpu.R[0] = (uint32_t)t;           // u64 in r0:r1, as the real one
@@ -5406,6 +5422,172 @@ void mark_load_override(void) {
     w.c = need;
     g_cpu.R[1] = kMarkCopy;
     wrap_start(w, kMarkLoad | 1u);
+}
+
+// ---- docs/472: AI reports after 0.4.13 -----------------------------------
+//
+// The three AI settings of docs/472 are recorded together (demo kind 26, a
+// mask): bit 0 BR-0070 the AI finishes tower upgrades, bit 1 SG-0089 it keeps
+// its bridges, bit 2 SG-0090 it bridges when stuck on any map. Offline only,
+// as every AI setting (an online match has no computer players).
+extern "C" int lb_setting_ai_finish_upgrades(void);
+extern "C" int lb_setting_ai_keep_bridges(void);
+extern "C" int lb_setting_ai_stuck_bridges(void);
+extern "C" int lb_demo_play_ai_extra(void);
+extern "C" int lb_ai_extra_live(void) {
+    if (lb_net_guest_state() > 0) return 0;
+    return (lb_setting_ai_finish_upgrades() ? 1 : 0) | (lb_setting_ai_keep_bridges() ? 2 : 0) |
+           (lb_setting_ai_stuck_bridges() ? 4 : 0);
+}
+static int ai_extra_mask(void) {
+    const int played = lb_demo_play_ai_extra();
+    return played >= 0 ? (played & 7) : lb_ai_extra_live();
+}
+
+// BR-0069 (docs/472): THE AI TRAINS A LAND TRANSPORT AT THE SHIPYARD.
+//
+// Which building trains a unit is decided twice, with two different rules:
+//   * the player's (FUN_020D9844, the building's train list): a special
+//     factory (kind 12) and a shipyard (kind 16) both list categories 5/6,
+//     and the shipyard keeps only a unit that is water-only on the surface
+//     (+0x16 == 0, +0x17 == 0, +0x18 != 0, +0x1A != 0); the factory keeps
+//     every other one;
+//   * the AI's (FUN_0208C500, Thumb, 100 bytes; r1 the blueprint holder
+//     {vtable, rec, rec}, r2 the out kind; called through dispatch from
+//     FUN_0208C564 at 0x0208C56E): category 5 -> 12 when +0x1B (air layer),
+//     else 16 when +0x1A (ground layer); category 6 -> 12 when +0x1B or not
+//     +0x18 (water), else 16.
+// Every stock record gets the same answer from both (checked against
+// BP/Entities.ebp: the ships 00 00 01 00 01 00, the land siege 01 01 00 00 01
+// 00, the flyers 01 01 01 01 00 01). A custom or rebalanced unit need not: a
+// land transport (the Transport Tank, 01 01 00 00 01 00, category 5) is a
+// factory unit to the player and a shipyard unit to the AI, which then trains
+// it there. Pure bug fix: where the two rules differ the AI takes the
+// player's, provided it owns a finished building of that kind (r0 is the
+// AI's producer, its player byte at +0x38, the byte FUN_0208C564 hands
+// thunk_FUN_020875D4; a building's owner is the entity's +0xE4, finished at
+// +0x22E == 100, alive +0x227, the tests FUN_0208C590 / FUN_02087308 apply). Without one it keeps the
+// cartridge's answer, so a unit the AI could train before is not stranded
+// at the head of its list (the BR-0040 shape) waiting for a building no
+// planner of its army builds. Everywhere else (all stock records) this is a
+// pure tail call, so stock runs execute exactly the cartridge's instructions.
+constexpr uint32_t kAiTrainerKind = 0x0208C500u;   // thumb
+static bool ai_owns_built(uint32_t owner, uint32_t kind) {
+    const uint32_t pool = bus_read_u32(kEntityPoolPtr);
+    if (!guest_ptr(pool)) return false;
+    const uint32_t arr = bus_read_u32(pool + 8u);
+    const int32_t count = (int32_t)bus_read_u32(pool + 0xCu);
+    if (!guest_ptr(arr) || count <= 0 || count > 4096) return false;
+    for (int32_t i = 0; i < count; ++i) {
+        const uint32_t e = bus_read_u32(arr + (uint32_t)i * 4u);
+        if (guest_ptr(e) && entity_category(e) == kind && bus_read_u8(e + 0xE4u) == owner &&
+            bus_read_u8(e + 0x227u) != 0u && bus_read_u8(e + 0x22Eu) == 100u)
+            return true;
+    }
+    return false;
+}
+void ai_trainer_kind_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kAiTrainerKind);
+    const uint32_t holder = g_cpu.R[1];
+    const uint32_t flags = guest_ptr(holder) ? bus_read_u32(holder + 4u) : 0u;   // the cartridge's [r1+4]
+    const uint32_t rec = guest_ptr(holder) ? bus_read_u32(holder + 8u) : 0u;     // and [r1+8]
+    const uint32_t cat = guest_ptr(rec) ? bus_read_u8(rec + 0x5Cu) : 0xFFu;
+    // r2 is the caller's stack slot: DTCM, not main RAM, so it is only
+    // tested for null (a main-RAM test would refuse every call).
+    if (guest_ptr(flags) && guest_ptr(g_cpu.R[0]) && g_cpu.R[2] != 0u && (cat == 5u || cat == 6u)) {
+        const bool notwater = bus_read_u8(flags + 0x16u) != 0, land = bus_read_u8(flags + 0x17u) != 0;
+        const bool water = bus_read_u8(flags + 0x18u) != 0, ground = bus_read_u8(flags + 0x1Au) != 0;
+        const bool air = bus_read_u8(flags + 0x1Bu) != 0;
+        int stock = -1;   // -1: the cartridge leaves the out kind as it was
+        if (cat == 5u) stock = air ? 12 : ground ? 16 : -1;
+        else stock = (air || !water) ? 12 : 16;
+        const int player = (!notwater && !land && water && ground) ? 16 : 12;
+        if (stock != player && ai_owns_built(bus_read_u8(g_cpu.R[0] + 0x38u), (uint32_t)player)) {
+            bus_write_u32(g_cpu.R[2], (uint32_t)player);
+            g_cpu.R[0] = 1u;
+            static uint32_t said[8] = {};
+            static int n = 0;
+            bool seen = false;
+            for (int i = 0; i < n; ++i) seen = seen || said[i] == rec;
+            if (!seen && n < 8) {
+                said[n++] = rec;
+                std::fprintf(stderr, "[lb_aitrain] blueprint record %08X (category %u): the AI trains it "
+                             "at the %s, as the player does (the cartridge's AI rule said %s)\n",
+                             (unsigned)rec, (unsigned)cat, player == 16 ? "shipyard" : "special factory",
+                             stock == 16 ? "shipyard" : stock == 12 ? "special factory" : "no building");
+                std::fflush(stderr);
+            }
+            lb_override_return();
+            return;
+        }
+    }
+    if (original) original();
+}
+
+// BR-0070 (docs/472): THE AI CANCELS ITS OWN TOWER UPGRADES.
+//
+// The tower-upgrade planner FUN_02095FE4 (Thumb) gathers the AI's towers of
+// one tier (FUN_02093C94: kind 13, or kind 14 for a Tower III) and lets
+// FUN_02092880 (Thumb; r0 out handle, r1 the AI, r2 the ArrayEntityRef --
+// data +4 as u16 handles, count +8 --, r3 100, then two stacked arguments)
+// pick one: the nearest to the base among those not damaged in the last 100
+// ticks. It then issues a ResearchUpgradeCommand (type 29, FUN_02005A20) on
+// it. Nothing leaves out a tower that is ALREADY upgrading, so the same
+// nearest tower is picked again on the planner's next turn; the new order
+// lands in the tower's order slot (+0xF8, FUN_0205A03C) and FUN_0205A2E8
+// interrupts the running Sim::ResearchUpgradeEntityCommand (state id 0x17,
+// FUN_02073044) for it -- the upgrade is cancelled (state 3, refunded) and
+// started over. An upgrade longer than the planner's interval (20 to 60 of
+// its turns) never finishes: Tower III's 1260 ticks stock, 2280 to 2820 in
+// FunLite2.
+// With the setting, for the two calls from FUN_02095FE4 only (LR 0x020960EF
+// and 0x0209616B), the towers whose current or pending order has state id
+// 0x17 (FUN_0205A118's test, [e+0xF4]+4 / [e+0xF8]+4) are taken out of the
+// list before the cartridge's pick runs; with none left it picks the null
+// handle and the planner issues nothing. A pre-call edit, then a pure tail
+// call. Free Play only (offline); demo kind 26 bit 0.
+constexpr uint32_t kAiUpgradePick = 0x02092880u;   // thumb
+constexpr uint32_t kAiUpgradeLr2 = 0x020960EFu;   // FUN_02095FE4, the Tower II -> III call
+constexpr uint32_t kAiUpgradeLr1 = 0x0209616Bu;   // and the Tower I -> II call
+void ai_upgrade_pick_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kAiUpgradePick);
+    const uint32_t lr = g_cpu.R[14];
+    if ((lr == kAiUpgradeLr1 || lr == kAiUpgradeLr2) && (ai_extra_mask() & 1)) {
+        // The list is FUN_02095FE4's local, on the guest stack (DTCM), so it
+        // is only tested for null; its handles are in the heap.
+        const uint32_t list = g_cpu.R[2];
+        const uint32_t data = list ? bus_read_u32(list + 4u) : 0u;
+        int32_t n = list ? (int32_t)bus_read_u32(list + 8u) : 0;
+        const bool data_ok = guest_ptr(data) || (data >= 0x027C0000u && data < 0x02800000u);   // heap or DTCM
+        if (data_ok && n > 0 && n <= 256) {
+            int dropped = 0;
+            for (int32_t i = n - 1; i >= 0; --i) {
+                const uint32_t e = entity_of_handle(bus_read_u16(data + 2u * (uint32_t)i));
+                if (!e) continue;
+                bool upgrading = false;
+                for (const uint32_t off : {0xF4u, 0xF8u}) {
+                    const uint32_t c = bus_read_u32(e + off);
+                    upgrading = upgrading || (guest_ptr(c) && bus_read_u32(c + 4u) == 0x17u);
+                }
+                if (!upgrading) continue;
+                for (int32_t k = i; k + 1 < n; ++k)
+                    bus_write_u16(data + 2u * (uint32_t)k, (uint16_t)bus_read_u16(data + 2u * (uint32_t)(k + 1)));
+                --n;
+                ++dropped;
+            }
+            if (dropped) {
+                bus_write_u32(list + 8u, (uint32_t)n);
+                static unsigned said = 0;
+                if (said < 8u) {
+                    ++said;
+                    std::fprintf(stderr, "[lb_aitower] tier %s: %d tower(s) already upgrading left out of the "
+                                 "pick, %d left\n", lr == kAiUpgradeLr2 ? "II->III" : "I->II", dropped, (int)n);
+                    std::fflush(stderr);
+                }
+            }
+        }
+    }
+    if (original) original();
 }
 
 constexpr uint32_t kMovePickDest = 0x0207F1B4u;   // arm
@@ -9366,6 +9548,14 @@ const NdsDispatchEntry kOverrideTable[] = {
     /* Thumb. An entity's own sound: a custom unit's WAV instead of its
        template's sequence (docs/448); otherwise a pure tail call. */
     {kEntitySound, 1u, entity_sound_override, nullptr},    /* 0x02089270 */
+    /* Thumb. BR-0069: the building the AI trains a unit in, by the player's
+       rule where the two differ (never for a stock record); otherwise a
+       pure tail call. docs/472. */
+    {kAiTrainerKind, 1u, ai_trainer_kind_override, nullptr}, /* 0x0208C500 */
+    /* Thumb. BR-0070: the tower-upgrade pick, from FUN_02095FE4 only, leaves
+       out towers already upgrading (setting); then a pure tail call.
+       docs/472. */
+    {kAiUpgradePick, 1u, ai_upgrade_pick_override, nullptr}, /* 0x02092880 */
     /* Thumb. Observer only (LB_AI_CENSUS): the AI's mine and bridge build
        requests. Registered only with the variable. SG-0032 / docs/444. */
     {kAiQueueBuild, 1u, ai_queue_build_observer, nullptr}, /* 0x02097374 */
@@ -9545,6 +9735,8 @@ static_assert(kRosterBuild < kPassability && kPassability < kOccLayers && kOccLa
               kHotWireTick < kCastGround && kCastGround < kCastSpell &&
               kCastSpell < kTileGather &&
               kTileGather < kMovePickDest && kMovePickDest < kTeamAddBricks && kTeamAddBricks < kAiMineScore && kAiMineScore < kSetMusicSide &&
+              kSetMusicSide < kEntitySound && kEntitySound < kAiTrainerKind &&
+              kAiTrainerKind < kAiUpgradePick && kAiUpgradePick < kAiQueueBuild &&
               kSetMusicSide < kAiQueueBuild && kAiQueueBuild < kFillWindow && kFillWindow < kMapParse &&
               kMapParse < kMinesLoad && kMinesLoad < kMarkLoad && kMarkLoad < kMinesGet && kMinesGet < kFloatNumber && kFloatNumber < kTouchRect &&
               kTouchRect < kMoveIssue &&
@@ -15927,8 +16119,21 @@ extern "C" int lb_ai_bridges_live(void) {
     return lb_setting_ai_bridges();
 }
 
+// SG-0090 (docs/472): THE AI BRIDGES WHEN IT IS STUCK, ON ANY MAP. Past the
+// marker test (0x020954A4) FUN_02095470 already tells need from no need: the
+// planner's failure counters +0x88 (FUN_020965EC: no job, or the goal in
+// another area, FUN_020A45B4) and +0x80 (FUN_020969A8: a building placement
+// refused) at 2 and 3 or more skip the "builders to spare and no bridge yet"
+// gate, and the spot is the free bridge spot nearest the job's goal
+// (FUN_0209B8E0, FUN_02092ABC). The marker test returns before any of that on
+// a map with fewer than five group-6 markers (FUN_02093A70, docs/471), need or
+// no need. With this setting only that test is patched (the same `bhi` ->
+// `b` as SG-0071) and the cap reads as 3 (as SG-0032); the "no bridge yet"
+// test stays, so with no sign of need it builds at most the one bridge the
+// cartridge builds on a map with markers. Bit 2 of the applied mask.
 static void apply_ai_more_mines(void) {
-    // Bit 0: SG-0032 more mines and bridges; bit 1: SG-0071 bridge any map.
+    // Bit 0: SG-0032 more mines and bridges; bit 1: SG-0071 bridge any map;
+    // bit 2: SG-0090 need-driven bridges on any map.
     static int applied = 0;
     static unsigned gen = 0;
     if (gen != g_boot_gen) { gen = g_boot_gen; applied = 0; }
@@ -15936,7 +16141,8 @@ static void apply_ai_more_mines(void) {
     const int playedb = lb_demo_play_ai_bridges();
     const int mines = played >= 0 ? played : lb_ai_more_mines_live();
     const int bridges = playedb >= 0 ? playedb : lb_ai_bridges_live();
-    const int want = (mines ? 1 : 0) | (bridges ? 2 : 0);
+    const int stuck = ai_extra_mask() & 4;
+    const int want = (mines ? 1 : 0) | (bridges ? 2 : 0) | (stuck ? 4 : 0);
     if (want == applied) return;
     // All sites stock or already ours, or none are touched.
     if (bus_read_u16(kAiMoreMines[0].addr) != kAiMoreMines[0].stock &&
@@ -15950,11 +16156,14 @@ static void apply_ai_more_mines(void) {
         if (got != p.stock && got != p.want) return;
     }
     bus_write_u16(kAiMoreMines[0].addr, (want & 1) ? kAiMoreMines[0].want : kAiMoreMines[0].stock);
-    bus_write_u16(kAiBridgeCapAddr, (want & 2) ? 0x2108u : (want & 1) ? 0x2103u : 0x7809u);
-    for (const HalfWordPatch& p : kAiBridges) bus_write_u16(p.addr, (want & 2) ? p.want : p.stock);
+    bus_write_u16(kAiBridgeCapAddr, (want & 2) ? 0x2108u : (want & 5) ? 0x2103u : 0x7809u);
+    // [0] the marker test: SG-0071 or SG-0090; [1] "no bridge yet": SG-0071 only.
+    bus_write_u16(kAiBridges[0].addr, (want & 6) ? kAiBridges[0].want : kAiBridges[0].stock);
+    bus_write_u16(kAiBridges[1].addr, (want & 2) ? kAiBridges[1].want : kAiBridges[1].stock);
     applied = want;
     std::fprintf(stderr, "[lb_aimines] the AI builds more mines and bridges: %s; "
-                 "bridges on any map: %s\n", (want & 1) ? "ON" : "off", (want & 2) ? "ON" : "off");
+                 "bridges on any map: %s; bridges when stuck: %s\n", (want & 1) ? "ON" : "off",
+                 (want & 2) ? "ON" : "off", (want & 4) ? "ON" : "off");
     std::fflush(stderr);
 }
 
@@ -16001,6 +16210,36 @@ static void apply_ai_shipyards(void) {
     bus_write_u16(q.addr, want ? q.want : q.stock);
     applied = want;
     std::fprintf(stderr, "[lb_yards] the AI builds shipyards with fewer than 4 sites: %s (%08X)\n",
+                 want ? "ON" : "off", q.addr);
+    std::fflush(stderr);
+}
+
+// SG-0089 (docs/472): THE AI RETIRES ITS BRIDGES. The retire planner
+// FUN_02094758 (Thumb; called from the bridge planner FUN_02094524 while
+// [FUN_020A186C()+0x74] is set) retires, every 2200 ticks (cooldown +0x1C,
+// literal 0x02094934), the bridge (kind 0x11) nobody has damaged for the
+// longest, over 2200 ticks (FUN_020936E4: now - e+0x19C, the damage time
+// FUN_0205079C / FUN_02050F3C stamp), when no unit stands on it
+// (FUN_02058574) -- a RetireCommand (type 30, FUN_02005A58). Nothing asks
+// whether the AI still needs the bridge to reach its enemy, so a bridge it
+// built because it was stuck is gone a minute or so later. With the setting
+// the cooldown test's `bls` (0x020948A6, D93F) is an unconditional `b` (E03F,
+// the same target, the function's end): the bridge arm never runs. The
+// lumber-mill and barracks arms before it are the cartridge's. Free Play
+// only; demo kind 26 bit 1.
+constexpr HalfWordPatch kAiKeepBridges = {0x020948A6u, 0xD93Fu, 0xE03Fu};
+static void apply_ai_keep_bridges(void) {
+    static int applied = 0;
+    static unsigned gen = 0;
+    if (gen != g_boot_gen) { gen = g_boot_gen; applied = 0; }
+    const int want = (ai_extra_mask() & 2) ? 1 : 0;
+    if (want == applied) return;
+    const HalfWordPatch& q = kAiKeepBridges;
+    const uint32_t got = bus_read_u16(q.addr);
+    if (got != q.stock && got != q.want) return;   // not loaded, or not this build
+    bus_write_u16(q.addr, want ? q.want : q.stock);
+    applied = want;
+    std::fprintf(stderr, "[lb_aibridge] the AI keeps its bridges (no retire): %s (%08X)\n",
                  want ? "ON" : "off", q.addr);
     std::fflush(stderr);
 }
@@ -18848,6 +19087,7 @@ extern "C" void lb_patches_on_vblank(void) {
     apply_ai_cheats();
     apply_ai_hero_rebuild();
     apply_ai_shipyards();   /* SG-0078 */
+    apply_ai_keep_bridges();          // SG-0089, docs/472
     apply_ai_hero_unstick();          // BR-0040
     apply_ai_more_mines();            // SG-0032, SG-0071
     apply_ai_hero_multi();
