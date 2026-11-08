@@ -191,6 +191,89 @@ extern "C" unsigned lb_palette_editor_key(int world) {
     return h;
 }
 
+// SG-0094 (docs/477): THE TOP SCREEN'S MINIMAP IN THE LEVEL PALETTE.
+// The battle's top-screen setup (FUN_02025F50, once a battle: its flag +0x8E3)
+// copies the world's 16 minimap colours (0x02127A8C + world * 0x20: indices
+// 1-10 the ground, water, crystals and so on, 11-13 the team colours it fills
+// next, 14 white) into a buffer and FUN_02028E38 writes them into slot 9 of
+// every palette object flagged 0x10 (the list at [0x02151CF8 + 0x10]: node +8
+// the object, +4 the next; the object's RAM colours at [+0x34] + 0xC), marking
+// it dirty (byte +0 = 2) for FUN_02028B7C to upload. Those 16 colours are their
+// own, hand-picked, not entries of the tileset palette (FactionWars itself
+// leaves them alone, so a FactionWars Mars minimap stays red and green). Here
+// each of 1-10 follows the level palette: the vanilla tileset colour nearest
+// it, and how the palette in force moves that colour, is applied to it.
+// Written only while slot 9 holds the vanilla colours (so after the game's own
+// copy) or the colours written last (so a change of setting follows);
+// cosmetic and this machine's only.
+namespace {
+constexpr uint32_t kMiniBanks = 0x02127A8Cu;
+constexpr uint32_t kPalList = 0x02151CF8u;
+uint16_t g_mini_written[11];
+bool g_mini_have = false;
+
+int ch(uint16_t c, int k) { return (c >> (5 * k)) & 31; }
+uint16_t mini_map_colour(uint16_t m, const uint16_t* van, const uint16_t* to, int world) {
+    int best = -1, bd = 1 << 30;
+    for (int j = 1; j < 256; ++j) {
+        if (runtime_index(j)) continue;
+        int d = 0;
+        for (int k = 0; k < 3; ++k) {
+            const int e = ch(m, k) - ch(van[j], k);
+            d += e * e;
+        }
+        if (d < bd) { bd = d; best = j; }
+    }
+    (void)world;
+    if (best < 0) return m;
+    uint16_t out = 0;
+    for (int k = 0; k < 3; ++k) {
+        int v = ch(m, k) + ch(to[best], k) - ch(van[best], k);
+        v = v < 0 ? 0 : v > 31 ? 31 : v;
+        out = (uint16_t)(out | (v << (5 * k)));
+    }
+    return out;
+}
+void minimap_follow(int world, const uint16_t* to) {
+    if (world < 0 || world > 2) return;
+    const uint16_t* van = g_table[world][0];
+    uint16_t vanilla[11], want[11];
+    for (int i = 1; i <= 10; ++i) {
+        vanilla[i] = bus_read_u16(kMiniBanks + 0x20u * (uint32_t)world + 2u * (uint32_t)i);
+        want[i] = to == van ? vanilla[i] : mini_map_colour(vanilla[i], van, to, world);
+    }
+    const uint32_t head = bus_read_u32(kPalList + 0x10u);
+    int wrote = 0;
+    for (uint32_t node = head, guard = 0; main_ram(node) && guard < 64; node = bus_read_u32(node + 4u), ++guard) {
+        const uint32_t obj = bus_read_u32(node + 8u);
+        if (!main_ram(obj) || !(bus_read_u32(obj + 0x24u) & 0x10u)) continue;
+        const uint32_t hdr = bus_read_u32(obj + 0x34u);
+        if (!main_ram(hdr)) continue;
+        const uint32_t cols = bus_read_u32(hdr + 0x0Cu);
+        if (!main_ram(cols)) continue;
+        const uint32_t slot = cols + 9u * 0x20u;
+        bool is_van = true, is_ours = g_mini_have, done = true;
+        for (int i = 1; i <= 10; ++i) {
+            const uint16_t c = bus_read_u16(slot + 2u * (uint32_t)i);
+            is_van = is_van && c == vanilla[i];
+            is_ours = is_ours && c == g_mini_written[i];
+            done = done && c == want[i];
+        }
+        if (done || !(is_van || is_ours)) continue;
+        for (int i = 1; i <= 10; ++i) bus_write_u16(slot + 2u * (uint32_t)i, want[i]);
+        bus_write_u8(obj, 2u);   // dirty: the game uploads it
+        ++wrote;
+    }
+    if (wrote) {
+        std::memcpy(g_mini_written, want, sizeof want);
+        g_mini_have = true;
+        std::fprintf(stderr, "[lb_palette] the top screen's minimap follows the level palette (%d palette%s)\n",
+                     wrote, wrote == 1 ? "" : "s");
+        std::fflush(stderr);
+    }
+}
+}  // namespace
+
 // Once per frame, from lb_patches_on_vblank.
 extern "C" void lb_palette_tick(void) {
     const uint32_t view = bus_read_u32(kViewPtr);
@@ -234,6 +317,8 @@ extern "C" void lb_palette_tick(void) {
         }
     }
     if (!g_custom_name[g_world].empty()) want = 2;
+    // SG-0094: the minimap follows what the tileset is (now, or once below).
+    minimap_follow(g_world, g_table[g_world][want]);
     if (want == g_in_ram && !custom_changed) return;
 
     const uint16_t* from = (g_in_ram == 2 && custom_changed) ? g_custom_prev

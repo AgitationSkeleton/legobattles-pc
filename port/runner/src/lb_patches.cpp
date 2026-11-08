@@ -5109,6 +5109,158 @@ static bool emp_transports_effective() {
 //    does it; and a unit whose EMP byte is 2 ("always") reads as 6;
 //  - ESP: a unit whose ESP byte is 2 reads as 2 when it is 5 or above.
 // Nothing to change: a pure tail call, as before.
+// BR-0067 (docs/477): THE "UPGRADE COMPLETE" CHIME OF OTHER ARMIES.
+// Sim::ResearchUpgradeEntityCommand's step (vtable slot 0, 0x02073544, ARM)
+// finishes a research through FUN_020735F4 or FUN_02073640, and both play
+// interface sound 0x11 (FUN_02089314 -> archive 1 index 1) with no owner test
+// -- every other interface sound the game plays for a team's event compares
+// the team with the local player first (FUN_02086634, FUN_0208382C). So every
+// army's upgrades chime at the player, wherever they are; a third computer
+// adds its own. With the setting on and the researching building not the
+// local player's, the step runs with that sound's byte in the started array
+// (0x02155878 + 1*20 + 1) set, which FUN_02089AAC reads as "already started
+// this pass" and skips; the byte is put back when the step returns. Audio
+// only: the byte is the sound manager's, nothing in the match reads it.
+// Otherwise a pure tail call.
+constexpr uint32_t kResearchStep = 0x02073544u;   // arm
+constexpr uint32_t kSndStartedRes = 0x02155878u + 1u * 20u + 1u;
+extern "C" int lb_setting_own_research_sound(void);   // lb_overlay.cpp
+CallWrap g_wrap_research;
+void research_step_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kResearchStep);
+    CallWrap& w = g_wrap_research;
+    const int st = wrap_state(w, original);
+    if (st == 1) return;
+    if (st == 2) {
+        bus_write_u8(kSndStartedRes, w.old[0]);
+        wrap_finish(w);
+        return;
+    }
+    // A replay plays the DS's sounds, so the exactness gate (instruction
+    // counts) and every recording stay as they were.
+    if (!lb_setting_own_research_sound() || lb_demo_playing()) {
+        if (original) original();
+        return;
+    }
+    const uint32_t cmd = g_cpu.R[0];
+    const uint32_t ent = guest_ptr(cmd) ? resolve_handle_kind(cmd + 0x20u, 0u) : 0u;
+    const uint32_t local = bus_read_u32(0x02156A24u + 100u);   // session: the local player's handle
+    if (!ent || bus_read_u8(ent + 0xE4u) == local || bus_read_u8(kSndStartedRes) != 0u) {
+        if (original) original();
+        return;
+    }
+    w.old[0] = bus_read_u8(kSndStartedRes);
+    bus_write_u8(kSndStartedRes, 1u);
+    static unsigned said = 0;   // the step runs every frame of a research: a few lines only
+    if (said < 4u) {
+        ++said;
+        std::fprintf(stderr, "[lb_research] army %u is researching: its upgrade chime will not play here (BR-0067)\n",
+                     (unsigned)bus_read_u8(ent + 0xE4u));
+        std::fflush(stderr);
+    }
+    wrap_start(w, kResearchStep);
+}
+
+// BR-0063 (docs/477): ENEMY SPECIALS SEEN IN THE FOG. The field draw
+// (Task_View_DrawField) keeps an entity when its vtable +0xC test passes.
+// For a unit that is Sim::Unit::virtual_03 (0x0205FC1C, ARM, reached only
+// through the vtable and a dispatched fall-through). Most units take
+// Sim::Entity::virtual_03: their footprint's four corner cells against the
+// fog record's VISIBLE grid (FUN_020A17C0, [0x021569E4]+0x14). A Transport or
+// Siege unit (FUN_0205FBFC: category 5 or 6) takes its own branch: the four
+// corners of its MODEL's box (+0xBC..+0xD0), which for a ship, a dragon or a
+// catapult reach well past the cell it stands on. This observer logs each
+// other army's special that passes while its own cell is not visible, with the
+// box, so a session log shows the leak and its size.
+constexpr uint32_t kUnitDrawTest = 0x0205FC1Cu;   // arm
+CallWrap g_wrap_drawtest;
+extern "C" int lb_setting_hide_fogged_specials(void);   // lb_overlay.cpp
+static int fog_visible_cell(int x, int y) {   // 1 visible, 0 not, -1 unknown
+    const uint32_t holder = bus_read_u32(0x021569E4u);
+    if (!guest_ptr(holder)) return -1;
+    const uint32_t desc = bus_read_u32(holder + 0x14u);
+    if (!guest_ptr(desc)) return -1;
+    const int w = (int)bus_read_u32(desc + 8u), h = (int)bus_read_u32(desc + 0xCu);
+    if (w <= 0 || h <= 0 || w > 1024 || h > 1024) return -1;
+    if (x < 0 || y < 0 || x >= w || y >= h) return 0;
+    const uint32_t rows = bus_read_u32(desc + 0x14u);
+    const uint32_t row = guest_ptr(rows) ? bus_read_u32(rows + 4u * (uint32_t)y) : 0u;
+    if (!guest_ptr(row)) return -1;
+    return (bus_read_u8(row + (uint32_t)(x >> 3)) >> (x & 7)) & 1;
+}
+void unit_draw_test_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kUnitDrawTest);
+    CallWrap& w = g_wrap_drawtest;
+    const int st = wrap_state(w, original);
+    if (st == 1) return;
+    if (st == 2) {
+        const uint32_t e = w.a;
+        static uint32_t n_test = 0, n_pass = 0, n_fog = 0, last_vb = 0;
+        ++n_test;
+        {
+            const uint32_t vb = bus_read_u32(kVBlankCounter);
+            if (vb - last_vb >= 3600u) {
+                if (last_vb)
+                    std::fprintf(stderr, "[lb_fogleak] last minute: %u draw tests of other armies' specials, %u drawn, "
+                                 "%u of them while their cell was fogged\n", n_test, n_pass, n_fog);
+                n_test = n_pass = n_fog = 0;
+                last_vb = vb;
+            }
+        }
+        if (g_cpu.R[0] != 0u && guest_ptr(e)) {
+            ++n_pass;
+            const int cx = ((int32_t)bus_read_u32(e + 0xECu) >> 12) / 24;
+            const int cy = ((int32_t)bus_read_u32(e + 0xF0u) >> 12) / 16;
+            if (fog_visible_cell(cx, cy) == 0) {
+                ++n_fog;
+                // The setting: drawn only when its own cell is visible, as a
+                // one-cell unit's corner test amounts to.
+                if (lb_setting_hide_fogged_specials()) g_cpu.R[0] = 0u;
+                static uint32_t said[32];
+                static uint32_t said_vb[32];
+                const uint32_t vb = bus_read_u32(kVBlankCounter);
+                int slot = -1;
+                for (int i = 0; i < 32; ++i)
+                    if (said[i] == e) { slot = i; break; }
+                if (slot < 0 || vb - said_vb[slot] > 600u) {   // once per entity per 10 s
+                    if (slot < 0) {
+                        static int next = 0;
+                        slot = next;
+                        next = (next + 1) % 32;
+                        said[slot] = e;
+                    }
+                    said_vb[slot] = vb;
+                    const uint32_t bp = unit_blueprint(e);
+                    std::fprintf(stderr,
+                                 "[lb_fogleak] army %u blueprint %u (category %u) at cell (%d,%d) is drawn while "
+                                 "its cell is fogged; model box x %d..%d y %d..%d z %d..%d (BR-0063)\n",
+                                 (unsigned)bus_read_u8(e + 0xE4u), bp ? (unsigned)bus_read_u16(bp + 4u) : 0u,
+                                 (unsigned)entity_category(e), cx, cy,
+                                 (int)bus_read_u32(e + 0xBCu) >> 12, (int)bus_read_u32(e + 0xC8u) >> 12,
+                                 (int)bus_read_u32(e + 0xC0u) >> 12, (int)bus_read_u32(e + 0xCCu) >> 12,
+                                 (int)bus_read_u32(e + 0xC4u) >> 12, (int)bus_read_u32(e + 0xD0u) >> 12);
+                    std::fflush(stderr);
+                }
+            }
+        }
+        wrap_finish(w);
+        return;
+    }
+    const uint32_t e = g_cpu.R[0];
+    const uint32_t local = bus_read_u32(0x02156A24u + 100u);
+    if (!guest_ptr(e)) {
+        if (original) original();
+        return;
+    }
+    const uint8_t cat = entity_category(e);
+    if ((cat != 5u && cat != 6u) || bus_read_u8(e + 0xE4u) == local) {
+        if (original) original();
+        return;
+    }
+    w.a = e;
+    wrap_start(w, kUnitDrawTest);
+}
+
 void emp_collect_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kEmpCollect);
     CallWrap& w = g_wrap_collect;
@@ -5428,20 +5580,23 @@ void mark_load_override(void) {
 //
 // The three AI settings of docs/472 are recorded together (demo kind 26, a
 // mask): bit 0 BR-0070 the AI finishes tower upgrades, bit 1 SG-0089 it keeps
-// its bridges, bit 2 SG-0090 it bridges when stuck on any map. Offline only,
-// as every AI setting (an online match has no computer players).
+// its bridges, bit 2 SG-0090 it bridges when stuck on any map. docs/478 adds
+// bit 3, SG-0091 the AI trains transports only when a squad asks for one. An
+// older recording has bit 3 clear, so it replays with the stock rule. Offline
+// only, as every AI setting (an online match has no computer players).
 extern "C" int lb_setting_ai_finish_upgrades(void);
 extern "C" int lb_setting_ai_keep_bridges(void);
 extern "C" int lb_setting_ai_stuck_bridges(void);
+extern "C" int lb_setting_ai_transports_on_request(void);
 extern "C" int lb_demo_play_ai_extra(void);
 extern "C" int lb_ai_extra_live(void) {
     if (lb_net_guest_state() > 0) return 0;
     return (lb_setting_ai_finish_upgrades() ? 1 : 0) | (lb_setting_ai_keep_bridges() ? 2 : 0) |
-           (lb_setting_ai_stuck_bridges() ? 4 : 0);
+           (lb_setting_ai_stuck_bridges() ? 4 : 0) | (lb_setting_ai_transports_on_request() ? 8 : 0);
 }
 static int ai_extra_mask(void) {
     const int played = lb_demo_play_ai_extra();
-    return played >= 0 ? (played & 7) : lb_ai_extra_live();
+    return played >= 0 ? (played & 15) : lb_ai_extra_live();
 }
 
 // BR-0069 (docs/472): THE AI TRAINS A LAND TRANSPORT AT THE SHIPYARD.
@@ -5486,12 +5641,60 @@ static bool ai_owns_built(uint32_t owner, uint32_t kind) {
     }
     return false;
 }
+// SG-0093 (docs/476): A CUSTOM UNIT'S "TRAINED AT" FIELD. unit.json
+// "trained_at" (lb_cunits.cpp) is kept in the record's padding byte +0x5B:
+// 1 Special Factory (kind 12), 2 Shipyard (kind 16); anything else (0, the
+// stock 0xA2) is Auto, the cartridge's rules. It counts only for a custom
+// unit's battle record in category 5 or 6 -- the two categories those
+// buildings list -- so no stock record, or a pack that writes the byte, is
+// affected. Returns the building kind, or 0 for Auto.
+extern "C" int lb_cunits_count(void);                            /* lb_cunits.cpp */
+extern "C" unsigned int lb_cunits_battle_record(int k);
+extern "C" int lb_cunits_of_battle_record(unsigned int rec);
+constexpr uint32_t kTrainedAtOff = 0x5Bu;
+static int trained_at_kind(uint32_t rec, bool known_custom) {
+    if (!guest_ptr(rec)) return 0;
+    const uint8_t cat = bus_read_u8(rec + 0x5Cu);
+    if (cat != 5u && cat != 6u) return 0;
+    const uint8_t v = bus_read_u8(rec + kTrainedAtOff);
+    if (v != 1u && v != 2u) return 0;
+    if (!known_custom && lb_cunits_of_battle_record(rec) < 0) return 0;
+    return v == 1u ? 12 : 16;
+}
+// The player's rule (FUN_020D9844): a shipyard unit is water-only on the surface.
+static bool list_rule_shipyard(uint32_t rec) {
+    return bus_read_u8(rec + 0x16u) == 0u && bus_read_u8(rec + 0x17u) == 0u && bus_read_u8(rec + 0x18u) != 0u &&
+           bus_read_u8(rec + 0x1Au) != 0u;
+}
 void ai_trainer_kind_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kAiTrainerKind);
     const uint32_t holder = g_cpu.R[1];
     const uint32_t flags = guest_ptr(holder) ? bus_read_u32(holder + 4u) : 0u;   // the cartridge's [r1+4]
     const uint32_t rec = guest_ptr(holder) ? bus_read_u32(holder + 8u) : 0u;     // and [r1+8]
     const uint32_t cat = guest_ptr(rec) ? bus_read_u8(rec + 0x5Cu) : 0xFFu;
+    // SG-0093: a custom unit's own choice wins, whether or not the AI owns
+    // that building yet (the player cannot train it anywhere else either;
+    // FUN_0208C564 then answers "not now" until it does, as for a stock ship
+    // with no shipyard). Always returns 1, as the cartridge's function does.
+    if (g_cpu.R[2] != 0u && (cat == 5u || cat == 6u)) {
+        const int forced = trained_at_kind(rec, false);
+        if (forced) {
+            bus_write_u32(g_cpu.R[2], (uint32_t)forced);
+            g_cpu.R[0] = 1u;
+            static uint32_t said[8] = {};
+            static int n = 0;
+            bool seen = false;
+            for (int i = 0; i < n; ++i) seen = seen || said[i] == rec;
+            if (!seen && n < 8) {
+                said[n++] = rec;
+                std::fprintf(stderr, "[lb_aitrain] custom record %08X (category %u): trained_at says the %s\n",
+                             (unsigned)rec, (unsigned)cat, forced == 16 ? "shipyard" : "special factory");
+                std::fflush(stderr);
+            }
+            lb_override_return();
+            return;
+        }
+    }
     // r2 is the caller's stack slot: DTCM, not main RAM, so it is only
     // tested for null (a main-RAM test would refuse every call).
     if (guest_ptr(flags) && guest_ptr(g_cpu.R[0]) && g_cpu.R[2] != 0u && (cat == 5u || cat == 6u)) {
@@ -5522,6 +5725,79 @@ void ai_trainer_kind_override(void) {
         }
     }
     if (original) original();
+}
+
+// SG-0093 (docs/476): THE PLAYER'S TRAIN LIST FOLLOWS "TRAINED AT".
+//
+// FUN_020D9844 (Thumb, 272 bytes; r1 the out list -- a PtrArray of blueprint
+// holders, data +4, count +8 --, r2 the building, its record at [r2+8]) fills
+// a building's train list. At a special factory (kind 12) or a shipyard (16)
+// it asks the roster for categories 6 and 5, then walks the list from the end
+// (0x020D98E0..0x020D9950) and, for each holder, reads [holder+4]+0x16/17/18/
+// 1A inline: a water-only unit is removed unless the building is a shipyard
+// (call at 0x020D9934), any other unit unless it is a special factory (call
+// at 0x020D9946). The rule is inline, with no sub-function to override, so
+// for the length of the call the movement bytes of each custom record whose
+// trained_at disagrees with that rule are set to bytes the rule reads the
+// way trained_at says (Shipyard: +0x16 0, +0x17 0, +0x18 1, +0x1A 1; Special
+// Factory: +0x16 1), and put back when it returns -- the CallWrap pattern
+// (SG-0073 above, docs/470): the cartridge's function is called with LR
+// pointing back at this override, so there is no nested guest call. Nothing
+// else runs in that window that moves a unit (the function only fills a list).
+// With no such record, or at any other building, a pure tail call.
+constexpr uint32_t kTrainList = 0x020D9844u;   // thumb
+CallWrap g_wrap_trainlist;
+void train_list_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kTrainList);
+    CallWrap& w = g_wrap_trainlist;
+    const int st = wrap_state(w, original);
+    if (st == 1) return;
+    if (st == 2) {
+        for (int i = w.n - 1; i >= 0; --i) bus_write_u8(w.rec[i], w.old[i]);
+        w.n = 0;
+        wrap_finish(w);
+        return;
+    }
+    // r2 may be a caller's local (DTCM) or a heap object: accept either.
+    const uint32_t bld = g_cpu.R[2];
+    const bool bld_ok = guest_ptr(bld) || (bld >= 0x027C0000u && bld < 0x02800000u);
+    const uint32_t brec = bld_ok ? bus_read_u32(bld + 8u) : 0u;
+    const uint32_t kind = guest_ptr(brec) ? bus_read_u8(brec + 0x5Cu) : 0xFFu;
+    const int n = (kind == 12u || kind == 16u) ? lb_cunits_count() : 0;
+    uint8_t newv[64];
+    w.n = 0;
+    for (int k = 0; k < n; ++k) {
+        const uint32_t rec = lb_cunits_battle_record(k);
+        const int want = trained_at_kind(rec, true);
+        if (!want || (want == 16) == list_rule_shipyard(rec)) continue;
+        static const uint8_t kShip[4][2] = {{0x16, 0}, {0x17, 0}, {0x18, 1}, {0x1A, 1}};
+        static const uint8_t kFactory[1][2] = {{0x16, 1}};
+        const uint8_t(*set)[2] = want == 16 ? &kShip[0] : &kFactory[0];
+        const int m = want == 16 ? 4 : 1;
+        if (w.n + m > 64) break;   // 64 bytes: 16 shipyard units per call at the least
+        for (int b = 0; b < m; ++b) {
+            w.rec[w.n] = rec + set[b][0];
+            w.old[w.n] = bus_read_u8(rec + set[b][0]);
+            newv[w.n] = set[b][1];
+            ++w.n;
+        }
+        static uint32_t said[8] = {};
+        static int ns = 0;
+        bool seen = false;
+        for (int i = 0; i < ns; ++i) seen = seen || said[i] == rec;
+        if (!seen && ns < 8) {
+            said[ns++] = rec;
+            std::fprintf(stderr, "[lb_trainat] custom unit %d (record %08X): listed at the %s only (trained_at)\n",
+                         k + 1, (unsigned)rec, want == 16 ? "shipyard" : "special factory");
+            std::fflush(stderr);
+        }
+    }
+    if (!w.n) {
+        if (original) original();
+        return;
+    }
+    for (int i = 0; i < w.n; ++i) bus_write_u8(w.rec[i], newv[i]);   // put back in reverse when it returns
+    wrap_start(w, kTrainList | 1u);
 }
 
 // BR-0070 (docs/472): THE AI CANCELS ITS OWN TOWER UPGRADES.
@@ -9509,6 +9785,10 @@ const NdsDispatchEntry kOverrideTable[] = {
     /* GRADED, NOT PATCHED. docs/333. */
     {kU16IsSet, 0u, u16_is_set_shadow, nullptr},           /* 0x0205E638 */
     {kSetHp, 0u, set_hp_override, nullptr},                /* 0x0205E7F4 */
+    /* ARM. Sim::Unit's draw test (vtable +0xC): logs another army's special
+       drawn while its cell is fogged (BR-0063, docs/477); the result is the
+       cartridge's own. Not during a replay. */
+    {kUnitDrawTest, 0u, unit_draw_test_override, nullptr}, /* 0x0205FC1C */
     /* GRADED, NOT PATCHED. docs/333. */
     {kListFind, 0u, list_find_shadow, nullptr},            /* 0x0206AC2C */
     /* ARM. Adds the attack boost to a ranged hit in front of the cartridge's
@@ -9516,6 +9796,10 @@ const NdsDispatchEntry kOverrideTable[] = {
        setting on; otherwise a pure tail call. Replaces the old override on
        func_0206E408, whose nested guest call was not re-entrant. docs/369. */
     {kApplyDamage, 0u, apply_damage_observer, nullptr},    /* 0x0206E970 */
+    /* ARM. Sim::ResearchUpgradeEntityCommand's step: another army's
+       "upgrade complete" chime is skipped (setting, BR-0067, docs/477);
+       otherwise a pure tail call. Reached only through its vtable. */
+    {kResearchStep, 0u, research_step_override, nullptr},  /* 0x02073544 */
     /* ARM. The EMP/ESP tick's stun step: victims whose blueprint is EMP or
        ESP immune are marked done first; otherwise a pure tail call. docs/463. */
     {kEmpApply, 0u, emp_victims_override, nullptr},        /* 0x02077510 */
@@ -9549,8 +9833,9 @@ const NdsDispatchEntry kOverrideTable[] = {
        template's sequence (docs/448); otherwise a pure tail call. */
     {kEntitySound, 1u, entity_sound_override, nullptr},    /* 0x02089270 */
     /* Thumb. BR-0069: the building the AI trains a unit in, by the player's
-       rule where the two differ (never for a stock record); otherwise a
-       pure tail call. docs/472. */
+       rule where the two differ (never for a stock record), or a custom
+       unit's trained_at (SG-0093, docs/476); otherwise a pure tail call.
+       docs/472. */
     {kAiTrainerKind, 1u, ai_trainer_kind_override, nullptr}, /* 0x0208C500 */
     /* Thumb. BR-0070: the tower-upgrade pick, from FUN_02095FE4 only, leaves
        out towers already upgrading (setting); then a pure tail call.
@@ -9619,6 +9904,10 @@ const NdsDispatchEntry kOverrideTable[] = {
     {kMapListFill, 1u, map_list_fill_override, nullptr},   /* 0x020C48B0 */
     {kMapConfirm, 1u, map_confirm_override, nullptr},      /* 0x020C53E4 */
     {kMapPreview, 1u, map_preview_override, nullptr},      /* 0x020C5444 */
+    /* Thumb. SG-0093: a building's train list; a custom transport/special's
+       trained_at decides factory or shipyard for the call (CallWrap), else a
+       pure tail call. docs/476. */
+    {kTrainList, 1u, train_list_override, nullptr},        /* 0x020D9844 */
     /* Thumb. The HUD's selection refresh: notes an open list when the
        selection has shrunk (docs/451); a pure tail call. */
     {kSelRefresh, 1u, sel_refresh_override, nullptr},      /* 0x020DA890 */
@@ -9714,6 +10003,7 @@ static_assert(kRosterBuild < kPassability && kPassability < kOccLayers && kOccLa
               kOppSetupLabel < kEnemyCycle &&
               kEnemyCycle < kMapListFill && kMapListFill < kMapConfirm &&
               kMapConfirm < kMapPreview && kMapPreview < kMarkerPlace &&
+              kMapPreview < kTrainList && kTrainList < kSelRefresh && kTrainList < kMarkerPlace &&
               kWidgetSetPos < kArmyListable && kArmyListable < kFactionOfBp &&
               kFactionOfBp < kArmyTier &&
               kArmyTier < kPtrAppend && kPtrAppend < kSplitArray &&
@@ -9730,7 +10020,8 @@ static_assert(kRosterBuild < kPassability && kPassability < kOccLayers && kOccLa
               kRegisterMissions < kGfxTransfer &&
               kGfxTransfer < kImageXfer && kImageXfer < kSetOwner &&
               kSetOwner < kSetHp && kSetHp < kApplyDamage &&
-              kApplyDamage < kEmpApply && kEmpApply < kEmpCollect && kEmpCollect < kHealTick &&
+              kApplyDamage < kResearchStep && kResearchStep < kEmpApply &&
+              kEmpApply < kEmpCollect && kEmpCollect < kHealTick &&
               kHealTick < kHotWireTick &&
               kHotWireTick < kCastGround && kCastGround < kCastSpell &&
               kCastSpell < kTileGather &&
@@ -9758,7 +10049,7 @@ static_assert(kRosterBuild < kPassability && kPassability < kOccLayers && kOccLa
               kFAdd < kFMul && kFMul < kFSub && kFSub < kDivMod &&
               kSetOwner < kEntityState && kEntityState < kU16IsSet &&
               kSetOwner < kU16IsSet && kU16IsSet < kSetHp &&
-              kSetHp < kListFind && kListFind < kApplyDamage &&
+              kSetHp < kUnitDrawTest && kUnitDrawTest < kListFind && kListFind < kApplyDamage &&
               kFeCard < kCreatureSprLoad && kCreatureSprLoad < kMapLoad &&
               kCommitBGs < kCreatureSprAnim && kCreatureSprAnim < kBg3Blank,
               "kOverrideTable must be sorted ascending by address: "
@@ -10209,8 +10500,57 @@ struct CatCloak {
     uint32_t bp[3] = {0, 0, 0};
     uint8_t cat[3] = {0, 0, 0};   // what each had
     int n = 0;
+    bool share = false;           // BR-0073: sheets shared across armies for this call
+    uint32_t sess_old = 0;        // session +0x74 as it was
 };
 CatCloak g_cloak_load, g_cloak_anim;
+
+// BR-0073 (docs/477): WHEN THE SPRITE POOL WOULD RUN OUT. FUN_020353B4 seats a
+// three-sheet set (kinds 1/2/3) for every category 1-3 roster unit -- and for a
+// creature in the Mounted or Hero slot, which the cloak below loads as
+// category 2. The pool has 9 such sets (33 slots, docs at match_log_tick).
+// With session+0x74 set, as in every Free Play, each army seats its own copy
+// of a sheet even when another army already holds it (FUN_0202DD18 reuses a
+// slot only when its in-use flag is 0, and each army searches from its own
+// range on) -- yet the page bytes live on the blueprint, shared by every army,
+// so the earlier copies are never drawn. A set past the ninth gets the
+// overflow word and pages 0: another unit's sheet. When the rosters ask for
+// more than 9 sets, the load runs with session+0x74 = 0 for that call: one
+// search from slot 0, and a sheet already seated is reused. Heroes are never
+// reused (FUN_0202DD18 excludes kind 0); buildings already were (bVar2).
+// The flag table it writes (0x02151DE0) is read by FUN_0202DD18 alone.
+// Otherwise the vanilla path, untouched.
+constexpr uint32_t kSession = 0x02156A24u;   // FUN_020A186C
+int sprite_sets_wanted(void) {
+    const uint32_t world = bus_read_u32(0x0215540Cu);
+    const uint32_t teams = guest_ptr(world) ? bus_read_u32(world + 8u) : 0u;
+    const int32_t nt = guest_ptr(world) ? (int32_t)bus_read_u32(world + 0xCu) : 0;
+    const bool creatures = g_blueprint_base && lb_creatures_live();
+    int sets = 0;
+    for (int32_t t = 0; guest_ptr(teams) && t < nt && t < 8; ++t) {
+        const uint32_t team = bus_read_u32(teams + 4u * (uint32_t)t);
+        if (!guest_ptr(team)) continue;
+        const uint32_t rl = bus_read_u32(team + 0x70u);
+        const int32_t nr = (int32_t)bus_read_u32(team + 0x74u);
+        for (int32_t r = 0; guest_ptr(rl) && r < nr && r < 8; ++r) {
+            const uint32_t ro = bus_read_u32(rl + 4u * (uint32_t)r);
+            if (!guest_ptr(ro)) continue;
+            const uint32_t ids = bus_read_u32(ro + 0x28u), hs = bus_read_u32(ro + 8u);
+            if (!guest_ptr(ids) || !guest_ptr(hs)) continue;
+            for (uint32_t k = 0; k < 26u; ++k) {
+                if (bus_read_u16(ids + 0xCu + 2u * k) == 0xFFFFu) continue;
+                const uint32_t h = bus_read_u32(hs + 4u * k);
+                const uint32_t bp = guest_ptr(h) ? bus_read_u32(h + 8u) : 0u;
+                if (!guest_ptr(bp)) continue;
+                const uint8_t cat = bus_read_u8(bp + 0x5Cu);
+                const unsigned idx = bus_read_u16(bp + 4u);
+                const bool creature = creatures && (idx == 169 || idx == 138 || idx == 153) && (cat == 4u || cat == 0u);
+                if ((cat >= 1u && cat <= 3u) || creature) ++sets;
+            }
+        }
+    }
+    return sets;
+}
 
 // The blueprints of the Wolf, Robot and Monkey that are in category 4 now.
 int cloak_mounted_blueprints(uint32_t* out) {
@@ -10245,6 +10585,7 @@ bool cloak_enter(CatCloak& c, uint32_t target, void (*original)(void), bool per_
         }
         // The original has returned: put the category back and return to the caller.
         cloak_set(c, false);
+        if (c.share) bus_write_u32(kSession + 0x74u, c.sess_old);
         g_cpu.R[14] = c.lr;
         g_cpu.R[13] = c.sp;
         c.active = false;
@@ -10265,9 +10606,26 @@ bool cloak_enter(CatCloak& c, uint32_t target, void (*original)(void), bool per_
     } else {
         n = cloak_mounted_blueprints(bps);
     }
-    if (n == 0) {
+    // BR-0073: share sheets across armies when the rosters want more than the
+    // pool's 9 three-sheet sets (the level load only).
+    bool share = false;
+    if (!per_entity) {
+        const int sets = sprite_sets_wanted();
+        share = sets > 9 && bus_read_u32(kSession + 0x74u) != 0u;
+        if (share) {
+            std::fprintf(stderr, "[lb_sprpool] the armies want %d three-sheet sprite sets, the pool holds 9: "
+                         "sheets are shared between armies for this load (BR-0073)\n", sets);
+            std::fflush(stderr);
+        }
+    }
+    if (n == 0 && !share) {
         if (original) original();
         return true;
+    }
+    c.share = share;
+    if (share) {
+        c.sess_old = bus_read_u32(kSession + 0x74u);
+        bus_write_u32(kSession + 0x74u, 0u);
     }
     c.n = n;
     for (int i = 0; i < n; ++i) c.bp[i] = bps[i];
@@ -16244,6 +16602,128 @@ static void apply_ai_keep_bridges(void) {
     std::fflush(stderr);
 }
 
+// SG-0091 (docs/478): IDLE TRANSPORTS TAKE THE AI'S SPECIAL SLOTS.
+// The army think FUN_0208B1F0 asks FUN_020860A8(team, 2) for the room left
+// in build-limit class 2 (categories 5 AND 6, allowance byte 0x02126D96, 4
+// stock), so every transport is one siege unit fewer. The category picker
+// FUN_0208BF90 (Thumb; r0 the army object AI+0x50, whose [+0] is the
+// transport manager AI+0x58) picks a transport two ways:
+//   A. the manager has more live TransportRequestItems (+0x14) than the AI
+//      owns plus queues transports, and those are below 2 -- a squad whose
+//      goal it cannot reach by land asked for one (FUN_0209C5E8 from the
+//      area tests at 0x0209C392 / 0x0209D344);
+//   B. any "special" pick while it owns no transport, when the map has 5 or
+//      more group-6 build sites (FUN_02093A70) -- a speculative transport,
+//      asked for by nobody (0x0208C0EE..0x0208C118).
+// A transport only ever moves to serve a request (the manager FUN_0209EB68),
+// and a land-connected map never makes one, so B's transport sits at the
+// shipyard for the rest of the match. Transports never join the army's
+// squads (the unit-created handler FUN_0208A5C0 hands category 5 to the
+// manager), so the cartridge's own empty-transport retire in FUN_0208BD4C
+// never sees one. With the setting, B's `bls` at 0x0208C114 (D901, after
+// `cmp r0,#4` on the site count) is an unconditional `b` (E001, the same
+// target): B never sets the transport flag, so the special pick is a siege
+// unit (category 6) and a transport is trained only through A. Free Play
+// only; demo kind 26 bit 3.
+constexpr HalfWordPatch kAiTransportsOnRequest = {0x0208C114u, 0xD901u, 0xE001u};
+static void apply_ai_transports_on_request(void) {
+    static int applied = 0;
+    static unsigned gen = 0;
+    if (gen != g_boot_gen) { gen = g_boot_gen; applied = 0; }
+    const int want = (ai_extra_mask() & 8) ? 1 : 0;
+    if (want == applied) return;
+    const HalfWordPatch& q = kAiTransportsOnRequest;
+    const uint32_t got = bus_read_u16(q.addr);
+    if (got != q.stock && got != q.want) return;   // not loaded, or not this build
+    bus_write_u16(q.addr, want ? q.want : q.stock);
+    applied = want;
+    std::fprintf(stderr, "[lb_aitransport] the AI trains transports only when a squad asks: %s (%08X)\n",
+                 want ? "ON" : "off", q.addr);
+    std::fflush(stderr);
+}
+
+// docs/478 test aid, read only: per computer player, once a second, its
+// transports (category 5, alive, its owner byte AI+0x36 at entity +0xE4),
+// how many are loaded (+0x104 occupants), how many sit queued in its army
+// list (AI+0x50 -> +0x50 -> vector: [item+8] -> [+8] -> +0x5C, as
+// FUN_0208CA00 reads it), its siege units (category 6, the other half of the
+// special allowance), the transport manager's live request count
+// ([AI+0x58]+0x14) and how long it has held an empty transport with no
+// request. One line when any of these changes, and every 30 s, at most 96
+// per boot. Active
+// with SG-0091 on or LB_AI_TRANSPORT_LOG=1; it writes nothing to the guest.
+static void ai_transport_log(void) {
+    static int env = -1;
+    if (env < 0) { const char* v = std::getenv("LB_AI_TRANSPORT_LOG"); env = (v && std::atoi(v)) ? 1 : 0; }
+    static unsigned gen = 0, vb = 0;
+    static int lines = 0;
+    static int last[8][5];
+    static unsigned idle_from[8];
+    static bool init = false;
+    if (!init || gen != g_boot_gen) {
+        init = true;
+        gen = g_boot_gen;
+        vb = 0;
+        lines = 0;
+        std::memset(last, 0xFF, sizeof last);
+        std::memset(idle_from, 0, sizeof idle_from);
+    }
+    ++vb;
+    if (!env && !(ai_extra_mask() & 8)) return;
+    if (vb % 60u != 0u || lines >= 96) return;
+    const uint32_t V = bus_read_u32(0x0215697Cu);
+    if (!guest_ptr(V)) return;
+    const uint32_t ar = bus_read_u32(V + 4u);
+    const int32_t n = (int32_t)bus_read_u32(V + 8u);
+    if (!guest_ptr(ar) || n <= 0) return;
+    const uint32_t pool = bus_read_u32(kEntityPoolPtr);
+    const uint32_t parr = guest_ptr(pool) ? bus_read_u32(pool + 8u) : 0u;
+    const int32_t pcnt = guest_ptr(pool) ? (int32_t)bus_read_u32(pool + 0xCu) : 0;
+    for (int32_t i = 0; i < n && i < 8; ++i) {
+        const uint32_t ai = bus_read_u32(ar + 4u * (uint32_t)i);
+        if (!guest_ptr(ai)) continue;
+        const uint8_t owner = bus_read_u8(ai + 0x36u);
+        int owned = 0, loaded = 0, siege = 0, queued = 0, req = -1;
+        for (int32_t k = 0; guest_ptr(parr) && k < pcnt && k < 4096; ++k) {
+            const uint32_t e = bus_read_u32(parr + 4u * (uint32_t)k);
+            if (!guest_ptr(e) || bus_read_u8(e + 0xE4u) != owner || bus_read_u8(e + 0x227u) == 0u) continue;
+            const uint8_t c = entity_category(e);
+            if (c == 5u) {
+                ++owned;
+                if ((int32_t)bus_read_u32(e + 0x104u) > 0) ++loaded;
+            } else if (c == 6u) {
+                ++siege;
+            }
+        }
+        const uint32_t mgr = bus_read_u32(ai + 0x58u);
+        if (guest_ptr(mgr)) req = (int32_t)bus_read_u32(mgr + 0x14u);
+        const uint32_t army = bus_read_u32(ai + 0x50u);
+        const uint32_t list = guest_ptr(army) ? bus_read_u32(army + 0x50u) : 0u;
+        const uint32_t vec = guest_ptr(list) ? bus_read_u32(list) : 0u;
+        const uint32_t varr = guest_ptr(vec) ? bus_read_u32(vec + 4u) : 0u;
+        const int32_t vcnt = guest_ptr(vec) ? (int32_t)bus_read_u32(vec + 8u) : 0;
+        for (int32_t k = 0; guest_ptr(varr) && k < vcnt && k < 64; ++k) {
+            const uint32_t item = bus_read_u32(varr + 4u * (uint32_t)k);
+            const uint32_t w = guest_ptr(item) ? bus_read_u32(item + 8u) : 0u;
+            const uint32_t rec = guest_ptr(w) ? bus_read_u32(w + 8u) : 0u;
+            if (guest_ptr(rec) && bus_read_u8(rec + 0x5Cu) == 5u) ++queued;
+        }
+        const bool idle = owned > loaded && req == 0;
+        if (!idle) idle_from[i] = 0;
+        else if (!idle_from[i]) idle_from[i] = vb;
+        const int now[5] = {owned, loaded, queued, siege, req};
+        const bool every30s = vb % 1800u == 0u;   // and a reminder line every 30 s
+        if (!every30s && std::memcmp(now, last[i], sizeof now) == 0) continue;
+        std::memcpy(last[i], now, sizeof now);
+        ++lines;
+        std::fprintf(stderr, "[lb_aitransport] vb %u AI owner %u: transports %d (loaded %d, queued %d), "
+                     "siege %d, requests %d, empty with no request for %us\n",
+                     vb, (unsigned)owner, owned, loaded, queued, siege, req,
+                     idle_from[i] ? (vb - idle_from[i]) / 60u : 0u);
+        std::fflush(stderr);
+    }
+}
+
 // BR-0040 (docs/464): A HERO ITEM THAT CANNOT BE BUILT STOPS THE BUILDERS.
 // FUN_02094A9C wipes L28 (FUN_0208CB5C: the available AND the used vector)
 // and queues the hero item (priority 100) alone; the builder planner
@@ -18138,6 +18618,165 @@ static void sprite_dump(void) {
     std::fflush(stderr);
 }
 
+// THE MATCH LOG (always on). A report's session log has to say what kind of
+// match it came from, so every battle logs one "[lb_match] start" line (online
+// hosting / joined, Free Play with its opponents and spectating, or a story
+// mission; the map) and one "[lb_match] end" line (time, each team standing or
+// defeated).
+//
+// BR-0073 (docs/477): THE SPRITE POOL. The level load (FUN_020353B4) seats each
+// roster unit's sheets in a pool of 33 slots (pool object [0x02151DD8] +4,
+// slot kind 0x02127B28: per army 11 slots, kinds 0 1 2 3 1 2 3 4 1 2 3: a hero
+// sheet, three triples for categories 1-3, one mounted/building sheet).
+// FUN_0202DD18 hands out the first free slot of the right kind from the army's
+// range on; when there is none it returns one shared overflow word
+// (0x02151DDC). FUN_0202E014 then looks the sheet up in the 33 slots to write
+// the unit's page bytes ([[e+0xE0]+4]+0x2E+4k); an overflow sheet is not
+// there, so its pages stay 0 -- slot 0, the first army's hero sheet. The unit
+// is then drawn from someone else's sheet (the report: a Wolf cycling through
+// Santa's frames). This check reads every sprite unit's page bytes against
+// the kind of slot they name and logs each (owner, blueprint) that is wrong,
+// once, with the pool's fill and the overflow word.
+static const char* match_kind_text(char* buf, size_t cap) {
+    if (lb_net_is_hosting_state()) return "online match (hosting)";
+    if (lobby_joined()) return "online match (joined)";
+    if (free_play_mission()) {
+        const int packed = lb_ai_opp_live();
+        const int extra = packed & 3;
+        std::snprintf(buf, cap, "Free Play, offline, %d computer opponent%s%s", 1 + extra,
+                      extra ? "s" : "", lb_setting_ai_spectate() ? ", spectated (the computer plays the player's side)" : "");
+        return buf;
+    }
+    return "story mission or other (offline)";
+}
+static bool sprite_pages_check(bool first) {
+    const uint32_t pool_obj = bus_read_u32(0x02151DD8u);
+    if (!guest_ptr(pool_obj)) return false;
+    char b[260];
+    if (first) {
+        int used[3] = {0, 0, 0};
+        for (uint32_t i = 0; i < 33u; ++i)
+            if (bus_read_u32(pool_obj + 4u + 4u * i) != 0u) ++used[i / 11u];
+        const uint32_t over = bus_read_u32(0x02151DDCu);
+        std::fprintf(stderr, "[lb_sprpool] %d of 33 sprite slots used (army ranges %d/%d/%d of 11); the shared overflow slot is %s\n",
+                     used[0] + used[1] + used[2], used[0], used[1], used[2],
+                     over ? "IN USE: a sheet found no slot (see [lb_sprpage])" : "empty");
+    }
+    // The rosters, as FUN_020353B4 walks them: world [0x0215540C] +8 teams
+    // (+0xC count); a team's rosters at +0x70 (+0x74 count); a roster's 26
+    // holders (+0x28 -> u16 ids at +0xC, 0xFFFF empty; +8 -> holder array);
+    // a holder's page record at +4 (shared by every army fielding that
+    // blueprint) and its blueprint at +8 (category +0x5C, index +4).
+    struct Unit { uint32_t rec, bp; unsigned owner; uint8_t cat; };
+    std::vector<Unit> units;
+    {
+        const uint32_t world = bus_read_u32(0x0215540Cu);
+        const uint32_t teams = guest_ptr(world) ? bus_read_u32(world + 8u) : 0u;
+        const int32_t nt = guest_ptr(world) ? (int32_t)bus_read_u32(world + 0xCu) : 0;
+        for (int32_t t = 0; guest_ptr(teams) && t < nt && t < 8; ++t) {
+            const uint32_t team = bus_read_u32(teams + 4u * (uint32_t)t);
+            if (!guest_ptr(team)) continue;
+            const uint32_t rl = bus_read_u32(team + 0x70u);
+            const int32_t nr = (int32_t)bus_read_u32(team + 0x74u);
+            for (int32_t r = 0; guest_ptr(rl) && r < nr && r < 8; ++r) {
+                const uint32_t ro = bus_read_u32(rl + 4u * (uint32_t)r);
+                if (!guest_ptr(ro)) continue;
+                const uint32_t ids = bus_read_u32(ro + 0x28u), hs = bus_read_u32(ro + 8u);
+                if (!guest_ptr(ids) || !guest_ptr(hs)) continue;
+                for (uint32_t k = 0; k < 26u; ++k) {
+                    if (bus_read_u16(ids + 0xCu + 2u * k) == 0xFFFFu) continue;
+                    const uint32_t h = bus_read_u32(hs + 4u * k);
+                    if (!guest_ptr(h)) continue;
+                    const uint32_t rec = bus_read_u32(h + 4u), bp = bus_read_u32(h + 8u);
+                    if (!guest_ptr(rec) || !guest_ptr(bp)) continue;
+                    units.push_back({rec, bp, (unsigned)t, bus_read_u8(bp + 0x5Cu)});
+                }
+            }
+        }
+    }
+    static uint32_t said[64];
+    static int nsaid = 0;
+    if (first) nsaid = 0;
+    bool bad_any = false;
+    for (const Unit& u : units) {
+        const uint32_t rec = u.rec;
+        const uint8_t cat = u.cat;
+        if (cat > 4u) continue;   // 3D specials and buildings are not checked
+        uint8_t pg[11];
+        for (uint32_t k = 0; k < 11u; ++k) pg[k] = bus_read_u8(rec + 0x2Eu + 4u * k);
+        const bool triple = pg[1] != pg[0] || pg[6] != pg[0];
+        // Want: a triple 1 / 2 / 3; one sheet: 0 for a hero, else 4 (mounted),
+        // or a triple's first kind when a category 1-3 unit's sheets coincide.
+        auto kind = [](uint8_t p) { return p < 33u ? (int)bus_read_u32(0x02127B28u + 4u * p) : -1; };
+        const int k0 = kind(pg[0]), k1 = kind(pg[1]), k6 = kind(pg[6]);
+        bool ok;
+        if (triple) ok = k0 == 1 && k1 == 2 && k6 == 3;
+        else if (cat == 0u) ok = k0 == 0;
+        else ok = k0 == 4 || (cat >= 1u && cat <= 3u && k0 == 1);
+        // A creature drawn as Mounted/Hero is seated as a triple (docs/438).
+        if (!ok && triple && (cat == 0u || cat == 4u)) ok = k0 == 1 && k1 == 2 && k6 == 3;
+        if (ok) continue;
+        bad_any = true;
+        const unsigned bpi = (unsigned)bus_read_u16(u.bp + 4u);
+        const uint32_t key = (bpi << 8) | u.owner;
+        bool seen = false;
+        for (int s = 0; s < nsaid; ++s) seen = seen || said[s] == key;
+        if (seen || nsaid >= 64) continue;
+        said[nsaid++] = key;
+        std::snprintf(b, sizeof b,
+                      "[lb_sprpage] army %u blueprint %u (category %u): page slots %u/%u/%u are kinds %d/%d/%d -- "
+                      "drawn from another unit's sheet (the sprite pool ran out, BR-0073)\n",
+                      u.owner, bpi, (unsigned)cat, pg[0], pg[1], pg[6], k0, k1, k6);
+        std::fputs(b, stderr);
+    }
+    std::fflush(stderr);
+    return bad_any;
+}
+static void match_log_tick(void) {
+    static bool in = false;
+    static uint32_t frames = 0;
+    int cx = 0, cy = 0;
+    const bool now = lb_field_camera(&cx, &cy);
+    char kb[200];
+    if (now && !in) {
+        in = true;
+        frames = 0;
+        const char* map = lb_level_map_name();
+        const char* stem = lb_level_map_stem();
+        std::fprintf(stderr, "[lb_match] start: %s; map \"%s\" (%s)\n", match_kind_text(kb, sizeof kb),
+                     map ? map : "?", stem ? stem : "?");
+        // BR-0067: the interface sounds' owner tests compare a team's id byte
+        // (+0x14) with the local player's (session +100 -> FUN_02088144).
+        std::string ids;
+        for (uint32_t h = 0; h < 4u; ++h) {
+            const uint32_t t = aiopp_team(h);
+            if (t) ids += " team " + std::to_string(h) + " id " + std::to_string(bus_read_u8(t + 0x14u)) + ";";
+        }
+        std::fprintf(stderr, "[lb_match] local player handle %u;%s\n", bus_read_u32(kSession + 100u), ids.c_str());
+        std::fflush(stderr);
+        return;
+    }
+    if (!now && in) {
+        in = false;
+        std::string teams;
+        for (uint32_t h = 0; h < 4u; ++h) {
+            const uint32_t t = aiopp_team(h);
+            if (!t) continue;
+            teams += " team " + std::to_string(h) + (bus_read_u32(t + 0x9Cu) ? " defeated;" : " standing;");
+        }
+        std::fprintf(stderr, "[lb_match] end after %us: %s;%s\n", frames / 60u, match_kind_text(kb, sizeof kb),
+                     teams.c_str());
+        std::fflush(stderr);
+        return;
+    }
+    if (!in) return;
+    ++frames;
+    // The pool is seated during the load: check a second in, then every 10 s
+    // (units of a kind first trained later are covered then).
+    if (frames == 60u) sprite_pages_check(true);
+    else if (frames % 600u == 0u) sprite_pages_check(false);
+}
+
 static void bp_census(void) {
     static const int secs = [] {
         const char* v = std::getenv("LB_BPCENSUS");
@@ -19088,6 +19727,8 @@ extern "C" void lb_patches_on_vblank(void) {
     apply_ai_hero_rebuild();
     apply_ai_shipyards();   /* SG-0078 */
     apply_ai_keep_bridges();          // SG-0089, docs/472
+    apply_ai_transports_on_request(); // SG-0091, docs/478
+    ai_transport_log();               // docs/478 test aid, read only
     apply_ai_hero_unstick();          // BR-0040
     apply_ai_more_mines();            // SG-0032, SG-0071
     apply_ai_hero_multi();
@@ -19113,6 +19754,7 @@ extern "C" void lb_patches_on_vblank(void) {
     apply_aihero_kill();              // docs/406 test aid
     bp_census();                      // docs/410 test aid
     sprite_dump();                    // mount picture bug test aid
+    match_log_tick();                 // match start/end + BR-0073 page check
     creature_tint_prepare();          // docs/437
     portrait_tint_refresh();          // docs/454
     apply_insn_hook_policy();

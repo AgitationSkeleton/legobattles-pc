@@ -1582,7 +1582,14 @@ extern "C" int lb_teams_is_king_default(int bp) { return king_default(bp) ? 1 : 
 // not bought, 2 fieldable. The army screen's own tests: unlocked is FUN_020EB658
 // (the minifig's +0x6B clear, or its bit in mgr+4 or mgr+0x24), bought is
 // FUN_020EB5B4 (its bit in mgr+0x34).
+extern "C" int lb_cunits_unlock_with(int bp);   /* lb_cunits.cpp, SG-0096 */
 extern "C" int lb_teams_unit_state(int bp) {
+    // SG-0096: a custom unit tied to a stock unit's unlock is unlocked with it
+    // (and needs no buying of its own).
+    if (const int uw = lb_cunits_unlock_with(bp); uw > 0) {
+        const int s = lb_teams_unit_state(uw);
+        return s < 0 ? -1 : s == 0 ? 0 : 2;
+    }
     const Cand* c = find_cand(bp, nullptr);
     const uint32_t mgr = bus_read_u32(kUnlockMgr);
     if (!c || !guest_ptr(mgr) || !lb_patches_blueprint_base()) return -1;
@@ -2103,6 +2110,7 @@ extern "C" int lb_teams_card_listable(int unit) {
     if (unit >= 551) {
         const int s = custom_slot(unit);
         if (s < 0 || s > 4) return -1;
+        if (lb_teams_unit_state(unit) == 0) return 0;   // SG-0096: not unlocked on this save
         return 1;   // the window (lb_teams_army_window) keeps a list to 25
     }
     if (!g_cards_applied) return -1;
@@ -2113,6 +2121,7 @@ extern "C" int lb_teams_card_listable(int unit) {
 extern "C" int lb_teams_card_tier(int unit) {
     if (unit >= 551) {   // docs/448: Special One/Two/Three 1..3, Transport 4 (FUN_020EB21C)
         const int s = custom_slot(unit);
+        if (s >= 5 && s <= 8 && lb_teams_unit_state(unit) == 0) return 0;   // SG-0096: no slot's tier is 0
         return s >= 5 && s <= 8 ? s - 4 : -1;
     }
     if (!g_cards_applied) return -1;

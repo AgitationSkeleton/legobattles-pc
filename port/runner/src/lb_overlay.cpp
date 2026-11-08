@@ -330,6 +330,7 @@ struct Settings {
     bool ai_finish_upgrades = false; // BR-0070 (docs/472): the AI does not re-order a tower that is upgrading
     bool ai_keep_bridges = false;   // SG-0089 (docs/472): the AI never retires its bridges
     bool ai_stuck_bridges = false;  // SG-0090 (docs/472): the AI's need-driven bridges on every map
+    bool ai_transports_on_request = false;  // SG-0091 (docs/478): no transport nobody asked for
     // docs/408: a hotwired transport stops taking its old owner's orders
     // (lb_patches.cpp, release_stolen_transport).
     bool transport_release = false;
@@ -440,6 +441,8 @@ struct Settings {
     int  notify_sound = 1;         // 0 off, 1 Group set (default) .. 8 Magic
     int  notify_volume = 60;       // percent
     int  cunit_volume = 100;       // BR-0047: custom unit sounds, percent of the normalised level
+    bool own_research_sound = true;   // BR-0067: research chimes only for this player's own army
+    bool hide_fogged_specials = true; // BR-0063: enemy specials hidden while their cell is fogged
 
     // Cosmetic, CLIENT-LOCAL (docs/356): what this machine's text calls the
     // Space Criminal Leader -- 0 the cartridge's own words, 1 Kranxx,
@@ -797,6 +800,8 @@ extern "C" void lb_settings_save(void) {
                   g_set.ai_keep_bridges ? "true" : "false"); o += buf;   // SG-0089
     std::snprintf(buf, sizeof buf, "  \"ai_stuck_bridges\": %s,\n",
                   g_set.ai_stuck_bridges ? "true" : "false"); o += buf;   // SG-0090
+    std::snprintf(buf, sizeof buf, "  \"ai_transports_on_request\": %s,\n",
+                  g_set.ai_transports_on_request ? "true" : "false"); o += buf;   // SG-0091
     std::snprintf(buf, sizeof buf, "  \"transport_release\": %s,\n",
                   g_set.transport_release ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"creatures\": %s,\n",
@@ -868,6 +873,10 @@ extern "C" void lb_settings_save(void) {
                   g_set.notify_volume); o += buf;
     std::snprintf(buf, sizeof buf, "  \"cunit_volume\": %d,\n",
                   g_set.cunit_volume); o += buf;   // BR-0047
+    std::snprintf(buf, sizeof buf, "  \"own_research_sound\": %s,\n",
+                  g_set.own_research_sound ? "true" : "false"); o += buf;   // BR-0067
+    std::snprintf(buf, sizeof buf, "  \"hide_fogged_specials\": %s,\n",
+                  g_set.hide_fogged_specials ? "true" : "false"); o += buf;   // BR-0063
     std::snprintf(buf, sizeof buf, "  \"criminal_leader_name\": %d,\n",
                   g_set.criminal_leader_name); o += buf;
     std::snprintf(buf, sizeof buf, "  \"plantation_name\": %d,\n",
@@ -1095,6 +1104,7 @@ extern "C" void lb_settings_load(void) {
     json_get_bool(s, "ai_finish_upgrades", &g_set.ai_finish_upgrades);   // BR-0070
     json_get_bool(s, "ai_keep_bridges", &g_set.ai_keep_bridges);         // SG-0089
     json_get_bool(s, "ai_stuck_bridges", &g_set.ai_stuck_bridges);       // SG-0090
+    json_get_bool(s, "ai_transports_on_request", &g_set.ai_transports_on_request);   // SG-0091
     json_get_bool(s, "transport_release", &g_set.transport_release);
     json_get_bool(s, "creatures", &g_set.creatures);   // docs/410
     json_get_bool(s, "creature_tint", &g_set.creature_tint);   // docs/437
@@ -1143,6 +1153,8 @@ extern "C" void lb_settings_load(void) {
     g_set.notify_sound = std::max(0, std::min(8, g_set.notify_sound));
     g_set.notify_volume = std::max(0, std::min(100, g_set.notify_volume));
     json_get_int(s, "cunit_volume", &g_set.cunit_volume);   // BR-0047
+    json_get_bool(s, "own_research_sound", &g_set.own_research_sound);   // BR-0067
+    json_get_bool(s, "hide_fogged_specials", &g_set.hide_fogged_specials);   // BR-0063
     g_set.cunit_volume = std::max(0, std::min(200, g_set.cunit_volume));
     // A file written before this key existed keeps the default (off).
     json_get_int(s, "criminal_leader_name", &g_set.criminal_leader_name);
@@ -1606,6 +1618,15 @@ void tab_display() {
     help("Draws ships, siege and special units with smooth edges and no\n"
          "dark outline. Only you see it.");
     badge(WIRED);
+    // BR-0063 (docs/477): the cartridge draws a transport or siege unit when
+    // any corner of its model's box is in sight, so one standing in the fog
+    // shows through it.
+    ImGui::Checkbox("Hide Enemy Specials in Fog", &g_set.hide_fogged_specials);
+    help("The game draws another army's ships, siege and special units when any\n"
+         "part of the model is near ground you can see, so they show through the\n"
+         "fog. On, one is drawn only when the ground it stands on is in sight,\n"
+         "as for every other unit. Off, as on the DS. Only you see it.");
+    badge(WIRED);
 
     // docs/434 (BR-0003): the 3D layer drawn at a higher resolution, so the
     // models are sharp when the picture is shown larger than the game draws it.
@@ -1923,6 +1944,17 @@ void tab_enhancements() {
          "it does this on every map, up to three bridges. It still bridges\n"
          "only when stuck (Bridges On Any Map bridges anyway). Free Play\n"
          "only.");
+    badge(WIRED);
+    // SG-0091 (docs/478): the category picker FUN_0208BF90 trains a transport
+    // on spec on maps with many AI build sites; it moves only when a squad
+    // cannot walk to its goal, and it takes one of the four special slots.
+    ImGui::Checkbox("The AI Builds Transports Only When Needed", &g_set.ai_transports_on_request);
+    help("Normally the computer builds a transport on maps with many AI\n"
+         "build sites even when it can walk everywhere, and the transport\n"
+         "then sits idle, using one of its special unit slots. On, it\n"
+         "builds a transport only when it needs to cross water, and uses\n"
+         "the slot for a siege unit instead. Transports it already has are\n"
+         "kept. Free Play only.");
     badge(WIRED);
     // SG-0002: AI vs AI.
     ImGui::Checkbox("AI Plays My Side (Spectate)", &g_set.ai_spectate);
@@ -5108,6 +5140,15 @@ void tab_music() {
     ImGui::SliderInt("Custom Unit Sound Volume", &g_set.cunit_volume, 0, 200, "%d%%");
     help("How loud custom units' own sounds play. 100% is the level every\n"
          "custom sound is normalised to, close to the game's own effects.\n"
+         "Only you hear this; it is not sent to other players.");
+    badge(WIRED);
+    ImGui::Spacing();
+    // BR-0067 (docs/477): the cartridge plays the "upgrade complete" chime
+    // for every army's upgrades, wherever they are.
+    ImGui::Checkbox("Hear Only Your Own Upgrades", &g_set.own_research_sound);
+    help("The game plays the \"upgrade complete\" chime for every army's\n"
+         "upgrades, the computers' included, wherever they are on the map.\n"
+         "On, you hear it only for your own. Off, as on the DS.\n"
          "Only you hear this; it is not sent to other players.");
     badge(WIRED);
     ImGui::Spacing();
@@ -9489,6 +9530,24 @@ extern "C" int lb_setting_notify_sound(void) { return g_set.notify_sound; }
 extern "C" int lb_setting_notify_volume(void) { return g_set.notify_volume; }
 
 // BR-0047: custom unit sound volume, 0..200 percent. LB_CUNIT_VOLUME forces it.
+// BR-0063: LB_HIDE_FOGGED_SPECIALS=0|1 forces it.
+extern "C" int lb_setting_hide_fogged_specials(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_HIDE_FOGGED_SPECIALS");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.hide_fogged_specials ? 1 : 0);
+}
+// BR-0067: LB_OWN_RESEARCH_SOUND=0|1 forces it.
+extern "C" int lb_setting_own_research_sound(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_OWN_RESEARCH_SOUND");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.own_research_sound ? 1 : 0);
+}
 extern "C" int lb_setting_cunit_volume(void) {
     static const char* v = std::getenv("LB_CUNIT_VOLUME");
     if (v) return std::max(0, std::min(200, std::atoi(v)));
@@ -10957,6 +11016,16 @@ extern "C" int lb_setting_ai_stuck_bridges(void) {
     return forced >= 0 ? forced : (g_set.ai_stuck_bridges ? 1 : 0);
 }
 
+// SG-0091 (docs/478): LB_AI_TRANSPORTS=0|1 forces it.
+extern "C" int lb_setting_ai_transports_on_request(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_AI_TRANSPORTS");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.ai_transports_on_request ? 1 : 0);
+}
+
 // docs/406: the rule flags a host sends its players (lb_teams.cpp).
 extern "C" int lb_rules_local_flags(void) {
     return (lb_setting_emp_transports() ? LB_RULE_EMP_TRANSPORTS : 0) |
@@ -11689,6 +11758,7 @@ extern "C" const char* lb_net_lobby_options_json(void) {
     kv.push_back({"AI finishes tower upgrades", g_set.ai_finish_upgrades ? "On" : "Off"});  // BR-0070
     kv.push_back({"AI keeps its bridges", g_set.ai_keep_bridges ? "On" : "Off"});          // SG-0089
     kv.push_back({"AI bridges when stuck", g_set.ai_stuck_bridges ? "On" : "Off"});        // SG-0090
+    kv.push_back({"AI transports only when needed", g_set.ai_transports_on_request ? "On" : "Off"});  // SG-0091
     kv.push_back({"Hotwired transports leave", g_set.transport_release ? "On" : "Off"});
     kv.push_back({"Attack boost reaches ranged",
                   g_set.attack_boost_ranged >= 2 ? "On, no blast"

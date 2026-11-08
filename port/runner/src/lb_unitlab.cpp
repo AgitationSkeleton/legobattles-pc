@@ -38,6 +38,7 @@
 #include <array>
 #include <atomic>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
@@ -605,6 +606,9 @@ const Field kFields[] = {
     // docs/463: the port's capability bytes (the record's padding, stock 0xA2).
     {"mountains", 0x79, 1}, {"hotwire_immune", 0x7A, 1}, {"emp_immune", 0x7B, 1},
     {"esp_immune", 0x22, 1}, {"construction_style", 0x23, 1},
+    // SG-0093 (docs/476): where a transport or special is trained, 0 auto,
+    // 1 Special Factory, 2 Shipyard (padding byte, stock 0xA2 reads as 0).
+    {"trained_at", 0x5B, 1},
     {"display_name_id", 0x06, 2},
 };
 
@@ -615,9 +619,15 @@ int port_field_max(const char* key) {
     if (!std::strcmp(key, "mountains")) return 1;
     // SG-0073 (docs/470): 0 normal, 1 immune, 2 always affected.
     if (!std::strcmp(key, "hotwire_immune") || !std::strcmp(key, "emp_immune") ||
-        !std::strcmp(key, "esp_immune"))
+        !std::strcmp(key, "esp_immune") || !std::strcmp(key, "trained_at"))
         return 2;
     return !std::strcmp(key, "construction_style") ? 3 : 0;
+}
+// The names of a three-way field's values.
+const char* const* port_field_names(const char* key) {
+    static const char* const kTri[3] = {"Normal", "Immune", "Always"};
+    static const char* const kTrained[3] = {"Automatic", "Special Factory", "Shipyard"};
+    return !std::strcmp(key, "trained_at") ? kTrained : kTri;
 }
 long fold_port_value(const char* key, long v) {
     const int mx = port_field_max(key);
@@ -639,6 +649,15 @@ const char* port_field_tip(const char* key) {
         return "Normal: the stock rule (ESP stuns heroes, builders, foot and mounted units).\n"
                "Immune: the ESP spell skips this unit.\n"
                "Always: ESP stuns it whatever its kind.";
+    if (!std::strcmp(key, "trained_at"))
+        return "Which building trains it (transports and siege/special units only).\n"
+               "Automatic: the stock rule -- a unit that moves only on water comes from the\n"
+               "Shipyard, every other one from the Special Factory.\n"
+               "Special Factory / Shipyard: only that building lists it, for you and for the\n"
+               "computer players. The computer trains it only once it owns that building.\n"
+               "Where it comes out still follows its movement: give a Shipyard unit Water and a\n"
+               "Special Factory unit Land, or it may find nowhere to stand when it is trained\n"
+               "(the cost is then lost). Not checked in play for every case yet.";
     return "The brick animation shown while this unit is trained.\n"
            "Auto: its faction's (a custom unit is Human). Skeleton is the Wizards', Alien the Aliens'.";
 }
@@ -683,7 +702,10 @@ const HowStep kHowTo[] = {
      "health, speed, damage and the rest; values are kept within what the game can\n"
      "store. The Stats tab names the projectile and spells, and has tick boxes for\n"
      "mountains (walk over cliffs) and immunity to Hotwire, EMP and ESP, and a\n"
-     "construction style for the brick animation when it is trained.\n"
+     "construction style for the brick animation when it is trained. A transport or\n"
+     "siege unit can say where it is trained (\"trained_at\": 0 automatic, 1 Special\n"
+     "Factory, 2 Shipyard). The Damage box under the values estimates its damage per\n"
+     "second and how long it takes to beat a few stock units.\n"
      "\"index\" is the unit it was made from:\n"
      "leave it. The other entries (sheets, animations, raw_record) are for reference\n"
      "and are not read back."},
@@ -701,7 +723,9 @@ const HowStep kHowTo[] = {
      "is laid over the sheet."},
     {"Re-skin a model (transports and siege)",
      "Edit model/texture.png and keep its size. The model's shape stays the stock\n"
-     "one."},
+     "one. Use at most 16 colours. The exported texture's three team blues stay\n"
+     "the owner's team colour in play: keep them exactly where the team colour\n"
+     "should show. The texture must be a PNG (a .tga is not read)."},
     {"Portraits",
      "portraits/head.png is the small round head on the army screen, the Team\n"
      "Builder and the top screen (any size, fitted to 24x24). portraits/card.png and\n"
@@ -1298,6 +1322,7 @@ struct Edit {
     char name[25] = "";
     char ingame[25] = "";       // SG-0053: "display_name", the name the game shows
     char credits[61] = "";      // SG-0070: "credits", the collaborators
+    int unlock_with = 0;        // SG-0096: "unlocked_with", a stock unit, 0 always available
     std::string asset;
     long field[sizeof kFields / sizeof kFields[0]] = {};
     bool has[sizeof kFields / sizeof kFields[0]] = {};
@@ -1312,6 +1337,14 @@ void edit_open(const Mine& m, const Rec& tmpl) {
     std::snprintf(e.name, sizeof e.name, "%s", json_get_s(j, "name").c_str());
     std::snprintf(e.ingame, sizeof e.ingame, "%s", json_get_s(j, "display_name").c_str());
     std::snprintf(e.credits, sizeof e.credits, "%s", credits_clean(json_get_s(j, "credits")).c_str());
+    {
+        size_t b, en;
+        const size_t fb0 = j.find("\"fields\"");
+        if (json_value_at(j, 0, fb0 == std::string::npos ? j.size() : fb0, "unlocked_with", &b, &en)) {
+            const long v = std::atol(j.c_str() + b);
+            e.unlock_with = v > 0 && v < 182 ? (int)v : 0;
+        }
+    }
     e.asset = json_get_s(j, "asset");
     if (e.asset.empty()) e.asset = tmpl.asset;
     size_t fb, fe;
@@ -1338,6 +1371,18 @@ bool edit_save() {
     if (g_edit.credits[0] || !json_get_s(j, "credits").empty())
         json_set_s(j, "credits", credits_clean(g_edit.credits));
     json_set_s(j, "asset", g_edit.asset);
+    {   // SG-0096: a top-level number; written when set, or to clear an old one
+        size_t b, en;
+        const size_t fb0 = j.find("\"fields\"");
+        const std::string v = std::to_string(g_edit.unlock_with);
+        if (json_value_at(j, 0, fb0 == std::string::npos ? j.size() : fb0, "unlocked_with", &b, &en)) {
+            j.replace(b, en - b, v);
+        } else if (g_edit.unlock_with > 0) {
+            const size_t ib = j.find("\"index\"");
+            const size_t nl = ib == std::string::npos ? std::string::npos : j.find('\n', ib);
+            if (nl != std::string::npos) j.insert(nl + 1, "  \"unlocked_with\": " + v + ",\n");
+        }
+    }
     size_t fb, fe;
     if (!fields_span(j, &fb, &fe)) {
         const size_t last = j.rfind('}');
@@ -1458,8 +1503,8 @@ bool draw_named_field(size_t i, const std::vector<Rec>& rs) {
         if (pmax == 1) {
             bool on = g_edit.field[i] == 1;
             if (ImGui::Checkbox(key, &on)) g_edit.field[i] = on ? 1 : 0;
-        } else if (pmax == 2) {   // SG-0073: Normal / Immune / Always
-            static const char* const kTri[3] = {"Normal", "Immune", "Always"};
+        } else if (pmax == 2) {   // SG-0073: Normal / Immune / Always; SG-0093: trained_at
+            const char* const* kTri = port_field_names(key);
             const int cur = (int)std::clamp<long>(g_edit.field[i], 0, 2);
             ImGui::SetNextItemWidth(180.0f);
             if (ImGui::BeginCombo(key, kTri[cur])) {
@@ -1504,6 +1549,122 @@ bool draw_named_field(size_t i, const std::vector<Rec>& rs) {
     return true;
 }
 
+// ── SG-0095: the damage readout (docs/476) ───────────────────────────────────
+// docs/20: melee damage +0x68 is the minimum and +0x6A the spread (maximum =
+// min + spread); a projectile's hit damage is its +0x6C..+0x6E (min, max); the
+// attack interval +0x6D is in 30 Hz game ticks; DPS = average x 30 / interval
+// (it reproduces a community stat sheet's DPS column on 19 of 22 units).
+struct ProjDamage { bool ok = false; int hmin = 0, hmax = 0, imin = 0, imax = 0; bool explodes = false; };
+ProjDamage projectile_damage(int p) {
+    static std::vector<uint8_t> e;
+    static bool loaded = false;
+    if (!loaded) { loaded = true; e = rom_file("BP/Entities.ebp"); }
+    ProjDamage d;
+    if (p < kUnits || p >= kUnits + 27 || e.size() < kPool) return d;
+    const size_t r = 4 + (size_t)kUnits * 0x7C + (size_t)(p - kUnits) * 0x74;
+    auto u16 = [&](size_t a) { return (int)(e[a] | (e[a + 1] << 8)); };
+    d.ok = true;
+    d.hmin = u16(r + 0x6C);
+    d.hmax = u16(r + 0x6E);
+    d.imin = u16(r + 0x70);
+    d.imax = u16(r + 0x72);
+    d.explodes = e[r + 0x6B] != 0;
+    return d;
+}
+struct DmgIn { int cat = 0; long melee = 0, spread = 0, interval = 0, proj = 65535; };
+void draw_damage(const DmgIn& in) {
+    ImGui::SeparatorText("Damage (estimate)");
+    const bool ranged = in.proj != 65535;
+    const ProjDamage pd = ranged ? projectile_damage((int)in.proj) : ProjDamage{};
+    int lo = 0, hi = 0;
+    if (ranged) {
+        if (!pd.ok) {
+            ImGui::TextDisabled("Its projectile (%ld) is not one of the 27 stock projectile records.", in.proj);
+            return;
+        }
+        lo = pd.hmin;
+        hi = std::max(pd.hmin, pd.hmax);
+    } else {
+        lo = (int)in.melee;
+        hi = (int)(in.melee + in.spread);
+    }
+    if (in.interval <= 0 || hi <= 0) {
+        ImGui::TextDisabled("Does not attack (no damage, or an attack interval of 0).");
+        return;
+    }
+    const double avg = (lo + hi) / 2.0;
+    const double secs = in.interval / 30.0;
+    const double dps = avg / secs;
+    ImGui::Text("%s %d-%d per hit (average %.1f), a hit every %ld ticks (%.2f s)", ranged ? "Projectile hit" : "Melee",
+                lo, hi, avg, in.interval, secs);
+    ImGui::Text("Damage per second: %.1f  (%.1f to %.1f)", dps, lo / secs, hi / secs);
+    std::string tip =
+        "From the values above: average damage x 30 / attack interval. The attack interval is in\n"
+        "game ticks, 30 a second. Melee damage is the least a hit does and the spread is added\n"
+        "on top at most (a random roll in between).\n"
+        "Not counted: walking to the target, the time before the first hit, Attack or Armour\n"
+        "Boost and other spells, and units that stop hitting when the target moves away.";
+    if (ranged) {
+        tip += "\n\nA ranged unit's damage is its projectile's \"hit\" damage, read from the cartridge's\n"
+               "own projectile record. A Balance pack or the Balance menu can change it in game;\n"
+               "the spare records (202-205, 208) may be given the Arrow's numbers in game\n"
+               "(docs/438). Flight time and misses are not counted.";
+        if (pd.explodes)
+            tip += "\nIt explodes: units near the target also take its impact damage (" + std::to_string(pd.imin) + "-" +
+                   std::to_string(std::max(pd.imin, pd.imax)) + "), which this does not add.";
+        if (in.melee > 0)
+            tip += "\nIt also has melee damage; whether a unit with a projectile ever uses it is not\n"
+                   "checked (no stock unit has both). Only the projectile is counted.";
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?)");
+    ImGui::SetItemTooltip("%s", tip.c_str());
+    // Time to beat a few stock units of the King's army, at their stock health.
+    static const int kRefs[] = {2, 3, 4, 5, 0, 7, 9, 16, 10};
+    const std::vector<Rec>& rs = records();
+    if (ImGui::BeginTable("##ttk", 4, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg)) {
+        ImGui::TableSetupColumn("Against");
+        ImGui::TableSetupColumn("Health");
+        ImGui::TableSetupColumn("Hits");
+        ImGui::TableSetupColumn("Seconds");
+        ImGui::TableHeadersRow();
+        for (int idx : kRefs) {
+            if (idx >= (int)rs.size()) continue;
+            const Rec& r = rs[(size_t)idx];
+            const int hp = r.raw[0x62] | (r.raw[0x63] << 8);
+            if (hp <= 0) continue;
+            const int hits = (int)std::ceil(hp / avg);
+            const int best = (int)std::ceil(hp / (double)hi), worst = lo > 0 ? (int)std::ceil(hp / (double)lo) : 0;
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(r.name.c_str());
+            ImGui::TableNextColumn();
+            ImGui::Text("%d", hp);
+            ImGui::TableNextColumn();
+            if (worst > 0 && worst != best) ImGui::Text("%d (%d-%d)", hits, best, worst);
+            else ImGui::Text("%d", hits);
+            ImGui::TableNextColumn();
+            ImGui::Text("%.1f", hits * secs);
+        }
+        ImGui::EndTable();
+    }
+    ImGui::TextDisabled("Hits at the average roll (fewest-most in brackets); seconds = hits x attack interval / 30.\n"
+                        "Health is the cartridge's stock value; a Balance pack may change it.");
+}
+long edit_value(const char* key) {
+    for (size_t i = 0; i < sizeof kFields / sizeof kFields[0]; ++i)
+        if (!std::strcmp(kFields[i].key, key)) return g_edit.field[i];
+    return 0;
+}
+long raw_value(const Rec& r, const char* key) {
+    for (size_t i = 0; i < sizeof kFields / sizeof kFields[0]; ++i) {
+        if (std::strcmp(kFields[i].key, key)) continue;
+        long v = 0;
+        for (int k = 0; k < kFields[i].width; ++k) v |= (long)r.raw[(size_t)(kFields[i].off + k)] << (8 * k);
+        return v;
+    }
+    return 0;
+}
+
 // The Stats tab of a custom unit: its name, the stock art it starts from and
 // every known value, saved into unit.json by the Save button above the tabs.
 void draw_edit_fields(const Mine& m, const std::vector<Rec>& rs) {
@@ -1522,6 +1683,28 @@ void draw_edit_fields(const Mine& m, const std::vector<Rec>& rs) {
     ImGui::SetItemTooltip("Who helped make this unit. Shown with the unit under Community units\n"
                           "and sent when you share it. Letters, digits, spaces and _ - ' . , & ! ?,\n"
                           "at most 60, no swearing.");
+    {   // SG-0096 (docs/477)
+        const std::string none = "Always available";
+        const std::string cur_u = g_edit.unlock_with > 0 && g_edit.unlock_with < (int)rs.size()
+                                      ? rs[(size_t)g_edit.unlock_with].name + " (" +
+                                            std::to_string(g_edit.unlock_with) + ")"
+                                      : none;
+        ImGui::SetNextItemWidth(260.0f);
+        if (ImGui::BeginCombo("Unlocked with", cur_u.c_str())) {
+            if (ImGui::Selectable(none.c_str(), g_edit.unlock_with == 0)) g_edit.unlock_with = 0;
+            for (size_t i = 1; i < rs.size() && i < 182; ++i) {
+                if (rs[i].category > 6) continue;   // units only
+                const std::string label = rs[i].name + " (" + std::to_string(i) + ")##uw" + std::to_string(i);
+                if (ImGui::Selectable(label.c_str(), g_edit.unlock_with == (int)i)) g_edit.unlock_with = (int)i;
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SetItemTooltip("You can pick this unit for your army only once the chosen stock unit\n"
+                              "is unlocked on your save: the Queen after the King campaign, the\n"
+                              "Sheriff with every Pirate minikit, and so on. Always available: as\n"
+                              "before. The computer's armies are not limited. Takes effect when\n"
+                              "custom units are loaded again.");
+    }
     const auto choices = asset_choices(rs, t);
     std::string cur = g_edit.asset;
     for (const auto& c : choices)
@@ -1538,7 +1721,12 @@ void draw_edit_fields(const Mine& m, const std::vector<Rec>& rs) {
         for (size_t i = 0; i < sizeof kFields / sizeof kFields[0]; ++i) {
             if (std::strcmp(kFields[i].key, "display_name_id") == 0) continue;
             ImGui::TableNextColumn();
-            if (draw_named_field(i, rs)) continue;
+            // SG-0093: only a transport or special is listed at a factory or shipyard.
+            const bool off = std::strcmp(kFields[i].key, "trained_at") == 0 && t.category != 5 && t.category != 6;
+            if (off) ImGui::BeginDisabled();
+            const bool named = draw_named_field(i, rs);
+            if (off) ImGui::EndDisabled();
+            if (named) continue;
             const long mx = kFields[i].width == 1 ? 255L : kFields[i].width == 2 ? 65535L : 0x7FFFFFFFL;
             int v = (int)std::min<long>(g_edit.field[i], 0x7FFFFFFFL);
             ImGui::SetNextItemWidth(140.0f);
@@ -1546,6 +1734,13 @@ void draw_edit_fields(const Mine& m, const std::vector<Rec>& rs) {
         }
         ImGui::EndTable();
     }
+    DmgIn d;
+    d.cat = t.category;
+    d.melee = edit_value("melee_damage");
+    d.spread = edit_value("melee_spread");
+    d.interval = edit_value("attack_interval");
+    d.proj = edit_value("projectile");
+    draw_damage(d);
 }
 
 // A stock unit's values, to read (a custom unit made from it starts with them).
@@ -1564,11 +1759,20 @@ void draw_stock_fields(const Rec& r) {
                 ImGui::TextUnformatted(projectile_label((int)v, records()).c_str());
             else if (std::strncmp(kFields[i].key, "spell_", 6) == 0)
                 ImGui::TextUnformatted(spell_label((int)v).c_str());
+            else if (std::strcmp(kFields[i].key, "trained_at") == 0)
+                ImGui::TextUnformatted(port_field_names("trained_at")[std::min<uint32_t>(v, 2u)]);
             else
                 ImGui::Text("%u", (unsigned)v);
         }
         ImGui::EndTable();
     }
+    DmgIn d;
+    d.cat = r.category;
+    d.melee = raw_value(r, "melee_damage");
+    d.spread = raw_value(r, "melee_spread");
+    d.interval = raw_value(r, "attack_interval");
+    d.proj = raw_value(r, "projectile");
+    draw_damage(d);
 }
 
 void start_share(const Mine& m, const std::vector<Rec>& rs);   // below

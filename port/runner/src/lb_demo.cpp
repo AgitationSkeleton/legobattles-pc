@@ -256,7 +256,7 @@ int g_rec_mines = 0, g_demo_mines = 0;     // kind 22, SG-0032: the AI builds mo
 int g_rec_cross = 0, g_demo_cross = 0;     // kind 23, SG-0051: the computers hunt each other (0 stock)
 int g_rec_bridges = 0, g_demo_bridges = 0; // kind 24, SG-0071: the AI bridges any map (0 stock)
 int g_rec_yards = 0, g_demo_yards = 0;     // kind 25, SG-0078: AI shipyard sites on any map (0 stock)
-int g_rec_aix = 0, g_demo_aix = 0;         // kind 26, docs/472: AI mask (1 finish upgrades, 2 keep bridges, 4 stuck bridges; 0 stock)
+int g_rec_aix = 0, g_demo_aix = 0;         // kind 26, docs/472: AI mask (1 finish upgrades, 2 keep bridges, 4 stuck bridges, 8 transports on request (docs/478); 0 stock)
 // BR-0011: kinds 14 and 15, the attack boost and the healing fix, from
 // `sets=4`; a recording before it leaves them to this machine (-1).
 int g_rec_atk = 0, g_demo_atk = -1;
@@ -994,7 +994,7 @@ extern "C" void lb_demo_tick(void) {
             else if (e.a == 23) g_demo_cross = e.b ? 1 : 0;   // SG-0051
             else if (e.a == 24) g_demo_bridges = e.b ? 1 : 0;   // SG-0071
             else if (e.a == 25) g_demo_yards = e.b ? 1 : 0;     // SG-0078
-            else if (e.a == 26) g_demo_aix = e.b & 7;            // docs/472
+            else if (e.a == 26) g_demo_aix = e.b & 15;           // docs/472; bit 3 docs/478
             else if (e.a == 17) g_demo_aiopp = (e.b & 0x7FFC) | ((e.b & 3) > 1 ? 1 : (e.b & 3));   // at most one extra (docs/414)   // docs/414
         } else if (e.kind == 'b') {   /* docs/404: a Balance tab value */
             lb_balance_custom_play_set(e.a, e.b, e.c);

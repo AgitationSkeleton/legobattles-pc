@@ -846,12 +846,14 @@ int          lb_setting_ai_shipyards(void);    /* SG-0078 */
 int          lb_demo_play_ai_shipyards(void);
 int          lb_ai_shipyards_live(void);
 /* docs/472: BR-0070 the AI finishes tower upgrades, SG-0089 it keeps its
-   bridges, SG-0090 it bridges when stuck on any map. Recorded together as
-   demo kind 26, a mask (lb_ai_extra_live: bit 0, 1, 2; 0 for an online
+   bridges, SG-0090 it bridges when stuck on any map; docs/478: SG-0091 it
+   trains transports only when a squad asks for one. Recorded together as
+   demo kind 26, a mask (lb_ai_extra_live: bit 0, 1, 2, 3; 0 for an online
    guest). */
 int          lb_setting_ai_finish_upgrades(void);
 int          lb_setting_ai_keep_bridges(void);
 int          lb_setting_ai_stuck_bridges(void);
+int          lb_setting_ai_transports_on_request(void);   /* SG-0091 */
 int          lb_demo_play_ai_extra(void);
 int          lb_ai_extra_live(void);
 int          lb_setting_ai_cross_fire(void);   /* SG-0051 */

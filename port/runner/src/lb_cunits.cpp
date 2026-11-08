@@ -101,6 +101,7 @@ struct Entity {
     size_t id_off = 0, id_wrap_off = 0, card_off = 0, card_wrap_off = 0;
     std::array<std::shared_ptr<const std::vector<int16_t>>, 5> snd;   // its own sounds, by index
     std::vector<uint32_t> head;  // portraits/head.png, 24x24 RGBA (0xAABBGGRR), or empty
+    int unlock_with = 0;         // SG-0096: a stock unit (1..181) whose unlock it shares, or 0
 };
 size_t g_array_off = 0;    // the larger blueprint array, in the file
 constexpr size_t kColBase = 4 + 182 * 0x7C + 27 * 0x74;   // collectable 209 (docs/11)
@@ -514,9 +515,9 @@ bool encode_card(std::vector<uint8_t>* ncgr, std::vector<uint8_t>* nclr, const s
 }
 
 // ---- model textures ----------------------------------------------------------
-// A copy of the template's .nsbmd with its one TEX0 texture (format 3, 16
-// colours: every model measured, docs/51) and palette taken from a picture of
-// the same size. False when it does not fit.
+// A copy of the template's .nsbmd with its one TEX0 texture and palette taken
+// from a picture of the same size (every stock model: format 4, 32x32, a
+// palette of 9 banks of 16 colours). False when it does not fit.
 bool encode_model_texture(std::vector<uint8_t>* m, const Img& im) {
     std::vector<uint8_t>& d = *m;
     if (d.size() < 0x14 || std::memcmp(d.data(), "BMD0", 4) != 0) return false;
@@ -548,13 +549,56 @@ bool encode_model_texture(std::vector<uint8_t>* m, const Img& im) {
     const size_t img = tdata + ((size_t)(p & 0xFFFF) << 3), pal_at = pdata + ((size_t)get16(d, pe) << 3);
     const size_t pal_end = pdata + ((size_t)get32(d, b + 0x28) << 3);   // the palette block's size
     if (img + (size_t)w * h * bits / 8 > d.size() || pal_end > d.size() || pal_at + 8 > pal_end) return false;
-    const size_t ncol = std::min<size_t>((size_t)1 << bits, (pal_end - pal_at) / 2);
+    // BR-0076/0077: a fmt-4 model's palette is BANKS of 16 colours. Every
+    // stock model has 9 (144 colours): banks 0-4 and 6 are the team colours
+    // (they differ only in entries 12-14, the team ramp), 5 is the white hit
+    // flash, 7-8 are effect tints, and the game picks a bank per team.
+    // texture.png is drawn from bank 0. 0.4.14 wrote one palette over bank 0
+    // and zeroed the rest, so every other team's unit was black.
+    // Now each colour of the picture takes the ROLE of a stock colour: the
+    // bank-0 entry it equals, else the nearest entry that no team bank
+    // recolours. In each bank it is then the picture's colour where that bank
+    // keeps the stock bank-0 colour, and the bank's own substitute (team ramp,
+    // flash, tint) where it does not.
+    const size_t room = (pal_end - pal_at) / 2;
+    const bool banked = fmt == 4 && room > 16 && room % 16 == 0;
+    const size_t ncol = banked ? 16 : std::min<size_t>((size_t)1 << bits, room);
+    const size_t nbank = banked ? room / 16 : 1;
+    std::vector<uint16_t> st(room);
+    for (size_t i = 0; i < room; ++i) st[i] = (uint16_t)get16(d, pal_at + i * 2);
     std::vector<uint32_t> pal = make_palette(im.rgba, ncol);
     if (!clear0) pal.erase(pal.begin());   // colour 0 is a colour when not clear
+    // A recolour bank keeps at least half of bank 0; an entry is plain when
+    // every recolour bank keeps it.
+    std::vector<bool> plain(ncol, true);
+    for (size_t k = 1; k < nbank; ++k) {
+        size_t same = 0;
+        for (size_t j = 0; j < ncol; ++j) same += st[k * ncol + j] == st[j];
+        if (same * 2 < ncol) continue;
+        for (size_t j = 0; j < ncol; ++j)
+            if (st[k * ncol + j] != st[j]) plain[j] = false;
+    }
     for (size_t i = 0; i < ncol; ++i) {
-        const uint16_t v = i < pal.size() ? to555(pal[i]) : 0;
-        d[pal_at + i * 2] = (uint8_t)v;
-        d[pal_at + i * 2 + 1] = (uint8_t)(v >> 8);
+        if (i >= pal.size() || (clear0 && i == 0)) continue;   // unused, or clear: stock stays
+        const uint16_t c = to555(pal[i]);
+        size_t role = ncol;
+        for (size_t j = 0; j < ncol && role == ncol; ++j)
+            if (st[j] == c) role = j;
+        if (role == ncol) {
+            int bd = 1 << 30;
+            for (size_t j = clear0 ? 1 : 0; j < ncol; ++j) {
+                if (!plain[j]) continue;
+                const int dd = dist(pal[i], ds_rgba(st[j]));
+                if (dd < bd) { bd = dd; role = j; }
+            }
+        }
+        if (role == ncol) role = i;   // no plain entry: the picture's colour in every bank
+        for (size_t k = 0; k < nbank; ++k) {
+            const uint16_t sub = st[k * ncol + role];
+            const uint16_t v = sub == st[role] ? c : sub;
+            d[pal_at + (k * ncol + i) * 2] = (uint8_t)v;
+            d[pal_at + (k * ncol + i) * 2 + 1] = (uint8_t)(v >> 8);
+        }
     }
     const int per = 8 / bits;                       // texels a byte
     const int mask = (1 << bits) - 1;
@@ -622,7 +666,13 @@ const Field kFields[] = {
     // affected.
     {"mountains", 0x79, 1, 1}, {"hotwire_immune", 0x7A, 1, 2}, {"emp_immune", 0x7B, 1, 2},
     {"esp_immune", 0x22, 1, 2}, {"construction_style", 0x23, 1, 3},
+    // SG-0093 (docs/476): which building trains a transport or special. 0 auto
+    // (the stock rules), 1 Special Factory, 2 Shipyard. Padding byte +0x5B
+    // (stock 0xA2 in all 182 unit records). Written only when 1 or 2, so a
+    // unit left on Auto keeps its template's byte and its record is unchanged.
+    {"trained_at", 0x5B, 1, 2},
 };
+constexpr int kTrainedAtOff = 0x5B;
 bool name_ok(const std::string& n) {
     if (n.empty() || n.size() > 24) return false;
     for (char ch : n)
@@ -734,6 +784,14 @@ bool load_unit(const std::string& folder, const std::string& tag, const std::vec
     // called). It is the unit's language string; "name" stays its identity.
     e->ingame = jstr(j, "display_name");
     if (!name_ok(e->ingame)) e->ingame = e->display;
+    // SG-0096 (docs/477): "unlocked_with": a stock unit's index. The player can
+    // pick this unit only once that unit is unlocked on their save (the Queen
+    // after the King campaign, the Sheriff with every Pirate minikit). 0 or
+    // absent: always, as before. The computer's armies are not limited.
+    {
+        long uw = 0;
+        if (jnum(j, 0, j.size(), "unlocked_with", &uw) && uw > 0 && uw < 182) e->unlock_with = (int)uw;
+    }
     // The stats: every known field, clamped to its width and range.
     const size_t fb = j.find("\"fields\"");
     const size_t fe = fb == std::string::npos ? std::string::npos : j.find('}', fb);
@@ -742,6 +800,7 @@ bool load_unit(const std::string& folder, const std::string& tag, const std::vec
             long v;
             if (!jnum(j, fb, fe, f.key, &v)) continue;
             v = std::clamp(v, 0L, f.max);
+            if (f.off == kTrainedAtOff && v == 0) continue;   // Auto: the template's byte stays
             for (int i = 0; i < f.width; ++i) e->rec[(size_t)f.off + (size_t)i] = (uint8_t)((unsigned long)v >> (8 * i));
         }
     std::string tasset = pool_str(stock, get32(stock, r + 0x24));
@@ -1075,6 +1134,11 @@ extern "C" int lb_cunits_of_any(int bp) {
     const int n = g_built ? (int)g_ents.size() : 0;
     return n > 0 && bp >= kStock && bp < kStock + 3 * n ? (bp - kStock) % n : -1;
 }
+// SG-0096: the stock unit whose unlock custom blueprint `bp` shares, or 0.
+extern "C" int lb_cunits_unlock_with(int bp) {
+    const int k = lb_cunits_of_any(bp);
+    return k >= 0 ? g_ents[(size_t)k].unlock_with : 0;
+}
 // Custom unit k's own head (portraits/head.png) as 24x24 RGBA; 0 when it has none.
 extern "C" int lb_cunits_head(int k, unsigned int out[576]) {
     if (!g_built || k < 0 || k >= (int)g_ents.size() || g_ents[(size_t)k].head.size() != 576u) return 0;
@@ -1137,6 +1201,20 @@ extern "C" int lb_cunits_name_id(int bp) {
     if (k < 0 || !g_saved.live || !g_pushed_base) return -1;
     const uint32_t rec = g_pushed_base + (uint32_t)g_ents[(size_t)k].rec_off;
     return (int)bus_read_u16(rec + 0x06u);
+}
+
+// SG-0093 (docs/476): custom unit k's BATTLE record in RAM (the one a roster,
+// a building's train list and the AI hold), or 0 while the records are not
+// registered. And back: which custom unit a record address is, or -1.
+extern "C" unsigned int lb_cunits_battle_record(int k) {
+    if (!g_built || k < 0 || k >= (int)g_ents.size() || !g_saved.live || !g_pushed_base) return 0u;
+    return g_pushed_base + (uint32_t)g_ents[(size_t)k].rec_off;
+}
+extern "C" int lb_cunits_of_battle_record(unsigned int rec) {
+    if (!g_built || !g_saved.live || !g_pushed_base || rec < g_pushed_base) return -1;
+    for (size_t k = 0; k < g_ents.size(); ++k)
+        if (g_pushed_base + (uint32_t)g_ents[k].rec_off == rec) return (int)k;
+    return -1;
 }
 
 // Once a frame (lb_patches.cpp): register the appended records with the game
