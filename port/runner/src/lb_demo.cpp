@@ -258,6 +258,7 @@ int g_rec_bridges = 0, g_demo_bridges = 0; // kind 24, SG-0071: the AI bridges a
 int g_rec_yards = 0, g_demo_yards = 0;     // kind 25, SG-0078: AI shipyard sites on any map (0 stock)
 int g_rec_natq = 0, g_demo_natq = 0;     // kind 27, docs/479: Native Game Logic (0 the cartridge timing)
 int g_rec_startpos = 0, g_demo_startpos = 0;   // kind 28, SG-0081: Free Play start position (0 the game's deal)
+int g_rec_fcpu = 0, g_demo_fcpu = 0;     // kind 29, docs/484: Faster CPU, the clock's share per cycle in 1/256 (0 the DS's)
 int g_rec_aix = 0, g_demo_aix = 0;         // kind 26, docs/472: AI mask (1 finish upgrades, 2 keep bridges, 4 stuck bridges, 8 transports on request (docs/478); 0 stock)
 // BR-0011: kinds 14 and 15, the attack boost and the healing fix, from
 // `sets=4`; a recording before it leaves them to this machine (-1).
@@ -333,6 +334,7 @@ bool load(const char* path) {
     g_demo_yards = 0;             // and the map's own AI sites (SG-0078)
     g_demo_natq = 0;              // and the cartridge's own timing (docs/479)
     g_demo_startpos = 0;          // and the game's own deal of the starts (SG-0081)
+    g_demo_fcpu = 0;              // and the DS's own clock (docs/484)
     g_demo_aix = 0;               // and the stock tower, bridge-retire and bridge-need rules (docs/472)
     g_demo_atk = g_demo_heal = -1;   // BR-0011: and this machine's
     g_demo_fw = g_demo_fh = 0;    // docs/409: and the window's own field
@@ -655,6 +657,9 @@ extern "C" int lb_demo_play_ai_shipyards(void) {   // SG-0078
 extern "C" int lb_demo_play_native_logic(void) {   // docs/479
     return (g_mode == Mode::Play || g_replay_done) ? g_demo_natq : -1;
 }
+extern "C" int lb_demo_play_faster_cpu(void) {   // docs/484: the clock, 0 the DS's
+    return (g_mode == Mode::Play || g_replay_done) ? g_demo_fcpu : -1;
+}
 extern "C" int lb_demo_play_start_position(void) {   // SG-0081
     return (g_mode == Mode::Play || g_replay_done) ? g_demo_startpos : -1;
 }
@@ -732,6 +737,7 @@ extern "C" void lb_demo_start_record(const char* path) {
     g_rec_aix = 0;                // docs/472
     g_rec_natq = 0;               // docs/479
     g_rec_startpos = 0;           // SG-0081
+    g_rec_fcpu = 0;               // docs/484
     g_rec_atk = g_rec_heal = 0;
     g_rec_fw = g_rec_fh = 0;      // docs/409: the first frame writes the size
     // docs/396: a session on the PC's clock records the guest clock as it
@@ -918,7 +924,7 @@ extern "C" void lb_demo_tick(void) {
             emit(e);
         }
         // docs/388: and the settings a replay takes from the recording.
-        const int now[29] = {lb_setting_force_tileset(),
+        const int now[30] = {lb_setting_force_tileset(),
                             lb_setting_level_palette(),
                             lb_setting_music_mode(),
                             lb_cage_fix_live() ? 1 : 0,
@@ -946,8 +952,9 @@ extern "C" void lb_demo_tick(void) {
                             lb_ai_shipyards_live(),                 // SG-0078
                             lb_ai_extra_live(),                     // docs/472
                             lb_native_logic_live(),                 // docs/479
-                            lb_start_position_live()};              // SG-0081
-        int* const was[29] = {&g_rec_tileset, &g_rec_palette, &g_rec_music,
+                            lb_start_position_live(),               // SG-0081
+                            lb_faster_cpu_clock_live()};            // docs/484
+        int* const was[30] = {&g_rec_tileset, &g_rec_palette, &g_rec_music,
                               &g_rec_cage, &g_rec_ownhero, &g_rec_oppdef,
                               &g_rec_hwtransport, &g_rec_hwmode, &g_rec_emp,
                               &g_rec_cheats, &g_rec_aicheats, &g_rec_aihero,
@@ -955,8 +962,8 @@ extern "C" void lb_demo_tick(void) {
                               &g_rec_cslot, &g_rec_aiopp, &g_rec_gold,
                               &g_rec_tabs, &g_rec_hwneut, &g_rec_stun, &g_rec_mines, &g_rec_cross,
                               &g_rec_bridges, &g_rec_yards, &g_rec_aix, &g_rec_natq,
-                              &g_rec_startpos};
-        for (int k = 0; k < 29; ++k) {
+                              &g_rec_startpos, &g_rec_fcpu};
+        for (int k = 0; k < 30; ++k) {
             if (now[k] == *was[k]) continue;
             *was[k] = now[k];
             const Event e{g_frame, 's', k, now[k], 0, 0};
@@ -1023,6 +1030,7 @@ extern "C" void lb_demo_tick(void) {
             else if (e.a == 25) g_demo_yards = e.b ? 1 : 0;     // SG-0078
             else if (e.a == 27) g_demo_natq = e.b ? 1 : 0;      // docs/479
             else if (e.a == 28) g_demo_startpos = (e.b >= 0 && e.b <= 8) ? e.b : 0;   // SG-0081
+            else if (e.a == 29) g_demo_fcpu = (e.b == 1 || (e.b >= 64 && e.b < 256)) ? e.b : 0;   // docs/484: 1 the governor
             else if (e.a == 26) g_demo_aix = e.b & 15;           // docs/472; bit 3 docs/478
             else if (e.a == 17) g_demo_aiopp = (e.b & 0x7FFC) | ((e.b & 3) > 1 ? 1 : (e.b & 3));   // at most one extra (docs/414)   // docs/414
         } else if (e.kind == 'b') {   /* docs/404: a Balance tab value */

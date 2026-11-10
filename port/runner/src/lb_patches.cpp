@@ -47,6 +47,9 @@ extern "C" {
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>        // docs/394: the map name is read off the emulation thread
+#include <cmath>        // docs/486: the cards' Lab recolour
+#include <map>          // docs/486: the cards' decoded art and recolour cache
+#include <zlib.h>       // docs/486: the card masks are zlib-packed, the stock cards CRC32-checked
 #include <string>       // docs/385: std::to_string
 #include <vector>
 
@@ -3536,8 +3539,62 @@ constexpr uint32_t kVBlankCounter = 0x02158A58u;  // ++ in the VBlank ISR, 020F2
 constexpr uint32_t kLoopT0Ret = 0x020F68D4u;      // NitroMain: t0 = ...()
 constexpr uint32_t kLoopT1Ret = 0x020F6908u;      // NitroMain: t1, after the tasks
 
+// docs/484: THE FASTER CPU GOVERNOR. At NitroMain's second clock read the
+// pass's task list has just finished. How long it took, in emulated time from
+// the VBlank that started it, says how fast the ARM9 must be for the next one:
+// the clock moves a quarter of the way toward the share that would finish it
+// at 85% of two frames (the full 30 Hz), from the DS's own clock to 4x. Only
+// emulated quantities (the clock, the cartridge's VBlank counter) decide it,
+// so a replay and every peer compute the same clock. Applied at the next
+// VBlank (lb_patches_on_vblank).
+static unsigned g_gov_q8 = 256u;
+static uint32_t g_gov_vbc0 = 0u;
+static bool g_gov_have0 = false;
+static void lb_governor_pass(void) {
+    const uint32_t vbc1 = bus_read_u32(kVBlankCounter);
+    const uint64_t kF = 560190ull, kV = 192ull * 2130ull;   // a frame; line 192
+    const uint64_t now = g_runtime_cycles >> 1;              // ARM9 -> system clock
+    if (!g_gov_have0 || now < kV) return;
+    const uint32_t passed = vbc1 - (g_gov_vbc0 + 1u);        // VBlanks since the pass began
+    if (vbc1 == g_gov_vbc0 || passed > 8u) return;
+    const uint64_t last_vbl = ((now - kV) / kF) * kF + kV;
+    const uint64_t start = last_vbl - (uint64_t)passed * kF;
+    const uint64_t e = now > start ? now - start : 1u;
+    // 70% of two frames: the task list's cost has a heavy tail (AI planning
+    // passes), so the clock keeps headroom. Up at once to what a heavy pass
+    // needed; down slowly, one step a pass, so the next heavy pass still
+    // finds it. Measured with a smoothed controller instead: the clock sat
+    // at ~1.1x while 12% of passes ran past two VBlanks.
+    static const uint64_t target_pct = [] {
+        const char* v = std::getenv("LB_GOVTARGET");   // experiments (percent of two frames)
+        const int n = v ? std::atoi(v) : 95;   // 95: a pass's work spread over both frames (steadier pacing than 70)
+        return (uint64_t)(n < 40 ? 40 : (n > 99 ? 99 : n));
+    }();
+    const uint64_t target = 2ull * kF * target_pct / 100ull;
+    uint64_t nq = (uint64_t)g_gov_q8 * target / e;
+    // Up to 4x the DS's clock. (A faster clock exposed the runtime's
+    // thread-switching interrupt bug -- streaked units, then a hang or a
+    // crash; fixed in runtime_irq, docs/484.) LB_GOVFLOOR sets the floor.
+    static const unsigned floor_q8 = [] {
+        const char* v = std::getenv("LB_GOVFLOOR");   // experiments
+        const int n = v ? std::atoi(v) : 64;
+        return (unsigned)(n < 64 ? 64 : (n > 256 ? 256 : n));
+    }();
+    if (nq < floor_q8) nq = floor_q8;
+    if (nq > 256u) nq = 256u;
+    if (nq < g_gov_q8 / 2u) nq = g_gov_q8 / 2u;   // at most twice as fast per pass
+    if (nq < g_gov_q8) g_gov_q8 = (unsigned)nq;
+    else if (g_gov_q8 < 256u) ++g_gov_q8;
+}
+
 void get_ms_override(void) {
     const uint32_t lr = g_cpu.R[14];
+    if (lr == kLoopT0Ret) {   // docs/484: the pass is about to wait for its VBlank
+        g_gov_vbc0 = bus_read_u32(kVBlankCounter);
+        g_gov_have0 = true;
+    } else if (lr == kLoopT1Ret) {
+        lb_governor_pass();
+    }
     if (lr == kLoopT1Ret) {
         // [lb_passes]: game-loop passes per VBlank, logged every 1800
         // VBlanks. 0.50 is the full 30 Hz; lower means the task list ran
@@ -5329,6 +5386,35 @@ extern "C" int lb_native_logic_live(void) {
     if (host >= 0) return (host & LB_RULE_NATIVE_LOGIC) ? 1 : 0;
     return lb_setting_native_logic();
 }
+// FASTER CPU (docs/484, setting "Faster CPU", on). The emulated ARM9 runs as
+// fast as the game needs, up to four times the DS's clock: each of its cycles
+// is charged a share (g_lb_clock_q8 of 256), with per-block accounting
+// (LB_TICK) and a flat memory model. The share is set every VBlank by a
+// governor from the ARM9's halted cycles (lb_patches_on_vblank), so a game
+// the DS keeps up with runs on the DS's own clock. A replay's clock (demo kind 29; a recording before it plays the
+// DS's), else the host's online (rule bit LB_RULE_FASTER_CPU), else this
+// machine's. LB_CLOCKQ8 overrides the live clock (experiments).
+static const int kFasterCpuQ8 = 1;          // the governor (kFasterCpuGovernor)
+static const int kFasterCpuGovernor = 1;    // as recorded: 1, else a fixed clock 64..255
+extern "C" unsigned long long g_lb_idle9;   // scheduler.cpp: the ARM9's halted cycles
+extern "C" int lb_faster_cpu_live(void) {
+    const int host = lb_rules_host_flags();
+    if (host >= 0) return (host & LB_RULE_FASTER_CPU) ? 1 : 0;
+    return lb_setting_faster_cpu();
+}
+extern "C" int lb_faster_cpu_clock_live(void) {
+    if (!lb_faster_cpu_live()) return 0;
+    static const int q8 = [] {
+        const char* v = std::getenv("LB_CLOCKQ8");
+        const int n = v ? std::atoi(v) : kFasterCpuQ8;
+        return n == 1 ? 1 : (n < 64 ? 64 : (n > 255 ? 0 : n));
+    }();
+    return q8;
+}
+static int faster_cpu_clock_effective(void) {   // 0: the DS's clock
+    const int played = lb_demo_play_faster_cpu();
+    return played >= 0 ? played : lb_faster_cpu_clock_live();
+}
 static bool native_logic_effective(void) {
     const int played = lb_demo_play_native_logic();
     return (played >= 0 ? played : lb_native_logic_live()) != 0;
@@ -5632,6 +5718,88 @@ static void gather_check_finish(void) {
 // with no I/O, no busy spin and no slice ended at the divider's deadline. The
 // divider's registers are left as they were: nothing reads them after FX_Div
 // but FX_Div itself.
+// docs/484: THE CARD READ, NATIVE, UNDER FASTER CPU. FUN_02117610 (ARM)
+// reads the cartridge in 512-byte blocks for the file system (the battle's
+// streamed sounds and data): for each block it sends command B7 (FUN_02117300:
+// AUXSPICNT high byte 0xC0, the eight command bytes at 0x040001A8), starts
+// ROMCTRL with the request's control word (r0 +4), and polls ROMCTRL/the data
+// port one word at a time into the destination -- or, for an unaligned or
+// short request, into the request's 512-byte cache (r0 +0x20, its block at
+// +8), from which FUN_02117274 copies the wanted part. That polling loop was
+// ~4% of a 3440x1440 battle. Native: the same steps, the same register
+// writes, the block drained by io.cpp's nds_card_drain_block (the very words
+// the data port would return), the same state updates of the card struct at
+// 0x021683E0 (+0x1C source, +0x20 destination, +0x24 bytes left). Only with
+// Faster CPU (the port's own timing; a DS-exact run keeps the cartridge's
+// loop) and only when the card is idle on entry; LB_NO_CARDNATIVE=1 keeps
+// the cartridge's loop for an A/B.
+constexpr uint32_t kCardRead = 0x02117610u, kCardState = 0x021683E0u;
+extern "C" int nds_card_drain_block(uint32_t dst, uint32_t max_bytes);   // io.cpp
+// g_lb_batch and g_lb_pending: declared by the runtime header.
+void card_read_override(void) {
+    static const bool off = std::getenv("LB_NO_CARDNATIVE") != nullptr;
+    if (off || !g_lb_batch || (bus_read_u32(0x040001A4u) & 0x80000000u)) {
+        if (void (*o)(void) = lb_dispatch_original(0, kCardRead)) o();
+        return;
+    }
+    const uint32_t req = g_cpu.R[0];
+    const uint32_t S = kCardState;
+    unsigned blocks = 0;
+    uint32_t left;
+    do {
+        for (;;) {
+            const uint32_t src = bus_read_u32(S + 0x1Cu);
+            const uint32_t blk = src & ~0x1FFu;
+            uint32_t dst = bus_read_u32(S + 0x20u);
+            if (blk != src || (dst & 3u) || bus_read_u32(S + 0x24u) < 0x200u) {
+                bus_write_u32(req + 8u, blk);
+                dst = req + 0x20u;
+            }
+            // FUN_02117300(blk >> 8 | 0xB7000000, 0)
+            const uint32_t cmd = (blk >> 8) | 0xB7000000u;
+            bus_write_u8(0x040001A1u, 0xC0u);
+            bus_write_u8(0x040001A8u, (uint8_t)(cmd >> 24));
+            bus_write_u8(0x040001A9u, (uint8_t)(cmd >> 16));
+            bus_write_u8(0x040001AAu, (uint8_t)(cmd >> 8));
+            bus_write_u8(0x040001ABu, (uint8_t)cmd);
+            for (uint32_t i = 0; i < 4u; ++i) bus_write_u8(0x040001ACu + i, 0u);
+            bus_write_u32(0x040001A4u, bus_read_u32(req + 4u));
+            nds_card_drain_block(dst, 0x200u);
+            ++blocks;
+            if (dst == bus_read_u32(S + 0x20u)) break;
+            // FUN_02117274(req): the wanted part of the cached block.
+            const uint32_t src2 = bus_read_u32(S + 0x1Cu);
+            const uint32_t b2 = src2 & ~0x1FFu;
+            if (b2 == bus_read_u32(req + 8u)) {
+                const uint32_t off2 = src2 - b2;
+                uint32_t cnt = 0x200u - off2;
+                const uint32_t len = bus_read_u32(S + 0x24u);
+                if (len < cnt) cnt = len;
+                const uint32_t to = bus_read_u32(S + 0x20u);
+                for (uint32_t i = 0; i < cnt; ++i)
+                    bus_write_u8(to + i, bus_read_u8(req + 0x20u + off2 + i));
+                bus_write_u32(S + 0x1Cu, src2 + cnt);
+                bus_write_u32(S + 0x20u, to + cnt);
+                bus_write_u32(S + 0x24u, len - cnt);
+            }
+            if (bus_read_u32(S + 0x24u) == 0u) {
+                g_lb_pending += 600ull * blocks;   // the polling loop's cost, roughly
+                lb_override_return();
+                return;
+            }
+        }
+        bus_write_u32(S + 0x1Cu, bus_read_u32(S + 0x1Cu) + 0x200u);
+        bus_write_u32(S + 0x20u, bus_read_u32(S + 0x20u) + 0x200u);
+        left = bus_read_u32(S + 0x24u) - 0x200u;
+        bus_write_u32(S + 0x24u, left);
+    } while (left != 0u);
+    g_lb_pending += 600ull * blocks;
+    static unsigned said = 0;
+    if (++said == 1u)
+        std::fprintf(stderr, "[lb_cardnative] the card read runs natively under Faster CPU (docs/484)\n");
+    lb_override_return();
+}
+
 constexpr uint32_t kFxDiv = 0x0210A6F4u;
 static uint32_t fxdiv_native(uint32_t a, uint32_t b, uint32_t* r1, uint32_t* r2) {
     const int64_t num = (int64_t)((uint64_t)a << 32);
@@ -9651,6 +9819,19 @@ extern "C" void lb_teams_army_walk_begin(void);
 // FUN_020B96FC (Thumb), the list fill: an observer, so the window counts from
 // this walk's first candidate. Its one caller (FUN_020B935C) is dispatched.
 constexpr uint32_t kArmyListFill = 0x020B96FCu;
+// BR-0080 (docs/485): CustomizeArmy::virtual_09 (Thumb), the army screen's
+// update. Its only reference is the vtable word at 0x0214C984 (no direct
+// call). The CustomizeArmy object outlives its screen: after Continue its
+// registry slot still holds it with its layout, list state 3 and shown slot,
+// so the scroll bar followed onto the team colour screen. lb_teams.cpp shows
+// the bar only while this update is running. An observer; a pure tail call.
+constexpr uint32_t kArmyUpdate = 0x020B9188u;
+extern "C" void lb_teams_army_updated(uint32_t screen);
+void army_update_observer(void) {
+    void (*original)(void) = lb_dispatch_original(0, kArmyUpdate);
+    lb_teams_army_updated(g_cpu.R[0]);
+    if (original) original();
+}
 void army_list_fill_observer(void) {
     void (*original)(void) = lb_dispatch_original(0, kArmyListFill);
     lb_teams_army_walk_begin();
@@ -9780,6 +9961,9 @@ constexpr uint32_t kBillboardDrawRet = 0x0203B2ACu;    // after Unit_BuildBillbo
 constexpr uint32_t kNeutralOwnerByte = 0x02155420u;    // FUN_02087634
 extern "C" int lb_setting_creature_tint(void);         /* lb_overlay.cpp */
 extern "C" int lb_setting_portrait_tint(void);        /* lb_overlay.cpp */
+extern "C" int lb_setting_card_tint(void);            /* lb_overlay.cpp, docs/486 */
+extern "C" const unsigned char* lb_cunits_card_mask(int bp, int* w, int* h);   /* lb_cunits.cpp */
+extern "C" int lb_rom_read_unwrapped(const char* path, unsigned char* out, int cap);
 extern "C" int lb_creatures_live(void);                /* below */
 namespace {
 struct TintEntry { uint8_t entry, shade; };   // shade 0 light, 1 mid, 2 dark (entries 12-14), 3 darker
@@ -10379,9 +10563,32 @@ void billboard_draw_override(void) {
 // cartridge's own unused teal, KingFaction.NCLR banks 10/11, which starts at
 // white and so reads mostly white, as it was drawn; 1 the port's ramp, shaped
 // like the other teams' (Blue: 29/27/22 blue).
-constexpr uint16_t kTealShades[2][3] = {{0x7FFF, 0x6B73, 0x56EA},
-                                        {0x6764, 0x4E80, 0x31A0}};   // (4,27,25) (0,20,19) (0,13,12)
-uint16_t teal_shade(unsigned i) { return kTealShades[lb_setting_teal_style() ? 1 : 0][i]; }
+// 2 (docs/485): the cartridge's OTHER unused team palette, KingFaction.NCLR
+// bank 13 -- red shades in 12-14, and dark blue in entries 2-5 where every
+// team bank has its greys (5EF7 4A52 294A 0C63 -> 7ED0 7D80 4501 2462).
+// Its other entries (6-11, 15) are bank 0's: bank 13's own 10 is a green that
+// would recolour the browns.
+constexpr uint16_t kTealShades[3][3] = {{0x7FFF, 0x6B73, 0x56EA},
+                                        {0x6764, 0x4E80, 0x31A0},    // (4,27,25) (0,20,19) (0,13,12)
+                                        {0x221F, 0x08BF, 0x0017}};   // bank 13's reds
+constexpr uint16_t kRdbGrey[4] = {0x5EF7, 0x4A52, 0x294A, 0x0C63};   // bank 0, entries 2-5
+constexpr uint16_t kRdbBlue[4] = {0x7ED0, 0x7D80, 0x4501, 0x2462};   // bank 13, entries 2-5
+int teal_style_now() { const int s = lb_setting_teal_style(); return s >= 0 && s <= 2 ? s : 0; }
+uint16_t teal_shade(unsigned i) { return kTealShades[teal_style_now()][i]; }
+// Style 2's grey -> dark blue for a colour of another palette (a 3D model's):
+// a neutral grey, neither near white nor near black, takes the blue of the
+// sprite grey nearest it in lightness; anything else is unchanged.
+uint16_t rdb_blue_of(uint16_t c) {
+    const int r = c & 31, g = (c >> 5) & 31, b = (c >> 10) & 31;
+    const int mx = std::max(r, std::max(g, b)), mn = std::min(r, std::min(g, b));
+    if (mx - mn > 2 || mx < 3 || mn > 27) return c;
+    int best = 0, bd = 1 << 30;
+    for (int i = 0; i < 4; ++i) {
+        const int d = std::abs((int)(kRdbGrey[i] & 31) - (r + g + b) / 3);
+        if (d < bd) { bd = d; best = i; }
+    }
+    return kRdbBlue[best];
+}
 constexpr unsigned kTealSlot = 5, kTealSrcSlot = 6, kTealEntry = 12;
 bool g_teal_on = false;   // the readers point at the seven-entry tables (apply_teal)
 constexpr uint32_t kTealModels = 0x02150BA0u, kTealModelStride = 0x6Cu;
@@ -10410,10 +10617,567 @@ bool g_model_pal_any = false;
 // banks. A model is only taken while its bank 5 is the stock white one, and
 // only rewritten while it holds what this wrote; with neither feature wanted,
 // the stock banks go back. Off and never on, nothing is read.
+
+// ---- docs/486: TEAM-COLOURED UNIT CARDS ---------------------------------------
+//
+// The top screen's big card of the selected unit or building (UI/GamePlayerCards,
+// 96x96 8bpp OBJ cell at (24,40)) and the hero's victory/defeat picture
+// (UI/Heroes, 256x192 at (0,0), SkirmishScoreTopScreen) are repainted on the
+// presented top-screen picture in the owner's team colour: the team parts only,
+// through a soft mask per card (lb_cardmasks.inc, tools/lb_cardmasks_export.py).
+// Nothing in the game is written, like docs/454's portraits. Off by default
+// ("Team-coloured unit cards"; LB_CARD_TINT=0|1).
+//
+// Emulation thread, once a frame (card_tint_refresh): which card is shown, its
+// owner's three shades (sprite bank entries 12-14), the top screen's fades; the
+// local player's shades are latched every frame of a battle for the end picture.
+// Presentation thread (card_tint_apply, from lb_top_postprocess): the stock card
+// is decoded from the ROM once, CRC-checked against the table (a mod's card is
+// left alone), matched against the screen under the four fade candidates, and
+// the cached recoloured card (per card and shades) is written over the pixels
+// that still show the stock colour -- the HP text, a pause page or a card still
+// loading never match. Custom units (docs/448) with a card_mask.png: the stock
+// card is captured from the screen once it is steady and unfaded.
+#include "lb_cardmasks.inc"
+
+constexpr uint32_t kCardHudState = 0x02157F3Cu;   // +0x74: the HUD's card state S
+constexpr uint32_t kCardSessionLocal = 0x02156A24u + 100u;   // the local player's owner id
+constexpr int kCardX = 24, kCardY = 40;
+constexpr int kCardBodyRows = 87;                 // rows 87.. are the HP band (text drawn over it)
+
+struct CardTintState {
+    int bp = -1;                 // the shown card's blueprint, -1 none
+    uint16_t sh[3] = {0, 0, 0};  // its owner's light, mid, dark
+    bool end = false;            // look for a victory/defeat picture
+    uint16_t end_sh[3] = {0, 0, 0};
+    uint16_t bldcnt = 0, master = 0;
+    uint8_t evy = 0;
+};
+std::mutex g_card_mu;
+CardTintState g_card_state;
+std::atomic<bool> g_card_active{false};
+uint16_t g_card_end_sh[3] = {0, 0, 0};   // emulation thread: the latch
+bool g_card_end_valid = false;
+
+void card_tint_refresh() {
+    static bool was_on = false;
+    if (!lb_setting_card_tint()) {
+        if (was_on) { g_card_active.store(false); was_on = false; }
+        return;
+    }
+    was_on = true;
+    CardTintState s;
+    s.bldcnt = bus_read_u16(0x04001050u);
+    s.evy = (uint8_t)std::min<unsigned>(16u, bus_read_u16(0x04001054u) & 0x1Fu);
+    s.master = bus_read_u16(0x0400106Cu);
+    uint32_t size = 0;
+    uint8_t* e = texpal_flat(&size);
+    const uint32_t vpal = sprite_palette_vram();
+    auto shades = [&](unsigned o, uint16_t out[3]) {
+        if (!e || !vpal || vpal + 0x200u > size || o >= (unsigned)kTintPlayers) return false;
+        std::memcpy(out, e + vpal + (uint32_t)(2u * o) * 0x20u + 12u * 2u, 3 * sizeof(uint16_t));
+        return true;
+    };
+    int cx = 0, cy = 0;
+    const bool battle = lb_field_camera(&cx, &cy);
+    const bool in_play = bus_read_u32(0x0214BBA8u) == 5u;
+    if (battle) {
+        const uint32_t local = bus_read_u32(kCardSessionLocal);
+        uint16_t ls[3];
+        if (local < (uint32_t)kTintPlayers && shades(local, ls)) {
+            std::memcpy(g_card_end_sh, ls, sizeof ls);
+            g_card_end_valid = true;
+        }
+        const uint32_t tab = quick_infotab();
+        const uint32_t S = bus_read_u32(kCardHudState + 0x74u);
+        const uint32_t w = tab ? bus_read_u32(tab + 0x384u) : 0u;
+        const uint32_t fl = guest_ptr(w) ? bus_read_u32(w + 4u) : 0u;
+        if (tab && guest_ptr(S) && guest_ptr(fl) && !(bus_read_u8(fl) & 2u) && bus_read_u8(S + 0x90u) == 0u) {
+            const int bp = (int)(bus_read_u32(S + 0x94u) & 0xFFFFu);
+            // The holder: the selected unit or building with that blueprint.
+            const uint32_t handles = bus_read_u32(tab + 0x54u);
+            const uint32_t n = std::min<uint32_t>(bus_read_u32(tab + 0x58u), 64u);
+            for (uint32_t k = 0; guest_ptr(handles) && k < n; ++k) {
+                const uint32_t ent = unit_resolve(handles + 2u * k);
+                if (!ent) continue;
+                const uint32_t bpr = unit_blueprint(ent);
+                if (!guest_ptr(bpr) || (int)bus_read_u16(bpr + 4u) != bp) continue;
+                const unsigned o = bus_read_u8(ent + 0xE4u);
+                // Neutral, wild and unowned: stock.
+                if (o != bus_read_u8(kNeutralOwnerByte) && shades(o, s.sh)) s.bp = bp;
+                break;
+            }
+        }
+    }
+    if (!in_play && g_card_end_valid) {
+        s.end = true;
+        std::memcpy(s.end_sh, g_card_end_sh, sizeof s.end_sh);
+    }
+    {
+        std::lock_guard<std::mutex> lk(g_card_mu);
+        g_card_state = s;
+    }
+    g_card_active.store(s.bp >= 0 || s.end);
+    {   // docs/486 diagnostic: each change of what is shown, and a heartbeat
+        static int last_bp = -2, last_end = -1;
+        static unsigned beat = 0;
+        if (s.bp != last_bp || (int)s.end != last_end || (battle && ++beat % 1800u == 0u)) {
+            last_bp = s.bp;
+            last_end = (int)s.end;
+            std::fprintf(stderr, "[lb_cards] state: battle %d play %d local %u card %d end %d (end shades %s)\n",
+                         battle ? 1 : 0, in_play ? 1 : 0, (unsigned)bus_read_u32(kCardSessionLocal), s.bp,
+                         s.end ? 1 : 0, g_card_end_valid ? "latched" : "none");
+        }
+    }
+}
+
+// One picture: its stock colours as the 2D engine outputs them unfaded
+// (0xFFRRGGBB; 0 = a transparent pixel, never compared nor painted), its mask
+// and the recolour anchors.
+struct CardArt {
+    bool ok = false;
+    int w = 0, h = 0;
+    std::vector<uint32_t> stock;
+    std::vector<uint8_t> a8;
+    double lo = 0, hi = 100, cref = 6, keep = 0.35, spread = 0.18;
+    std::vector<int> probe;      // end pictures: sample pixel indices for a quick match
+};
+std::map<int, CardArt> g_card_art;   // presentation thread only
+
+bool card_rom(const std::string& path, std::vector<uint8_t>& b) {
+    int n = lb_rom_read_unwrapped(path.c_str(), nullptr, 0);
+    if (n <= 0 || n > (8 << 20)) return false;
+    b.resize((size_t)n);
+    return lb_rom_read_unwrapped(path.c_str(), b.data(), n) == n;
+}
+bool card_rom_ci(const std::string& dir, const std::string& name, const char* ext, std::vector<uint8_t>& b) {
+    if (card_rom(dir + name + ext, b)) return true;
+    std::string low = name;   // e.g. UI/GamePlayerCards/k_mine.NCLR
+    for (char& c : low) c = (char)std::tolower((unsigned char)c);
+    return card_rom(dir + low + ext, b);
+}
+uint32_t cm_u16(const std::vector<uint8_t>& b, size_t a) { return a + 2 <= b.size() ? (uint32_t)(b[a] | (b[a + 1] << 8)) : 0u; }
+uint32_t cm_u32(const std::vector<uint8_t>& b, size_t a) { return cm_u16(b, a) | (cm_u16(b, a + 2) << 16); }
+
+const std::vector<uint8_t>& card_rle() {
+    static std::vector<uint8_t> rle;
+    static bool done = false;
+    if (!done) {
+        done = true;
+        rle.resize(kCardMaskRleSize);
+        uLongf len = (uLongf)rle.size();
+        if (uncompress(rle.data(), &len, kCardMaskZ, (uLong)sizeof kCardMaskZ) != Z_OK || len != rle.size()) rle.clear();
+    }
+    return rle;
+}
+bool card_mask_expand(const CardMask& m, int count, std::vector<uint8_t>& out) {
+    const std::vector<uint8_t>& r = card_rle();
+    if (r.empty() || (size_t)m.rle_off + m.rle_len > r.size()) return false;
+    out.clear();
+    out.reserve((size_t)count);
+    for (uint32_t i = 0; i + 1 < m.rle_len; i += 2)
+        out.insert(out.end(), (size_t)r[m.rle_off + i], (uint8_t)r[m.rle_off + i + 1]);
+    return (int)out.size() == count;
+}
+
+// A battle card (96x96 cell of 8bpp OBJs) decoded from the ROM: indices into
+// its 256-colour palette, -1 transparent.
+bool card_decode(const std::string& name, std::vector<int>& idx, uint16_t pal[256]) {
+    const std::string dir = "UI/GamePlayerCards/";
+    std::vector<uint8_t> e, g, c;
+    if (!card_rom_ci(dir, name, ".NCER", e) || !card_rom_ci(dir, name, ".NCGR", g) || !card_rom_ci(dir, name, ".NCLR", c))
+        return false;
+    if (e.size() < 0x30 || g.size() < 0x30 || c.size() < 0x28 || std::memcmp(e.data() + 0x10, "KBEC", 4) != 0 ||
+        std::memcmp(g.data() + 0x10, "RAHC", 4) != 0) return false;
+    for (int i = 0; i < 256; ++i) pal[i] = (uint16_t)(0x28u + 2u * i + 2u <= c.size() ? cm_u16(c, 0x28u + 2u * i) : 0u);
+    const uint32_t ncell = cm_u16(e, 0x18), cattr = cm_u16(e, 0x1A), coff = cm_u32(e, 0x1C);
+    if (!ncell) return false;
+    const size_t cells = 0x18 + coff, esz = cattr == 1 ? 16 : 8, oams = cells + ncell * esz;
+    const uint32_t noam = cm_u16(e, cells), ooff = cm_u32(e, cells + 4);
+    const size_t chars = 0x18 + cm_u32(g, 0x2C), csize = cm_u32(g, 0x28);
+    const bool linear = (cm_u32(g, 0x24) & 0xFFu) == 1u;
+    static const int kW[3][4] = {{8, 16, 32, 64}, {16, 32, 32, 64}, {8, 8, 16, 32}};
+    static const int kH[3][4] = {{8, 16, 32, 64}, {8, 8, 16, 32}, {16, 32, 32, 64}};
+    struct O { int x, y, w, h, tile, pal; bool b8; };
+    std::vector<O> os;
+    int x0 = 1 << 20, y0 = 1 << 20, x1 = -(1 << 20), y1 = -(1 << 20);
+    for (uint32_t k = 0; k < noam && k < 128; ++k) {
+        const size_t at = oams + ooff + k * 6;
+        if (at + 6 > e.size()) return false;
+        const uint32_t a0 = cm_u16(e, at), a1 = cm_u16(e, at + 2), a2 = cm_u16(e, at + 4);
+        const int shape = (int)(a0 >> 14) & 3, sz = (int)(a1 >> 14) & 3;
+        if (shape == 3) continue;
+        O o;
+        o.y = (int)(int8_t)(a0 & 0xFF);
+        o.x = (int)(a1 & 0x1FF); if (o.x >= 256) o.x -= 512;
+        o.w = kW[shape][sz]; o.h = kH[shape][sz];
+        o.tile = (int)(a2 & 0x3FF); o.pal = (int)(a2 >> 12); o.b8 = (a0 & 0x2000u) != 0;
+        os.push_back(o);
+        x0 = std::min(x0, o.x); y0 = std::min(y0, o.y); x1 = std::max(x1, o.x + o.w); y1 = std::max(y1, o.y + o.h);
+    }
+    if (os.empty() || x1 - x0 != kCardMaskW || y1 - y0 != kCardMaskH) return false;
+    idx.assign((size_t)kCardMaskW * kCardMaskH, -1);
+    for (const O& o : os)
+        for (int y = 0; y < o.h; ++y)
+            for (int x = 0; x < o.w; ++x) {
+                size_t byte;
+                if (linear) {
+                    const size_t p = (size_t)o.tile * 32 * (o.b8 ? 1 : 2) + (size_t)y * o.w + x;
+                    byte = o.b8 ? p : p / 2;
+                } else {
+                    const size_t t = (size_t)(y / 8) * (o.w / 8) + (x / 8), in = (size_t)(y % 8) * 8 + (x % 8);
+                    byte = (size_t)o.tile * 32 + t * (o.b8 ? 64 : 32) + (o.b8 ? in : in / 2);
+                }
+                if (byte >= csize || chars + byte >= g.size()) continue;
+                const uint8_t v = g[chars + byte];
+                int i = o.b8 ? v : ((x % 2) ? (v >> 4) : (v & 15));
+                if (!o.b8 && i) i += o.pal * 16;
+                idx[(size_t)(o.y - y0 + y) * kCardMaskW + (o.x - x0 + x)] = i ? i : -1;
+            }
+    return true;
+}
+
+// The table entry for a battle card's blueprint (bridges and gates use the
+// named cards FUN_02030C1C picks), or -1.
+int card_entry(int bp) {
+    const char* named = bp >= 0x79 && bp <= 0x7E ? "Bridge" : (bp == 0x7F || bp == 0x80) ? "K_Unknown" : nullptr;
+    for (int i = 0; i < (int)(sizeof kCardMasks / sizeof kCardMasks[0]); ++i) {
+        const CardMask& m = kCardMasks[i];
+        if (m.flags & kCardFlagEndScreen) continue;
+        if (named ? std::strcmp(m.name, named) == 0 : m.bp == bp) return i;
+    }
+    return -1;
+}
+
+void card_anchors_from(const CardMask& m, CardArt& a) {
+    a.lo = m.L_lo; a.hi = m.L_hi; a.cref = m.C_ref; a.keep = m.chroma_keep; a.spread = m.L_spread;
+}
+
+// Entry i's art, decoded and checked once (ok = false: stock).
+const CardArt& card_art(int i) {
+    auto it = g_card_art.find(i);
+    if (it != g_card_art.end()) return it->second;
+    CardArt& a = g_card_art[i];
+    const CardMask& m = kCardMasks[i];
+    if (m.flags & kCardFlagDisabled) return a;
+    std::vector<uint16_t> c555;
+    if (m.flags & kCardFlagEndScreen) {
+        a.w = kEndMaskW; a.h = kEndMaskH;
+        std::vector<uint8_t> d, p;
+        const std::string base = std::string("UI/") + m.name;
+        if (!card_rom(base + ".NCBR", d) || !card_rom(base + ".NCLR", p) || d.size() < 0x30) return a;
+        const size_t at = 0x18 + cm_u32(d, 0x2C);
+        if ((int)cm_u16(d, 0x1A) * 8 != a.w || (int)cm_u16(d, 0x18) * 8 != a.h || at + (size_t)a.w * a.h > d.size()) return a;
+        c555.resize((size_t)a.w * a.h);
+        a.stock.resize(c555.size());
+        for (size_t k = 0; k < c555.size(); ++k) {
+            const uint16_t c = (uint16_t)(cm_u16(p, 0x28 + 2u * d[at + k]) & 0x7FFFu);
+            c555[k] = c;
+            a.stock[k] = ds_host_rgb(c);
+        }
+    } else {
+        a.w = kCardMaskW; a.h = kCardMaskH;
+        std::vector<int> idx;
+        uint16_t pal[256];
+        if (!card_decode(m.name, idx, pal)) return a;
+        c555.resize(idx.size());
+        a.stock.assign(idx.size(), 0u);
+        for (size_t k = 0; k < idx.size(); ++k) {
+            c555[k] = idx[k] >= 0 ? (uint16_t)(pal[idx[k]] & 0x7FFFu) : (uint16_t)0x8000u;
+            if (idx[k] >= 0) a.stock[k] = ds_host_rgb(pal[idx[k]]);
+        }
+    }
+    std::vector<uint8_t> le(c555.size() * 2);
+    for (size_t k = 0; k < c555.size(); ++k) { le[2 * k] = (uint8_t)c555[k]; le[2 * k + 1] = (uint8_t)(c555[k] >> 8); }
+    const uint32_t crc = (uint32_t)crc32(0L, le.data(), (uInt)le.size());
+    if (crc != m.crc555) {
+        std::fprintf(stderr, "[lb_cards] %s: the card differs from the cartridge's (CRC %08X): left stock\n", m.name, (unsigned)crc);
+        return a;
+    }
+    if (!card_mask_expand(m, a.w * a.h, a.a8)) return a;
+    card_anchors_from(m, a);
+    if (m.flags & kCardFlagEndScreen)
+        for (int k = 0; k < 48; ++k) a.probe.push_back((8 + (k * 53) % 176) * a.w + 8 + (k * 37) % 240);
+    a.ok = true;
+    return a;
+}
+
+// ---- the recolour (docs/486 RUNTIME.md; the Python previews' cardv3.recolour) ----
+struct CmLab { double L, a, b; };
+double cm_lin(double c8) { const double c = c8 / 255.0; return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4); }
+double cm_gam(double c) { c = c < 0 ? 0 : (c > 1 ? 1 : c); return 255.0 * (c <= 0.0031308 ? 12.92 * c : 1.055 * std::pow(c, 1 / 2.4) - 0.055); }
+const double kCmM[3][3] = {{0.4124564, 0.3575761, 0.1804375}, {0.2126729, 0.7151522, 0.0721750}, {0.0193339, 0.1191920, 0.9503041}};
+const double kCmWP[3] = {0.95047, 1.0, 1.08883};
+CmLab cm_lab(uint32_t host) {
+    const double l[3] = {cm_lin((host >> 16) & 255u), cm_lin((host >> 8) & 255u), cm_lin(host & 255u)};
+    double f[3];
+    for (int k = 0; k < 3; ++k) {
+        const double x = (kCmM[k][0] * l[0] + kCmM[k][1] * l[1] + kCmM[k][2] * l[2]) / kCmWP[k];
+        f[k] = x > 216.0 / 24389 ? std::cbrt(x) : (24389.0 / 27 * x + 16) / 116;
+    }
+    return {116 * f[1] - 16, 500 * (f[0] - f[1]), 200 * (f[1] - f[2])};
+}
+void cm_rgb(const CmLab& c, double rgb[3]) {
+    static double Mi[3][3];
+    static bool inv = false;
+    if (!inv) {   // the inverse of kCmM
+        const double (&m)[3][3] = kCmM;
+        const double det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0]) +
+                           m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+        for (int r = 0; r < 3; ++r)
+            for (int k = 0; k < 3; ++k) {
+                const int r1 = (k + 1) % 3, r2 = (k + 2) % 3, c1 = (r + 1) % 3, c2 = (r + 2) % 3;
+                Mi[r][k] = (m[r1][c1] * m[r2][c2] - m[r1][c2] * m[r2][c1]) / det;
+            }
+        inv = true;
+    }
+    const double fy = (c.L + 16) / 116, f[3] = {fy + c.a / 500, fy, fy - c.b / 200};
+    double xyz[3];
+    for (int k = 0; k < 3; ++k) {
+        const double t = f[k] * f[k] * f[k];
+        xyz[k] = (t > 216.0 / 24389 ? t : (116 * f[k] - 16) / (24389.0 / 27)) * kCmWP[k];
+    }
+    for (int k = 0; k < 3; ++k) rgb[k] = cm_gam(Mi[k][0] * xyz[0] + Mi[k][1] * xyz[1] + Mi[k][2] * xyz[2]);
+}
+double cm_interp(double x, const double xp[3], const double fp[3]) {
+    if (x <= xp[0]) return fp[0];
+    if (x >= xp[2]) return fp[2];
+    const int i = x <= xp[1] ? 0 : 1;
+    const double d = xp[i + 1] - xp[i];
+    return d > 0 ? fp[i] + (fp[i + 1] - fp[i]) * (x - xp[i]) / d : fp[i + 1];
+}
+// The whole picture in shades sh (light, mid, dark): 0 where the mask is 0.
+std::vector<uint32_t> card_recolour(const CardArt& a, const uint16_t sh[3]) {
+    std::vector<uint32_t> out(a.stock.size(), 0u);
+    const CmLab Ll = cm_lab(ds_host_rgb(sh[0])), Lm = cm_lab(ds_host_rgb(sh[1])), Ld = cm_lab(ds_host_rgb(sh[2]));
+    const double tlo = std::max(2.0, Ld.L - a.spread * (Ll.L - Ld.L) - 4);
+    const double thi = std::min(98.0, Ll.L + a.spread * (Ll.L - Ld.L) + 4);
+    double rL[3] = {Ld.L, Lm.L, Ll.L};
+    const double rA[3] = {Ld.a, Lm.a, Ll.a}, rB[3] = {Ld.b, Lm.b, Ll.b};
+    if (!(rL[0] < rL[1] && rL[1] < rL[2])) std::sort(rL, rL + 3);   // as the Python: the a/b keep their order
+    for (size_t k = 0; k < out.size(); ++k) {
+        const uint32_t src = a.stock[k];
+        if (!src || !a.a8[k]) continue;
+        const CmLab p = cm_lab(src);
+        const double t = (p.L - a.lo) / (a.hi - a.lo);
+        const double ts = t < 0 ? t * 0.5 : (t > 1 ? 1 + (t - 1) * 0.5 : t);
+        const double Lo = std::min(100.0, std::max(0.0, tlo + ts * (thi - tlo)));
+        const double at = cm_interp(Lo, rL, rA), bt = cm_interp(Lo, rL, rB);
+        double crel = std::min(1.25, std::max(0.0, std::hypot(p.a, p.b) / a.cref));
+        crel = a.keep + (1 - a.keep) * crel;
+        const double Co = std::hypot(at, bt) * crel, h = std::atan2(bt, at);
+        double n[3];
+        cm_rgb({Lo, Co * std::cos(h), Co * std::sin(h)}, n);
+        const double A = a.a8[k] / 255.0;
+        const double s[3] = {(double)((src >> 16) & 255u), (double)((src >> 8) & 255u), (double)(src & 255u)};
+        uint32_t o = 0xFF000000u;
+        for (int c = 0; c < 3; ++c) {
+            const double v = std::floor(s[c] * (1 - A) + n[c] * A + 0.5);
+            o |= (uint32_t)std::min(255.0, std::max(0.0, v)) << (16 - 8 * c);
+        }
+        out[k] = o;
+    }
+    return out;
+}
+// Recoloured pictures, by (art key, shades); a few kept.
+const std::vector<uint32_t>& card_recoloured(int key, const CardArt& a, const uint16_t sh[3]) {
+    struct Rec { int key; uint16_t sh[3]; std::vector<uint32_t> px; };
+    static std::vector<Rec> cache;
+    for (Rec& r : cache)
+        if (r.key == key && !std::memcmp(r.sh, sh, sizeof r.sh)) return r.px;
+    if (cache.size() >= 8) cache.erase(cache.begin());
+    Rec r;
+    r.key = key;
+    std::memcpy(r.sh, sh, sizeof r.sh);
+    r.px = card_recolour(a, sh);
+    cache.push_back(std::move(r));
+    return cache.back().px;
+}
+
+// Which fade candidate the screen shows the picture under (docs/454's four),
+// and how many of the sampled stock pixels match; -1 when none matches well.
+int card_match(const CardArt& a, const uint32_t* scr, int width, int ox, int px0, int py0, int rows,
+               const std::vector<int>* sample, const PortraitTint& ft, double need) {
+    int best = -1, best_n = 0, total = 0;
+    for (int cand = 0; cand < 4; ++cand) {
+        int n = 0, tot = 0;
+        auto test = [&](int k) {
+            const int y = k / a.w, x = k % a.w;
+            if (y >= rows || !a.stock[k]) return;
+            const int X = px0 + x, Y = py0 + y;
+            if (X < 0 || X > 255 || Y < 0 || Y > 191) return;
+            ++tot;
+            if (scr[(size_t)Y * width + (size_t)(X + ox)] == host_of_six(fade_six(six_of_host(a.stock[k]), cand, ft))) ++n;
+        };
+        if (sample) for (int k : *sample) test(k);
+        else for (int k = 0; k < a.w * a.h; k += 3) test(k);
+        if (n > best_n) { best_n = n; best = cand; total = tot; }
+    }
+    return best >= 0 && total > 0 && best_n >= need * total ? best : -1;
+}
+void card_paint(const CardArt& a, const std::vector<uint32_t>& rec, uint32_t* scr, int width, int ox, int px0, int py0,
+                int rows, int cand, const PortraitTint& ft) {
+    for (int y = 0; y < std::min(rows, a.h); ++y)
+        for (int x = 0; x < a.w; ++x) {
+            const int k = y * a.w + x;
+            if (!rec[k]) continue;
+            const int X = px0 + x, Y = py0 + y;
+            if (X < 0 || X > 255 || Y < 0 || Y > 191) continue;
+            uint32_t& d = scr[(size_t)Y * width + (size_t)(X + ox)];
+            if (d != host_of_six(fade_six(six_of_host(a.stock[k]), cand, ft))) continue;   // overdrawn: leave it
+            d = host_of_six(fade_six(six_of_host(rec[k]), cand, ft));
+        }
+}
+
+// A custom unit's card (docs/448): its stock picture captured from the screen
+// once it shows the same unfaded 96x96 for three frames, its mask from the
+// bundle's card_mask.png, the anchors from the masked pixels (RUNTIME.md 4).
+double cm_pct(std::vector<double> v, double q) {
+    std::sort(v.begin(), v.end());
+    const double pos = q / 100.0 * (double)(v.size() - 1);
+    const size_t i = (size_t)pos;
+    return i + 1 < v.size() ? v[i] + (v[i + 1] - v[i]) * (pos - (double)i) : v.back();
+}
+const CardArt* card_custom(int bp, const uint32_t* scr, int width, int ox, const PortraitTint& ft) {
+    const int key = 100000 + bp;
+    auto it = g_card_art.find(key);
+    if (it != g_card_art.end()) return it->second.ok ? &it->second : nullptr;
+    int mw = 0, mh = 0;
+    const unsigned char* mask = lb_cunits_card_mask(bp, &mw, &mh);
+    if (!mask || mw <= 0 || mh <= 0) return nullptr;   // no mask: stock
+    const bool clear = (((ft.bldcnt >> 6) & 3u) == 0u || ft.evy == 0) && ((ft.master >> 14) == 0u || (ft.master & 0x1Fu) == 0u);
+    static int seen_bp = -1, steady = 0;
+    static std::vector<uint32_t> last;
+    std::vector<uint32_t> cap((size_t)kCardMaskW * kCardMaskH);
+    for (int y = 0; y < kCardMaskH; ++y)
+        for (int x = 0; x < kCardMaskW; ++x) cap[(size_t)y * kCardMaskW + x] = scr[(size_t)(kCardY + y) * width + (size_t)(kCardX + x + ox)];
+    if (!clear || seen_bp != bp || cap != last) { seen_bp = bp; last = cap; steady = clear ? 1 : 0; return nullptr; }
+    if (++steady < 3) return nullptr;
+    CardArt& a = g_card_art[key];
+    a.w = kCardMaskW; a.h = kCardMaskH;
+    a.stock = cap;
+    a.a8.assign(cap.size(), 0);
+    std::vector<double> Ls, Cs;
+    for (int y = 0; y < kCardBodyRows; ++y)
+        for (int x = 0; x < kCardMaskW; ++x) {
+            const uint8_t v = mask[(size_t)(y * mh / kCardMaskH) * mw + (size_t)(x * mw / kCardMaskW)];
+            a.a8[(size_t)y * kCardMaskW + x] = v;
+            if (v >= 128) {
+                const CmLab p = cm_lab(cap[(size_t)y * kCardMaskW + x]);
+                Ls.push_back(p.L);
+                Cs.push_back(std::hypot(p.a, p.b));
+            }
+        }
+    if (Ls.empty()) return nullptr;   // a.ok stays false: stock
+    a.lo = cm_pct(Ls, 2); a.hi = cm_pct(Ls, 98);
+    if (a.hi - a.lo < 8) { a.lo -= 4; a.hi += 4; }
+    a.cref = std::max(6.0, cm_pct(Cs, 90));
+    a.ok = true;
+    std::fprintf(stderr, "[lb_cards] custom card %d: captured, %zu team pixels\n", bp, Ls.size());
+    return &a;
+}
+
+void card_tint_apply(uint32_t* scr, int width, int ox) {
+    CardTintState s;
+    {
+        std::lock_guard<std::mutex> lk(g_card_mu);
+        s = g_card_state;
+    }
+    static PortraitTint ft;   // only the fade fields are used
+    ft.bldcnt = s.bldcnt; ft.evy = s.evy; ft.master = s.master;
+    if (s.bp >= 0) {
+        const int i = card_entry(s.bp);
+        const CardArt* a = nullptr;
+        int key = i;
+        if (i >= 0) {
+            const CardArt& r = card_art(i);
+            if (r.ok) a = &r;
+        } else {
+            a = card_custom(s.bp, scr, width, ox, ft);
+            key = 100000 + s.bp;
+        }
+        if (!a) return;
+        const int cand = card_match(*a, scr, width, ox, kCardX, kCardY, kCardBodyRows, nullptr, ft, 0.85);
+        if (cand < 0) return;
+        card_paint(*a, card_recoloured(key, *a, s.sh), scr, width, ox, kCardX, kCardY, a->h, cand, ft);
+        return;
+    }
+    if (!s.end) return;
+    // The victory/defeat picture: whichever end picture the screen shows.
+    static unsigned diag = 0;   // docs/486 diagnostic, rate-limited
+    int tried = 0, decoded = 0;
+    for (int i = 0; i < (int)(sizeof kCardMasks / sizeof kCardMasks[0]); ++i) {
+        const CardMask& m = kCardMasks[i];
+        if (!(m.flags & kCardFlagEndScreen) || (m.flags & kCardFlagDisabled)) continue;
+        ++tried;
+        const CardArt& a = card_art(i);
+        if (!a.ok) continue;
+        ++decoded;
+        if (card_match(a, scr, width, ox, 0, 0, a.h, &a.probe, ft, 0.75) < 0) continue;
+        const int cand = card_match(a, scr, width, ox, 0, 0, a.h, nullptr, ft, 0.70);   // text is drawn over it
+        if (cand < 0) continue;
+        card_paint(a, card_recoloured(i, a, s.end_sh), scr, width, ox, 0, 0, a.h, cand, ft);
+        if (++diag % 600u == 1u)
+            std::fprintf(stderr, "[lb_cards] end picture %s: painted (width %d, ox %d)\n", m.name, width, ox);
+        return;
+    }
+    if (++diag % 600u == 1u)
+        std::fprintf(stderr, "[lb_cards] end screen: no picture matched (%d tried, %d decoded, width %d, ox %d)\n",
+                     tried, decoded, width, ox);
+}
 }  // namespace
 extern unsigned g_boot_gen;   // below: bumped by every reset
 namespace {
+// DIAGNOSTIC (BR-0081, docs/485): A 3D UNIT WITH NO MODEL RECORD. Building_Draw3D
+// (reached only by direct calls, so it cannot be hooked) draws a Transport or
+// Siege unit from the record FUN_0200D114 finds by (blueprint number at
+// record+4, the entity's team byte +0xD5) among the 12 at kTealModels; with no
+// match it silently uses record 0. The level load (FUN_02035C48) gives each
+// (blueprint, team) of a category 5/6 roster unit one record, first free
+// (FUN_0200D0E4, -1 when all 12 are taken). Once a second this checks every
+// live category 5/6 unit against the records and logs, once per key, one
+// whose key has no loaded record (+0x54 the model resource), and when all 12
+// records are in use. Host-side reads only.
+void model_records_watch() {
+    static unsigned tick = 0, gen = 0;
+    static std::vector<uint32_t> said;
+    if (gen != g_boot_gen) { gen = g_boot_gen; said.clear(); }
+    if (++tick < 60u) return;
+    tick = 0;
+    const uint32_t pool = bus_read_u32(kEntityPoolPtr);
+    if (!guest_ptr(pool)) return;
+    const uint32_t arr = bus_read_u32(pool + 8u);
+    const int32_t cnt = (int32_t)bus_read_u32(pool + 0xCu);
+    int used = 0;
+    for (uint32_t k = 0; k < 12u; ++k) used += bus_read_u8(kTealModels + kTealModelStride * k + 0x60u) == 0u;
+    for (int32_t i = 0; guest_ptr(arr) && i < cnt && i < 4096; ++i) {
+        const uint32_t e = bus_read_u32(arr + 4u * (uint32_t)i);
+        if (!guest_ptr(e) || !bus_read_u8(e + 0x227u)) continue;
+        const uint8_t cat = entity_category(e);
+        if (cat != 5u && cat != 6u) continue;
+        const uint32_t bp = unit_blueprint(e);
+        if (!bp) continue;
+        const uint32_t idx = bus_read_u16(bp + 4u), team = bus_read_u8(e + 0xD5u);
+        int rec = -1;
+        for (uint32_t k = 0; k < 12u && rec < 0; ++k) {
+            const uint32_t m = kTealModels + kTealModelStride * k;
+            if (bus_read_u32(m + 0x64u) == idx && bus_read_u32(m + 0x68u) == team) rec = (int)k;
+        }
+        const bool ok = rec >= 0 && bus_read_u32(kTealModels + kTealModelStride * (uint32_t)rec + 0x54u) != 0u;
+        if (ok) continue;
+        const uint32_t key = (idx << 8) | team;
+        if (std::find(said.begin(), said.end(), key) != said.end() || said.size() >= 64u) continue;
+        said.push_back(key);
+        std::fprintf(stderr, "[lb_models] BR-0081: unit %08X (blueprint %u, team %u, owner %u, category %u) has %s; "
+                     "the draw takes record 0's model. %d of 12 records in use\n", e, idx, team,
+                     (unsigned)bus_read_u8(e + 0xE4u), (unsigned)cat,
+                     rec < 0 ? "no model record" : "a record with no model loaded", used);
+        std::fflush(stderr);
+    }
+}
+
 void models_paint() {
+    model_records_watch();   // BR-0081 diagnostic
     static unsigned gen = 0;
     if (gen != g_boot_gen) {   // VRAM is new: nothing is held
         gen = g_boot_gen;
@@ -10471,6 +11235,20 @@ void models_paint() {
         if (teal) {
             std::memcpy(b[kTealSlot], b[kTealSrcSlot], 0x20);
             for (unsigned i = 0; i < 3; ++i) b[kTealSlot][kTealEntry + i] = teal_shade(i);
+            // BR-0082 (docs/485): a re-skinned custom model keeps team pixels at
+            // other entries too, each holding the bank's own team shade; in
+            // Grey's bank those are Grey's shades. Each such entry (one that
+            // differs from Red's bank 1) takes the matching teal shade.
+            for (unsigned j = 0; j < 16; ++j) {
+                if (j >= kTealEntry && j <= kTealEntry + 2) continue;
+                const uint16_t v = b[kTealSrcSlot][j];
+                if (v == b[1][j]) continue;
+                for (unsigned s = 0; s < 3; ++s)
+                    if (v == b[kTealSrcSlot][kTealEntry + s]) { b[kTealSlot][j] = teal_shade(s); break; }
+            }
+            if (teal_style_now() == 2)   // docs/485: the greys dark blue too
+                for (unsigned i = 1; i < 16; ++i)
+                    if (i < kTealEntry || i > kTealEntry + 2) b[kTealSlot][i] = rdb_blue_of(b[kTealSlot][i]);
         }
         if (is_shark)
             for (unsigned s = 0; s < 7u; ++s) {
@@ -10614,9 +11392,13 @@ void teal_palette_ensure() {
     }
     uint8_t want[0x20];
     std::memcpy(want, e + cached + 15u * 0x20u, sizeof want);
+    // docs/485: style 2's swatch and badges in its own colours (light, mid
+    // and dark red, and its dark blue in the slot of the ramp's lighter mid).
+    static const uint16_t kRdbRamp[4] = {0x221Fu, 0x08BFu, 0x0017u, 0x7D80u};
+    const uint16_t* ramp = teal_style_now() == 2 ? kRdbRamp : kTealRamp;
     for (int i = 0; i < 4; ++i) {
-        want[(11 + i) * 2] = (uint8_t)(kTealRamp[i] & 0xFFu);
-        want[(11 + i) * 2 + 1] = (uint8_t)(kTealRamp[i] >> 8);
+        want[(11 + i) * 2] = (uint8_t)(ramp[i] & 0xFFu);
+        want[(11 + i) * 2 + 1] = (uint8_t)(ramp[i] >> 8);
     }
     uint8_t* dst = e + cached + (uint32_t)kTealBank * 0x20u;
     if (std::memcmp(dst, want, sizeof want) == 0) return;
@@ -10915,6 +11697,9 @@ const NdsDispatchEntry kOverrideTable[] = {
        call. docs/455. */
     {kClientLobbyShow, 1u, client_lobby_show_override, nullptr}, /* 0x020B61A8 */
     {kClientLobbyTick, 1u, client_lobby_tick_override, nullptr}, /* 0x020B64B4 */
+    /* Thumb. CustomizeArmy::virtual_09: notes that the army screen is the one
+       updating, for its scroll bar (BR-0080, docs/485); a pure tail call. */
+    {kArmyUpdate, 1u, army_update_observer, nullptr},      /* 0x020B9188 */
     /* Thumb. The army screen's list fill: an observer that starts the scroll
        window's count (docs/450); then a pure tail call. */
     {kArmyListFill, 1u, army_list_fill_observer, nullptr}, /* 0x020B96FC */
@@ -11003,6 +11788,8 @@ const NdsDispatchEntry kOverrideTable[] = {
     /* ARM. FX_Div: with Native Game Logic, the quotient computed here, not
        through the emulated divider (docs/479). Otherwise a pure tail call. */
     {kFxDiv, 0u, fxdiv_override, nullptr},                 /* 0x0210A6F4 */
+    /* ARM. The file system's card read: native under Faster CPU (docs/484). */
+    {kCardRead, 0u, card_read_override, nullptr},          /* 0x02117610 */
     /* ARM. The four WM calls the game makes past WH. docs/423. */
     {kWmConnectedAids, 0u, wm_connected_override, nullptr}, /* 0x02118628 */
     {kWmLinkLevel, 0u, wm_link_override, nullptr},         /* 0x021188C4 */
@@ -11030,7 +11817,7 @@ static_assert(kRosterBuild < kPassability && kPassability < kOccLayers && kOccLa
               kSelRect < kReadyToggle && kReadyToggle < kMainMenuUpdate &&
               kReadyToggle < kClientLobbyShow &&
               kClientLobbyShow < kClientLobbyTick &&
-              kClientLobbyTick < kArmyListFill &&
+              kClientLobbyTick < kArmyUpdate && kArmyUpdate < kArmyListFill &&
               kArmyListFill < kLobbySettingsTick &&
               kLobbySettingsTick < kMainMenuUpdate &&
               kSelRect < kMainMenuUpdate && kMainMenuUpdate < kEnemyMap &&
@@ -11630,8 +12417,12 @@ namespace {
 struct CatCloak {
     bool active = false, calling = false;
     uint32_t sp_call = 0, sp = 0, lr = 0, r12 = 0, r[4] = {0, 0, 0, 0}, arg5 = 0;
-    uint32_t bp[3] = {0, 0, 0};
-    uint8_t cat[3] = {0, 0, 0};   // what each had
+    // The Wolf, Robot and Monkey, and (SG-0109, docs/485) custom units whose
+    // "role" changed their category: 3 + 128 at most.
+    static constexpr int kMax = 3 + 128;
+    uint32_t bp[kMax] = {};
+    uint8_t cat[kMax] = {};       // what each had
+    uint8_t to[kMax] = {};        // what each reads as during the call
     int n = 0;
     bool share = false;           // BR-0073: sheets shared across armies for this call
     uint32_t sess_old = 0;        // session +0x74 as it was
@@ -11654,6 +12445,7 @@ CatCloak g_cloak_load, g_cloak_anim;
 // The flag table it writes (0x02151DE0) is read by FUN_0202DD18 alone.
 // Otherwise the vanilla path, untouched.
 constexpr uint32_t kSession = 0x02156A24u;   // FUN_020A186C
+int custom_art_category(uint32_t bp);         // SG-0109, below
 int sprite_sets_wanted(void) {
     const uint32_t world = bus_read_u32(0x0215540Cu);
     const uint32_t teams = guest_ptr(world) ? bus_read_u32(world + 8u) : 0u;
@@ -11678,28 +12470,51 @@ int sprite_sets_wanted(void) {
                 const uint8_t cat = bus_read_u8(bp + 0x5Cu);
                 const unsigned idx = bus_read_u16(bp + 4u);
                 const bool creature = creatures && (idx == 169 || idx == 138 || idx == 153) && (cat == 4u || cat == 0u);
-                if ((cat >= 1u && cat <= 3u) || creature) ++sets;
+                const bool moved = cat == 4u && custom_art_category(bp) >= 1;   // SG-0109: loads as its template
+                if ((cat >= 1u && cat <= 3u) || creature || moved) ++sets;
             }
         }
     }
     return sets;
 }
 
-// The blueprints of the Wolf, Robot and Monkey that are in category 4 now.
-int cloak_mounted_blueprints(uint32_t* out) {
-    if (!g_blueprint_base || !lb_creatures_live()) return 0;
+// SG-0109 (docs/485): a custom unit whose "role" moved it to another ground
+// slot keeps its template's sprites, so the two sprite steps see the
+// template's category (2 or 3), as the creatures' see 2. -1: not such a unit.
+extern "C" int lb_cunits_art_category(int k);       /* lb_cunits.cpp */
+extern "C" int lb_cunits_of_battle_record(unsigned int rec);
+int custom_art_category(uint32_t bp) {
+    if (!bp) return -1;
+    const int k = lb_cunits_of_battle_record(bp);
+    const int art = k >= 0 ? lb_cunits_art_category(k) : -1;
+    return art >= 1 && art <= 3 && bus_read_u8(bp + 0x5Cu) != (uint8_t)art ? art : -1;
+}
+// The blueprints of the Wolf, Robot and Monkey that are in category 4 now
+// (read as 2), then the custom units of SG-0109 (read as their art category).
+int cloak_mounted_blueprints(uint32_t* out, uint8_t* to, int cap) {
     int n = 0;
-    for (int rec : {169, 138, 153}) {
-        const uint32_t a = record_addr(g_blueprint_base, (uint32_t)rec);
-        const uint8_t cat = bus_read_u8(a + 0x5Cu);
-        if (cat == 4u || cat == 0u) out[n++] = a;   // Mounted, or Hero
+    if (g_blueprint_base && lb_creatures_live())
+        for (int rec : {169, 138, 153}) {
+            const uint32_t a = record_addr(g_blueprint_base, (uint32_t)rec);
+            const uint8_t cat = bus_read_u8(a + 0x5Cu);
+            if ((cat == 4u || cat == 0u) && n < cap) {   // Mounted, or Hero
+                to[n] = 2u;
+                out[n++] = a;
+            }
+        }
+    for (int k = 0, nk = lb_cunits_count(); k < nk && n < cap; ++k) {
+        const uint32_t a = lb_cunits_battle_record(k);
+        const int art = guest_ptr(a) ? custom_art_category(a) : -1;
+        if (art < 0) continue;
+        to[n] = (uint8_t)art;
+        out[n++] = a;
     }
     return n;
 }
 void cloak_set(CatCloak& c, bool on) {
     for (int i = 0; i < c.n; ++i) {
         if (on) c.cat[i] = bus_read_u8(c.bp[i] + 0x5Cu);
-        bus_write_u8(c.bp[i] + 0x5Cu, on ? 2u : c.cat[i]);
+        bus_write_u8(c.bp[i] + 0x5Cu, on ? c.to[i] : c.cat[i]);
     }
 }
 // The three-way state machine shared by both wrappers. `target` is the
@@ -11708,6 +12523,7 @@ void cloak_set(CatCloak& c, bool on) {
 static bool spr_ext_is_live(void);   // docs/479, below
 static void spr_ext_reset(void);
 static bool spr_ext_go_live(void);
+static void spr_pool_topup(void);    // BR-0079 (docs/485), below
 extern "C" int lb_setting_big_sprite_pool(void);   // lb_overlay.cpp
 bool cloak_enter(CatCloak& c, uint32_t target, void (*original)(void), bool per_entity) {
     if (c.active) {
@@ -11729,7 +12545,8 @@ bool cloak_enter(CatCloak& c, uint32_t target, void (*original)(void), bool per_
         lb_override_return();
         return true;
     }
-    uint32_t bps[3];
+    uint32_t bps[CatCloak::kMax];
+    uint8_t tos[CatCloak::kMax];
     int n = 0;
     if (per_entity) {   // Unit_BuildBillboard: r1 is the entity
         const uint32_t ent = g_cpu.R[1];
@@ -11737,16 +12554,27 @@ bool cloak_enter(CatCloak& c, uint32_t target, void (*original)(void), bool per_
         const uint8_t cat = bp ? bus_read_u8(bp + 0x5Cu) : 0xFFu;
         if (cat == 4u || cat == 0u) {
             const unsigned idx = bus_read_u16(bp + 4u);
-            if ((idx == 169 || idx == 138 || idx == 153) && g_blueprint_base && lb_creatures_live())
+            if ((idx == 169 || idx == 138 || idx == 153) && g_blueprint_base && lb_creatures_live()) {
+                tos[n] = 2u;
                 bps[n++] = bp;
+            }
+        }
+        // SG-0109: a custom unit moved to another ground slot draws as its template.
+        if (n == 0 && cat >= 2u && cat <= 4u && lb_cunits_count() > 0) {
+            const int art = custom_art_category(bp);
+            if (art >= 0) {
+                tos[n] = (uint8_t)art;
+                bps[n++] = bp;
+            }
         }
     } else {
-        n = cloak_mounted_blueprints(bps);
+        n = cloak_mounted_blueprints(bps, tos, CatCloak::kMax);
     }
     // BR-0073: share sheets across armies when the rosters want more than the
     // pool's 9 three-sheet sets (the level load only).
     bool share = false;
     if (!per_entity) {
+        spr_pool_topup();   // BR-0079: spare sheet objects behind the cartridge's 45
         const int sets = sprite_sets_wanted();
         // The larger pool (docs/479) gives every army its own sheets; the
         // sharing below is only the fallback with that setting off.
@@ -11777,7 +12605,10 @@ bool cloak_enter(CatCloak& c, uint32_t target, void (*original)(void), bool per_
         bus_write_u32(kSession + 0x74u, 0u);
     }
     c.n = n;
-    for (int i = 0; i < n; ++i) c.bp[i] = bps[i];
+    for (int i = 0; i < n; ++i) {
+        c.bp[i] = bps[i];
+        c.to[i] = tos[i];
+    }
     for (int i = 0; i < 4; ++i) c.r[i] = g_cpu.R[i];
     c.r12 = g_cpu.R[12];
     c.lr = g_cpu.R[14];
@@ -11882,6 +12713,136 @@ static void spr_ext_reset(void) {
     }
     g_sprext = SprExt{};
 }
+// BR-0079 (docs/485): THE SHEET OBJECTS RAN OUT. NitroMain makes two unit
+// heaps once, at boot (FUN_02031ABC, 0x020F683C): [0x02151EB8] holds 45
+// sheet objects of 0xA0 bytes (FUN_0204CD1C(0xA0, 0x2D, ...)), [0x02151EBC]
+// 64 records of 0xC bytes (FUN_02031B04). Every loaded sheet takes one of
+// each (FUN_02032718/0203266C/02032864 -> FUN_0204CDA8, and FUN_02031FD8).
+// 45 covers two armies; three armies with the extension table above load
+// more sheets than that, and FUN_0204CDA8 then returns 0, which the cartridge
+// never checks: the mounted loader's sheet (FUN_0202E280 slot 48+n) was
+// built at address 0, over the ITCM, and the game crashed while the level
+// loaded (the BR-0079 log: [r4+0x38] read 0xE16F0F11, the ITCM's word at
+// 0x38).
+//
+// The heaps are plain free lists (FUN_020F94C0 pops the head at heap+0x24,
+// FUN_020F95F0 pushes), so spare blocks are appended at the TAIL of each
+// list: the cartridge's own blocks are still handed out first and in the
+// same order, and a spare is used only where the stock heap would have
+// answered 0. The spares live in two 1 KB holes of docs/412's zero run,
+// between the map-mark copy (to 0x023FAC00) and the extension table
+// (0x023FB000), and between that table's end (0x023FB400) and the gather
+// buffers (0x023FB800); claimed while zero, once per boot.
+struct SprSpare { int pool; uint32_t at; uint32_t size; int count; };
+const SprSpare kSprSpares[] = {
+    {0, 0x023FAC00u, 0xA0u, 6},   // 0x023FAC00..0x023FAFC0
+    {1, 0x023FAFC0u, 0x0Cu, 5},   //  ..0x023FAFFC
+    {0, 0x023FB400u, 0xA0u, 6},   // 0x023FB400..0x023FB7C0
+    {1, 0x023FB7C0u, 0x0Cu, 5},   //  ..0x023FB7FC
+};
+constexpr uint32_t kSheetPools = 0x02151EB8u;
+unsigned g_spare_gen[2] = {0u, 0u};   // g_boot_gen + 1 when this boot's heap was seen to
+bool g_spare_owned[2] = {false, false};   // this port wrote spares there (in some boot)
+
+// The unit heap's handle ([[0x02151EB8 + 4*pool]]), or 0.
+static uint32_t spr_pool_heap(int pool) {
+    const uint32_t p = bus_read_u32(kSheetPools + 4u * (uint32_t)pool);
+    if (!guest_ptr(p)) return 0u;
+    const uint32_t h = bus_read_u32(p);
+    return guest_ptr(h) ? h : 0u;
+}
+// Free blocks in the heap's list (and its last one), or -1 for a list that
+// does not look like one.
+static int spr_pool_free(uint32_t heap, uint32_t* tail) {
+    int n = 0;
+    uint32_t last = 0u, b = bus_read_u32(heap + 0x24u);
+    while (b && n < 1024) {
+        if (!guest_ptr(b)) return -1;
+        last = b;
+        ++n;
+        b = bus_read_u32(b);
+    }
+    if (b) return -1;
+    if (tail) *tail = last;
+    return n;
+}
+static void spr_pool_topup(void) {
+    for (int pool = 0; pool < 2; ++pool) {
+        if (g_spare_gen[pool] == g_boot_gen + 1u) continue;
+        const uint32_t heap = spr_pool_heap(pool);
+        if (!heap) continue;
+        const uint32_t want = pool == 0 ? 0xA0u : 0x0Cu;
+        uint32_t tail = 0u;
+        const int before = spr_pool_free(heap, &tail);
+        if (bus_read_u32(heap + 0x28u) != want || before < 0) {
+            std::fprintf(stderr, "[lb_sprpool] BR-0079: sheet heap %d is not the expected unit heap "
+                         "(block %u, free %d): no spares\n", pool, bus_read_u32(heap + 0x28u), before);
+            std::fflush(stderr);
+            g_spare_gen[pool] = g_boot_gen + 1u;
+            continue;
+        }
+        // Claimed only while zero; a previous boot's spares (a game Reset
+        // keeps the RAM above the heap) are this port's own.
+        const bool ours = g_spare_owned[pool];
+        bool clear = true;
+        for (const SprSpare& s : kSprSpares) {
+            if (s.pool != pool || ours) continue;
+            for (uint32_t o = 0; o < s.size * (uint32_t)s.count && clear; o += 4u)
+                clear = bus_read_u32(s.at + o) == 0u;
+        }
+        g_spare_gen[pool] = g_boot_gen + 1u;
+        if (!clear) {
+            std::fprintf(stderr, "[lb_sprpool] BR-0079: the spare memory for sheet heap %d is in use: no spares\n", pool);
+            std::fflush(stderr);
+            continue;
+        }
+        int added = 0;
+        for (const SprSpare& s : kSprSpares) {
+            if (s.pool != pool) continue;
+            for (int k = 0; k < s.count; ++k) {
+                const uint32_t blk = s.at + s.size * (uint32_t)k;
+                for (uint32_t o = 0; o < s.size; o += 4u) bus_write_u32(blk + o, 0u);
+                if (tail) bus_write_u32(tail, blk);   // the tail's next
+                else bus_write_u32(heap + 0x24u, blk);
+                tail = blk;
+                ++added;
+            }
+        }
+        g_spare_owned[pool] = true;
+        std::fprintf(stderr, "[lb_sprpool] BR-0079: sheet heap %d (%u-byte blocks): %d free, %d spare(s) "
+                     "appended after them\n", pool, want, before, added);
+        std::fflush(stderr);
+    }
+}
+
+// DIAGNOSTIC (docs/485): the sheet heaps' low-water mark, logged each time it
+// falls below 8 free blocks, once a second at most (two short list walks).
+// BR-0049/50/51 (EMP on a hotwired unit) left the same trace as BR-0079 --
+// writes through address 0 into the ITCM -- and the next such log should say
+// whether a sheet heap was what ran dry. Host-side reads only.
+void spr_pool_watch(void) {
+    static unsigned tick = 0u;
+    static int low[2] = {1 << 30, 1 << 30};
+    static unsigned gen = 0u;
+    if (gen != g_boot_gen + 1u) {
+        gen = g_boot_gen + 1u;
+        low[0] = low[1] = 1 << 30;
+    }
+    if (++tick < 60u) return;
+    tick = 0u;
+    for (int pool = 0; pool < 2; ++pool) {
+        const uint32_t heap = spr_pool_heap(pool);
+        const int f = heap ? spr_pool_free(heap, nullptr) : -1;
+        if (f < 0 || f >= low[pool]) continue;
+        low[pool] = f;
+        if (f < 8) {
+            std::fprintf(stderr, "[lb_sprpool] sheet heap %d: %d free block(s) (lowest so far)%s\n", pool, f,
+                         f == 0 ? " -- the next sheet load gets a null object" : "");
+            std::fflush(stderr);
+        }
+    }
+}
+
 // The index a sheet object holds in the extension table, or -1.
 static int spr_ext_index(uint32_t sheet) {
     if (!g_sprext.live || !sheet) return -1;
@@ -11908,6 +12869,22 @@ void spr_slot_alloc_override(void) {
         // its own copy of a sheet inside the 33.
         if (g_cpu.R[0] == kSprOverflow) {
             int idx = -1;
+            // BR-0079: a sheet in a new slot takes a sheet object, and the
+            // mounted loader still wants up to three after this. With fewer
+            // free than that, the sheet reuses slot 0's (what the stock
+            // overflow draws), so nothing is built at address 0.
+            const uint32_t heap = spr_pool_heap(0);
+            const int free_objs = heap ? spr_pool_free(heap, nullptr) : -1;
+            const uint32_t mgr = bus_read_u32(kSprMgr);
+            if (free_objs >= 0 && free_objs < 4 && guest_ptr(mgr) && bus_read_u32(mgr + 4u) != 0u) {
+                std::fprintf(stderr, "[lb_sprpool] BR-0079: sheet \"%s\" (kind %u) found no slot and only %d sheet "
+                             "object(s) are free: it shares slot 0's sheet\n", g_sprslot_name, g_sprslot_kind,
+                             free_objs);
+                std::fflush(stderr);
+                g_cpu.R[0] = mgr + 4u;
+                wrap_finish(w);
+                return;
+            }
             if (g_sprext.n < kSprExtMax && spr_ext_go_live()) {
                 idx = g_sprext.n++;
                 std::snprintf(g_sprext.name[idx], sizeof g_sprext.name[idx], "%s", g_sprslot_name);
@@ -19163,7 +20140,8 @@ void teal_build_image() {
     for (uint32_t w = 0; w < 3u; ++w) {
         for (uint32_t c = 0; c < 6u; ++c)
             teal_put16(0x80u + 14u * w + 2u * c, (uint16_t)bus_read_u16(0x02127A68u + 12u * w + 2u * c));
-        teal_put16(0x80u + 14u * w + 12u, kTealDot);
+        // docs/485: style 2's dot is its light red (the Red team's is a pure red).
+        teal_put16(0x80u + 14u * w + 12u, teal_style_now() == 2 ? kTealShades[2][0] : kTealDot);
     }
     // The model slot map: the stock {1,0,2,3,4,5} with its 5 -> 6 folded in, then teal's bank 5.
     static const uint8_t kSlots[7] = {1, 0, 2, 3, 4, 6, 5};
@@ -19283,6 +20261,46 @@ static void apply_text_count(void) {
     std::fflush(stderr);
 }
 
+// docs/485: STYLE 2'S GREYS ON THE SPRITES. View_SetupLevelBGs (0x02038BA8)
+// gives team t the sprite banks 2t and 2t+1 of the shared faction palette --
+// the PalettePtr of the sprite manager's slot-0 sheet ([[0x02151DD8]+4]+0x54)
+// -- and writes only their entries 12-14, through FUN_02028498 (the colour
+// data at [[pal+0x34]+0xC], then pal+0 = 2 to upload it). Every team bank
+// keeps bank 0's greys in entries 2-5. With style 2, a team whose colour is 6
+// (match setup +0xDC + 4*player, the player at team+0x10) gets bank 13's dark
+// blues there; otherwise, a bank holding those blues gets its greys back.
+// Only the entries that hold exactly the expected words are touched. Colours
+// only: client-local, as the style is.
+static void teal_sprite_greys(bool want) {
+    const uint32_t mgr = bus_read_u32(0x02151DD8u);
+    const uint32_t sheet = guest_ptr(mgr) ? bus_read_u32(mgr + 4u) : 0u;
+    const uint32_t pal = guest_ptr(sheet) ? bus_read_u32(sheet + 0x54u) : 0u;
+    if (!guest_ptr(pal) || bus_read_u8(pal + 1u) != 0u) return;
+    const uint32_t res = bus_read_u32(pal + 0x34u);
+    const uint32_t data = guest_ptr(res) ? bus_read_u32(res + 0xCu) : 0u;
+    const uint32_t world = bus_read_u32(0x0215540Cu), setup = bus_read_u32(0x02154080u);
+    if (!guest_ptr(data) || !guest_ptr(world) || !guest_ptr(setup)) return;
+    const uint32_t teams = bus_read_u32(world + 8u);
+    const int32_t nt = (int32_t)bus_read_u32(world + 0xCu);
+    bool dirty = false;
+    for (int32_t t = 0; guest_ptr(teams) && t < nt && t < 6; ++t) {
+        const uint32_t team = bus_read_u32(teams + 4u * (uint32_t)t);
+        if (!guest_ptr(team)) continue;
+        const uint32_t player = bus_read_u32(team + 0x10u);
+        const bool blue = want && player < 8u && bus_read_u32(setup + 0xDCu + 4u * player) == 6u;
+        for (uint32_t bank = 2u * (uint32_t)t; bank < 2u * (uint32_t)t + 2u; ++bank)
+            for (uint32_t i = 0; i < 4u; ++i) {
+                const uint32_t at = data + (bank * 16u + 2u + i) * 2u;
+                const uint16_t from = blue ? kRdbGrey[i] : kRdbBlue[i], to = blue ? kRdbBlue[i] : kRdbGrey[i];
+                if (bus_read_u16(at) == from) {
+                    bus_write_u16(at, to);
+                    dirty = true;
+                }
+            }
+    }
+    if (dirty) bus_write_u8(pal, 2u);
+}
+
 static void apply_teal(void) {
     static unsigned gen = 0;   // a reset reloads the image: stock again
     if (gen != g_boot_gen) {
@@ -19292,6 +20310,7 @@ static void apply_teal(void) {
     }
     if (!lb_teal_live() || g_teal_dead) {
         if (g_teal_on) {
+            teal_sprite_greys(false);   // docs/485: style 2's blues back to greys
             teal_release(true);
             std::fprintf(stderr, "[lb_teal] off: stock tables back\n");
             std::fflush(stderr);
@@ -19309,6 +20328,7 @@ static void apply_teal(void) {
                 }
                 style = now;
             }
+            teal_sprite_greys(now == 2);   // docs/485
             return;
         }
         teal_release(false);
@@ -21342,7 +22362,111 @@ extern "C" void lb_port_on_guest_reset(void) {
     std::fflush(stderr);
 }
 
+extern "C" unsigned g_lb_clock_q8;   /* docs/484, runtime_arm.cpp */
+// docs/484 DIAGNOSTIC (LB_STACKWATCH=1): NitroSDK's thread-stack guard words.
+// OS_CreateThread writes 0xFDDB597C / 0x7BF9DD5B at the two ends of every
+// thread stack. A Faster CPU match crashed resuming a thread whose saved pc
+// was 0xFDDB597C. This finds every guard in main RAM (rescanning for new
+// threads) and logs the first VBlank at which one is overwritten.
+static void lb_stackwatch(void) {
+    static const bool on = std::getenv("LB_STACKWATCH") != nullptr;
+    if (!on) return;
+    static uint32_t addr[128];
+    static uint32_t want[128];
+    static unsigned n = 0, frames = 0, reported = 0;
+    ++frames;
+    if (frames % 600u == 1u) {
+        unsigned found = 0;
+        for (uint32_t a = 0x02000000u; a < 0x02400000u; a += 4u) {
+            const uint32_t v = bus_read_u32(a);
+            if (v != 0xFDDB597Cu && v != 0x7BF9DD5Bu) continue;
+            bool known = false;
+            for (unsigned i = 0; i < n; ++i) if (addr[i] == a) { known = true; break; }
+            if (known || n >= 128u) continue;
+            addr[n] = a; want[n] = v; ++n; ++found;
+        }
+        if (found)
+            std::fprintf(stderr, "[lb_stackwatch] frame %u: %u new guard word(s), %u watched\n",
+                         frames, found, n);
+        // The thread list: OSi_ThreadInfo (0x02166240) +8 -> list head;
+        // OSThread +0x68 next, +0x6C id, +0x90 stack top, +0x94 bottom.
+        if (frames == 1u || found) {
+            uint32_t t = bus_read_u32(0x02166240u + 8u);
+            for (int k = 0; k < 16 && t >= 0x02000000u && t < 0x02400000u; ++k) {
+                std::fprintf(stderr, "[lb_stackwatch]   thread %08X id %u state %u pc %08X sp %08X stack %08X..%08X\n",
+                             t, bus_read_u32(t + 0x6Cu), bus_read_u32(t + 0x64u),
+                             bus_read_u32(t + 0x40u), bus_read_u32(t + 0x38u),
+                             bus_read_u32(t + 0x90u), bus_read_u32(t + 0x94u));
+                t = bus_read_u32(t + 0x68u);
+            }
+        }
+    }
+    for (unsigned i = 0; i < n; ++i) {
+        const uint32_t v = bus_read_u32(addr[i]);
+        if (v == want[i]) continue;
+        if (reported < 8u) {
+            ++reported;
+            std::fprintf(stderr, "[lb_stackwatch] frame %u: guard %08X at %08X now %08X; words below: %08X %08X %08X %08X\n",
+                         frames, want[i], addr[i], v, bus_read_u32(addr[i] - 4u), bus_read_u32(addr[i] - 8u),
+                         bus_read_u32(addr[i] - 12u), bus_read_u32(addr[i] - 16u));
+        }
+        want[i] = v;   // report each breach once
+    }
+}
+
+extern "C" void runtime_set_deep_trace(uint32_t on);
 extern "C" void lb_patches_on_vblank(void) {
+    lb_stackwatch();   // docs/484 diagnostic
+    {   // docs/484 diagnostic: LB_DEEPTRACE_AT=<vblank> arms the runtime's event ring
+        static const long at = [] { const char* v = std::getenv("LB_DEEPTRACE_AT"); return v ? std::atol(v) : -1L; }();
+        static long vbl = 0;
+        if (at >= 0 && ++vbl == at) {
+            runtime_set_deep_trace(1);
+            std::fprintf(stderr, "[lb_deeptrace] armed at vblank %ld\n", vbl);
+        }
+    }
+    // docs/484: per-block cycle accounting and the faster clock follow Faster
+    // CPU (a replay's clock, else the host's online, else this machine's), so
+    // a recording made before it and DS-exact play keep the DS's clock and
+    // per-instruction timing. Set here, between slices, where no block is
+    // part-way. LB_EXACT_TICK=1 keeps the DS's timing regardless (A/B).
+    {
+        // The replay first: on the first VBlank it is not yet loaded, and
+        // the live clock would run one frame before the recorded one.
+        lb_demo_apply_env();
+        static const bool exact = std::getenv("LB_EXACT_TICK") != nullptr;
+        const int q8 = exact ? 0 : faster_cpu_clock_effective();
+        g_lb_batch = q8 ? 1u : 0u;
+        if (q8 == kFasterCpuGovernor) {
+            // THE GOVERNOR (get_ms_override): a fixed 2x clock let the guest
+            // finish each two-VBlank pass early and halt, so the host's work
+            // came in bursts, one frame ~20 ms and the next light. The clock
+            // is instead what the last passes needed.
+            // Battles only. Booting and loading run long passes too, and a
+            // fast clock there only spins the guest's wait loops faster:
+            // with a 4x clock the frontend stalled before the title screen.
+            {
+                int lb_cx = 0, lb_cy = 0;
+                if (!lb_field_camera(&lb_cx, &lb_cy)) g_gov_q8 = 256u;
+            }
+            const unsigned gov = g_gov_q8;
+            static unsigned said = 0;
+            static unsigned long long gsum = 0, gn = 0;
+            g_lb_clock_q8 = gov;
+            gsum += gov;
+            if (++gn == 1800u) {
+                if (said < 400u) {
+                    ++said;
+                    std::fprintf(stderr, "[lb_cpu] governor: mean clock %.2fx of the DS's over 1800 frames (now %.2fx)\n",
+                                 256.0 * (double)gn / (double)gsum, 256.0 / (double)gov);
+                    std::fflush(stderr);
+                }
+                gsum = gn = 0;
+            }
+        } else {
+            g_lb_clock_q8 = q8 ? (unsigned)q8 : 256u;
+        }
+    }
     // Before anything reads the camera. See the note above.
     //
     // Bounds first: it widens the guest's own clamp, so the guest holds the
@@ -21407,6 +22531,7 @@ extern "C" void lb_patches_on_vblank(void) {
     match_log_tick();                 // match start/end + BR-0073 page check
     creature_tint_prepare();          // docs/437
     portrait_tint_refresh();          // docs/454
+    card_tint_refresh();              // docs/486 (one flag check when off)
     apply_insn_hook_policy();
     // Fill the tilemap columns the guest leaves empty, so the widened field
     // shows terrain rather than black. Off unless LB_WIDEMAP is set.
@@ -21429,6 +22554,7 @@ extern "C" void lb_patches_on_vblank(void) {
     lb_teams_portrait_tick();   // docs/390: the Custom/Random portrait records
     lb_cunits_tick();           // docs/448: register the appended blueprints
     teal_tick();                // docs/412: teal's bounds and clamp
+    spr_pool_watch();           // BR-0079/BR-0049 (docs/485): sheet heap low-water log
     drawer_anim_tick();         // BR-0030: a drawer sliding, for lb_hud.cpp
     opponent_open_portrait_tick();   // docs/393: and the opening choice's
     mod_names_tick();           // docs/391: the mod maps' names
@@ -21841,9 +22967,11 @@ extern "C" const uint32_t* lb_top_postprocess(const uint32_t* px, int width) {
         std::lock_guard<std::mutex> lk(g_ptint_mu);
         t = g_ptint;
     }
-    if (!px || t.n == 0 || width < 256) return px;
+    const bool cards = g_card_active.load(std::memory_order_relaxed);   // docs/486
+    if (!px || (t.n == 0 && !cards) || width < 256) return px;
     const int ox = width > 256 ? (width - 256) / 2 : 0;   // a wider top screen keeps the DS one centred
     out.assign(px, px + (size_t)width * 192u);
+    if (cards) card_tint_apply(out.data(), width, ox);   // docs/486: the big card / end picture
     for (int k = 0; k < t.n; ++k) {
         // The 24x24 head: centred across the button, at its top.
         const int hx = t.r[k][0] + ((t.r[k][2] - t.r[k][0] + 1) - 24) / 2, hy = t.r[k][1];

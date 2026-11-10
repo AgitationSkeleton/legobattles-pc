@@ -825,6 +825,13 @@ void         lb_rules_incoming(const unsigned char* buf, int len,
 int          lb_setting_native_logic(void);   /* this machine's choice */
 int          lb_native_logic_live(void);      /* the host's online, else this */
 int          lb_demo_play_native_logic(void); /* a replay's (kind 27), else -1 */
+/* docs/484: Faster CPU (an emulated ARM9 faster than the DS's). Set means ON,
+   so an older host (no bit) plays the DS's clock. */
+#define LB_RULE_FASTER_CPU     0x80
+int          lb_setting_faster_cpu(void);     /* this machine's choice */
+int          lb_faster_cpu_live(void);        /* the host's online, else this */
+int          lb_demo_play_faster_cpu(void);   /* a replay's clock (kind 29), else -1 */
+int          lb_faster_cpu_clock_live(void);  /* the clock to record: 1/256 per cycle, 0 the DS's */
 int          lb_setting_many_mines(void);   /* this machine's choice */
 int          lb_many_mines_live(void);      /* the host's online, else this */
 int          lb_setting_phantom_guard(void);   /* this machine's choice */
@@ -904,7 +911,7 @@ int          lb_creatures_live(void);
 // docs/412: teal (colour 6) in play: this machine's setting offline or while
 // hosting, the host's rule flag while joined. LB_TEAL=0|1 forces the setting.
 int          lb_setting_teal(void);
-int          lb_setting_teal_style(void);   // 0 the cartridge's (default), 1 the port's ramp
+int          lb_setting_teal_style(void);   // 0 the cartridge's (default), 1 the port's ramp, 2 red/dark blue (docs/485)
 int          lb_teal_live(void);
 int          lb_creature_slot_allowed(int creature_index, int slot);   /* docs/437, lb_patches.cpp */
 // docs/436: the army slot of each creature, packed 4 bits a creature (Wolf,

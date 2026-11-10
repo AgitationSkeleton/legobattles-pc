@@ -327,7 +327,9 @@ uint32_t team_colour_rgba(unsigned c) {
     // docs/412: teal (6) has no row in the cartridge's table. The port's ramp
     // gives its light shade; the cartridge's light shade is white, so its
     // pale teal (shade 1) instead.
-    const uint32_t teal = lb_setting_teal_style() ? 0x6764u : 0x6B73u;
+    // docs/485: style 2, the unused red/dark-blue palette, gives its light red.
+    const int style = lb_setting_teal_style();
+    const uint32_t teal = style == 2 ? 0x221Fu : style == 1 ? 0x6764u : 0x6B73u;
     const uint32_t v = bgr555_to_rgba(c == 6u ? teal : bus_read_u16(0x02127F38u + 6u * c));
     const int r = (int)(v & 255u), g = (int)((v >> 8) & 255u), b = (int)((v >> 16) & 255u);
     return rgba(r + (255 - r) / 4, g + (255 - g) / 4, b + (255 - b) / 4);

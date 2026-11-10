@@ -250,6 +250,7 @@ extern "C" int lb_cunits_of_battle(int bp);
 extern "C" int lb_cunits_of_any(int bp);
 extern "C" int lb_cunits_name_id(int bp);   // BR-0064
 extern "C" int lb_cunits_head(int k, unsigned int out[576]);
+extern "C" int lb_cunits_role_slot(int k);   // SG-0109 (docs/485)
 // A custom unit (its battle blueprint, lb_cunits_battle) draws its template's head and HUD icon: those tables
 // are keyed by the stock index (docs/448).
 int art_bp(int bp) {
@@ -355,15 +356,31 @@ std::vector<Cand> g_custom[LB_TEAM_SLOTS];
 int g_custom_n = -1;
 void custom_refresh() {
     const int n = lb_cunits_count();
-    if (n == g_custom_n) return;
+    // Keyed by the set, not the count alone: a reload with as many units (a
+    // changed template or role, SG-0109) must place them again.
+    static uint64_t sig_was = 0;
+    uint64_t sig = 1469598103934665603ull ^ (uint64_t)(n + 1);
+    for (int k = 0; k < n; ++k)
+        sig = (sig ^ (uint64_t)(lb_cunits_template(k) * 131 + lb_cunits_role_slot(k) + 7) ^
+               ((uint64_t)lb_cunits_battle(k) << 20)) * 1099511628211ull;
+    if (n == g_custom_n && sig == sig_was) return;
     g_custom_n = n;
+    sig_was = sig;
     for (auto& v : g_custom) v.clear();
     for (int k = 0; k < n; ++k) {
         const int t = lb_cunits_template(k);
+        // SG-0109 (docs/485): a "role" puts it in that slot instead of its
+        // template's (Close Combat/Ranged/Mounted, or Special One/Two/Three;
+        // lb_cunits.cpp checks which moves a template may make).
+        const int role = lb_cunits_role_slot(k);
         for (int s = 0; s < LB_TEAM_SLOTS; ++s)
             for (int i = 0; i < kSlots[s].n; ++i)
-                if (kSlots[s].c[i].unit == t)
-                    g_custom[s].push_back({(uint16_t)lb_cunits_battle(k), kSlots[s].c[i].minifig, kSlots[s].c[i].faction});
+                if (kSlots[s].c[i].unit == t) {
+                    const bool ground = s >= 2 && s <= 4 && role >= 2 && role <= 4;
+                    const bool special = s >= 5 && s <= 7 && role >= 5 && role <= 7;
+                    const int to = ground || special ? role : s;
+                    g_custom[to].push_back({(uint16_t)lb_cunits_battle(k), kSlots[s].c[i].minifig, kSlots[s].c[i].faction});
+                }
     }
 }
 int slot_total(int s) {
@@ -2072,10 +2089,31 @@ extern "C" int lb_teams_army_slot(void) {
     return army ? (int)(int8_t)bus_read_u8(army + 0x110u) : -1;
 }
 
+// BR-0080 (docs/485): the army screen's update ran (army_update_observer,
+// lb_patches.cpp). The CustomizeArmy object stays in its registry slot, with
+// its layout and its open list, after the player leaves it, so army_screen()
+// alone does not say the screen is on show. Frames since its last update.
+bool g_army_upd = false;
+int g_army_idle = 1000;
+extern "C" void lb_teams_army_updated(uint32_t screen) {
+    if (screen && screen == bus_read_u32(kArmySlot)) g_army_upd = true;
+}
+
 // Once a frame (lb_teams_portrait_tick): the last walk's count, the overlay's
 // requests, and the re-open that applies them.
 void army_scroll_tick() {
+    if (g_army_upd) g_army_idle = 0;
+    else if (g_army_idle < 1000) ++g_army_idle;
+    g_army_upd = false;
+    // A few frames of slack: the screen updates at the game's pace, which
+    // can be every other frame.
+    const bool current = g_army_idle < 8;
     const uint32_t army = army_screen();
+    if (army && !current) {   // left behind by the next screen: no bar, no requests
+        g_as_info.store(0);
+        g_as_req.store(0);
+        return;
+    }
     if (!army) {
         g_as = ArmyScroll();
         g_as_info.store(0);

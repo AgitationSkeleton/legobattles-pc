@@ -347,6 +347,9 @@ struct Settings {
     // The Wolf's and the Shark's battle portraits are their heads, not the
     // battle sheet's sack and lantern (lb_patches.cpp, portrait_tint_refresh).
     bool creature_portraits = true;
+// docs/486: the top screen's big unit card (and the victory/defeat picture)
+// in the owner's team colour (lb_patches.cpp, card_tint_refresh). Off by default.
+bool card_tint = false;
     // docs/412: teal as a seventh team colour (colour 6). The host's rule
     // online (LB_RULE_TEAL); see lb_teal_live().
     bool teal_colour = false;
@@ -466,6 +469,7 @@ struct Settings {
     bool hide_fogged_specials = true; // BR-0063: enemy specials hidden while their cell is fogged
     bool big_sprite_pool = true;      // docs/479: sheets past the DS's 33 slots get slots of their own
     bool native_logic = true;         // docs/479: hot cartridge routines as host code (game speed)
+    bool faster_cpu = true;           // docs/484: an emulated ARM9 faster than the DS's (game speed)
 
     // Cosmetic, CLIENT-LOCAL (docs/356): what this machine's text calls the
     // Space Criminal Leader -- 0 the cartridge's own words, 1 Kranxx,
@@ -833,6 +837,8 @@ extern "C" void lb_settings_save(void) {
                   g_set.creature_tint ? "true" : "false"); o += buf;   // docs/437
     std::snprintf(buf, sizeof buf, "  \"portrait_tint\": %s,\n",
                   g_set.portrait_tint ? "true" : "false"); o += buf;   // docs/454
+    std::snprintf(buf, sizeof buf, "  \"card_tint\": %s,\n",
+                  g_set.card_tint ? "true" : "false"); o += buf;   // docs/486
     std::snprintf(buf, sizeof buf, "  \"creature_portraits\": %s,\n",
                   g_set.creature_portraits ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"teal_colour\": %s,\n",
@@ -913,6 +919,8 @@ extern "C" void lb_settings_save(void) {
                   g_set.big_sprite_pool ? "true" : "false"); o += buf;   // docs/479
     std::snprintf(buf, sizeof buf, "  \"native_logic\": %s,\n",
                   g_set.native_logic ? "true" : "false"); o += buf;      // docs/479
+    std::snprintf(buf, sizeof buf, "  \"faster_cpu\": %s,\n",
+                  g_set.faster_cpu ? "true" : "false"); o += buf;        // docs/484
     std::snprintf(buf, sizeof buf, "  \"criminal_leader_name\": %d,\n",
                   g_set.criminal_leader_name); o += buf;
     std::snprintf(buf, sizeof buf, "  \"plantation_name\": %d,\n",
@@ -1145,10 +1153,11 @@ extern "C" void lb_settings_load(void) {
     json_get_bool(s, "creatures", &g_set.creatures);   // docs/410
     json_get_bool(s, "creature_tint", &g_set.creature_tint);   // docs/437
     json_get_bool(s, "portrait_tint", &g_set.portrait_tint);   // docs/454
+    json_get_bool(s, "card_tint", &g_set.card_tint);           // docs/486
     json_get_bool(s, "creature_portraits", &g_set.creature_portraits);
     json_get_bool(s, "teal_colour", &g_set.teal_colour);       // docs/412
     json_get_int(s, "teal_style", &g_set.teal_style);
-    if (g_set.teal_style < 0 || g_set.teal_style > 1) g_set.teal_style = 0;
+    if (g_set.teal_style < 0 || g_set.teal_style > 2) g_set.teal_style = 0;   // docs/485: 2 Red/Dark Blue
     json_get_ints(s, "creature_slots", g_set.creature_slot, 4);   // docs/436
     for (int& c : g_set.creature_slot)
         if (c < 0 || c > 8 || c <= 2) c = 0;   // 1 + slot; Hero (1) and Builder (2) are not offered
@@ -1202,6 +1211,7 @@ extern "C" void lb_settings_load(void) {
     json_get_bool(s, "hide_fogged_specials", &g_set.hide_fogged_specials);   // BR-0063
     json_get_bool(s, "big_sprite_pool", &g_set.big_sprite_pool);             // docs/479
     json_get_bool(s, "native_logic", &g_set.native_logic);                   // docs/479
+    json_get_bool(s, "faster_cpu", &g_set.faster_cpu);                       // docs/484
     g_set.cunit_volume = std::max(0, std::min(200, g_set.cunit_volume));
     // A file written before this key existed keeps the default (off).
     json_get_int(s, "criminal_leader_name", &g_set.criminal_leader_name);
@@ -2054,6 +2064,23 @@ void tab_enhancements() {
     {
         const int live = lb_native_logic_live();
         if (live != (g_set.native_logic ? 1 : 0)) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("(host: %s)", live ? "On" : "Off");
+        }
+    }
+    badge(WIRED);
+    // docs/484: the DS's ARM9 runs at 67 MHz; a PC can emulate a faster one.
+    ImGui::Checkbox("Faster CPU", &g_set.faster_cpu);
+    help("In the biggest battles a DS's processor cannot keep up and the\n"
+         "whole game slows down. With this on, the emulated processor\n"
+         "speeds up as far as the battle needs (up to four times a DS's),\n"
+         "so the game keeps its normal speed; smaller battles run on the\n"
+         "DS's own speed. Off, the DS's own processor speed and timing.\n"
+         "Online, the host's choice is used. Replays keep the choice they\n"
+         "were recorded with.");
+    {
+        const int live = lb_faster_cpu_live();
+        if (live != (g_set.faster_cpu ? 1 : 0)) {
             ImGui::SameLine();
             ImGui::TextDisabled("(host: %s)", live ? "On" : "Off");
         }
@@ -4518,18 +4545,30 @@ void tab_team_builder() {
         ImGui::TextDisabled("In this lobby, the host's: %s",
                             lb_teal_live() ? "On" : "Off");
     {
-        static const char* const kTealStyles[] = {"White/Teal (Original)", "Teal (PC Port)"};
+        // docs/485: a third style, the cartridge's other unused team palette
+        // (KingFaction.NCLR bank 13: red shades, dark blue where the others are grey).
+        static const char* const kTealStyles[] = {"White/Teal (Original)", "Teal (PC Port)",
+                                                  "Red/Dark Blue (Unused)"};
         ImGui::SameLine();
         ImGui::SetNextItemWidth(190.0f * g_ui_scale);
         ImGui::Combo("##teal_style", &g_set.teal_style, kTealStyles, IM_ARRAYSIZE(kTealStyles));
         help("Original is the game's unused, mostly white teal. PC Port is a\n"
-             "full teal like the other colours. Only you see it. From the next level.");
+             "full teal like the other colours. Red/Dark Blue is the game's other\n"
+             "unused team palette: red, with dark blue where units are grey.\n"
+             "Only you see it. From the next level.");
     }
     // docs/454 (SG-0041): the selection portraits on the top screen.
     ImGui::Checkbox("Team-Colour Unit Portraits", &g_set.portrait_tint);
     help("The small round portraits of the selected units on the top screen\n"
          "take their owner's team colour, like the units do. Off: the game's\n"
          "own red and blue. Only you see it.");
+    badge(WIRED);
+    // docs/486: the big unit card on the top screen.
+    ImGui::Checkbox("Team-coloured unit cards", &g_set.card_tint);
+    help("The large card of the selected unit or building on the top screen,\n"
+         "and your hero's victory/defeat picture, take the owner's team colour\n"
+         "(the team parts only; faces, weapons and the backdrop stay). Neutral\n"
+         "units stay as they are. Off: the game's own art. Only you see it.");
     badge(WIRED);
     ImGui::Checkbox("Proper Creature Portraits", &g_set.creature_portraits);
     help("The Wolf and the Shark show their own heads on the top screen when\n"
@@ -9968,6 +10007,15 @@ extern "C" int lb_setting_native_logic(void) {
     }
     return forced >= 0 ? forced : (g_set.native_logic ? 1 : 0);
 }
+// docs/484: LB_FASTER_CPU=0|1 forces it.
+extern "C" int lb_setting_faster_cpu(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_FASTER_CPU");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.faster_cpu ? 1 : 0);
+}
 // docs/479: LB_BIG_SPRITE_POOL=0|1 forces it.
 extern "C" int lb_setting_big_sprite_pool(void) {
     static int forced = -2;
@@ -10648,6 +10696,10 @@ extern "C" bool lb_overlay_event(const SDL_Event* event) {
             return false;
     }
 }
+
+// docs/484: whether the settings panel is up (the composite is not reused
+// then: a setting may change what it shows).
+extern "C" int lb_overlay_shown(void) { return g_visible ? 1 : 0; }
 
 extern "C" bool lb_overlay_wants_mouse(void) {
     return g_ready && ImGui::GetIO().WantCaptureMouse;
@@ -11481,7 +11533,8 @@ extern "C" int lb_rules_local_flags(void) {
            (lb_setting_stun_cast() ? LB_RULE_STUN_CAST : 0) |   // docs/453
            (lb_setting_phantom_guard() ? 0 : LB_RULE_OWN_CHEATS) |  // docs/469
            (lb_setting_many_mines() ? LB_RULE_MANY_MINES : 0) |      // SG-0077
-           (lb_setting_native_logic() ? LB_RULE_NATIVE_LOGIC : 0);   // docs/479
+           (lb_setting_native_logic() ? LB_RULE_NATIVE_LOGIC : 0) |  // docs/479
+           (lb_setting_faster_cpu() ? LB_RULE_FASTER_CPU : 0);       // docs/484
 }
 
 // docs/412: Teal team colour. LB_TEAL=0|1 forces it (LB_TEST_TEAL=1 too).
@@ -11494,11 +11547,12 @@ extern "C" int lb_setting_teal(void) {
     return forced >= 0 ? forced : (g_set.teal_colour ? 1 : 0);
 }
 
-// docs/412: 0 the cartridge's teal (default), 1 the port's ramp. LB_TEAL_STYLE=0|1 forces it.
+// docs/412: 0 the cartridge's teal (default), 1 the port's ramp, 2 (docs/485)
+// the cartridge's unused red/dark-blue palette. LB_TEAL_STYLE=0|1|2 forces it.
 extern "C" int lb_setting_teal_style(void) {
     static const char* v = std::getenv("LB_TEAL_STYLE");
-    if (v) return std::atoi(v) == 1 ? 1 : 0;
-    return g_set.teal_style == 1 ? 1 : 0;
+    const int s = v ? std::atoi(v) : g_set.teal_style;
+    return s == 1 || s == 2 ? s : 0;
 }
 
 // docs/412: whether colour 6 (teal) is in play. Offline or hosting, this
@@ -11520,6 +11574,16 @@ extern "C" int lb_setting_match_picture_tint(void) {
         forced = v ? (std::atoi(v) ? 1 : 0) : -1;
     }
     return forced >= 0 ? forced : (g_set.match_picture_tint ? 1 : 0);
+}
+
+// docs/486: LB_CARD_TINT=0|1 forces it.
+extern "C" int lb_setting_card_tint(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_CARD_TINT");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.card_tint ? 1 : 0);
 }
 
 // docs/454: LB_PORTRAIT_TINT=0|1 forces it.
@@ -12279,6 +12343,7 @@ extern "C" const char* lb_net_lobby_options_json(void) {
     kv.push_back({"EMP disables transports", g_set.emp_transports ? "On" : "Off"});
     kv.push_back({"More than 10 mine spots", g_set.many_mines ? "On" : "Off"});   // SG-0077
     kv.push_back({"Native game logic", g_set.native_logic ? "On" : "Off"});       // docs/479
+    kv.push_back({"Faster CPU", g_set.faster_cpu ? "On" : "Off"});               // docs/484
     kv.push_back({"Prevent phantom ties", g_set.phantom_guard ? "On" : "Off"});   // docs/469
     kv.push_back({"Stunned heroes can cast", g_set.stun_cast ? "On" : "Off"});
     kv.push_back({"AI rebuilds its hero", g_set.ai_hero_rebuild ? "On" : "Off"});

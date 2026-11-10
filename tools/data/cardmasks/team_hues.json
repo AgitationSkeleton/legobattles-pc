@@ -1,0 +1,3075 @@
+{
+ "K_King": {
+  "bp": 0,
+  "colour": "blue",
+  "expected_hue": 295,
+  "stock_hue": 290.6,
+  "evidence": "faction default: King = blue",
+  "measured": {
+   "hue": 290.6,
+   "L": [
+    3.5,
+    41.1
+   ],
+   "C": [
+    15.5,
+    43.4
+   ],
+   "px": 681
+  },
+  "measured_rejected": false
+ },
+ "K_King_F": {
+  "bp": 1,
+  "colour": "blue",
+  "expected_hue": 295,
+  "stock_hue": 291.4,
+  "evidence": "faction default: King = blue",
+  "measured": {
+   "hue": 291.4,
+   "L": [
+    5.2,
+    37.7
+   ],
+   "C": [
+    15.5,
+    51.6
+   ],
+   "px": 1173
+  },
+  "measured_rejected": false
+ },
+ "K_Engineer": {
+  "bp": 2,
+  "colour": "blue",
+  "expected_hue": 295,
+  "stock_hue": 301.6,
+  "evidence": "faction default: King = blue",
+  "measured": {
+   "hue": 301.6,
+   "L": [
+    1.4,
+    29.9
+   ],
+   "C": [
+    15.2,
+    93.4
+   ],
+   "px": 987
+  },
+  "measured_rejected": false
+ },
+ "K_Swordsman": {
+  "bp": 3,
+  "colour": "blue",
+  "expected_hue": 295,
+  "stock_hue": 290.8,
+  "evidence": "faction default: King = blue",
+  "measured": {
+   "hue": 290.8,
+   "L": [
+    11.8,
+    67.8
+   ],
+   "C": [
+    17.7,
+    48.4
+   ],
+   "px": 1036
+  },
+  "measured_rejected": false
+ },
+ "K_Archer": {
+  "bp": 4,
+  "colour": "blue",
+  "expected_hue": 295,
+  "stock_hue": 287.0,
+  "evidence": "faction default: King = blue",
+  "measured": {
+   "hue": 287.0,
+   "L": [
+    2.5,
+    45.6
+   ],
+   "C": [
+    15.3,
+    33.8
+   ],
+   "px": 293
+  },
+  "measured_rejected": false
+ },
+ "K_Knight": {
+  "bp": 5,
+  "colour": "blue",
+  "expected_hue": 295,
+  "stock_hue": 290.6,
+  "evidence": "faction default: King = blue",
+  "measured": {
+   "hue": 290.6,
+   "L": [
+    3.0,
+    29.6
+   ],
+   "C": [
+    15.5,
+    48.1
+   ],
+   "px": 2636
+  },
+  "measured_rejected": false
+ },
+ "K_Ballista": {
+  "bp": 6,
+  "colour": "blue",
+  "expected_hue": 295,
+  "stock_hue": 267.5,
+  "evidence": "faction default: King = blue",
+  "measured": {
+   "hue": 267.5,
+   "L": [
+    12.1,
+    43.3
+   ],
+   "C": [
+    16.7,
+    26.7
+   ],
+   "px": 273
+  },
+  "measured_rejected": false
+ },
+ "K_Catapult": {
+  "bp": 7,
+  "colour": "blue",
+  "expected_hue": 295,
+  "stock_hue": 288.1,
+  "evidence": "faction default: King = blue",
+  "measured": {
+   "hue": 288.1,
+   "L": [
+    4.7,
+    34.6
+   ],
+   "C": [
+    15.9,
+    44.5
+   ],
+   "px": 406
+  },
+  "measured_rejected": false
+ },
+ "K_Gryphon": {
+  "bp": 8,
+  "colour": "green (owner call)",
+  "expected_hue": 140,
+  "stock_hue": 140.3,
+  "evidence": "model texture almost all team; card dragon green",
+  "measured": {
+   "hue": 140.3,
+   "L": [
+    9.8,
+    43.9
+   ],
+   "C": [
+    18.9,
+    47.3
+   ],
+   "px": 1949
+  },
+  "measured_rejected": false
+ },
+ "K_TransportShip": {
+  "bp": 9,
+  "colour": "blue",
+  "expected_hue": 295,
+  "stock_hue": 269.7,
+  "evidence": "faction default: King = blue",
+  "measured": {
+   "hue": 269.7,
+   "L": [
+    14.9,
+    49.6
+   ],
+   "C": [
+    18.8,
+    49.6
+   ],
+   "px": 2305
+  },
+  "measured_rejected": false
+ },
+ "K_Castle": {
+  "bp": 10,
+  "colour": "blue",
+  "expected_hue": 295,
+  "stock_hue": 304.8,
+  "evidence": "faction default: King = blue",
+  "measured": {
+   "hue": 304.8,
+   "L": [
+    6.5,
+    45.2
+   ],
+   "C": [
+    20.1,
+    127.7
+   ],
+   "px": 831
+  },
+  "measured_rejected": false
+ },
+ "K_LumberMill": {
+  "bp": 11,
+  "colour": "blue",
+  "expected_hue": 295,
+  "stock_hue": 305.6,
+  "evidence": "faction default: King = blue",
+  "measured": {
+   "hue": 305.6,
+   "L": [
+    15.5,
+    32.6
+   ],
+   "C": [
+    81.8,
+    129.6
+   ],
+   "px": 1650
+  },
+  "measured_rejected": false
+ },
+ "K_Mine": {
+  "bp": 12,
+  "colour": "blue",
+  "expected_hue": 295,
+  "stock_hue": 305.5,
+  "evidence": "faction default: King = blue",
+  "measured": {
+   "hue": 305.5,
+   "L": [
+    14.3,
+    42.2
+   ],
+   "C": [
+    35.8,
+    131.0
+   ],
+   "px": 790
+  },
+  "measured_rejected": false
+ },
+ "K_Farm": {
+  "bp": 13,
+  "colour": "blue",
+  "expected_hue": 295,
+  "stock_hue": 302.9,
+  "evidence": "faction default: King = blue",
+  "measured": {
+   "hue": 302.9,
+   "L": [
+    8.5,
+    43.5
+   ],
+   "C": [
+    50.1,
+    118.1
+   ],
+   "px": 1599
+  },
+  "measured_rejected": false
+ },
+ "K_Barracks": {
+  "bp": 14,
+  "colour": "blue",
+  "expected_hue": 295,
+  "stock_hue": 305.7,
+  "evidence": "faction default: King = blue",
+  "measured": {
+   "hue": 305.7,
+   "L": [
+    21.5,
+    32.6
+   ],
+   "C": [
+    55.9,
+    131.0
+   ],
+   "px": 1900
+  },
+  "measured_rejected": false
+ },
+ "K_Stables": {
+  "bp": 15,
+  "colour": "blue",
+  "expected_hue": 295,
+  "stock_hue": 304.3,
+  "evidence": "faction default: King = blue",
+  "measured": {
+   "hue": 304.3,
+   "L": [
+    14.5,
+    26.9
+   ],
+   "C": [
+    40.7,
+    102.5
+   ],
+   "px": 2052
+  },
+  "measured_rejected": false
+ },
+ "K_Tower": {
+  "bp": 16,
+  "colour": "blue",
+  "expected_hue": 295,
+  "stock_hue": 305.2,
+  "evidence": "faction default: King = blue",
+  "measured": {
+   "hue": 305.2,
+   "L": [
+    11.8,
+    42.3
+   ],
+   "C": [
+    21.8,
+    131.0
+   ],
+   "px": 760
+  },
+  "measured_rejected": false
+ },
+ "K_Tower2": {
+  "bp": 17,
+  "colour": "blue",
+  "expected_hue": 295,
+  "stock_hue": 305.2,
+  "evidence": "faction default: King = blue",
+  "measured": {
+   "hue": 305.2,
+   "L": [
+    11.8,
+    42.3
+   ],
+   "C": [
+    21.8,
+    131.0
+   ],
+   "px": 760
+  },
+  "measured_rejected": false
+ },
+ "K_Tower3": {
+  "bp": 18,
+  "colour": "blue",
+  "expected_hue": 295,
+  "stock_hue": 305.2,
+  "evidence": "faction default: King = blue",
+  "measured": {
+   "hue": 305.2,
+   "L": [
+    11.8,
+    42.3
+   ],
+   "C": [
+    21.8,
+    131.0
+   ],
+   "px": 760
+  },
+  "measured_rejected": false
+ },
+ "K_Shipyard": {
+  "bp": 19,
+  "colour": "blue",
+  "expected_hue": 295,
+  "stock_hue": 305.8,
+  "evidence": "faction default: King = blue",
+  "measured": {
+   "hue": 305.8,
+   "L": [
+    6.5,
+    26.5
+   ],
+   "C": [
+    29.3,
+    114.2
+   ],
+   "px": 154
+  },
+  "measured_rejected": false
+ },
+ "W_Wizard": {
+  "bp": 20,
+  "colour": "red",
+  "expected_hue": 32,
+  "stock_hue": 37.8,
+  "evidence": "faction default: Wizard = red",
+  "measured": {
+   "hue": 37.8,
+   "L": [
+    7.6,
+    53.0
+   ],
+   "C": [
+    19.4,
+    103.3
+   ],
+   "px": 1395
+  },
+  "measured_rejected": false
+ },
+ "W_Wizard_F": {
+  "bp": 21,
+  "colour": "purple",
+  "expected_hue": 335,
+  "stock_hue": 334.1,
+  "evidence": "sprite: whole dress team; card dress dark purple (not the faction red)",
+  "measured": {
+   "hue": 334.1,
+   "L": [
+    9.8,
+    63.0
+   ],
+   "C": [
+    21.5,
+    89.4
+   ],
+   "px": 2173
+  },
+  "measured_rejected": false
+ },
+ "W_Engineer": {
+  "bp": 22,
+  "colour": "maroon",
+  "expected_hue": 25,
+  "stock_hue": 0.8,
+  "evidence": "sprite: collar team; card scarf maroon (bones stock)",
+  "measured": {
+   "hue": 0.8,
+   "L": [
+    5.8,
+    47.1
+   ],
+   "C": [
+    20.8,
+    44.8
+   ],
+   "px": 255
+  },
+  "measured_rejected": false
+ },
+ "W_Swordsman": {
+  "bp": 23,
+  "colour": "red",
+  "expected_hue": 32,
+  "stock_hue": 28.6,
+  "evidence": "faction default: Wizard = red",
+  "measured": {
+   "hue": 28.6,
+   "L": [
+    10.0,
+    45.8
+   ],
+   "C": [
+    19.4,
+    55.2
+   ],
+   "px": 1176
+  },
+  "measured_rejected": false
+ },
+ "W_Crossbowman": {
+  "bp": 24,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "DISAGREEMENT: sprite wears a team chestplate, the card has bones only -> stock",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "W_Skeleknight": {
+  "bp": 25,
+  "colour": "red",
+  "expected_hue": 32,
+  "stock_hue": 21.3,
+  "evidence": "faction default: Wizard = red",
+  "measured": {
+   "hue": 21.3,
+   "L": [
+    5.7,
+    47.1
+   ],
+   "C": [
+    16.7,
+    40.8
+   ],
+   "px": 2020
+  },
+  "measured_rejected": false
+ },
+ "W_Ballista": {
+  "bp": 26,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "no team-coloured part in the art",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "W_Giant": {
+  "bp": 27,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "model head texture team; card skin grey-green -> stock (skin)",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "W_Dragon": {
+  "bp": 28,
+  "colour": "red",
+  "expected_hue": 32,
+  "stock_hue": 36.2,
+  "evidence": "faction default: Wizard = red",
+  "measured": {
+   "hue": 36.2,
+   "L": [
+    4.1,
+    45.8
+   ],
+   "C": [
+    19.4,
+    78.9
+   ],
+   "px": 2239
+  },
+  "measured_rejected": false
+ },
+ "W_TransportShip": {
+  "bp": 29,
+  "colour": "red",
+  "expected_hue": 32,
+  "stock_hue": 29.0,
+  "evidence": "faction default: Wizard = red",
+  "measured": {
+   "hue": 29.0,
+   "L": [
+    10.0,
+    45.8
+   ],
+   "C": [
+    17.4,
+    67.4
+   ],
+   "px": 2143
+  },
+  "measured_rejected": false
+ },
+ "W_SkeletonTower": {
+  "bp": 30,
+  "colour": "red",
+  "expected_hue": 32,
+  "stock_hue": 37.0,
+  "evidence": "faction default: Wizard = red",
+  "measured": {
+   "hue": 37.0,
+   "L": [
+    11.4,
+    52.7
+   ],
+   "C": [
+    18.0,
+    103.3
+   ],
+   "px": 1066
+  },
+  "measured_rejected": false
+ },
+ "W_LumberShack": {
+  "bp": 31,
+  "colour": "red",
+  "expected_hue": 32,
+  "stock_hue": 37.1,
+  "evidence": "faction default: Wizard = red",
+  "measured": {
+   "hue": 37.1,
+   "L": [
+    17.8,
+    52.6
+   ],
+   "C": [
+    15.9,
+    101.7
+   ],
+   "px": 940
+  },
+  "measured_rejected": false
+ },
+ "W_Mine": {
+  "bp": 32,
+  "colour": "red",
+  "expected_hue": 32,
+  "stock_hue": 38.0,
+  "evidence": "faction default: Wizard = red",
+  "measured": {
+   "hue": 38.0,
+   "L": [
+    15.0,
+    52.6
+   ],
+   "C": [
+    17.4,
+    102.1
+   ],
+   "px": 1481
+  },
+  "measured_rejected": false
+ },
+ "W_Graveyard": {
+  "bp": 33,
+  "colour": "red",
+  "expected_hue": 32,
+  "stock_hue": 38.0,
+  "evidence": "faction default: Wizard = red",
+  "measured": {
+   "hue": 38.0,
+   "L": [
+    14.5,
+    52.8
+   ],
+   "C": [
+    18.7,
+    103.3
+   ],
+   "px": 1617
+  },
+  "measured_rejected": false
+ },
+ "W_Mousoleum": {
+  "bp": 34,
+  "colour": "red",
+  "expected_hue": 32,
+  "stock_hue": 37.4,
+  "evidence": "faction default: Wizard = red",
+  "measured": {
+   "hue": 37.4,
+   "L": [
+    7.6,
+    52.4
+   ],
+   "C": [
+    20.9,
+    103.3
+   ],
+   "px": 1412
+  },
+  "measured_rejected": false
+ },
+ "W_Cauldron": {
+  "bp": 35,
+  "colour": "red",
+  "expected_hue": 32,
+  "stock_hue": 37.6,
+  "evidence": "faction default: Wizard = red",
+  "measured": {
+   "hue": 37.6,
+   "L": [
+    18.1,
+    52.6
+   ],
+   "C": [
+    18.8,
+    102.1
+   ],
+   "px": 1600
+  },
+  "measured_rejected": false
+ },
+ "W_Tower": {
+  "bp": 36,
+  "colour": "red",
+  "expected_hue": 32,
+  "stock_hue": 36.9,
+  "evidence": "faction default: Wizard = red",
+  "measured": {
+   "hue": 36.9,
+   "L": [
+    13.0,
+    50.8
+   ],
+   "C": [
+    19.5,
+    100.8
+   ],
+   "px": 896
+  },
+  "measured_rejected": false
+ },
+ "W_Tower2": {
+  "bp": 37,
+  "colour": "red",
+  "expected_hue": 32,
+  "stock_hue": 36.9,
+  "evidence": "faction default: Wizard = red",
+  "measured": {
+   "hue": 36.9,
+   "L": [
+    13.0,
+    50.8
+   ],
+   "C": [
+    19.5,
+    100.8
+   ],
+   "px": 896
+  },
+  "measured_rejected": false
+ },
+ "W_Tower3": {
+  "bp": 38,
+  "colour": "red",
+  "expected_hue": 32,
+  "stock_hue": 36.9,
+  "evidence": "faction default: Wizard = red",
+  "measured": {
+   "hue": 36.9,
+   "L": [
+    13.0,
+    50.8
+   ],
+   "C": [
+    19.5,
+    100.8
+   ],
+   "px": 896
+  },
+  "measured_rejected": false
+ },
+ "W_Shipyard": {
+  "bp": 39,
+  "colour": "red",
+  "expected_hue": 32,
+  "stock_hue": 32,
+  "evidence": "faction default: Wizard = red",
+  "measured": {
+   "hue": 62.2,
+   "L": [
+    23.4,
+    61.9
+   ],
+   "C": [
+    22.0,
+    51.3
+   ],
+   "px": 911
+  },
+  "measured_rejected": true
+ },
+ "P_Captain": {
+  "bp": 40,
+  "colour": "red",
+  "expected_hue": 32,
+  "stock_hue": 41.2,
+  "evidence": "owner: the parrot is team; coat/hat are index-0 black",
+  "measured": {
+   "hue": 41.2,
+   "L": [
+    12.1,
+    70.6
+   ],
+   "C": [
+    16.9,
+    81.9
+   ],
+   "px": 1655
+  },
+  "measured_rejected": false
+ },
+ "P_Captain_F": {
+  "bp": 41,
+  "colour": "dark green",
+  "expected_hue": 170,
+  "stock_hue": 162.1,
+  "evidence": "sprite: torso + legs team; card top dark green",
+  "measured": {
+   "hue": 162.1,
+   "L": [
+    9.6,
+    20.0
+   ],
+   "C": [
+    16.4,
+    24.0
+   ],
+   "px": 282
+  },
+  "measured_rejected": false
+ },
+ "P_Builder": {
+  "bp": 42,
+  "colour": "green",
+  "expected_hue": 140,
+  "stock_hue": 155.3,
+  "evidence": "sprite: bandana + shirt team; card bandana and shirt stripes green (docs/454)",
+  "measured": {
+   "hue": 155.3,
+   "L": [
+    9.6,
+    61.2
+   ],
+   "C": [
+    17.7,
+    48.4
+   ],
+   "px": 802
+  },
+  "measured_rejected": false
+ },
+ "P_Oarsman": {
+  "bp": 43,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "card vest maroon = oar hue; left stock pending owner",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "P_Crossbowman": {
+  "bp": 44,
+  "colour": "blue",
+  "expected_hue": 290,
+  "stock_hue": 285.2,
+  "evidence": "sprite: striped shirt team; card shirt blue",
+  "measured": {
+   "hue": 285.2,
+   "L": [
+    10.5,
+    45.4
+   ],
+   "C": [
+    27.9,
+    63.5
+   ],
+   "px": 400
+  },
+  "measured_rejected": false
+ },
+ "P_Horseman": {
+  "bp": 45,
+  "colour": "red",
+  "expected_hue": 32,
+  "stock_hue": 43.3,
+  "evidence": "faction default: Pirate = red",
+  "measured": {
+   "hue": 43.3,
+   "L": [
+    7.2,
+    35.5
+   ],
+   "C": [
+    16.9,
+    41.2
+   ],
+   "px": 2329
+  },
+  "measured_rejected": false
+ },
+ "P_Barracuda": {
+  "bp": 46,
+  "colour": "red",
+  "expected_hue": 32,
+  "stock_hue": 33.7,
+  "evidence": "faction default: Pirate = red",
+  "measured": {
+   "hue": 33.7,
+   "L": [
+    7.6,
+    56.6
+   ],
+   "C": [
+    17.5,
+    53.4
+   ],
+   "px": 1515
+  },
+  "measured_rejected": false
+ },
+ "P_Battleship": {
+  "bp": 47,
+  "colour": "red",
+  "expected_hue": 32,
+  "stock_hue": 37.3,
+  "evidence": "faction default: Pirate = red",
+  "measured": {
+   "hue": 37.3,
+   "L": [
+    5.7,
+    56.6
+   ],
+   "C": [
+    16.1,
+    65.2
+   ],
+   "px": 2235
+  },
+  "measured_rejected": false
+ },
+ "P_FlyingDutchman": {
+  "bp": 48,
+  "colour": "red",
+  "expected_hue": 32,
+  "stock_hue": 36.7,
+  "evidence": "faction default: Pirate = red",
+  "measured": {
+   "hue": 36.7,
+   "L": [
+    5.6,
+    56.6
+   ],
+   "C": [
+    17.2,
+    61.2
+   ],
+   "px": 2084
+  },
+  "measured_rejected": false
+ },
+ "P_TransportShip": {
+  "bp": 49,
+  "colour": "red",
+  "expected_hue": 32,
+  "stock_hue": 39.3,
+  "evidence": "faction default: Pirate = red",
+  "measured": {
+   "hue": 39.3,
+   "L": [
+    10.6,
+    52.2
+   ],
+   "C": [
+    22.6,
+    72.7
+   ],
+   "px": 2082
+  },
+  "measured_rejected": false
+ },
+ "P_PiratesHold": {
+  "bp": 50,
+  "colour": "red",
+  "expected_hue": 32,
+  "stock_hue": 31.2,
+  "evidence": "faction default: Pirate = red",
+  "measured": {
+   "hue": 31.2,
+   "L": [
+    9.3,
+    56.0
+   ],
+   "C": [
+    15.9,
+    87.5
+   ],
+   "px": 720
+  },
+  "measured_rejected": false
+ },
+ "P_LumberShack": {
+  "bp": 51,
+  "colour": "red",
+  "expected_hue": 32,
+  "stock_hue": 30.8,
+  "evidence": "faction default: Pirate = red",
+  "measured": {
+   "hue": 30.8,
+   "L": [
+    23.9,
+    55.1
+   ],
+   "C": [
+    21.5,
+    88.1
+   ],
+   "px": 1808
+  },
+  "measured_rejected": false
+ },
+ "P_Quarry": {
+  "bp": 52,
+  "colour": "red",
+  "expected_hue": 32,
+  "stock_hue": 31.6,
+  "evidence": "faction default: Pirate = red",
+  "measured": {
+   "hue": 31.6,
+   "L": [
+    20.0,
+    55.1
+   ],
+   "C": [
+    17.5,
+    92.3
+   ],
+   "px": 1072
+  },
+  "measured_rejected": false
+ },
+ "P_ShantyShack": {
+  "bp": 53,
+  "colour": "red",
+  "expected_hue": 32,
+  "stock_hue": 32.7,
+  "evidence": "faction default: Pirate = red",
+  "measured": {
+   "hue": 32.7,
+   "L": [
+    11.4,
+    50.3
+   ],
+   "C": [
+    15.6,
+    69.7
+   ],
+   "px": 1026
+  },
+  "measured_rejected": false
+ },
+ "P_Tavern": {
+  "bp": 54,
+  "colour": "red",
+  "expected_hue": 32,
+  "stock_hue": 33.4,
+  "evidence": "faction default: Pirate = red",
+  "measured": {
+   "hue": 33.4,
+   "L": [
+    11.4,
+    54.4
+   ],
+   "C": [
+    17.2,
+    91.1
+   ],
+   "px": 1274
+  },
+  "measured_rejected": false
+ },
+ "P_Jetty": {
+  "bp": 55,
+  "colour": "red",
+  "expected_hue": 32,
+  "stock_hue": 32.9,
+  "evidence": "faction default: Pirate = red",
+  "measured": {
+   "hue": 32.9,
+   "L": [
+    17.8,
+    54.4
+   ],
+   "C": [
+    16.3,
+    91.1
+   ],
+   "px": 1028
+  },
+  "measured_rejected": false
+ },
+ "P_LogTower": {
+  "bp": 56,
+  "colour": "red",
+  "expected_hue": 32,
+  "stock_hue": 32.4,
+  "evidence": "faction default: Pirate = red",
+  "measured": {
+   "hue": 32.4,
+   "L": [
+    16.2,
+    54.4
+   ],
+   "C": [
+    15.9,
+    93.9
+   ],
+   "px": 578
+  },
+  "measured_rejected": false
+ },
+ "P_LogTower2": {
+  "bp": 57,
+  "colour": "red",
+  "expected_hue": 32,
+  "stock_hue": 32.4,
+  "evidence": "faction default: Pirate = red",
+  "measured": {
+   "hue": 32.4,
+   "L": [
+    16.2,
+    54.4
+   ],
+   "C": [
+    15.9,
+    93.9
+   ],
+   "px": 578
+  },
+  "measured_rejected": false
+ },
+ "P_LogTower3": {
+  "bp": 58,
+  "colour": "red",
+  "expected_hue": 32,
+  "stock_hue": 32.4,
+  "evidence": "faction default: Pirate = red",
+  "measured": {
+   "hue": 32.4,
+   "L": [
+    16.2,
+    54.4
+   ],
+   "C": [
+    15.9,
+    93.9
+   ],
+   "px": 578
+  },
+  "measured_rejected": false
+ },
+ "P_Shipyard": {
+  "bp": 59,
+  "colour": "red",
+  "expected_hue": 32,
+  "stock_hue": 31.7,
+  "evidence": "faction default: Pirate = red",
+  "measured": {
+   "hue": 31.7,
+   "L": [
+    19.6,
+    55.5
+   ],
+   "C": [
+    21.5,
+    91.1
+   ],
+   "px": 1305
+  },
+  "measured_rejected": false
+ },
+ "I_Governor": {
+  "bp": 60,
+  "colour": "blue",
+  "expected_hue": 285,
+  "stock_hue": 289.8,
+  "evidence": "faction default: Imperial = blue",
+  "measured": {
+   "hue": 289.8,
+   "L": [
+    0.9,
+    34.4
+   ],
+   "C": [
+    15.3,
+    41.7
+   ],
+   "px": 459
+  },
+  "measured_rejected": false
+ },
+ "I_Governor_F": {
+  "bp": 61,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "DISAGREEMENT: sprite dress team, card dress white -> stock",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "I_Engineer": {
+  "bp": 62,
+  "colour": "blue",
+  "expected_hue": 285,
+  "stock_hue": 253.9,
+  "evidence": "faction default: Imperial = blue",
+  "measured": {
+   "hue": 253.9,
+   "L": [
+    18.8,
+    49.2
+   ],
+   "C": [
+    22.6,
+    33.6
+   ],
+   "px": 538
+  },
+  "measured_rejected": false
+ },
+ "I_Swordsman": {
+  "bp": 63,
+  "colour": "blue",
+  "expected_hue": 285,
+  "stock_hue": 255.6,
+  "evidence": "faction default: Imperial = blue",
+  "measured": {
+   "hue": 255.6,
+   "L": [
+    15.5,
+    41.9
+   ],
+   "C": [
+    17.2,
+    25.8
+   ],
+   "px": 428
+  },
+  "measured_rejected": false
+ },
+ "I_Rifleman": {
+  "bp": 64,
+  "colour": "blue",
+  "expected_hue": 285,
+  "stock_hue": 292.7,
+  "evidence": "faction default: Imperial = blue",
+  "measured": {
+   "hue": 292.7,
+   "L": [
+    13.4,
+    38.3
+   ],
+   "C": [
+    16.5,
+    54.4
+   ],
+   "px": 242
+  },
+  "measured_rejected": false
+ },
+ "I_Cavalry": {
+  "bp": 65,
+  "colour": "blue",
+  "expected_hue": 285,
+  "stock_hue": 283.4,
+  "evidence": "faction default: Imperial = blue",
+  "measured": {
+   "hue": 283.4,
+   "L": [
+    20.6,
+    50.7
+   ],
+   "C": [
+    15.5,
+    43.1
+   ],
+   "px": 602
+  },
+  "measured_rejected": false
+ },
+ "I_Clipper": {
+  "bp": 66,
+  "colour": "blue",
+  "expected_hue": 285,
+  "stock_hue": 286.3,
+  "evidence": "faction default: Imperial = blue",
+  "measured": {
+   "hue": 286.3,
+   "L": [
+    9.3,
+    64.9
+   ],
+   "C": [
+    17.8,
+    54.4
+   ],
+   "px": 858
+  },
+  "measured_rejected": false
+ },
+ "I_Battleship": {
+  "bp": 67,
+  "colour": "blue",
+  "expected_hue": 285,
+  "stock_hue": 284.4,
+  "evidence": "faction default: Imperial = blue",
+  "measured": {
+   "hue": 284.4,
+   "L": [
+    12.7,
+    70.6
+   ],
+   "C": [
+    17.3,
+    54.2
+   ],
+   "px": 875
+  },
+  "measured_rejected": false
+ },
+ "I_Dirigible": {
+  "bp": 68,
+  "colour": "blue",
+  "expected_hue": 285,
+  "stock_hue": 287.4,
+  "evidence": "faction default: Imperial = blue",
+  "measured": {
+   "hue": 287.4,
+   "L": [
+    5.9,
+    70.6
+   ],
+   "C": [
+    18.1,
+    49.5
+   ],
+   "px": 1475
+  },
+  "measured_rejected": false
+ },
+ "I_TransportShip": {
+  "bp": 69,
+  "colour": "blue",
+  "expected_hue": 285,
+  "stock_hue": 289.7,
+  "evidence": "faction default: Imperial = blue",
+  "measured": {
+   "hue": 289.7,
+   "L": [
+    8.7,
+    64.0
+   ],
+   "C": [
+    18.0,
+    54.3
+   ],
+   "px": 1511
+  },
+  "measured_rejected": false
+ },
+ "I_Fortress": {
+  "bp": 70,
+  "colour": "blue",
+  "expected_hue": 285,
+  "stock_hue": 304.6,
+  "evidence": "faction default: Imperial = blue",
+  "measured": {
+   "hue": 304.6,
+   "L": [
+    17.0,
+    56.3
+   ],
+   "C": [
+    23.9,
+    131.0
+   ],
+   "px": 967
+  },
+  "measured_rejected": false
+ },
+ "I_LumberMill": {
+  "bp": 71,
+  "colour": "blue",
+  "expected_hue": 285,
+  "stock_hue": 304.5,
+  "evidence": "faction default: Imperial = blue",
+  "measured": {
+   "hue": 304.5,
+   "L": [
+    12.9,
+    76.5
+   ],
+   "C": [
+    17.8,
+    131.0
+   ],
+   "px": 468
+  },
+  "measured_rejected": false
+ },
+ "I_Quarry": {
+  "bp": 72,
+  "colour": "blue",
+  "expected_hue": 285,
+  "stock_hue": 304.7,
+  "evidence": "faction default: Imperial = blue",
+  "measured": {
+   "hue": 304.7,
+   "L": [
+    16.8,
+    71.8
+   ],
+   "C": [
+    29.8,
+    131.0
+   ],
+   "px": 677
+  },
+  "measured_rejected": false
+ },
+ "I_Tavern": {
+  "bp": 73,
+  "colour": "blue",
+  "expected_hue": 285,
+  "stock_hue": 305.3,
+  "evidence": "faction default: Imperial = blue",
+  "measured": {
+   "hue": 305.3,
+   "L": [
+    10.1,
+    33.6
+   ],
+   "C": [
+    24.9,
+    130.4
+   ],
+   "px": 1135
+  },
+  "measured_rejected": false
+ },
+ "I_Barracks": {
+  "bp": 74,
+  "colour": "blue",
+  "expected_hue": 285,
+  "stock_hue": 305.0,
+  "evidence": "faction default: Imperial = blue",
+  "measured": {
+   "hue": 305.0,
+   "L": [
+    18.8,
+    55.0
+   ],
+   "C": [
+    23.1,
+    131.0
+   ],
+   "px": 1170
+  },
+  "measured_rejected": false
+ },
+ "I_Drydock": {
+  "bp": 75,
+  "colour": "blue",
+  "expected_hue": 285,
+  "stock_hue": 305.3,
+  "evidence": "faction default: Imperial = blue",
+  "measured": {
+   "hue": 305.3,
+   "L": [
+    20.3,
+    61.6
+   ],
+   "C": [
+    29.9,
+    131.0
+   ],
+   "px": 708
+  },
+  "measured_rejected": false
+ },
+ "I_StoneTower": {
+  "bp": 76,
+  "colour": "blue",
+  "expected_hue": 285,
+  "stock_hue": 305.2,
+  "evidence": "faction default: Imperial = blue",
+  "measured": {
+   "hue": 305.2,
+   "L": [
+    9.3,
+    59.5
+   ],
+   "C": [
+    24.8,
+    131.0
+   ],
+   "px": 667
+  },
+  "measured_rejected": false
+ },
+ "I_StoneTower2": {
+  "bp": 77,
+  "colour": "blue",
+  "expected_hue": 285,
+  "stock_hue": 305.2,
+  "evidence": "faction default: Imperial = blue",
+  "measured": {
+   "hue": 305.2,
+   "L": [
+    9.3,
+    59.5
+   ],
+   "C": [
+    24.8,
+    131.0
+   ],
+   "px": 667
+  },
+  "measured_rejected": false
+ },
+ "I_StoneTower3": {
+  "bp": 78,
+  "colour": "blue",
+  "expected_hue": 285,
+  "stock_hue": 305.2,
+  "evidence": "faction default: Imperial = blue",
+  "measured": {
+   "hue": 305.2,
+   "L": [
+    9.3,
+    59.5
+   ],
+   "C": [
+    24.8,
+    131.0
+   ],
+   "px": 667
+  },
+  "measured_rejected": false
+ },
+ "I_Shipyard": {
+  "bp": 79,
+  "colour": "blue",
+  "expected_hue": 285,
+  "stock_hue": 305.3,
+  "evidence": "faction default: Imperial = blue",
+  "measured": {
+   "hue": 305.3,
+   "L": [
+    18.5,
+    58.5
+   ],
+   "C": [
+    33.1,
+    131.0
+   ],
+   "px": 961
+  },
+  "measured_rejected": false
+ },
+ "E_Commander": {
+  "bp": 80,
+  "colour": "orange",
+  "expected_hue": 45,
+  "stock_hue": 48.6,
+  "evidence": "faction default: Earth = orange",
+  "measured": {
+   "hue": 48.6,
+   "L": [
+    9.1,
+    54.5
+   ],
+   "C": [
+    20.4,
+    81.9
+   ],
+   "px": 1486
+  },
+  "measured_rejected": false
+ },
+ "E_Commander_F": {
+  "bp": 81,
+  "colour": "orange",
+  "expected_hue": 45,
+  "stock_hue": 41.9,
+  "evidence": "faction default: Earth = orange",
+  "measured": {
+   "hue": 41.9,
+   "L": [
+    8.9,
+    58.4
+   ],
+   "C": [
+    29.8,
+    94.9
+   ],
+   "px": 1248
+  },
+  "measured_rejected": false
+ },
+ "E_Engineer": {
+  "bp": 82,
+  "colour": "red",
+  "expected_hue": 35,
+  "stock_hue": 43.8,
+  "evidence": "sprite: tool/eyes; card eye glow red (2-3 px)",
+  "measured": {
+   "hue": 43.8,
+   "L": [
+    14.3,
+    54.3
+   ],
+   "C": [
+    23.2,
+    90.5
+   ],
+   "px": 111
+  },
+  "measured_rejected": false
+ },
+ "E_Melee": {
+  "bp": 83,
+  "colour": "red",
+  "expected_hue": 40,
+  "stock_hue": 43.5,
+  "evidence": "sprite: chest emblem team; card emblem red",
+  "measured": {
+   "hue": 43.5,
+   "L": [
+    24.5,
+    54.7
+   ],
+   "C": [
+    26.1,
+    97.5
+   ],
+   "px": 916
+  },
+  "measured_rejected": false
+ },
+ "E_Ranged": {
+  "bp": 84,
+  "colour": "red",
+  "expected_hue": 40,
+  "stock_hue": 43.8,
+  "evidence": "sprite: chest team; card red bits",
+  "measured": {
+   "hue": 43.8,
+   "L": [
+    22.6,
+    67.9
+   ],
+   "C": [
+    20.7,
+    82.1
+   ],
+   "px": 529
+  },
+  "measured_rejected": false
+ },
+ "E_Mounted": {
+  "bp": 85,
+  "colour": "red",
+  "expected_hue": 35,
+  "stock_hue": 29.5,
+  "evidence": "sprite: dome team; card dome red",
+  "measured": {
+   "hue": 29.5,
+   "L": [
+    14.9,
+    55.3
+   ],
+   "C": [
+    23.6,
+    88.4
+   ],
+   "px": 1265
+  },
+  "measured_rejected": false
+ },
+ "E_SiegeOne": {
+  "bp": 86,
+  "colour": "orange",
+  "expected_hue": 45,
+  "stock_hue": 39.0,
+  "evidence": "faction default: Earth = orange",
+  "measured": {
+   "hue": 39.0,
+   "L": [
+    11.3,
+    81.0
+   ],
+   "C": [
+    21.2,
+    76.3
+   ],
+   "px": 1257
+  },
+  "measured_rejected": false
+ },
+ "E_SiegeTwo": {
+  "bp": 87,
+  "colour": "orange",
+  "expected_hue": 45,
+  "stock_hue": 42.7,
+  "evidence": "faction default: Earth = orange",
+  "measured": {
+   "hue": 42.7,
+   "L": [
+    20.1,
+    66.5
+   ],
+   "C": [
+    25.1,
+    81.5
+   ],
+   "px": 1000
+  },
+  "measured_rejected": false
+ },
+ "E_SiegeThree": {
+  "bp": 88,
+  "colour": "orange",
+  "expected_hue": 45,
+  "stock_hue": 42.3,
+  "evidence": "faction default: Earth = orange",
+  "measured": {
+   "hue": 42.3,
+   "L": [
+    7.2,
+    56.7
+   ],
+   "C": [
+    22.6,
+    83.4
+   ],
+   "px": 542
+  },
+  "measured_rejected": false
+ },
+ "E_TransportShip": {
+  "bp": 89,
+  "colour": "orange",
+  "expected_hue": 45,
+  "stock_hue": 41.2,
+  "evidence": "faction default: Earth = orange",
+  "measured": {
+   "hue": 41.2,
+   "L": [
+    10.6,
+    74.5
+   ],
+   "C": [
+    20.4,
+    73.9
+   ],
+   "px": 404
+  },
+  "measured_rejected": false
+ },
+ "E_EagleCommandBase": {
+  "bp": 90,
+  "colour": "orange",
+  "expected_hue": 45,
+  "stock_hue": 55.4,
+  "evidence": "faction default: Earth = orange",
+  "measured": {
+   "hue": 55.4,
+   "L": [
+    17.7,
+    72.4
+   ],
+   "C": [
+    28.1,
+    87.2
+   ],
+   "px": 1180
+  },
+  "measured_rejected": false
+ },
+ "E_Harvester": {
+  "bp": 91,
+  "colour": "orange",
+  "expected_hue": 45,
+  "stock_hue": 53.9,
+  "evidence": "faction default: Earth = orange",
+  "measured": {
+   "hue": 53.9,
+   "L": [
+    34.5,
+    72.4
+   ],
+   "C": [
+    36.3,
+    86.6
+   ],
+   "px": 1668
+  },
+  "measured_rejected": false
+ },
+ "E_WellCap": {
+  "bp": 92,
+  "colour": "orange",
+  "expected_hue": 45,
+  "stock_hue": 45,
+  "evidence": "faction default: Earth = orange",
+  "measured": {
+   "hue": 69.9,
+   "L": [
+    29.9,
+    75.6
+   ],
+   "C": [
+    31.8,
+    86.6
+   ],
+   "px": 1089
+  },
+  "measured_rejected": true
+ },
+ "E_Biodome": {
+  "bp": 93,
+  "colour": "orange",
+  "expected_hue": 45,
+  "stock_hue": 51.2,
+  "evidence": "faction default: Earth = orange",
+  "measured": {
+   "hue": 51.2,
+   "L": [
+    28.0,
+    72.0
+   ],
+   "C": [
+    28.7,
+    90.1
+   ],
+   "px": 1533
+  },
+  "measured_rejected": false
+ },
+ "E_Barracks": {
+  "bp": 94,
+  "colour": "orange",
+  "expected_hue": 45,
+  "stock_hue": 53.5,
+  "evidence": "faction default: Earth = orange",
+  "measured": {
+   "hue": 53.5,
+   "L": [
+    33.0,
+    65.2
+   ],
+   "C": [
+    34.5,
+    91.3
+   ],
+   "px": 1427
+  },
+  "measured_rejected": false
+ },
+ "E_VehicleFactory": {
+  "bp": 95,
+  "colour": "orange",
+  "expected_hue": 45,
+  "stock_hue": 62.0,
+  "evidence": "faction default: Earth = orange",
+  "measured": {
+   "hue": 62.0,
+   "L": [
+    31.5,
+    75.6
+   ],
+   "C": [
+    26.2,
+    88.1
+   ],
+   "px": 990
+  },
+  "measured_rejected": false
+ },
+ "E_RocketTowers": {
+  "bp": 96,
+  "colour": "orange",
+  "expected_hue": 45,
+  "stock_hue": 51.0,
+  "evidence": "faction default: Earth = orange",
+  "measured": {
+   "hue": 51.0,
+   "L": [
+    16.4,
+    62.6
+   ],
+   "C": [
+    22.0,
+    87.2
+   ],
+   "px": 1730
+  },
+  "measured_rejected": false
+ },
+ "E_RocketTowers2": {
+  "bp": 97,
+  "colour": "orange",
+  "expected_hue": 45,
+  "stock_hue": 51.0,
+  "evidence": "faction default: Earth = orange",
+  "measured": {
+   "hue": 51.0,
+   "L": [
+    16.4,
+    62.6
+   ],
+   "C": [
+    22.0,
+    87.2
+   ],
+   "px": 1730
+  },
+  "measured_rejected": false
+ },
+ "E_RocketTowers3": {
+  "bp": 98,
+  "colour": "orange",
+  "expected_hue": 45,
+  "stock_hue": 51.0,
+  "evidence": "faction default: Earth = orange",
+  "measured": {
+   "hue": 51.0,
+   "L": [
+    16.4,
+    62.6
+   ],
+   "C": [
+    22.0,
+    87.2
+   ],
+   "px": 1730
+  },
+  "measured_rejected": false
+ },
+ "E_Shipyard": {
+  "bp": 99,
+  "colour": "orange",
+  "expected_hue": 45,
+  "stock_hue": 50.8,
+  "evidence": "faction default: Earth = orange",
+  "measured": {
+   "hue": 50.8,
+   "L": [
+    19.1,
+    70.2
+   ],
+   "C": [
+    25.7,
+    91.3
+   ],
+   "px": 1023
+  },
+  "measured_rejected": false
+ },
+ "A_AlienKing": {
+  "bp": 100,
+  "colour": "green",
+  "expected_hue": 140,
+  "stock_hue": 137.5,
+  "evidence": "faction default: Alien = green",
+  "measured": {
+   "hue": 137.5,
+   "L": [
+    16.3,
+    87.2
+   ],
+   "C": [
+    29.7,
+    94.7
+   ],
+   "px": 2405
+  },
+  "measured_rejected": false
+ },
+ "A_AlienKing_F": {
+  "bp": 101,
+  "colour": "green",
+  "expected_hue": 140,
+  "stock_hue": 136.0,
+  "evidence": "faction default: Alien = green",
+  "measured": {
+   "hue": 136.0,
+   "L": [
+    25.0,
+    83.3
+   ],
+   "C": [
+    28.5,
+    93.0
+   ],
+   "px": 1933
+  },
+  "measured_rejected": false
+ },
+ "A_Engineer": {
+  "bp": 102,
+  "colour": "yellow",
+  "expected_hue": 95,
+  "stock_hue": 104.8,
+  "evidence": "sprite: the dome is team in all 5 directions; the card's dome is yellow",
+  "measured": {
+   "hue": 104.8,
+   "L": [
+    21.1,
+    93.1
+   ],
+   "C": [
+    29.6,
+    92.8
+   ],
+   "px": 3002
+  },
+  "measured_rejected": false
+ },
+ "A_Melee": {
+  "bp": 103,
+  "colour": "green",
+  "expected_hue": 140,
+  "stock_hue": 135.6,
+  "evidence": "faction default: Alien = green",
+  "measured": {
+   "hue": 135.6,
+   "L": [
+    19.6,
+    86.5
+   ],
+   "C": [
+    33.5,
+    114.9
+   ],
+   "px": 3355
+  },
+  "measured_rejected": false
+ },
+ "A_Ranged": {
+  "bp": 104,
+  "colour": "yellow-green",
+  "expected_hue": 100,
+  "stock_hue": 114.6,
+  "evidence": "sprite: helmet and eye team; card: only the yellow eye and the green LEGO axle at the back of the head (face stays)",
+  "measured": {
+   "hue": 114.6,
+   "L": [
+    19.3,
+    96.4
+   ],
+   "C": [
+    16.7,
+    77.8
+   ],
+   "px": 676
+  },
+  "measured_rejected": false
+ },
+ "A_Mounted": {
+  "bp": 105,
+  "colour": "yellow",
+  "expected_hue": 95,
+  "stock_hue": 108.3,
+  "evidence": "sprite: canopy/hull team; the card's canopy is yellow",
+  "measured": {
+   "hue": 108.3,
+   "L": [
+    22.5,
+    92.9
+   ],
+   "C": [
+    29.0,
+    86.0
+   ],
+   "px": 1446
+  },
+  "measured_rejected": false
+ },
+ "A_SiegeOne": {
+  "bp": 106,
+  "colour": "yellow-green",
+  "expected_hue": 102,
+  "stock_hue": 115.7,
+  "evidence": "sprite: tubes, lights and panels team (entries 12-14); card tubes yellow-green",
+  "measured": {
+   "hue": 115.7,
+   "L": [
+    17.7,
+    70.9
+   ],
+   "C": [
+    20.8,
+    75.2
+   ],
+   "px": 795
+  },
+  "measured_rejected": false
+ },
+ "A_SiegeTwo": {
+  "bp": 107,
+  "colour": "yellow-green",
+  "expected_hue": 102,
+  "stock_hue": 114.8,
+  "evidence": "sprite: tubes, lights and panels team (entries 12-14); card tubes yellow-green",
+  "measured": {
+   "hue": 114.8,
+   "L": [
+    14.7,
+    79.8
+   ],
+   "C": [
+    16.7,
+    82.9
+   ],
+   "px": 995
+  },
+  "measured_rejected": false
+ },
+ "A_SiegeThree": {
+  "bp": 108,
+  "colour": "yellow-green",
+  "expected_hue": 102,
+  "stock_hue": 114.6,
+  "evidence": "sprite: tubes, lights and panels team (entries 12-14); card tubes yellow-green",
+  "measured": {
+   "hue": 114.6,
+   "L": [
+    14.5,
+    79.2
+   ],
+   "C": [
+    18.6,
+    81.7
+   ],
+   "px": 1014
+  },
+  "measured_rejected": false
+ },
+ "A_TransportShip": {
+  "bp": 109,
+  "colour": "yellow-green",
+  "expected_hue": 102,
+  "stock_hue": 112.5,
+  "evidence": "sprite: tubes, lights and panels team (entries 12-14); card tubes yellow-green",
+  "measured": {
+   "hue": 112.5,
+   "L": [
+    15.5,
+    78.6
+   ],
+   "C": [
+    20.3,
+    81.7
+   ],
+   "px": 1193
+  },
+  "measured_rejected": false
+ },
+ "A_CraterBase": {
+  "bp": 110,
+  "colour": "yellow-green",
+  "expected_hue": 102,
+  "stock_hue": 120.5,
+  "evidence": "sprite: tubes, lights and panels team (entries 12-14); card tubes yellow-green",
+  "measured": {
+   "hue": 120.5,
+   "L": [
+    17.6,
+    78.6
+   ],
+   "C": [
+    21.3,
+    87.0
+   ],
+   "px": 1864
+  },
+  "measured_rejected": false
+ },
+ "A_Harvester": {
+  "bp": 111,
+  "colour": "yellow-green",
+  "expected_hue": 102,
+  "stock_hue": 118.5,
+  "evidence": "sprite: tubes, lights and panels team (entries 12-14); card tubes yellow-green",
+  "measured": {
+   "hue": 118.5,
+   "L": [
+    20.7,
+    95.4
+   ],
+   "C": [
+    21.0,
+    95.8
+   ],
+   "px": 1505
+  },
+  "measured_rejected": false
+ },
+ "A_WellCap": {
+  "bp": 112,
+  "colour": "yellow-green",
+  "expected_hue": 102,
+  "stock_hue": 119.4,
+  "evidence": "sprite: tubes, lights and panels team (entries 12-14); card tubes yellow-green",
+  "measured": {
+   "hue": 119.4,
+   "L": [
+    18.3,
+    95.8
+   ],
+   "C": [
+    16.7,
+    96.5
+   ],
+   "px": 1317
+  },
+  "measured_rejected": false
+ },
+ "A_Hatchery": {
+  "bp": 113,
+  "colour": "yellow-green",
+  "expected_hue": 102,
+  "stock_hue": 118.4,
+  "evidence": "sprite: tubes, lights and panels team (entries 12-14); card tubes yellow-green",
+  "measured": {
+   "hue": 118.4,
+   "L": [
+    18.4,
+    95.8
+   ],
+   "C": [
+    20.6,
+    96.4
+   ],
+   "px": 2850
+  },
+  "measured_rejected": false
+ },
+ "A_BreedingPit": {
+  "bp": 114,
+  "colour": "yellow-green",
+  "expected_hue": 102,
+  "stock_hue": 119.5,
+  "evidence": "sprite: tubes, lights and panels team (entries 12-14); card tubes yellow-green",
+  "measured": {
+   "hue": 119.5,
+   "L": [
+    18.5,
+    89.2
+   ],
+   "C": [
+    23.5,
+    93.3
+   ],
+   "px": 1701
+  },
+  "measured_rejected": false
+ },
+ "A_CreationPit": {
+  "bp": 115,
+  "colour": "yellow-green",
+  "expected_hue": 102,
+  "stock_hue": 117.4,
+  "evidence": "sprite: tubes, lights and panels team (entries 12-14); card tubes yellow-green",
+  "measured": {
+   "hue": 117.4,
+   "L": [
+    20.6,
+    95.8
+   ],
+   "C": [
+    21.0,
+    95.8
+   ],
+   "px": 1661
+  },
+  "measured_rejected": false
+ },
+ "A_Spire": {
+  "bp": 116,
+  "colour": "yellow-green",
+  "expected_hue": 102,
+  "stock_hue": 119.8,
+  "evidence": "sprite: tubes, lights and panels team (entries 12-14); card tubes yellow-green",
+  "measured": {
+   "hue": 119.8,
+   "L": [
+    20.6,
+    95.8
+   ],
+   "C": [
+    26.5,
+    95.8
+   ],
+   "px": 1076
+  },
+  "measured_rejected": false
+ },
+ "A_Spire2": {
+  "bp": 117,
+  "colour": "yellow-green",
+  "expected_hue": 102,
+  "stock_hue": 119.8,
+  "evidence": "sprite: tubes, lights and panels team (entries 12-14); card tubes yellow-green",
+  "measured": {
+   "hue": 119.8,
+   "L": [
+    20.6,
+    95.8
+   ],
+   "C": [
+    26.5,
+    95.8
+   ],
+   "px": 1076
+  },
+  "measured_rejected": false
+ },
+ "A_Spire3": {
+  "bp": 118,
+  "colour": "yellow-green",
+  "expected_hue": 102,
+  "stock_hue": 119.8,
+  "evidence": "sprite: tubes, lights and panels team (entries 12-14); card tubes yellow-green",
+  "measured": {
+   "hue": 119.8,
+   "L": [
+    20.6,
+    95.8
+   ],
+   "C": [
+    26.5,
+    95.8
+   ],
+   "px": 1076
+  },
+  "measured_rejected": false
+ },
+ "A_Shipyard": {
+  "bp": 119,
+  "colour": "yellow-green",
+  "expected_hue": 102,
+  "stock_hue": 120.0,
+  "evidence": "sprite: tubes, lights and panels team (entries 12-14); card tubes yellow-green",
+  "measured": {
+   "hue": 120.0,
+   "L": [
+    29.4,
+    95.8
+   ],
+   "C": [
+    18.9,
+    98.9
+   ],
+   "px": 1351
+  },
+  "measured_rejected": false
+ },
+ "Wall": {
+  "bp": 120,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "neutral / no team part",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "SpacePoliceCaptain": {
+  "bp": 129,
+  "colour": "red",
+  "expected_hue": 35,
+  "stock_hue": 37.6,
+  "evidence": "sprite: helmet + torso panel team (5 dirs); card helmet red",
+  "measured": {
+   "hue": 37.6,
+   "L": [
+    14.4,
+    65.6
+   ],
+   "C": [
+    27.9,
+    93.2
+   ],
+   "px": 1612
+  },
+  "measured_rejected": false
+ },
+ "SpacePolice": {
+  "bp": 130,
+  "colour": "red",
+  "expected_hue": 35,
+  "stock_hue": 30.1,
+  "evidence": "sprite: torso + visor team; card visor band and jetpack red",
+  "measured": {
+   "hue": 30.1,
+   "L": [
+    32.1,
+    64.3
+   ],
+   "C": [
+    38.8,
+    85.6
+   ],
+   "px": 701
+  },
+  "measured_rejected": false
+ },
+ "SpacePoliceShip": {
+  "bp": 131,
+  "colour": "blue",
+  "expected_hue": 290,
+  "stock_hue": 291.2,
+  "evidence": "model texture team bits; card hull blue",
+  "measured": {
+   "hue": 291.2,
+   "L": [
+    4.3,
+    52.5
+   ],
+   "C": [
+    17.7,
+    76.6
+   ],
+   "px": 1160
+  },
+  "measured_rejected": false
+ },
+ "SpacePoliceBase": {
+  "bp": 132,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "neutral / no team part",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "SpaceCriminalLeader": {
+  "bp": 133,
+  "colour": "orange",
+  "expected_hue": 45,
+  "stock_hue": 45.8,
+  "evidence": "sprite: head, torso, legs team (5 dirs); card body orange",
+  "measured": {
+   "hue": 45.8,
+   "L": [
+    23.9,
+    57.0
+   ],
+   "C": [
+    40.8,
+    85.2
+   ],
+   "px": 2026
+  },
+  "measured_rejected": false
+ },
+ "SpaceCriminal": {
+  "bp": 134,
+  "colour": "red",
+  "expected_hue": 35,
+  "stock_hue": 20.7,
+  "evidence": "sprite: small chest stripes team; card jacket stripes red",
+  "measured": {
+   "hue": 20.7,
+   "L": [
+    4.2,
+    65.3
+   ],
+   "C": [
+    19.4,
+    78.5
+   ],
+   "px": 1492
+  },
+  "measured_rejected": false
+ },
+ "SpaceCriminalShip": {
+  "bp": 135,
+  "colour": "red",
+  "expected_hue": 35,
+  "stock_hue": 36.3,
+  "evidence": "model texture; card red bits",
+  "measured": {
+   "hue": 36.3,
+   "L": [
+    23.9,
+    60.0
+   ],
+   "C": [
+    15.9,
+    98.4
+   ],
+   "px": 811
+  },
+  "measured_rejected": false
+ },
+ "SpaceCriminalBase": {
+  "bp": 136,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "neutral / no team part",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "Robot": {
+  "bp": 138,
+  "colour": "orange",
+  "expected_hue": 55,
+  "stock_hue": 45.0,
+  "evidence": "docs/437 creature tint: orange wheels/parts",
+  "measured": {
+   "hue": 45.0,
+   "L": [
+    12.8,
+    46.4
+   ],
+   "C": [
+    20.6,
+    77.9
+   ],
+   "px": 1248
+  },
+  "measured_rejected": false
+ },
+ "CrashedEarthSupplyPod": {
+  "bp": 140,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "neutral / no team part",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "CrashedMothership": {
+  "bp": 141,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "neutral / no team part",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "Meteorite": {
+  "bp": 142,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "neutral / no team part",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "CrashedAlienTransport": {
+  "bp": 143,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "neutral / no team part",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "AncientMarsStructure": {
+  "bp": 144,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "neutral / no team part",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "IslanderChief": {
+  "bp": 145,
+  "colour": "red",
+  "expected_hue": 38,
+  "stock_hue": 36.4,
+  "evidence": "sprite: mask/head, shield, legs team; card mask red, shield",
+  "measured": {
+   "hue": 36.4,
+   "L": [
+    10.0,
+    63.0
+   ],
+   "C": [
+    22.6,
+    103.3
+   ],
+   "px": 1771
+  },
+  "measured_rejected": false
+ },
+ "Islander": {
+  "bp": 146,
+  "colour": "red",
+  "expected_hue": 35,
+  "stock_hue": 13.9,
+  "evidence": "sprite: torso/waist team; card torso is bare skin -> only the red waist cloth",
+  "measured": {
+   "hue": 13.9,
+   "L": [
+    9.5,
+    56.6
+   ],
+   "C": [
+    17.4,
+    50.1
+   ],
+   "px": 386
+  },
+  "measured_rejected": false
+ },
+ "IslanderWarCanoe": {
+  "bp": 147,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "model almost all team; card stone grey -> stock",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "IslanderTemple": {
+  "bp": 148,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "neutral / no team part",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "NinjaKing": {
+  "bp": 149,
+  "colour": "red",
+  "expected_hue": 38,
+  "stock_hue": 33.5,
+  "evidence": "sprite: whole robe team (5 dirs); card robe red",
+  "measured": {
+   "hue": 33.5,
+   "L": [
+    5.7,
+    53.6
+   ],
+   "C": [
+    17.2,
+    72.7
+   ],
+   "px": 1181
+  },
+  "measured_rejected": false
+ },
+ "Ninja": {
+  "bp": 150,
+  "colour": "purple",
+  "expected_hue": 300,
+  "stock_hue": 322.8,
+  "evidence": "sprite: whole suit team (5 dirs); card suit dark purple",
+  "measured": {
+   "hue": 322.8,
+   "L": [
+    3.1,
+    44.1
+   ],
+   "C": [
+    19.2,
+    44.5
+   ],
+   "px": 3138
+  },
+  "measured_rejected": false
+ },
+ "WarJunk": {
+  "bp": 151,
+  "colour": "blue",
+  "expected_hue": 285,
+  "stock_hue": 282.5,
+  "evidence": "model texture; card roof blue",
+  "measured": {
+   "hue": 282.5,
+   "L": [
+    2.5,
+    76.5
+   ],
+   "C": [
+    15.3,
+    62.6
+   ],
+   "px": 600
+  },
+  "measured_rejected": false
+ },
+ "NinjaTemple": {
+  "bp": 152,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "neutral / no team part",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "Monkey": {
+  "bp": 153,
+  "colour": "brown",
+  "expected_hue": 50,
+  "stock_hue": 42.6,
+  "evidence": "docs/437 creature tint: brown fur",
+  "measured": {
+   "hue": 42.6,
+   "L": [
+    5.6,
+    38.9
+   ],
+   "C": [
+    17.2,
+    59.3
+   ],
+   "px": 2517
+  },
+  "measured_rejected": false
+ },
+ "Shark": {
+  "bp": 155,
+  "colour": "grey",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "docs/437 creature tint: grey body (any hue, low chroma)",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "ShipWreckWater": {
+  "bp": 156,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "neutral / no team part",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "ShipWreckBeach": {
+  "bp": 157,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "neutral / no team part",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "ForgottenIslanderTemple": {
+  "bp": 158,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "neutral / no team part",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "AbandonnedImperialOutpost": {
+  "bp": 159,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "neutral / no team part",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "Hermitage": {
+  "bp": 160,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "neutral / no team part",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "DwarfKing": {
+  "bp": 161,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "sprite: legs only, not visible on the card -> none",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "Dwarf": {
+  "bp": 162,
+  "colour": "dark red",
+  "expected_hue": 30,
+  "stock_hue": 30.0,
+  "evidence": "sprite: torso team; card tunic maroon",
+  "measured": {
+   "hue": 30.0,
+   "L": [
+    9.3,
+    58.2
+   ],
+   "C": [
+    16.5,
+    63.8
+   ],
+   "px": 1213
+  },
+  "measured_rejected": false
+ },
+ "DwarfMineDefender": {
+  "bp": 163,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "model texture team bits; card brown machine -> stock",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "DwarvenHall": {
+  "bp": 164,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "neutral / no team part",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "TrollKing": {
+  "bp": 165,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "sprite: chest; card chest is dark armour with no team hue -> none (disagreement)",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "Troll": {
+  "bp": 166,
+  "colour": "orange",
+  "expected_hue": 50,
+  "stock_hue": 42.7,
+  "evidence": "sprite: head (skin) + tunic; card tunic orange; skin never coloured",
+  "measured": {
+   "hue": 42.7,
+   "L": [
+    12.8,
+    61.0
+   ],
+   "C": [
+    15.6,
+    82.0
+   ],
+   "px": 1306
+  },
+  "measured_rejected": false
+ },
+ "TrollBattleWheel": {
+  "bp": 167,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "model texture team bits; no clear card part -> stock",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "TrollHall": {
+  "bp": 168,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "neutral / no team part",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "Wolf": {
+  "bp": 169,
+  "colour": "grey",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "docs/437 creature tint: grey body (any hue, low chroma)",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "Stonehenge": {
+  "bp": 170,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "neutral / no team part",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "Cairn": {
+  "bp": 171,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "neutral / no team part",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "Church": {
+  "bp": 172,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "neutral / no team part",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "RuinedTower": {
+  "bp": 173,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "neutral / no team part",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "RuinedCastle": {
+  "bp": 174,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "neutral / no team part",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "ForestMan": {
+  "bp": 175,
+  "colour": "green",
+  "expected_hue": 140,
+  "stock_hue": 134.7,
+  "evidence": "sprite: torso team; card tunic green",
+  "measured": {
+   "hue": 134.7,
+   "L": [
+    12.7,
+    67.4
+   ],
+   "C": [
+    26.5,
+    68.7
+   ],
+   "px": 1012
+  },
+  "measured_rejected": false
+ },
+ "Ghost": {
+  "bp": 176,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "sprite: only the lantern; card has no team part",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "Sheriff": {
+  "bp": 177,
+  "colour": "brown",
+  "expected_hue": 60,
+  "stock_hue": 65.7,
+  "evidence": "sprite: legs + chest; card suit brown (face carved out)",
+  "measured": {
+   "hue": 65.7,
+   "L": [
+    16.3,
+    79.4
+   ],
+   "C": [
+    17.8,
+    73.6
+   ],
+   "px": 3385
+  },
+  "measured_rejected": false
+ },
+ "Conquistador": {
+  "bp": 178,
+  "colour": "green",
+  "expected_hue": 150,
+  "stock_hue": 135.9,
+  "evidence": "sprite: torso team; card coat green",
+  "measured": {
+   "hue": 135.9,
+   "L": [
+    12.7,
+    81.6
+   ],
+   "C": [
+    25.7,
+    101.6
+   ],
+   "px": 1092
+  },
+  "measured_rejected": false
+ },
+ "AgentChase": {
+  "bp": 179,
+  "colour": "navy",
+  "expected_hue": 280,
+  "stock_hue": 281.3,
+  "evidence": "sprite: torso + arms team; card jumpsuit near-black navy",
+  "measured": {
+   "hue": 281.3,
+   "L": [
+    2.5,
+    36.5
+   ],
+   "C": [
+    15.3,
+    37.4
+   ],
+   "px": 215
+  },
+  "measured_rejected": false
+ },
+ "ClassicSpace": {
+  "bp": 180,
+  "colour": "red",
+  "expected_hue": 35,
+  "stock_hue": 38.9,
+  "evidence": "sprite: whole suit + helmet team; card suit red",
+  "measured": {
+   "hue": 38.9,
+   "L": [
+    7.2,
+    58.6
+   ],
+   "C": [
+    22.6,
+    83.0
+   ],
+   "px": 1827
+  },
+  "measured_rejected": false
+ },
+ "Santa": {
+  "bp": 181,
+  "colour": "red",
+  "expected_hue": 35,
+  "stock_hue": 39.2,
+  "evidence": "sprite: whole suit + hat team; card suit red",
+  "measured": {
+   "hue": 39.2,
+   "L": [
+    9.3,
+    56.5
+   ],
+   "C": [
+    21.8,
+    80.7
+   ],
+   "px": 2464
+  },
+  "measured_rejected": false
+ },
+ "A_LaserTrooper": {
+  "bp": -3,
+  "colour": "yellow-green",
+  "expected_hue": 102,
+  "stock_hue": 114.6,
+  "evidence": "sprite: tubes, lights and panels team (entries 12-14); card tubes yellow-green",
+  "measured": {
+   "hue": 114.6,
+   "L": [
+    19.3,
+    96.4
+   ],
+   "C": [
+    16.7,
+    77.8
+   ],
+   "px": 676
+  },
+  "measured_rejected": false
+ },
+ "Bridge": {
+  "bp": -1,
+  "colour": "none",
+  "expected_hue": null,
+  "stock_hue": null,
+  "evidence": "neutral / no team part",
+  "measured": null,
+  "measured_rejected": false
+ },
+ "K_Unknown": {
+  "bp": -2,
+  "colour": "blue",
+  "expected_hue": 295,
+  "stock_hue": 295,
+  "evidence": "faction default: King = blue",
+  "measured": null,
+  "measured_rejected": false
+ }
+}

@@ -49,6 +49,7 @@ cp -p "$W/port/runner/src/lb_overlay.cpp" "$TREE/runner/src/"
 # The menu's search index (tools/lb_menu_index.py), #included by lb_overlay.cpp.
 cp -p "$W/port/runner/src/lb_menu_index.inc" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_patches.cpp" "$TREE/runner/src/"
+cp -p "$W/port/runner/src/lb_cardmasks.inc" "$TREE/runner/src/"   # docs/486: included by lb_patches.cpp
 cp -p "$W/port/runner/src/lb_net.cpp" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_balance.cpp" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_balance_data.h" "$TREE/runner/src/"
@@ -116,6 +117,7 @@ cp -p "$W/port/runner/src/lb_wide2d.inc" "$TREE/runner/src/"
 # 3D resolution (docs/433): the hi-res partner renderer, its compositing and
 # its presentation. Includes, so no source list entry.
 cp -p "$W/port/runner/src/lb_hires_soft.inc" "$TREE/runner/vendor/melonds/"
+cp -p "$W/port/runner/src/lb_band_soft.inc" "$TREE/runner/vendor/melonds/"   # docs/484: banded 3D
 cp -p "$W/port/runner/src/lb_hires_comp.inc" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_hires_front.inc" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_field.h"   "$TREE/runner/src/"

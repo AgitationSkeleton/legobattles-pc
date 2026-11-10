@@ -892,7 +892,8 @@ void lb_fast_row(const Unit& u, int width, int extra, bool hud_anchor,
                  const BgLine* lines, size_t line_count,
                  const uint32_t* line3d, uint8_t prio3d,
                  const uint8_t* cover, Pixel backdrop, uint32_t mbmode,
-                 uint32_t mb, uint8_t* layer_row, uint32_t* __restrict dst) {
+                 uint32_t mb, uint8_t* layer_row, uint32_t* __restrict dst,
+                 const uint32_t* ht_row = nullptr, int ht_lo = 0, int ht_hi = 0) {
     LbFastLayer layer[4];
     int n = 0;
     for (size_t i = 0; i < line_count && n < 3; ++i)
@@ -934,7 +935,20 @@ void lb_fast_row(const Unit& u, int width, int extra, bool hud_anchor,
         }
         // top/below as the general loop's Pixels would carry them: colour,
         // BLDCNT target bit, 3D alpha (0 = not 3D) and order.
-        uint32_t top_c = base_color, below_c = base_color;
+        // docs/484: on a host-terrain row the base is the terrain pixel where
+        // the row has one -- Pixel{colour, 0x20, alpha 3, 4, 5}, the backdrop's
+        // target, priority and order with alpha 3 (gpu2d.cpp's general loop).
+        uint32_t px_base = base_color;
+        bool base_a3 = false;
+        if (ht_row) {
+            const int dx = x - extra;
+            if (dx >= ht_lo && dx < ht_hi) {
+                const uint32_t c = ht_row[dx - ht_lo];
+                px_base = ((c >> 18) & 0x3Fu) | (((c >> 10) & 0x3Fu) << 8) | (((c >> 2) & 0x3Fu) << 16);
+                base_a3 = true;
+            }
+        }
+        uint32_t top_c = px_base, below_c = px_base;
         uint8_t top_t = base_target, below_t = base_target;
         uint8_t top_a5 = 0, top_o = base_order;
         int found = 0;
@@ -973,7 +987,17 @@ void lb_fast_row(const Unit& u, int width, int extra, bool hud_anchor,
         }
         uint32_t color = top_c;
         const uint32_t target2 = static_cast<uint32_t>(below_t) << 8;
-        if (top_a5) {
+        if (found == 0 && base_a3) {
+            // compose() with the terrain base on top (alpha 3) and below:
+            // blended with itself at 3/13 when it is a second target, else
+            // the first-target brightness effects (an alpha blend needs a
+            // second target, which this branch has ruled out).
+            if (bldcnt & target2) color = blend(top_c, below_c, 3u, 13u);
+            else if (bldcnt & top_t) {
+                if (effect == 2u) color = brighten(top_c, evy);
+                else if (effect == 3u) color = darken(top_c, evy);
+            }
+        } else if (top_a5) {
             if (bldcnt & target2) color = blend5(top_c, below_c, top_a5);
             else if (bldcnt & top_t) {
                 if (effect == 2u) color = brighten(top_c, evy);

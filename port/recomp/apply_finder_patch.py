@@ -182,6 +182,22 @@ def apply(recompiler_dir):
         fh.write(text.replace(old, "{ uint32_t _m = LB_MEM_CYC("))
     done.append("arm_codegen.cpp: DTCM data-access charge inline (LB_MEM_CYC), %d sites" % n)
 
+    # 5. PER-BLOCK CYCLE ACCOUNTING (docs/484). The fall-through epilogue of
+    #    every ordinary instruction called runtime_tick (an out-of-line call
+    #    per guest instruction). It now emits LB_TICK, which the runner's
+    #    runtime_arm.h defines: with batching off it IS runtime_tick(x); with
+    #    it on (ARM9 banks, Native Game Logic) the cost is added to a pending
+    #    total that every remaining runtime_tick -- the block exits: branches,
+    #    calls, returns, exceptions -- commits first, as do the bus's slow
+    #    paths (I/O reads the clock) and the scheduler after each dispatch.
+    replace(
+        codegen,
+        "    os << \"    runtime_tick(\"\n"
+        "       << arm9_tick_expr(ins, arm9_has_data(ins.op)) << \");\\n\";\n",
+        "    os << \"    LB_TICK(\"\n"
+        "       << arm9_tick_expr(ins, arm9_has_data(ins.op)) << \");\\n\";\n")
+    done.append("arm_codegen.cpp: fall-through epilogue ticks through LB_TICK (docs/484)")
+
     return done
 
 

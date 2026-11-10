@@ -1,0 +1,1704 @@
+{
+"A_Defeat": {
+"parts": [],
+"note": "STOCK: the alien is lit entirely orange by lava; no separable team green"
+},
+"A_Defeat_2": {
+"parts": [
+{
+"poly": [
+[
+20,
+20
+],
+[
+150,
+20
+],
+[
+150,
+192
+],
+[
+20,
+192
+]
+],
+"hue": 140,
+"hue_tol": 30,
+"C_min": 20,
+"L_min": 10
+}
+],
+"note": "green limbs and chest"
+},
+"A_Victory": {
+"parts": [
+{
+"poly": [
+[
+0,
+40
+],
+[
+140,
+40
+],
+[
+140,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 140,
+"hue_tol": 30,
+"C_min": 20,
+"L_min": 10
+}
+],
+"note": "green limbs"
+},
+"A_Victory_2": {
+"parts": [
+{
+"poly": [
+[
+0,
+40
+],
+[
+240,
+40
+],
+[
+240,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 140,
+"hue_tol": 30,
+"C_min": 20,
+"L_min": 10
+}
+],
+"note": "green limbs and chest"
+},
+"Chase_Defeat": {
+"parts": [
+{
+"poly": [
+[
+0,
+90
+],
+[
+180,
+90
+],
+[
+200,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 280,
+"hue_tol": 45,
+"C_min": 10,
+"L_max": 50
+}
+],
+"note": "navy jumpsuit; yellow trim, badge, face stay"
+},
+"Chase_Victory": {
+"parts": [
+{
+"poly": [
+[
+0,
+90
+],
+[
+170,
+90
+],
+[
+180,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 280,
+"hue_tol": 45,
+"C_min": 10,
+"L_max": 50
+}
+],
+"note": "navy jumpsuit"
+},
+"ClassicSpace_Defeat": {
+"parts": [
+{
+"poly": [
+[
+0,
+0
+],
+[
+150,
+0
+],
+[
+160,
+60
+],
+[
+150,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 38,
+"hue_tol": 22,
+"C_min": 40,
+"L_min": 15
+}
+],
+"note": "red suit and helmet (figure outline vs the red Mars backdrop); visor, face, logo stay"
+},
+"ClassicSpace_Victory": {
+"parts": [
+{
+"poly": [
+[
+30,
+0
+],
+[
+150,
+0
+],
+[
+170,
+90
+],
+[
+175,
+192
+],
+[
+20,
+192
+],
+[
+20,
+60
+]
+],
+"hue": 38,
+"hue_tol": 22,
+"C_min": 40,
+"L_min": 15
+}
+],
+"note": "red suit and helmet"
+},
+"Conquistador_Defeat": {
+"parts": [
+{
+"poly": [
+[
+0,
+90
+],
+[
+40,
+84
+],
+[
+112,
+84
+],
+[
+136,
+96
+],
+[
+150,
+150
+],
+[
+130,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 145,
+"hue_tol": 30,
+"C_min": 20,
+"L_min": 10
+}
+],
+"note": "green coat (figure outline vs the jungle)"
+},
+"Conquistador_victory": {
+"parts": [
+{
+"poly": [
+[
+0,
+0
+],
+[
+28,
+0
+],
+[
+40,
+84
+],
+[
+110,
+84
+],
+[
+128,
+110
+],
+[
+140,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 145,
+"hue_tol": 30,
+"C_min": 20,
+"L_min": 10
+}
+],
+"note": "green coat"
+},
+"DawrfKing_Defeat": {
+"parts": [],
+"note": "STOCK: the team arms are not visible"
+},
+"DawrfKing_Victory": {
+"parts": [
+{
+"poly": [
+[
+190,
+90
+],
+[
+250,
+90
+],
+[
+250,
+150
+],
+[
+190,
+150
+]
+],
+"hue": 285,
+"hue_tol": 40,
+"C_min": 15
+}
+],
+"note": "the blue arm"
+},
+"E_Defeat": {
+"parts": [
+{
+"poly": [
+[
+0,
+84
+],
+[
+20,
+80
+],
+[
+100,
+84
+],
+[
+110,
+100
+],
+[
+104,
+150
+],
+[
+98,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 45,
+"hue_tol": 20,
+"C_min": 40,
+"L_min": 20
+},
+{
+"poly": [
+[
+0,
+40
+],
+[
+8,
+40
+],
+[
+8,
+84
+],
+[
+0,
+84
+]
+],
+"hue": 45,
+"hue_tol": 20,
+"C_min": 40,
+"L_min": 20
+}
+],
+"note": "orange spacesuit (figure outline vs Mars)"
+},
+"E_Defeat_2": {
+"parts": [
+{
+"poly": [
+[
+0,
+104
+],
+[
+40,
+96
+],
+[
+110,
+110
+],
+[
+124,
+96
+],
+[
+132,
+110
+],
+[
+130,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 45,
+"hue_tol": 20,
+"C_min": 40,
+"L_min": 20
+}
+],
+"note": "orange spacesuit; white panels stay"
+},
+"E_Victory": {
+"parts": [
+{
+"poly": [
+[
+0,
+76
+],
+[
+20,
+70
+],
+[
+84,
+76
+],
+[
+100,
+120
+],
+[
+104,
+150
+],
+[
+96,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 45,
+"hue_tol": 20,
+"C_min": 40,
+"L_min": 20
+}
+],
+"excl_poly": [
+[
+[
+0,
+100
+],
+[
+70,
+130
+],
+[
+80,
+192
+],
+[
+0,
+192
+]
+]
+],
+"note": "orange spacesuit; the blaster and its glow stay"
+},
+"E_Victory_2": {
+"parts": [
+{
+"poly": [
+[
+0,
+84
+],
+[
+20,
+80
+],
+[
+140,
+76
+],
+[
+150,
+96
+],
+[
+124,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 45,
+"hue_tol": 20,
+"C_min": 40,
+"L_min": 20
+},
+{
+"poly": [
+[
+110,
+40
+],
+[
+140,
+50
+],
+[
+160,
+76
+],
+[
+150,
+96
+],
+[
+124,
+92
+],
+[
+120,
+60
+]
+],
+"hue": 45,
+"hue_tol": 20,
+"C_min": 40,
+"L_min": 20
+}
+],
+"note": "orange spacesuit; white panels stay"
+},
+"Forestman_Defeat": {
+"parts": [
+{
+"poly": [
+[
+0,
+100
+],
+[
+40,
+94
+],
+[
+90,
+104
+],
+[
+116,
+112
+],
+[
+130,
+150
+],
+[
+120,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 140,
+"hue_tol": 30,
+"C_min": 15,
+"L_min": 10
+}
+],
+"note": "green tunic (figure outline vs the forest)"
+},
+"Forestman_Victory": {
+"parts": [
+{
+"poly": [
+[
+20,
+88
+],
+[
+60,
+82
+],
+[
+100,
+86
+],
+[
+130,
+120
+],
+[
+140,
+150
+],
+[
+126,
+192
+],
+[
+20,
+192
+]
+],
+"hue": 150,
+"hue_tol": 30,
+"C_min": 15,
+"L_min": 10
+}
+],
+"note": "green tunic"
+},
+"Ghost_Defeat": {
+"parts": [],
+"note": "STOCK: the lantern (team) is not in the picture"
+},
+"Ghost_Victory": {
+"parts": [],
+"note": "STOCK: the lantern (team) is not in the picture"
+},
+"I_Defeat": {
+"parts": [
+{
+"poly": [
+[
+0,
+40
+],
+[
+130,
+40
+],
+[
+130,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 285,
+"hue_tol": 40,
+"C_min": 12,
+"L_max": 50
+}
+],
+"note": "navy coat",
+"excl_poly": [
+[
+[
+0,
+0
+],
+[
+100,
+0
+],
+[
+100,
+70
+],
+[
+0,
+70
+]
+]
+]
+},
+"I_Defeat_2": {
+"parts": [
+{
+"poly": [
+[
+20,
+60
+],
+[
+200,
+60
+],
+[
+200,
+192
+],
+[
+20,
+192
+]
+],
+"hue": 265,
+"hue_tol": 35,
+"C_min": 15
+}
+],
+"note": "the blue lace and bows of her dress"
+},
+"I_Victory": {
+"parts": [
+{
+"poly": [
+[
+0,
+60
+],
+[
+170,
+60
+],
+[
+170,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 285,
+"hue_tol": 40,
+"C_min": 12,
+"L_max": 50
+}
+],
+"note": "navy coat; gold, sash, face stay"
+},
+"I_Victory_2": {
+"parts": [
+{
+"poly": [
+[
+20,
+60
+],
+[
+200,
+60
+],
+[
+200,
+192
+],
+[
+20,
+192
+]
+],
+"hue": 265,
+"hue_tol": 35,
+"C_min": 15
+}
+],
+"note": "the blue lace and bows"
+},
+"IslanderKing_Defeat": {
+"parts": [
+{
+"poly": [
+[
+60,
+120
+],
+[
+256,
+100
+],
+[
+256,
+192
+],
+[
+60,
+192
+]
+],
+"hue": 285,
+"hue_tol": 40,
+"C_min": 20
+},
+{
+"poly": [
+[
+60,
+120
+],
+[
+256,
+100
+],
+[
+256,
+192
+],
+[
+60,
+192
+]
+],
+"hue": 35,
+"hue_tol": 20,
+"C_min": 40
+}
+],
+"note": "the shield (blue pattern, red rim)"
+},
+"IslanderKing_Victory": {
+"parts": [
+{
+"poly": [
+[
+0,
+0
+],
+[
+160,
+0
+],
+[
+160,
+90
+],
+[
+0,
+90
+]
+],
+"hue": 36,
+"hue_tol": 20,
+"C_min": 40
+},
+{
+"poly": [
+[
+60,
+110
+],
+[
+256,
+90
+],
+[
+256,
+192
+],
+[
+60,
+192
+]
+],
+"hue": 285,
+"hue_tol": 40,
+"C_min": 20
+},
+{
+"poly": [
+[
+60,
+110
+],
+[
+256,
+90
+],
+[
+256,
+192
+],
+[
+60,
+192
+]
+],
+"hue": 35,
+"hue_tol": 20,
+"C_min": 40
+}
+],
+"note": "red mask and the shield"
+},
+"K_Defeat": {
+"parts": [
+{
+"poly": [
+[
+0,
+40
+],
+[
+130,
+40
+],
+[
+130,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 290,
+"hue_tol": 35,
+"C_min": 15
+}
+],
+"note": "blue cloth (little visible)"
+},
+"K_Defeat_2": {
+"parts": [
+{
+"poly": [
+[
+0,
+60
+],
+[
+200,
+60
+],
+[
+200,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 290,
+"hue_tol": 35,
+"C_min": 15
+}
+],
+"note": "blue dress"
+},
+"K_Victory": {
+"parts": [
+{
+"poly": [
+[
+0,
+150
+],
+[
+110,
+150
+],
+[
+110,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 290,
+"hue_tol": 35,
+"C_min": 15,
+"L_max": 60
+}
+],
+"note": "blue cloth (sky excluded by outline + L)"
+},
+"K_Victory_2": {
+"parts": [
+{
+"poly": [
+[
+0,
+90
+],
+[
+40,
+84
+],
+[
+110,
+90
+],
+[
+130,
+110
+],
+[
+140,
+148
+],
+[
+120,
+160
+],
+[
+120,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 290,
+"hue_tol": 35,
+"C_min": 15,
+"L_max": 60
+}
+],
+"note": "blue dress (figure outline vs the sky)"
+},
+"NinjaMaster_Defeat": {
+"parts": [
+{
+"poly": [
+[
+0,
+90
+],
+[
+230,
+90
+],
+[
+230,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 35,
+"hue_tol": 20,
+"C_min": 35,
+"L_min": 8
+}
+],
+"note": "red robe"
+},
+"NinjaMaster_Victory": {
+"parts": [
+{
+"poly": [
+[
+0,
+90
+],
+[
+256,
+90
+],
+[
+256,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 35,
+"hue_tol": 20,
+"C_min": 35,
+"L_min": 8
+}
+],
+"note": "red robe"
+},
+"P_Defeat": {
+"parts": [
+{
+"poly": [
+[
+0,
+40
+],
+[
+130,
+40
+],
+[
+130,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 32,
+"hue_tol": 18,
+"C_min": 45,
+"L_min": 10
+}
+],
+"note": "the coat's red bits (beard and face stay)"
+},
+"P_Defeat_2": {
+"parts": [],
+"note": "STOCK: the team top is not visible"
+},
+"P_Victory": {
+"parts": [
+{
+"poly": [
+[
+0,
+90
+],
+[
+150,
+90
+],
+[
+150,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 32,
+"hue_tol": 18,
+"C_min": 45,
+"L_min": 10
+}
+],
+"note": "the coat's red bits"
+},
+"P_Victory_2": {
+"parts": [
+{
+"poly": [
+[
+0,
+100
+],
+[
+190,
+100
+],
+[
+190,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 170,
+"hue_tol": 30,
+"C_min": 10
+}
+],
+"note": "dark green top"
+},
+"Santa_Defeat": {
+"parts": [
+{
+"poly": [
+[
+0,
+0
+],
+[
+160,
+0
+],
+[
+160,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 38,
+"hue_tol": 20,
+"C_min": 40,
+"L_min": 8
+}
+],
+"note": "red suit and hat"
+},
+"Santa_Victory": {
+"parts": [
+{
+"poly": [
+[
+0,
+0
+],
+[
+190,
+0
+],
+[
+190,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 38,
+"hue_tol": 20,
+"C_min": 40,
+"L_min": 8
+}
+],
+"note": "red suit and hat"
+},
+"Sheriff_Defeat": {
+"parts": [
+{
+"poly": [
+[
+0,
+100
+],
+[
+200,
+100
+],
+[
+200,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 300,
+"hue_tol": 40,
+"C_min": 6,
+"L_min": 15
+}
+],
+"note": "the lavender suit (team suit in the sprite); shirt and badge stay"
+},
+"Sheriff_Victory": {
+"parts": [
+{
+"poly": [
+[
+0,
+90
+],
+[
+150,
+90
+],
+[
+150,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 300,
+"hue_tol": 40,
+"C_min": 6,
+"L_min": 15
+}
+],
+"note": "the lavender suit"
+},
+"SpaceCriminal_Defeat": {
+"parts": [
+{
+"poly": [
+[
+0,
+0
+],
+[
+120,
+0
+],
+[
+130,
+30
+],
+[
+130,
+110
+],
+[
+100,
+130
+],
+[
+120,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 45,
+"hue_tol": 20,
+"C_min": 35,
+"L_min": 15
+}
+],
+"note": "orange head, arms and chest (figure outline vs Mars)"
+},
+"SpaceCriminal_Victory": {
+"parts": [
+{
+"poly": [
+[
+0,
+0
+],
+[
+116,
+0
+],
+[
+116,
+90
+],
+[
+140,
+110
+],
+[
+160,
+140
+],
+[
+156,
+180
+],
+[
+130,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 45,
+"hue_tol": 20,
+"C_min": 35,
+"L_min": 15
+}
+],
+"note": "orange head, arms and chest"
+},
+"SpacePolice_Defeat": {
+"parts": [
+{
+"poly": [
+[
+0,
+30
+],
+[
+20,
+10
+],
+[
+60,
+4
+],
+[
+100,
+16
+],
+[
+110,
+40
+],
+[
+104,
+60
+],
+[
+0,
+60
+]
+],
+"hue": 40,
+"hue_tol": 22,
+"C_min": 30
+}
+],
+"note": "the red helmet"
+},
+"SpacePolice_Victory": {
+"parts": [
+{
+"poly": [
+[
+20,
+30
+],
+[
+40,
+10
+],
+[
+80,
+4
+],
+[
+120,
+10
+],
+[
+130,
+30
+],
+[
+124,
+54
+],
+[
+24,
+54
+]
+],
+"hue": 40,
+"hue_tol": 22,
+"C_min": 30
+}
+],
+"note": "the red helmet"
+},
+"TrollKing_Defeat": {
+"parts": [
+{
+"poly": [
+[
+30,
+120
+],
+[
+120,
+120
+],
+[
+120,
+192
+],
+[
+30,
+192
+]
+],
+"hue": 0,
+"hue_tol": 181,
+"L_min": 12,
+"L_max": 60
+}
+],
+"chroma_keep": 0.9,
+"note": "the chest armour",
+"excl_poly": [
+[
+[
+0,
+140
+],
+[
+60,
+140
+],
+[
+60,
+192
+],
+[
+0,
+192
+]
+]
+]
+},
+"TrollKing_Victory": {
+"parts": [
+{
+"poly": [
+[
+20,
+88
+],
+[
+120,
+88
+],
+[
+130,
+120
+],
+[
+124,
+192
+],
+[
+20,
+192
+]
+],
+"hue": 0,
+"hue_tol": 181,
+"L_min": 12,
+"L_max": 60
+}
+],
+"chroma_keep": 0.9,
+"note": "the chest armour"
+},
+"W_Defeat": {
+"parts": [
+{
+"poly": [
+[
+0,
+100
+],
+[
+80,
+100
+],
+[
+116,
+130
+],
+[
+150,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 35,
+"hue_tol": 15,
+"C_min": 50,
+"L_min": 10
+}
+],
+"note": "red robe (figure outline vs the orange sky)"
+},
+"W_Defeat_2": {
+"parts": [
+{
+"poly": [
+[
+0,
+90
+],
+[
+220,
+90
+],
+[
+220,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 330,
+"hue_tol": 35,
+"C_min": 15,
+"L_min": 5
+}
+],
+"note": "purple dress"
+},
+"W_Victory": {
+"parts": [
+{
+"poly": [
+[
+0,
+30
+],
+[
+16,
+30
+],
+[
+16,
+60
+],
+[
+76,
+50
+],
+[
+104,
+30
+],
+[
+110,
+50
+],
+[
+104,
+100
+],
+[
+128,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 35,
+"hue_tol": 15,
+"C_min": 50,
+"L_min": 10
+}
+],
+"note": "red robe"
+},
+"W_Victory_2": {
+"parts": [
+{
+"poly": [
+[
+0,
+90
+],
+[
+200,
+90
+],
+[
+200,
+192
+],
+[
+0,
+192
+]
+],
+"hue": 330,
+"hue_tol": 35,
+"C_min": 15,
+"L_min": 5
+}
+],
+"note": "purple dress"
+}
+}

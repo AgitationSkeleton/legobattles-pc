@@ -102,6 +102,17 @@ struct Entity {
     std::array<std::shared_ptr<const std::vector<int16_t>>, 5> snd;   // its own sounds, by index
     std::vector<uint32_t> head;  // portraits/head.png, 24x24 RGBA (0xAABBGGRR), or empty
     int unlock_with = 0;         // SG-0096: a stock unit (1..181) whose unlock it shares, or 0
+    // SG-0109 (docs/485): "role", the army slot it plays in when not its
+    // template's. art_cat: the template's category, which its sprites are
+    // drawn as, when the record's category (+0x5C) was changed; else -1.
+    // role_slot: the army slot (2..4 ground, 5..7 Special One..Three), or -1.
+    int art_cat = -1;
+    int role_slot = -1;
+    // docs/485 (A): portraits/card_mask.png, the top-screen card's team mask
+    // (one byte a pixel, 0..255, white = team part), stored for the port's
+    // card recolour; empty when the unit has none.
+    std::vector<uint8_t> card_mask;
+    int card_mask_w = 0, card_mask_h = 0;
 };
 size_t g_array_off = 0;    // the larger blueprint array, in the file
 constexpr size_t kColBase = 4 + 182 * 0x7C + 27 * 0x74;   // collectable 209 (docs/11)
@@ -226,6 +237,7 @@ struct Img {
     int w = 0, h = 0;
     std::vector<uint32_t> rgba;   // 0xAABBGGRR
     std::vector<int> idx;         // palette index per pixel when indexed, else empty
+    std::vector<uint32_t> pal;    // the PNG's own palette when indexed (BR-0075)
 };
 uint32_t be32(const uint8_t* p) { return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3]; }
 bool read_png(const std::vector<uint8_t>& b, Img* out) {
@@ -308,6 +320,7 @@ bool read_png(const std::vector<uint8_t>& b, Img* out) {
         std::swap(cur, prev);
     }
     if (ctype == 3 && pal.size() > 16) out->idx.clear();   // not one of our 16-colour exports
+    out->pal = ctype == 3 ? pal : std::vector<uint32_t>();
     return true;
 }
 
@@ -348,6 +361,70 @@ std::vector<uint32_t> make_palette(const std::vector<uint32_t>& px, size_t n) {
     return pal;
 }
 
+// BR-0075 (docs/485): A SPRITE PNG IN OTHER COLOURS. A unit's sheets are 4bpp
+// and draw with its army's bank of the shared faction palette, so a sprite
+// has these 16 entries and no others (12-14 are the team's shades). Two things
+// went wrong with a PNG not made from the export:
+//  * an INDEXED PNG of 16 colours or fewer had its indices used as they were,
+//    whatever colours its own palette gave them, so a picture saved by an
+//    editor that rebuilds the palette (drops unused entries, sorts them)
+//    drew in unrelated colours. Its indices are now used only while its
+//    palette is still the faction layout (the export's); otherwise each pixel
+//    is taken by its colour, as a truecolour PNG's is.
+//  * a colour that is not in the palette becomes the nearest entry (as
+//    before); each such colour is now logged, and the Unit Lab's Files tab
+//    ("Last build") lists them, so the creator sees what changed.
+std::map<uint32_t, int>* g_mapped = nullptr;   // 0xBBGGRR -> the entry drawn, while a unit loads
+
+// Is an indexed PNG still on the faction palette's layout, as exported? Every
+// entry its pixels use matches the faction colour of that number (by the DS's
+// 15-bit colour), 12-14 being any team's shades, and only entry 0 is clear.
+bool on_faction_layout(const Img& im, const std::vector<uint32_t>& fpal) {
+    if (im.idx.empty() || fpal.size() < 16) return false;
+    bool used[16] = {};
+    for (int k : im.idx) {
+        if (k < 0 || k > 15) return false;
+        used[k] = true;
+    }
+    for (int k = 1; k < 16; ++k) {
+        if (!used[k]) continue;
+        if ((size_t)k >= im.pal.size() || (im.pal[(size_t)k] >> 24) < 128) return false;
+        if (k >= 12 && k <= 14) continue;
+        if (to555(im.pal[(size_t)k]) != to555(fpal[(size_t)k])) return false;
+    }
+    return true;
+}
+// The nearest entry, noting a colour the palette does not hold exactly.
+int nearest_logged(uint32_t c, const std::vector<uint32_t>& fpal) {
+    const int v = nearest(c, fpal);
+    if (g_mapped && v > 0 && (size_t)v < fpal.size() && to555(c) != to555(fpal[(size_t)v]))
+        g_mapped->emplace(c & 0xFFFFFFu, v);
+    return v;
+}
+// Pixel o of a picture as a faction-palette entry; `raw` from on_faction_layout.
+int pixel_entry(const Img& im, size_t o, bool raw, const std::vector<uint32_t>& fpal) {
+    return raw ? (im.idx[o] & 15) : nearest_logged(im.rgba[o], fpal);
+}
+// The report line for the colours a unit's pictures were drawn in instead.
+std::string mapped_note(const std::map<uint32_t, int>& m, const std::vector<uint32_t>& fpal) {
+    if (m.empty()) return std::string();
+    auto hex = [](uint32_t c) {
+        char b[8];
+        std::snprintf(b, sizeof b, "#%02X%02X%02X", (unsigned)(c & 0xFF), (unsigned)((c >> 8) & 0xFF),
+                      (unsigned)((c >> 16) & 0xFF));
+        return std::string(b);
+    };
+    std::string s = "  " + std::to_string(m.size()) + " colour(s) are not in the faction palette (16 colours, "
+                    "entries 12-14 the team's) and were drawn as the nearest:";
+    int n = 0;
+    for (const auto& kv : m) {
+        if (n++ == 12) { s += " ..."; break; }
+        s += " " + hex(kv.first) + "->" + hex(fpal[(size_t)kv.second]) +
+             (kv.second >= 12 && kv.second <= 14 ? "(team)" : "");
+    }
+    return s + "\n";
+}
+
 // ---- sheets ------------------------------------------------------------------
 struct Sheet { std::vector<uint8_t> file; int w = 0, h = 0; size_t data = 0; std::vector<uint8_t> px; };
 // An NCBR: its CHAR block's size, depth and data (4bpp, linear rows).
@@ -385,14 +462,15 @@ std::vector<uint8_t> encode_sheet(const Sheet& s) {
     return f;
 }
 // Draw a picture into the sheet at (x, y): indices as they are when the PNG is
-// one of ours (16-colour indexed), else the nearest faction colour.
+// one of ours (indexed on the faction layout), else the nearest faction colour.
 void blit(Sheet& s, const Img& im, int x0, int y0, const std::vector<uint32_t>& fpal) {
+    const bool raw = on_faction_layout(im, fpal);
     for (int y = 0; y < im.h; ++y)
         for (int x = 0; x < im.w; ++x) {
             const int X = x0 + x, Y = y0 + y;
             if (X < 0 || Y < 0 || X >= s.w || Y >= s.h) continue;
             const size_t o = (size_t)y * im.w + x;
-            const int v = !im.idx.empty() ? (im.idx[o] & 15) : nearest(im.rgba[o], fpal);
+            const int v = pixel_entry(im, o, raw, fpal);
             s.px[(size_t)Y * s.w + X] = (uint8_t)v;
         }
 }
@@ -403,12 +481,13 @@ void blit(Sheet& s, const Img& im, int x0, int y0, const std::vector<uint32_t>& 
 // art came back).
 bool frame_unchanged(const std::vector<uint8_t>& tpx, int sw, int sh, const Img& im, int x0, int y0,
                      const std::vector<uint32_t>& fpal) {
+    const bool raw = on_faction_layout(im, fpal);
     for (int y = 0; y < im.h; ++y)
         for (int x = 0; x < im.w; ++x) {
             const int X = x0 + x, Y = y0 + y;
             if (X < 0 || Y < 0 || X >= sw || Y >= sh) continue;
             const size_t o = (size_t)y * im.w + x;
-            const int v = !im.idx.empty() ? (im.idx[o] & 15) : nearest(im.rgba[o], fpal);
+            const int v = raw ? (im.idx[o] & 15) : nearest(im.rgba[o], fpal);
             if (tpx[(size_t)Y * sw + X] != (uint8_t)v) return false;
         }
     return true;
@@ -458,8 +537,40 @@ std::vector<std::string> sheets_of(int cat, const std::string& base) {
 // The template's card re-encoded from a picture of the same cell size: a new
 // palette from the picture (255 colours at 8bpp, 15 at 4bpp), its pixels into
 // the same OBJ tiles. False when the picture does not fit.
+// docs/485 (A): the card's cell size (its OAMs' bounding box), as encode_card
+// requires the picture to be; false when the NCER has no usable cell.
+bool card_cell_size(const std::vector<uint8_t>& ncer, int* w, int* h) {
+    if (ncer.size() < 0x30 || std::memcmp(ncer.data() + 0x10, "KBEC", 4) != 0) return false;
+    const uint32_t ncell = get16(ncer, 0x18), cattr = get16(ncer, 0x1A), coff = get32(ncer, 0x1C);
+    if (!ncell) return false;
+    const size_t cells = 0x18 + coff, esz = cattr == 1 ? 16 : 8, oams = cells + ncell * esz;
+    const uint32_t noam = get16(ncer, cells), ooff = get32(ncer, cells + 4);
+    static const int kW[3][4] = {{8, 16, 32, 64}, {16, 32, 32, 64}, {8, 8, 16, 32}};
+    static const int kH[3][4] = {{8, 16, 32, 64}, {8, 8, 16, 32}, {16, 32, 32, 64}};
+    int x0 = 1 << 20, y0 = 1 << 20, x1 = -(1 << 20), y1 = -(1 << 20);
+    for (uint32_t k = 0; k < noam && k < 128; ++k) {
+        const size_t at = oams + ooff + k * 6;
+        if (at + 6 > ncer.size()) break;
+        const uint32_t a0 = get16(ncer, at), a1 = get16(ncer, at + 2);
+        const int shape = (int)(a0 >> 14) & 3, size = (int)(a1 >> 14) & 3;
+        if (shape == 3) continue;
+        int x = (int)(a1 & 0x1FF);
+        if (x >= 256) x -= 512;
+        const int y = (int)(int8_t)(a0 & 0xFF);
+        x0 = std::min(x0, x); y0 = std::min(y0, y);
+        x1 = std::max(x1, x + kW[shape][size]); y1 = std::max(y1, y + kH[shape][size]);
+    }
+    if (x1 <= x0 || y1 <= y0) return false;
+    *w = x1 - x0;
+    *h = y1 - y0;
+    return true;
+}
+// docs/485 (A): the colours a card picture had beyond what its palette holds
+// (more than 255 at 8bpp, 15 at 4bpp), set by encode_card.
+int g_card_approx = 0;
 bool encode_card(std::vector<uint8_t>* ncgr, std::vector<uint8_t>* nclr, const std::vector<uint8_t>& ncer,
                  const Img& im) {
+    g_card_approx = 0;
     std::vector<uint8_t>& g = *ncgr;
     std::vector<uint8_t>& c = *nclr;
     if (ncer.size() < 0x30 || g.size() < 0x30 || c.size() < 0x28 + 32) return false;
@@ -491,6 +602,18 @@ bool encode_card(std::vector<uint8_t>* ncgr, std::vector<uint8_t>* nclr, const s
     if (os.empty() || im.w != x1 - x0 || im.h != y1 - y0) return false;
     const bool b8 = os[0].b8;
     const std::vector<uint32_t> pal = make_palette(im.rgba, b8 ? 256 : 16);
+    {   // docs/485 (A): count the colours the palette could not hold exactly
+        std::map<uint16_t, bool> seen;
+        for (uint32_t c : im.rgba) {
+            if ((c >> 24) < 128) continue;
+            const uint16_t k = to555(c);
+            if (seen.count(k)) continue;
+            bool in = false;
+            for (size_t i = 1; i < pal.size() && !in; ++i) in = to555(pal[i]) == k;
+            seen[k] = in;
+            if (!in) ++g_card_approx;
+        }
+    }
     const size_t ncol = (c.size() - 0x28) / 2;
     for (size_t i = 0; i < ncol; ++i) {
         const uint16_t v = i < pal.size() ? to555(pal[i]) : 0;
@@ -819,6 +942,35 @@ bool load_unit(const std::string& folder, const std::string& tag, const std::vec
             if (auto_when_zero(f.off) && v == 0) continue;   // Auto: the template's byte stays
             for (int i = 0; i < f.width; ++i) e->rec[(size_t)f.off + (size_t)i] = (uint8_t)((unsigned long)v >> (8 * i));
         }
+    // SG-0109 (docs/485): "role" moves a ground unit between Close Combat (2),
+    // Ranged (3) and Mounted (4), as the creature layer moves the Wolf, Robot
+    // and Monkey (docs/436): the record's category becomes the role, so the
+    // army screen, the AI and the build limits see it there, while its sprites
+    // keep the template's category (the sprite cloak, lb_patches.cpp). Only a
+    // template drawn from the "_0".."_2" sheets (category 2 or 3) can move: a
+    // Mounted template's "_a0".."_w4" set loads through the mounted loader,
+    // whose three slots (48-50) one Mounted unit per army fills. A special
+    // (Special One/Two/Three, 5..7) moves between those three slots; its
+    // category stays.
+    {
+        long role = -1;
+        if (jnum(j, 0, j.size(), "role", &role) && role >= 0) {
+            const int tslot = cat;   // ground: the slot is the category
+            if (role >= 2 && role <= 4 && (tslot == 2 || tslot == 3)) {
+                if (role != cat) {
+                    e->rec[0x5C] = (uint8_t)role;
+                    e->art_cat = cat;
+                }
+                e->role_slot = (int)role;
+            } else if (role >= 5 && role <= 7 && cat == 6) {
+                e->role_slot = (int)role;
+            } else if (role != cat) {
+                g_report += folder + ": \"role\" " + std::to_string(role) +
+                            " is not open to this template (Close Combat/Ranged templates move between 2, 3 and 4; "
+                            "a Special One/Two/Three between 5, 6 and 7); ignored\n";
+            }
+        }
+    }
     std::string tasset = pool_str(stock, get32(stock, r + 0x24));
     const std::string tname = pool_str(stock, get32(stock, r + 0x00));
     e->name = "cu/" + tag;
@@ -862,6 +1014,12 @@ bool load_unit(const std::string& folder, const std::string& tag, const std::vec
         const fs::path sdir = sheet_folder(dir);
         if (sdir == dir && has_sheet_files(dir)) notes += "  sheets read from the unit's own folder (no sheets/ folder)\n";
         auto stand_in = [&](const std::string& ts) { return sheet_stand_in(sdir, names, tbase, ts); };
+        // BR-0075: the colours its pictures did not have in the palette.
+        std::map<uint32_t, int> mapped;
+        struct MapLog {
+            explicit MapLog(std::map<uint32_t, int>* m) { g_mapped = m; }
+            ~MapLog() { g_mapped = nullptr; }
+        } map_log(&mapped);
         for (const std::string& ts : names) {
             std::vector<uint8_t> raw;
             Sheet s;
@@ -919,7 +1077,8 @@ bool load_unit(const std::string& folder, const std::string& tag, const std::vec
                 std::find(claimed.begin(), claimed.end(), stem) == claimed.end())
                 notes += "  sheets/" + utf8(de.path().filename()) + " is not one of this unit's sheets (" + expect + "); ignored\n";
         }
-        g_report += folder + ": " + std::to_string(sheets_used) + " of " + std::to_string((int)names.size()) +
+        notes += mapped_note(mapped, fpal);   // BR-0075
+        g_report +=folder + ": " + std::to_string(sheets_used) + " of " + std::to_string((int)names.size()) +
                     " sheets and " + std::to_string(frames_used) + " frames from the folder\n" + notes;
         if (!notes.empty()) std::fprintf(stderr, "[lb_cunits] %s:\n%s", folder.c_str(), notes.c_str());
     } else if (tasset.compare(0, 7, "Models/") == 0) {
@@ -960,8 +1119,41 @@ bool load_unit(const std::string& folder, const std::string& tag, const std::vec
         read(tp + ".NANR", &a);
         std::vector<uint8_t> mine;
         Img im;
-        if (slurp(dir / "portraits" / k.pic, &mine) && read_png(mine, &im) && !encode_card(&g, &c, r2, im))
-            std::fprintf(stderr, "[lb_cunits] %s: portraits/%s is not the template's card size; ignored\n", folder.c_str(), k.pic);
+        int cw = 0, ch = 0;
+        const bool sized = card_cell_size(r2, &cw, &ch);
+        if (slurp(dir / "portraits" / k.pic, &mine) && read_png(mine, &im)) {
+            if (!encode_card(&g, &c, r2, im)) {
+                std::fprintf(stderr, "[lb_cunits] %s: portraits/%s is not the template's card size; ignored\n", folder.c_str(), k.pic);
+                g_report += folder + ": portraits/" + k.pic + " is " + std::to_string(im.w) + "x" + std::to_string(im.h) +
+                            (sized ? ", the card is " + std::to_string(cw) + "x" + std::to_string(ch) : std::string()) +
+                            "; ignored\n";
+            } else if (g_card_approx > 0) {   // docs/485 (A), as BR-0075 reports sprites
+                g_report += folder + ": portraits/" + k.pic + ": " + std::to_string(g_card_approx) +
+                            " colour(s) beyond the card's palette (255 colours) were drawn as the nearest\n";
+            }
+        }
+        // docs/485 (A): the top-screen card's team mask, kept for the recolour.
+        if (std::strcmp(k.parent, "UI/GamePlayerCards") == 0) {
+            std::vector<uint8_t> mb;
+            Img mi;
+            if (slurp(dir / "portraits" / "card_mask.png", &mb) && read_png(mb, &mi)) {
+                if (sized && (mi.w != cw || mi.h != ch)) {
+                    g_report += folder + ": portraits/card_mask.png is " + std::to_string(mi.w) + "x" + std::to_string(mi.h) +
+                                ", the top-screen card is " + std::to_string(cw) + "x" + std::to_string(ch) + "; ignored\n";
+                } else {
+                    e->card_mask.resize((size_t)mi.w * mi.h);
+                    for (size_t i = 0; i < e->card_mask.size(); ++i) {
+                        const uint32_t px = mi.rgba[i];
+                        const uint32_t lum = (77u * (px & 0xFFu) + 150u * ((px >> 8) & 0xFFu) + 29u * ((px >> 16) & 0xFFu)) >> 8;
+                        e->card_mask[i] = (uint8_t)((px >> 24) < 128u ? 0u : lum);
+                    }
+                    e->card_mask_w = mi.w;
+                    e->card_mask_h = mi.h;
+                }
+            } else if (!mb.empty()) {
+                g_report += folder + ": portraits/card_mask.png is not a PNG it can read; ignored\n";
+            }
+        }
         // As the cartridge ships a card: the NCGR COMP-wrapped, the NCLR, NCER
         // and NANR raw. A wrapped NCLR/NCER is never finished loading and the
         // army screen's top screen stays black (run army448f).
@@ -993,7 +1185,8 @@ void collect_test(const std::vector<uint8_t>& stock) {
 
 }  // namespace
 
-void load_unit_sounds(const fs::path& dir, std::array<std::shared_ptr<const std::vector<int16_t>>, 5>* snd);   // below
+void load_unit_sounds(const fs::path& dir, std::array<std::shared_ptr<const std::vector<int16_t>>, 5>* snd,
+                      std::string* report);   // below
 
 bool lb_cunits_prepare(const std::vector<uint8_t>& stock, const CuReader& read, std::vector<CuFile>* files,
                        std::vector<std::string>* names) {
@@ -1030,7 +1223,8 @@ bool lb_cunits_prepare(const std::vector<uint8_t>& stock, const CuReader& read, 
         // that received it builds the very same records (docs/448).
         std::vector<uint8_t> bundle;
         if (!make_bundle(units_dir() / fs::u8path(folder), &bundle)) {
-            g_report += folder + ": too large to share (over 1 MB)\n";
+            g_report += folder + ": too large to share (over 1 MB); left out. Long or high-rate WAVs are the usual "
+                        "cause: the game keeps 6 s of mono at 32 kHz, so a short mono WAV loses nothing\n";
             continue;
         }
         const uint64_t hash = fnv64(bundle);
@@ -1042,8 +1236,10 @@ bool lb_cunits_prepare(const std::vector<uint8_t>& stock, const CuReader& read, 
         }
         files->insert(files->end(), std::make_move_iterator(fl.begin()), std::make_move_iterator(fl.end()));
         e.card_src = find_card(stock, e.tmpl);
-        load_unit_sounds(units_dir() / fs::u8path(folder), &e.snd);
-        g_report += folder + ": unit " + std::to_string((int)g_ents.size() + 1) + " (" + e.display + ")\n";
+        std::string snd_notes;   // docs/485 (B)
+        load_unit_sounds(units_dir() / fs::u8path(folder), &e.snd, &snd_notes);
+        g_report += folder + ": unit " + std::to_string((int)g_ents.size() + 1) + " (" + e.display + ")\n" + snd_notes;
+        if (!snd_notes.empty()) std::fprintf(stderr, "[lb_cunits] %s sounds:\n%s", folder.c_str(), snd_notes.c_str());
         g_ents.push_back(std::move(e));
         g_hashes.push_back(hash);
         g_bundles.push_back(std::move(bundle));
@@ -1162,6 +1358,27 @@ extern "C" int lb_cunits_head(int k, unsigned int out[576]) {
     return 1;
 }
 extern "C" int lb_cunits_template(int k) { return g_built && k >= 0 && k < (int)g_ents.size() ? g_ents[(size_t)k].tmpl : -1; }
+// docs/485 (A): the top-screen card's team mask of the custom unit with
+// blueprint index `bp` (its identity 551+k or battle record 551+n+k): one byte
+// a pixel, row-major, 0 = keep, 255 = team colour; null when it has none.
+extern "C" int lb_cunits_of_any(int bp);
+extern "C" const unsigned char* lb_cunits_card_mask(int bp, int* w, int* h) {
+    const int k = lb_cunits_of_any(bp);
+    if (!g_built || k < 0 || k >= (int)g_ents.size() || g_ents[(size_t)k].card_mask.empty()) return nullptr;
+    const Entity& e = g_ents[(size_t)k];
+    if (w) *w = e.card_mask_w;
+    if (h) *h = e.card_mask_h;
+    return e.card_mask.data();
+}
+// SG-0109 (docs/485): the category custom unit k's sprites are drawn as when
+// its "role" changed the record's (-1 when it did not), and its army slot
+// when "role" set one (-1: its template's).
+extern "C" int lb_cunits_art_category(int k) {
+    return g_built && k >= 0 && k < (int)g_ents.size() ? g_ents[(size_t)k].art_cat : -1;
+}
+extern "C" int lb_cunits_role_slot(int k) {
+    return g_built && k >= 0 && k < (int)g_ents.size() ? g_ents[(size_t)k].role_slot : -1;
+}
 extern "C" int lb_cunits_category(int k) {
     return g_built && k >= 0 && k < (int)g_ents.size() ? g_ents[(size_t)k].rec[0x5C] : -1;
 }
@@ -1467,37 +1684,92 @@ int sound_role(std::string stem) {
     return -1;
 }
 
-// RIFF WAVE PCM to mono 16-bit at kMixRate; false when it is not one.
-bool wav_to_mix(const std::vector<uint8_t>& b, std::vector<int16_t>* out) {
-    if (b.size() < 44 || std::memcmp(b.data(), "RIFF", 4) != 0 || std::memcmp(b.data() + 8, "WAVE", 4) != 0)
-        return false;
-    int fmt = 0, ch = 0, rate = 0, bits = 0;
+// docs/485 (B): RIFF WAVE to mono 16-bit at kMixRate. Any PCM the common
+// tools write is taken:
+//  * integer PCM of 8 (unsigned), 16, 24 or 32 bits, and IEEE float of 32 or
+//    64 bits (format 1 or 3, or WAVE_FORMAT_EXTENSIBLE 0xFFFE naming either);
+//  * 1 to 8 channels (averaged to mono), any rate from 1 kHz to 384 kHz
+//    (resampled to the game's);
+//  * any other chunks (LIST, bext, id3, cue, JUNK, fact ...) before or after
+//    "data", odd-sized chunks padded or not, and a "data" size that runs past
+//    the file or reads 0xFFFFFFFF (a streamed write): the samples present.
+// The first 6 s are kept. Returns "" when it worked, else why it did not, in
+// words for the Unit Lab's report (the old reader failed silently, and it
+// refused extensible, 24-bit and float files and files whose chunk sizes ran
+// past the end, which is why re-exporting sometimes "fixed" a sound).
+std::string wav_to_mix(const std::vector<uint8_t>& b, std::vector<int16_t>* out) {
+    if (b.size() < 12) return "the file is too short to be a WAV";
+    if (std::memcmp(b.data(), "RIFF", 4) != 0 || std::memcmp(b.data() + 8, "WAVE", 4) != 0) {
+        if (!std::memcmp(b.data(), "RF64", 4)) return "it is an RF64 (very large) WAV; save it as a normal WAV";
+        if (!std::memcmp(b.data(), "ID3", 3) || (b[0] == 0xFF && (b[1] & 0xE0) == 0xE0))
+            return "it is an MP3 with a .wav name; export it as a WAV";
+        if (!std::memcmp(b.data(), "OggS", 4)) return "it is an OGG with a .wav name; export it as a WAV";
+        return "it is not a RIFF WAVE file";
+    }
+    int tag = 0, ch = 0, rate = 0, bits = 0, align = 0;
+    bool have_fmt = false;
     size_t data = 0, dlen = 0;
     for (size_t p = 12; p + 8 <= b.size();) {
         const uint32_t n = get32(b, p + 4);
-        if (n > b.size() - p - 8) break;
-        if (!std::memcmp(b.data() + p, "fmt ", 4) && n >= 16) {
-            fmt = b[p + 8] | (b[p + 9] << 8);
+        const size_t avail = b.size() - p - 8;
+        if (!std::memcmp(b.data() + p, "fmt ", 4) && n >= 16 && n <= avail) {
+            tag = b[p + 8] | (b[p + 9] << 8);
             ch = b[p + 10] | (b[p + 11] << 8);
             rate = (int)get32(b, p + 12);
+            align = b[p + 20] | (b[p + 21] << 8);
             bits = b[p + 22] | (b[p + 23] << 8);
+            if (tag == 0xFFFE && n >= 40) tag = b[p + 8 + 24] | (b[p + 8 + 25] << 8);   // the sub-format GUID's first word
+            have_fmt = true;
         } else if (!std::memcmp(b.data() + p, "data", 4)) {
             data = p + 8;
-            dlen = n;
+            dlen = std::min<size_t>(n, avail);   // a streamed or cut file: what is there
+            if (have_fmt) break;                 // anything after it is not needed
         }
-        p += 8 + n + (n & 1);
+        if (n > avail) break;
+        p += 8 + (size_t)n + (n & 1u);
+        // Some writers do not pad odd chunks: if the padded position is not a
+        // chunk id but the unpadded one is, follow the file.
+        auto id_ok = [&](size_t q) {
+            if (q + 4 > b.size()) return false;
+            for (size_t i = 0; i < 4; ++i)
+                if (b[q + i] < 0x20 || b[q + i] > 0x7E) return false;
+            return true;
+        };
+        if ((n & 1u) && p + 4 <= b.size() && !id_ok(p) && id_ok(p - 1)) --p;
     }
-    if (fmt != 1 || ch < 1 || ch > 2 || rate < 4000 || rate > 96000 || (bits != 8 && bits != 16) || !data) return false;
-    const size_t frame = (size_t)ch * (size_t)(bits / 8);
-    const size_t frames = dlen / frame;
-    if (!frames) return false;
+    if (!have_fmt) return "it has no \"fmt \" chunk";
+    if (!data || !dlen) return "it has no sound data";
+    const bool flt = tag == 3;
+    if (tag != 1 && tag != 3) {
+        char why[96];
+        std::snprintf(why, sizeof why, "it is compressed (format 0x%04X, e.g. ADPCM or MP3); save it as PCM", tag);
+        return why;
+    }
+    if (ch < 1 || ch > 8) return "it has " + std::to_string(ch) + " channels (1 to 8 are read)";
+    if (rate < 1000 || rate > 384000) return "its sample rate is " + std::to_string(rate) + " Hz";
+    if (flt ? (bits != 32 && bits != 64) : (bits != 8 && bits != 16 && bits != 24 && bits != 32))
+        return std::string("it has ") + std::to_string(bits) + "-bit " + (flt ? "float" : "integer") + " samples";
+    const size_t bps = (size_t)bits / 8;
+    const size_t frame = std::max<size_t>((size_t)align, (size_t)ch * bps);
+    const size_t frames = std::min<size_t>(dlen / frame, (size_t)((double)kMaxSoundSamples * rate / kMixRate) + 2);
+    if (!frames) return "its sound data is empty";
+    auto sample = [&](size_t o) -> float {   // one sample, scaled to 16-bit range
+        const uint8_t* q = b.data() + o;
+        if (flt) {
+            if (bits == 32) { float f; std::memcpy(&f, q, 4); return std::isfinite(f) ? f * 32767.0f : 0.0f; }
+            double d; std::memcpy(&d, q, 8); return std::isfinite(d) ? (float)(d * 32767.0) : 0.0f;
+        }
+        switch (bits) {
+            case 8: return (float)((int)q[0] - 128) * 256.0f;
+            case 16: return (float)(int16_t)(q[0] | (q[1] << 8));
+            case 24: return (float)(((int32_t)((uint32_t)q[0] << 8 | (uint32_t)q[1] << 16 | (uint32_t)q[2] << 24)) >> 8) / 256.0f;
+            default: return (float)(int32_t)((uint32_t)q[0] | (uint32_t)q[1] << 8 | (uint32_t)q[2] << 16 | (uint32_t)q[3] << 24) / 65536.0f;
+        }
+    };
     std::vector<float> mono(frames);
     for (size_t i = 0; i < frames; ++i) {
         float s = 0.0f;
-        for (int c = 0; c < ch; ++c) {
-            const size_t o = data + i * frame + (size_t)c * (size_t)(bits / 8);
-            s += bits == 16 ? (float)(int16_t)(b[o] | (b[o + 1] << 8)) : (float)((int)b[o] - 128) * 256.0f;
-        }
+        for (int c = 0; c < ch; ++c) s += sample(data + i * frame + (size_t)c * bps);
         mono[i] = s / (float)ch;
     }
     const double step = (double)rate / (double)kMixRate;
@@ -1520,7 +1792,7 @@ bool wav_to_mix(const std::vector<uint8_t>& b, std::vector<int16_t>* out) {
     const float gain = std::min(4.0f, kSoundPeak / peak);
     for (size_t i = 0; i < n; ++i)
         (*out)[i] = (int16_t)std::max(-32768.0f, std::min(32767.0f, res[i] * gain));
-    return n > 0;
+    return n > 0 ? std::string() : std::string("it is too short to play");
 }
 
 // The voices playing now; the audio thread mixes them.
@@ -1531,15 +1803,36 @@ std::vector<Voice> g_voices;
 }  // namespace
 
 // A unit folder's sounds, by role (lb_cunits_prepare).
-void load_unit_sounds(const fs::path& dir, std::array<std::shared_ptr<const std::vector<int16_t>>, 5>* snd) {
+// docs/485 (B): every file is reported when it is not used, and why: the Unit
+// Lab's Files > Last build shows `report`. ".WAV" counts as ".wav".
+void load_unit_sounds(const fs::path& dir, std::array<std::shared_ptr<const std::vector<int16_t>>, 5>* snd,
+                      std::string* report) {
     std::error_code ec;
     for (const auto& e : fs::directory_iterator(dir / "sounds", ec)) {
-        if (!e.is_regular_file(ec) || e.path().extension() != ".wav") continue;
+        std::string ext = utf8(e.path().extension());
+        for (char& c : ext) c = (char)std::tolower((unsigned char)c);
+        if (!e.is_regular_file(ec) || ext != ".wav") continue;
+        const std::string name = utf8(e.path().filename());
         const int role = sound_role(utf8(e.path().stem()));
-        if (role < 0 || (*snd)[(size_t)role]) continue;
+        if (role < 0) {
+            if (report)
+                *report += "  sounds/" + name + ": not used (name it SELECT, DEATH, STRIKE, HIT or SPECIAL, "
+                           "or end the name with one of them)\n";
+            continue;
+        }
+        if ((*snd)[(size_t)role]) {
+            if (report) *report += "  sounds/" + name + ": not used (another file already has this role)\n";
+            continue;
+        }
         std::vector<uint8_t> b;
         auto pcm = std::make_shared<std::vector<int16_t>>();
-        if (slurp(e.path(), &b, 4u << 20) && wav_to_mix(b, pcm.get())) (*snd)[(size_t)role] = pcm;
+        if (!slurp(e.path(), &b, 64u << 20)) {
+            if (report) *report += "  sounds/" + name + ": could not be read (unreadable, or over 64 MB)\n";
+            continue;
+        }
+        const std::string why = wav_to_mix(b, pcm.get());
+        if (why.empty()) (*snd)[(size_t)role] = pcm;
+        else if (report) *report += "  sounds/" + name + ": not used: " + why + "\n";
     }
 }
 
@@ -1640,10 +1933,18 @@ std::vector<std::string> bundle_files(const fs::path& dir) {
         }
     }
     for (const auto& e : fs::directory_iterator(dir / "sounds", ec)) {
-        const std::string n = utf8(e.path().filename());
+        std::string n = utf8(e.path().filename());
+        // docs/485 (B): ".WAV" too, sent as ".wav" (the bundle's path rule;
+        // the read below opens it on Windows' case-blind file system).
+        if (n.size() > 4) {
+            std::string ext = n.substr(n.size() - 4);
+            for (char& c : ext) c = (char)std::tolower((unsigned char)c);
+            if (ext == ".wav") n = n.substr(0, n.size() - 4) + ".wav";
+        }
         if (e.is_regular_file(ec) && n.size() > 4 && n.substr(n.size() - 4) == ".wav") v.push_back("sounds/" + n);
     }
-    for (const char* f : {"portraits/card.png", "portraits/card_top_screen.png", "portraits/head.png", "model/texture.png"})
+    for (const char* f : {"portraits/card.png", "portraits/card_top_screen.png", "portraits/card_mask.png",
+                          "portraits/head.png", "model/texture.png"})   // card_mask: docs/485 (A)
         if (fs::exists(dir / f, ec)) v.push_back(f);
     std::sort(v.begin(), v.end());
     return v;
@@ -1679,6 +1980,7 @@ bool bundle_path_ok(const std::string& p) {
            (p.compare(0, 7, "sounds/") == 0 && p.size() > 11 && p.compare(p.size() - 4, 4, ".wav") == 0 &&
             p.find('/', 7) == std::string::npos) ||
            p == "portraits/card.png" || p == "portraits/card_top_screen.png" || p == "portraits/head.png" ||
+           p == "portraits/card_mask.png" ||   // docs/485 (A)
            p == "model/texture.png";
 }
 
@@ -1866,10 +2168,11 @@ bool lb_cunits_png_to_ncbr(const std::vector<uint8_t>& png, const uint32_t pal[1
     }
     const std::vector<uint32_t> fpal(pal, pal + 16);
     std::vector<uint8_t> px((size_t)W * H, 0);
+    const bool raw = on_faction_layout(im, fpal);   // BR-0075: else by colour
     for (int y = 0; y < im.h; ++y)
         for (int x = 0; x < im.w; ++x) {
             const size_t o = (size_t)y * im.w + x;
-            px[(size_t)y * W + x] = (uint8_t)(!im.idx.empty() ? (im.idx[o] & 15) : nearest(im.rgba[o], fpal));
+            px[(size_t)y * W + x] = (uint8_t)(raw ? (im.idx[o] & 15) : nearest(im.rgba[o], fpal));
         }
     const uint32_t dsize = (uint32_t)((size_t)W * H / 2);
     std::vector<uint8_t> f;

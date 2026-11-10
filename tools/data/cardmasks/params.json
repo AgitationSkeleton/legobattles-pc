@@ -1,0 +1,7477 @@
+{
+"SpaceCriminalLeader": {
+"parts": [
+{
+"seeds": [
+[
+38,
+12
+],
+[
+50,
+20
+],
+[
+28,
+18
+],
+[
+48,
+55
+],
+[
+66,
+62
+],
+[
+76,
+72
+],
+[
+56,
+30
+],
+[
+78,
+66
+],
+[
+72,
+64
+]
+],
+"hue_tol": 24,
+"excl_poly": [
+[
+[
+19,
+58
+],
+[
+46,
+56
+],
+[
+52,
+70
+],
+[
+46,
+90
+],
+[
+19,
+90
+]
+]
+]
+},
+{
+"poly": [
+[
+2,
+46
+],
+[
+22,
+42
+],
+[
+24,
+60
+],
+[
+18,
+72
+],
+[
+14,
+88
+],
+[
+2,
+88
+]
+],
+"hue_tol": 30,
+"C_min": 12,
+"L_min": 5,
+"fill": 2
+},
+{
+"poly": [
+[
+22,
+40
+],
+[
+36,
+40
+],
+[
+36,
+54
+],
+[
+22,
+56
+]
+],
+"hue_tol": 26,
+"C_min": 20,
+"L_min": 10,
+"fill": 1
+},
+{
+"poly": [
+[
+28,
+44
+],
+[
+42,
+44
+],
+[
+42,
+58
+],
+[
+30,
+58
+]
+],
+"hue_tol": 30,
+"C_min": 15,
+"L_min": 5,
+"fill": 1
+},
+{
+"poly": [
+[
+34,
+50
+],
+[
+46,
+50
+],
+[
+46,
+66
+],
+[
+34,
+66
+]
+],
+"hue": 45,
+"hue_tol": 28,
+"C_min": 20,
+"L_min": 8
+},
+{
+"poly": [
+[
+42,
+64
+],
+[
+56,
+64
+],
+[
+56,
+90
+],
+[
+42,
+90
+]
+],
+"hue": 45,
+"hue_tol": 28,
+"C_min": 20,
+"L_min": 8
+},
+{
+"poly": [
+[
+16,
+56
+],
+[
+32,
+56
+],
+[
+32,
+74
+],
+[
+16,
+74
+]
+],
+"hue": 42,
+"hue_tol": 12,
+"C_min": 40,
+"L_min": 8
+}
+],
+"note": "head, chest, both arms incl. his right (blaster) arm and the vest corner under the gun"
+},
+"K_King": {
+"seeds": [
+[
+10,
+70
+],
+[
+16,
+80
+],
+[
+78,
+68
+],
+[
+84,
+80
+],
+[
+66,
+82
+],
+[
+20,
+60
+],
+[
+52,
+82
+],
+[
+58,
+86
+],
+[
+24,
+86
+]
+],
+"L_min": 2,
+"bg_tol": 14,
+"note": "cape both sides and the legs below the hands"
+},
+"E_Commander": {
+"mode": "hue",
+"hue_tol": 22,
+"C_min": 25,
+"L_min": 10,
+"within": [
+[
+0,
+46,
+95,
+95
+]
+],
+"close": 1,
+"fill": 2,
+"excl": [
+[
+34,
+14,
+82,
+48
+]
+],
+"note": "orange spacesuit; the face and helmet stay"
+},
+"E_Commander_F": {
+"mode": "hue",
+"hue_tol": 22,
+"C_min": 25,
+"L_min": 10,
+"within": [
+[
+0,
+44,
+95,
+95
+]
+],
+"close": 1,
+"fill": 0,
+"excl": [
+[
+38,
+16,
+72,
+44
+]
+],
+"note": "orange spacesuit; the white panels, face, hair and helmet stay",
+"parts": [
+{},
+{
+"poly": [
+[
+66,
+50
+],
+[
+88,
+50
+],
+[
+88,
+70
+],
+[
+66,
+70
+]
+],
+"hue": 50,
+"hue_tol": 28,
+"C_min": 20,
+"L_min": 12
+}
+]
+},
+"Santa": {
+"mode": "hue",
+"hue": 39,
+"hue_tol": 28,
+"C_min": 12,
+"L_min": 2,
+"close": 1,
+"fill": 2,
+"parts": [
+{},
+{
+"poly": [
+[
+2,
+40
+],
+[
+30,
+36
+],
+[
+32,
+70
+],
+[
+2,
+72
+]
+],
+"hue": 39,
+"hue_tol": 32,
+"C_min": 8,
+"L_min": 2,
+"fill": 1
+},
+{
+"poly": [
+[
+8,
+42
+],
+[
+34,
+40
+],
+[
+34,
+56
+],
+[
+8,
+58
+]
+],
+"hue": 39,
+"hue_tol": 70,
+"C_min": 0,
+"hue_Cmin": 0,
+"L_min": 0,
+"L_max": 40,
+"fill": 2,
+"close": 1
+},
+{
+"poly": [
+[
+56,
+42
+],
+[
+76,
+44
+],
+[
+76,
+54
+],
+[
+56,
+54
+]
+],
+"hue": 39,
+"hue_tol": 70,
+"C_min": 0,
+"hue_Cmin": 0,
+"L_min": 0,
+"L_max": 40,
+"fill": 2,
+"close": 1
+}
+],
+"note": "red suit and hat incl. both shoulders and the dark shadow on top of them; face and beard stay"
+},
+"NinjaKing": {
+"mode": "hue",
+"hue": 38,
+"hue_tol": 28,
+"C_min": 12,
+"L_min": 3,
+"close": 1,
+"fill": 0,
+"excl_poly": [
+[
+[
+18,
+95
+],
+[
+88,
+10
+],
+[
+96,
+12
+],
+[
+96,
+16
+],
+[
+30,
+95
+]
+],
+[
+[
+24,
+40
+],
+[
+52,
+40
+],
+[
+52,
+56
+],
+[
+50,
+70
+],
+[
+46,
+84
+],
+[
+40,
+86
+],
+[
+32,
+72
+],
+[
+24,
+56
+]
+]
+],
+"within": [
+[
+0,
+40,
+95,
+95
+]
+],
+"note": "all the red robe incl. the shoulders and the torso under the beard (beard, sword, hands stay by hue)"
+},
+"A_Melee": {
+"seeds": [
+[
+40,
+20
+],
+[
+50,
+50
+],
+[
+30,
+60
+],
+[
+60,
+75
+],
+[
+48,
+85
+],
+[
+64,
+26
+],
+[
+60,
+22
+],
+[
+28,
+30
+]
+],
+"hue_tol": 35,
+"note": "whole body"
+},
+"A_AlienKing": {
+"seeds": [
+[
+10,
+64
+],
+[
+18,
+48
+],
+[
+26,
+70
+],
+[
+54,
+60
+],
+[
+66,
+52
+],
+[
+76,
+66
+],
+[
+80,
+80
+],
+[
+84,
+74
+],
+[
+74,
+84
+],
+[
+58,
+64
+],
+[
+62,
+58
+],
+[
+48,
+64
+]
+],
+"hue_tol": 35,
+"chroma_free": 10,
+"grow_step": 16,
+"note": "green arms, legs, torso panel"
+},
+"A_Engineer": {
+"outline_bg": true,
+"outline_dark_L": 40,
+"outline_gap": 1,
+"parts": [
+{
+"seeds": [
+[
+42,
+20
+],
+[
+50,
+35
+],
+[
+36,
+30
+],
+[
+58,
+25
+]
+],
+"within_poly": [
+[
+[
+24,
+3
+],
+[
+68,
+3
+],
+[
+72,
+52
+],
+[
+22,
+52
+]
+]
+],
+"hue_tol": 30
+},
+{
+"poly": [
+[
+0,
+66
+],
+[
+95,
+66
+],
+[
+95,
+86
+],
+[
+0,
+86
+]
+],
+"hue": 105,
+"hue_tol": 22,
+"C_min": 25,
+"L_min": 34,
+"ignore_bg": true,
+"island": 1,
+"outline_part": true,
+"excl": [
+[
+0,
+0,
+95,
+4
+],
+[
+0,
+0,
+4,
+95
+],
+[
+90,
+0,
+95,
+95
+],
+[
+0,
+84,
+95,
+95
+]
+]
+},
+{
+"poly": [
+[
+0,
+66
+],
+[
+95,
+66
+],
+[
+95,
+95
+],
+[
+0,
+95
+]
+],
+"hue": 104,
+"hue_tol": 6,
+"C_min": 25,
+"L_min": 15,
+"ignore_bg": true,
+"island": 1
+}
+],
+"note": "the yellow dome and the whole lime claw feet incl. their tips in the HP strip (hue 98-110; the lime backdrop is 113-118)",
+"outline_noseed": [
+[
+0,
+78,
+95,
+95
+]
+]
+},
+"W_Wizard": {
+"mode": "hue",
+"hue": 38,
+"hue_tol": 22,
+"C_min": 15,
+"L_min": 3,
+"within": [
+[
+0,
+52,
+95,
+95
+]
+],
+"close": 1,
+"fill": 2,
+"excl_poly": [
+[
+[
+0,
+0
+],
+[
+40,
+0
+],
+[
+36,
+40
+],
+[
+24,
+64
+],
+[
+0,
+64
+]
+]
+],
+"note": "red robe; lightning, beard, and the beard's neckpiece (red rim light) stay",
+"excl": [
+[
+41,
+44,
+53,
+57
+]
+]
+},
+"P_Barracuda": {
+"parts": [
+{
+"poly": [
+[
+28,
+14
+],
+[
+40,
+8
+],
+[
+58,
+8
+],
+[
+66,
+30
+],
+[
+90,
+76
+],
+[
+60,
+76
+],
+[
+30,
+72
+],
+[
+28,
+40
+]
+],
+"hue": 30,
+"hue_tol": 28,
+"C_min": 8,
+"hue_Cmin": 8,
+"L_min": 0,
+"L_max": 62,
+"ignore_bg": false,
+"close": 1
+},
+{
+"poly": [
+[
+28,
+14
+],
+[
+40,
+8
+],
+[
+58,
+8
+],
+[
+66,
+30
+],
+[
+90,
+76
+],
+[
+60,
+76
+],
+[
+30,
+72
+],
+[
+28,
+40
+]
+],
+"hue": 28,
+"hue_tol": 26,
+"C_min": 20,
+"hue_Cmin": 20,
+"L_min": 0,
+"L_max": 40,
+"ignore_bg": true,
+"close": 0
+},
+{
+"poly": [
+[
+28,
+14
+],
+[
+40,
+8
+],
+[
+58,
+8
+],
+[
+66,
+30
+],
+[
+90,
+76
+],
+[
+60,
+76
+],
+[
+30,
+72
+],
+[
+28,
+40
+]
+],
+"hue": 30,
+"hue_tol": 18,
+"C_min": 40,
+"hue_Cmin": 40,
+"L_min": 15,
+"L_max": 65,
+"ignore_bg": true,
+"close": 1
+}
+],
+"note": "every red sail stripe incl. the thin dark edges (hand outline of the sails)"
+},
+"P_Battleship": {
+"parts": [
+{
+"poly": [
+[
+12,
+20
+],
+[
+40,
+18
+],
+[
+56,
+22
+],
+[
+60,
+40
+],
+[
+56,
+48
+],
+[
+88,
+78
+],
+[
+66,
+78
+],
+[
+50,
+66
+],
+[
+20,
+60
+],
+[
+12,
+40
+]
+],
+"hue": 30,
+"hue_tol": 28,
+"C_min": 8,
+"hue_Cmin": 8,
+"L_min": 0,
+"L_max": 62,
+"ignore_bg": true,
+"close": 1
+},
+{
+"poly": [
+[
+12,
+20
+],
+[
+40,
+18
+],
+[
+56,
+22
+],
+[
+60,
+40
+],
+[
+56,
+48
+],
+[
+88,
+78
+],
+[
+66,
+78
+],
+[
+50,
+66
+],
+[
+20,
+60
+],
+[
+12,
+40
+]
+],
+"hue": 28,
+"hue_tol": 26,
+"C_min": 20,
+"hue_Cmin": 20,
+"L_min": 0,
+"L_max": 40,
+"ignore_bg": true,
+"close": 0
+},
+{
+"poly": [
+[
+12,
+20
+],
+[
+40,
+18
+],
+[
+56,
+22
+],
+[
+60,
+40
+],
+[
+56,
+48
+],
+[
+88,
+78
+],
+[
+66,
+78
+],
+[
+50,
+66
+],
+[
+20,
+60
+],
+[
+12,
+40
+]
+],
+"hue": 30,
+"hue_tol": 18,
+"C_min": 40,
+"hue_Cmin": 40,
+"L_min": 15,
+"L_max": 65,
+"ignore_bg": true,
+"close": 1
+}
+],
+"note": "every red sail stripe incl. the thin dark edges"
+},
+"P_FlyingDutchman": {
+"parts": [
+{
+"poly": [
+[
+8,
+26
+],
+[
+18,
+12
+],
+[
+30,
+10
+],
+[
+44,
+14
+],
+[
+58,
+16
+],
+[
+64,
+28
+],
+[
+64,
+52
+],
+[
+92,
+80
+],
+[
+66,
+78
+],
+[
+50,
+62
+],
+[
+20,
+62
+],
+[
+8,
+46
+]
+],
+"hue": 30,
+"hue_tol": 28,
+"C_min": 8,
+"hue_Cmin": 8,
+"L_min": 0,
+"L_max": 62,
+"ignore_bg": false,
+"close": 1
+},
+{
+"poly": [
+[
+8,
+26
+],
+[
+18,
+12
+],
+[
+30,
+10
+],
+[
+44,
+14
+],
+[
+58,
+16
+],
+[
+64,
+28
+],
+[
+64,
+52
+],
+[
+92,
+80
+],
+[
+66,
+78
+],
+[
+50,
+62
+],
+[
+20,
+62
+],
+[
+8,
+46
+]
+],
+"hue": 28,
+"hue_tol": 26,
+"C_min": 20,
+"hue_Cmin": 20,
+"L_min": 0,
+"L_max": 40,
+"ignore_bg": true,
+"close": 0
+},
+{
+"poly": [
+[
+8,
+26
+],
+[
+18,
+12
+],
+[
+30,
+10
+],
+[
+44,
+14
+],
+[
+58,
+16
+],
+[
+64,
+28
+],
+[
+64,
+52
+],
+[
+92,
+80
+],
+[
+66,
+78
+],
+[
+50,
+62
+],
+[
+20,
+62
+],
+[
+8,
+46
+]
+],
+"hue": 30,
+"hue_tol": 18,
+"C_min": 40,
+"hue_Cmin": 40,
+"L_min": 15,
+"L_max": 65,
+"ignore_bg": true,
+"close": 1
+}
+],
+"note": "every red sail stripe incl. the thin dark edges"
+},
+"P_TransportShip": {
+"parts": [
+{
+"poly": [
+[
+6,
+14
+],
+[
+34,
+10
+],
+[
+60,
+10
+],
+[
+66,
+36
+],
+[
+90,
+78
+],
+[
+70,
+78
+],
+[
+60,
+58
+],
+[
+36,
+58
+],
+[
+8,
+54
+]
+],
+"hue": 30,
+"hue_tol": 28,
+"C_min": 8,
+"hue_Cmin": 8,
+"L_min": 0,
+"L_max": 62,
+"ignore_bg": false,
+"close": 1
+},
+{
+"poly": [
+[
+6,
+14
+],
+[
+34,
+10
+],
+[
+60,
+10
+],
+[
+66,
+36
+],
+[
+90,
+78
+],
+[
+70,
+78
+],
+[
+60,
+58
+],
+[
+36,
+58
+],
+[
+8,
+54
+]
+],
+"hue": 28,
+"hue_tol": 26,
+"C_min": 20,
+"hue_Cmin": 20,
+"L_min": 0,
+"L_max": 40,
+"ignore_bg": true,
+"close": 0
+},
+{
+"poly": [
+[
+6,
+14
+],
+[
+34,
+10
+],
+[
+60,
+10
+],
+[
+66,
+36
+],
+[
+90,
+78
+],
+[
+70,
+78
+],
+[
+60,
+58
+],
+[
+36,
+58
+],
+[
+8,
+54
+]
+],
+"hue": 30,
+"hue_tol": 18,
+"C_min": 40,
+"hue_Cmin": 40,
+"L_min": 15,
+"L_max": 65,
+"ignore_bg": true,
+"close": 1
+}
+],
+"note": "every red sail stripe incl. the thin dark edges"
+},
+"Troll": {
+"parts": [
+{
+"poly": [
+[
+12,
+46
+],
+[
+40,
+42
+],
+[
+60,
+46
+],
+[
+60,
+70
+],
+[
+40,
+74
+],
+[
+12,
+68
+]
+],
+"hue": 50,
+"hue_tol": 24,
+"C_min": 22,
+"L_min": 8,
+"fill": 1,
+"close": 1
+}
+],
+"note": "the orange tunic (hand polygon); skin and axe stay"
+},
+"I_Rifleman": {
+"mode": "hue",
+"hue": 262,
+"hue_tol": 42,
+"C_min": 10,
+"L_min": 4,
+"within": [
+[
+0,
+44,
+95,
+95
+]
+],
+"close": 1,
+"fill": 2,
+"note": "blue coat, whole"
+},
+"W_TransportShip": {
+"parts": [
+{
+"poly": [
+[
+0,
+4
+],
+[
+20,
+6
+],
+[
+22,
+42
+],
+[
+0,
+46
+]
+],
+"hue": 30,
+"hue_tol": 26,
+"C_min": 15,
+"L_min": 5,
+"fill": 1
+},
+{
+"poly": [
+[
+38,
+30
+],
+[
+64,
+24
+],
+[
+68,
+56
+],
+[
+42,
+62
+]
+],
+"hue": 30,
+"hue_tol": 26,
+"C_min": 15,
+"L_min": 5,
+"fill": 1
+}
+],
+"note": "both red flags, whole (hand polygons); the lavender emblem stays"
+},
+"K_Knight": {
+"mode": "hue",
+"hue_tol": 34,
+"C_min": 22,
+"L_min": 4,
+"close": 1,
+"parts": [
+{},
+{
+"poly": [
+[
+44,
+14
+],
+[
+72,
+10
+],
+[
+94,
+18
+],
+[
+94,
+60
+],
+[
+80,
+90
+],
+[
+62,
+90
+],
+[
+58,
+60
+],
+[
+44,
+50
+]
+],
+"hue": 290,
+"hue_tol": 50,
+"C_min": 3,
+"hue_Cmin": 3,
+"L_min": 0,
+"L_max": 60,
+"fill": 2,
+"close": 1
+},
+{
+"poly": [
+[
+0,
+58
+],
+[
+32,
+58
+],
+[
+30,
+90
+],
+[
+0,
+90
+]
+],
+"hue": 285,
+"hue_tol": 45,
+"C_min": 14,
+"hue_Cmin": 14,
+"L_min": 0,
+"L_max": 34,
+"fill": 0,
+"close": 1,
+"ignore_bg": true
+},
+{
+"poly": [
+[
+36,
+40
+],
+[
+60,
+40
+],
+[
+60,
+60
+],
+[
+36,
+60
+]
+],
+"hue": 290,
+"hue_tol": 40,
+"C_min": 12,
+"L_min": 0,
+"fill": 1
+}
+],
+"excl_poly": [
+[
+[
+0,
+0
+],
+[
+40,
+0
+],
+[
+42,
+50
+],
+[
+30,
+58
+],
+[
+0,
+58
+]
+]
+],
+"note": "the horse's navy caparison (head, ears) and the saddle cloth; the knight, his sword and the white horse stay"
+},
+"K_Engineer": {
+"mode": "hue",
+"hue": 300,
+"hue_tol": 26,
+"C_min": 15,
+"L_min": 4,
+"close": 1,
+"parts": [
+{},
+{
+"poly": [
+[
+40,
+46
+],
+[
+72,
+46
+],
+[
+80,
+94
+],
+[
+34,
+94
+]
+],
+"hue": 290,
+"hue_tol": 60,
+"C_min": 4,
+"hue_Cmin": 4,
+"L_min": 0,
+"L_max": 38,
+"fill": 1
+},
+{
+"poly": [
+[
+26,
+60
+],
+[
+42,
+60
+],
+[
+42,
+90
+],
+[
+26,
+90
+]
+],
+"hue": 290,
+"hue_tol": 60,
+"C_min": 3,
+"hue_Cmin": 3,
+"L_min": 0,
+"L_max": 40,
+"close": 1
+}
+],
+"note": "blue tunic incl. its shadowed sections (hand polygon, dark navy)"
+},
+"K_Swordsman": {
+"chroma_free": 0,
+"C_min": 12,
+"note": "tabard and the shield's blue quarters"
+},
+"K_King_F": {
+"parts": [
+{},
+{
+"poly": [
+[
+54,
+38
+],
+[
+80,
+42
+],
+[
+86,
+72
+],
+[
+68,
+76
+],
+[
+56,
+62
+]
+],
+"hue": 290,
+"hue_tol": 40,
+"C_min": 8,
+"L_min": 3,
+"fill": 1
+}
+],
+"chroma_free": 0,
+"C_min": 10,
+"note": "blue dress; her left arm by hand polygon"
+},
+"K_Catapult": {
+"mode": "hue",
+"hue": 290,
+"hue_tol": 40,
+"C_min": 10,
+"L_min": 3,
+"within": [
+[
+20,
+30,
+66,
+72
+]
+],
+"close": 1,
+"fill": 2,
+"note": "the blue panel of the frame (hand box)"
+},
+"I_Engineer": {
+"mode": "hue",
+"hue": 262,
+"hue_tol": 42,
+"C_min": 10,
+"L_min": 4,
+"within": [
+[
+0,
+44,
+95,
+95
+]
+],
+"close": 1,
+"fill": 2,
+"parts": [
+{},
+{
+"poly": [
+[
+64,
+46
+],
+[
+84,
+48
+],
+[
+94,
+82
+],
+[
+72,
+86
+],
+[
+64,
+70
+]
+],
+"hue": 250,
+"hue_tol": 60,
+"C_min": 8,
+"L_min": 4,
+"fill": 1
+},
+{
+"poly": [
+[
+70,
+46
+],
+[
+80,
+46
+],
+[
+84,
+50
+],
+[
+86,
+58
+],
+[
+87,
+70
+],
+[
+87,
+80
+],
+[
+78,
+84
+],
+[
+70,
+70
+]
+],
+"hue": 0,
+"hue_tol": 181,
+"C_min": 38,
+"hue_Cmin": 38,
+"L_min": 4,
+"ignore_bg": true,
+"close": 1
+}
+],
+"note": "blue coat incl. his left arm and its cyan rim light (hand outline of the arm)"
+},
+"I_Swordsman": {
+"mode": "hue",
+"hue": 262,
+"hue_tol": 42,
+"C_min": 10,
+"L_min": 4,
+"within": [
+[
+0,
+44,
+95,
+95
+]
+],
+"close": 1,
+"fill": 2,
+"excl": [
+[
+30,
+0,
+70,
+44
+]
+],
+"note": "blue coat and sleeves, whole"
+},
+"P_Horseman": {
+"parts": [
+{
+"poly": [
+[
+8,
+36
+],
+[
+38,
+34
+],
+[
+42,
+60
+],
+[
+10,
+62
+]
+],
+"hue": 30,
+"hue_tol": 22,
+"C_min": 30,
+"L_min": 10
+},
+{
+"poly": [
+[
+8,
+36
+],
+[
+38,
+34
+],
+[
+42,
+60
+],
+[
+10,
+62
+]
+],
+"hue": 280,
+"hue_tol": 40,
+"C_min": 20,
+"L_min": 10
+}
+],
+"note": "the torso's red scarf and blue strap (the shirt is white, so these are its team-coloured parts)"
+},
+"P_Captain": {
+"parts": [
+{
+"mode": "hue",
+"hue_tol": 22,
+"C_min": 30,
+"within_poly": [
+[
+[
+50,
+6
+],
+[
+94,
+2
+],
+[
+95,
+30
+],
+[
+72,
+48
+],
+[
+66,
+55
+],
+[
+52,
+55
+],
+[
+50,
+46
+]
+]
+],
+"fill": 1,
+"drop_hue": 62,
+"drop_tol": 12
+},
+{
+"poly": [
+[
+22,
+52
+],
+[
+64,
+52
+],
+[
+64,
+88
+],
+[
+22,
+88
+]
+],
+"hue_tol": 24,
+"C_min": 18,
+"L_min": 5,
+"close": 1
+}
+],
+"excl": [
+[
+14,
+30,
+49,
+51
+],
+[
+64,
+66,
+95,
+95
+]
+],
+"note": "the parrot (beak orange stays) and the torso's red; the red beard and the treasure chest stay"
+},
+"P_Oarsman": {
+"mode": "hue",
+"hue": 285,
+"hue_tol": 50,
+"C_min": 2,
+"hue_Cmin": 2,
+"L_min": 0,
+"L_max": 40,
+"within": [
+[
+16,
+74,
+82,
+95
+]
+],
+"fill": 2,
+"close": 1,
+"note": "the navy pants and waist, whole"
+},
+"W_Crossbowman": {
+"disabled": true,
+"note": "OWNER: dark bones; the sprite's team torso has no counterpart"
+},
+"Sheriff": {
+"parts": [
+{
+"poly": [
+[
+10,
+56
+],
+[
+30,
+52
+],
+[
+44,
+58
+],
+[
+62,
+44
+],
+[
+72,
+30
+],
+[
+90,
+32
+],
+[
+94,
+60
+],
+[
+94,
+95
+],
+[
+10,
+95
+]
+],
+"hue": 62,
+"hue_tol": 26,
+"C_min": 6,
+"hue_Cmin": 6,
+"L_min": 14,
+"close": 1,
+"fill": 1
+}
+],
+"excl": [
+[
+36,
+28,
+62,
+52
+],
+[
+64,
+75,
+71,
+85
+],
+[
+40,
+52,
+56,
+62
+],
+[
+66,
+28,
+84,
+44
+]
+],
+"excl_poly": [
+[
+[
+0,
+0
+],
+[
+24,
+0
+],
+[
+26,
+56
+],
+[
+20,
+64
+],
+[
+0,
+64
+]
+],
+[
+[
+45,
+57
+],
+[
+57,
+57
+],
+[
+51,
+69
+]
+]
+],
+"note": "the whole brown suit incl. both arms and their rim light; gun, gloves, face, bow tie and badge stay"
+},
+"AgentChase": {
+"parts": [
+{
+"poly": [
+[
+2,
+46
+],
+[
+20,
+38
+],
+[
+40,
+36
+],
+[
+58,
+36
+],
+[
+80,
+42
+],
+[
+84,
+58
+],
+[
+66,
+60
+],
+[
+66,
+80
+],
+[
+30,
+88
+],
+[
+2,
+64
+]
+],
+"hue": 281,
+"hue_tol": 70,
+"C_min": 0,
+"hue_Cmin": 0,
+"L_min": 0,
+"L_max": 40,
+"close": 1,
+"fill": 2,
+"drop_hue": 105,
+"drop_tol": 35
+},
+{
+"poly": [
+[
+6,
+44
+],
+[
+20,
+36
+],
+[
+34,
+34
+],
+[
+34,
+60
+],
+[
+28,
+72
+],
+[
+24,
+92
+],
+[
+10,
+92
+],
+[
+6,
+70
+]
+],
+"hue": 0,
+"hue_tol": 181,
+"C_min": 0,
+"hue_Cmin": 0,
+"L_min": 0,
+"L_max": 36,
+"close": 2,
+"fill": 3,
+"drop_hue": 105,
+"drop_tol": 35
+}
+],
+"excl": [
+[
+0,
+60,
+16,
+86
+],
+[
+68,
+56,
+94,
+78
+],
+[
+20,
+54,
+30,
+95
+]
+],
+"note": "the navy jumpsuit; his right arm (viewer's left) as one continuous region; hands, pole, trim and badge stay"
+},
+"Dwarf": {
+"parts": [
+{
+"poly": [
+[
+6,
+52
+],
+[
+20,
+50
+],
+[
+22,
+74
+],
+[
+8,
+76
+]
+],
+"hue": 30,
+"hue_tol": 26,
+"C_min": 15,
+"L_min": 5,
+"fill": 1
+},
+{
+"poly": [
+[
+57,
+54
+],
+[
+65,
+54
+],
+[
+65,
+70
+],
+[
+57,
+70
+]
+],
+"hue": 30,
+"hue_tol": 26,
+"C_min": 15,
+"L_min": 5,
+"fill": 1
+},
+{
+"poly": [
+[
+16,
+76
+],
+[
+56,
+72
+],
+[
+60,
+95
+],
+[
+16,
+95
+]
+],
+"hue": 30,
+"hue_tol": 26,
+"C_min": 15,
+"L_min": 5,
+"fill": 1
+},
+{
+"poly": [
+[
+54,
+54
+],
+[
+64,
+54
+],
+[
+64,
+70
+],
+[
+54,
+70
+]
+],
+"hue": 38,
+"hue_tol": 20,
+"C_min": 30,
+"L_min": 8,
+"ignore_bg": true
+}
+],
+"excl_poly": [
+[
+[
+2,
+84
+],
+[
+72,
+38
+],
+[
+80,
+46
+],
+[
+10,
+94
+]
+],
+[
+[
+24,
+0
+],
+[
+76,
+0
+],
+[
+54,
+56
+],
+[
+54,
+74
+],
+[
+26,
+74
+]
+]
+],
+"note": "both red sleeves and the tunic; beard, helmet, axe stay"
+},
+"Ninja": {
+"mode": "hue",
+"hue": 300,
+"hue_tol": 38,
+"C_min": 10,
+"L_min": 3,
+"close": 1,
+"parts": [
+{
+"within": [
+[
+38,
+0,
+95,
+43
+],
+[
+0,
+62,
+56,
+95
+],
+[
+0,
+44,
+20,
+62
+],
+[
+38,
+44,
+56,
+62
+],
+[
+94,
+44,
+95,
+95
+]
+]
+},
+{
+"within": [
+[
+56,
+44,
+94,
+90
+],
+[
+0,
+0,
+20,
+44
+]
+],
+"L_max": 44
+},
+{
+"within": [
+[
+20,
+0,
+38,
+62
+]
+],
+"L_max": 28
+}
+],
+"note": "dark purple suit incl. around the blades; both blades / the shuriken (light silver) stay"
+},
+"SpaceCriminal": {
+"mode": "hue",
+"hue": 35,
+"hue_tol": 24,
+"C_min": 34,
+"L_min": 20,
+"island": 2,
+"within": [
+[
+2,
+58,
+93,
+95
+]
+],
+"note": "the bright red stripes on the jacket (not the maroon body)"
+},
+"E_Melee": {
+"excl": [
+[
+0,
+0,
+95,
+40
+]
+],
+"note": "red emblem and the red vest parts incl. the top ones; helmet and visor stay",
+"parts": [
+{},
+{
+"poly": [
+[
+28,
+48
+],
+[
+70,
+48
+],
+[
+70,
+86
+],
+[
+28,
+86
+]
+],
+"hue_tol": 25,
+"C_min": 25,
+"L_min": 8,
+"island": 1
+}
+]
+},
+"E_Ranged": {
+"mode": "hue",
+"hue_tol": 30,
+"C_min": 12,
+"L_min": 5,
+"close": 1,
+"fill": 2,
+"within": [
+[
+0,
+34,
+82,
+70
+]
+],
+"note": "red-orange arm and chest parts incl. rim light; helmet stays"
+},
+"E_Shipyard": {
+"parts": [
+{},
+{
+"poly": [
+[
+8,
+46
+],
+[
+34,
+12
+],
+[
+60,
+8
+],
+[
+80,
+30
+],
+[
+94,
+50
+],
+[
+90,
+80
+],
+[
+60,
+86
+],
+[
+30,
+80
+],
+[
+8,
+70
+]
+],
+"hue": 52,
+"hue_tol": 20,
+"C_min": 35,
+"L_min": 22,
+"fill": 2
+},
+{
+"poly": [
+[
+0,
+54
+],
+[
+14,
+54
+],
+[
+14,
+72
+],
+[
+0,
+72
+]
+],
+"hue": 55,
+"hue_tol": 35,
+"C_min": 25,
+"L_min": 12,
+"ignore_bg": false,
+"fill": 1
+},
+{
+"poly": [
+[
+76,
+62
+],
+[
+92,
+62
+],
+[
+92,
+80
+],
+[
+76,
+80
+]
+],
+"hue": 55,
+"hue_tol": 35,
+"C_min": 25,
+"L_min": 12,
+"ignore_bg": false,
+"fill": 1
+},
+{
+"poly": [
+[
+64,
+48
+],
+[
+80,
+48
+],
+[
+80,
+60
+],
+[
+64,
+60
+]
+],
+"hue": 55,
+"hue_tol": 35,
+"C_min": 25,
+"L_min": 12,
+"ignore_bg": false,
+"fill": 1
+},
+{
+"poly": [
+[
+80,
+64
+],
+[
+86,
+66
+],
+[
+88,
+72
+],
+[
+84,
+78
+],
+[
+78,
+76
+],
+[
+78,
+68
+]
+],
+"hue": 65,
+"hue_tol": 30,
+"C_min": 30,
+"L_min": 15,
+"ignore_bg": true
+},
+{
+"poly": [
+[
+64,
+38
+],
+[
+74,
+38
+],
+[
+76,
+46
+],
+[
+70,
+50
+],
+[
+64,
+48
+]
+],
+"hue": 65,
+"hue_tol": 30,
+"C_min": 30,
+"L_min": 15,
+"ignore_bg": true
+},
+{
+"poly": [
+[
+34,
+30
+],
+[
+60,
+30
+],
+[
+64,
+58
+],
+[
+30,
+58
+]
+],
+"hue": 55,
+"hue_tol": 42,
+"C_min": 15,
+"L_min": 12
+},
+{
+"poly": [
+[
+44,
+14
+],
+[
+58,
+14
+],
+[
+58,
+22
+],
+[
+44,
+22
+]
+],
+"hue": 55,
+"hue_tol": 30,
+"C_min": 20,
+"L_min": 12
+},
+{
+"poly": [
+[
+74,
+62
+],
+[
+90,
+62
+],
+[
+90,
+82
+],
+[
+74,
+82
+]
+],
+"hue": 60,
+"hue_tol": 30,
+"C_min": 20,
+"L_min": 12
+},
+{
+"poly": [
+[
+0,
+58
+],
+[
+14,
+58
+],
+[
+14,
+80
+],
+[
+0,
+80
+]
+],
+"hue": 45,
+"hue_tol": 30,
+"C_min": 20,
+"L_min": 12
+},
+{
+"poly": [
+[
+60,
+36
+],
+[
+76,
+36
+],
+[
+76,
+50
+],
+[
+60,
+50
+]
+],
+"hue": 60,
+"hue_tol": 30,
+"C_min": 20,
+"L_min": 12
+}
+],
+"excl": [
+[
+20,
+76,
+64,
+95
+]
+],
+"note": "orange dome and dish elements (hand silhouette)"
+},
+"I_Cavalry": {
+"mode": "hue",
+"hue": 262,
+"hue_tol": 30,
+"C_min": 22,
+"L_min": 4,
+"L_max": 55,
+"within": [
+[
+0,
+24,
+46,
+95
+]
+],
+"close": 1,
+"note": "the rider s blue coat; the pale horse and its rim light stay (L > 55 or low chroma)"
+},
+"I_Governor": {
+"mode": "hue",
+"hue": 285,
+"hue_tol": 70,
+"C_min": 0,
+"hue_Cmin": 0,
+"L_min": 0,
+"L_max": 36,
+"within": [
+[
+0,
+46,
+40,
+95
+],
+[
+62,
+46,
+95,
+95
+]
+],
+"close": 1,
+"fill": 2,
+"note": "the near-black navy coat, whole"
+},
+"Shark": {
+"bg_tol": 7,
+"bg_relax": 1.2,
+"pockets": false,
+"chroma_keep": 0.9,
+"parts": [
+{
+"poly": [
+[
+16,
+27
+],
+[
+20,
+26
+],
+[
+28,
+30
+],
+[
+34,
+33
+],
+[
+40,
+28
+],
+[
+52,
+22
+],
+[
+64,
+18
+],
+[
+80,
+16
+],
+[
+92,
+16
+],
+[
+93,
+24
+],
+[
+90,
+32
+],
+[
+86,
+42
+],
+[
+76,
+50
+],
+[
+66,
+58
+],
+[
+54,
+64
+],
+[
+44,
+70
+],
+[
+36,
+74
+],
+[
+30,
+80
+],
+[
+26,
+82
+],
+[
+24,
+80
+],
+[
+26,
+74
+],
+[
+16,
+70
+],
+[
+12,
+74
+],
+[
+8,
+72
+],
+[
+8,
+64
+],
+[
+0,
+62
+],
+[
+0,
+56
+],
+[
+6,
+56
+],
+[
+14,
+60
+],
+[
+18,
+56
+],
+[
+22,
+48
+],
+[
+22,
+40
+],
+[
+16,
+32
+]
+],
+"hue": 0,
+"hue_tol": 181,
+"C_min": 0,
+"hue_Cmin": 0,
+"L_min": 14,
+"L_max": 92,
+"ignore_bg": true,
+"close": 1
+}
+],
+"excl_poly": [
+[
+[
+50,
+40
+],
+[
+60,
+37
+],
+[
+88,
+30
+],
+[
+86,
+42
+],
+[
+72,
+50
+],
+[
+56,
+52
+]
+],
+[
+[
+46,
+30
+],
+[
+56,
+28
+],
+[
+56,
+36
+],
+[
+46,
+36
+]
+]
+],
+"note": "the whole grey body incl. its dark underside and fins (hand outline); belly, mouth, teeth and eye stay"
+},
+"IslanderChief": {
+"parts": [
+{
+"seeds": [
+[
+20,
+10
+],
+[
+30,
+30
+],
+[
+40,
+20
+],
+[
+48,
+36
+],
+[
+66,
+10
+]
+],
+"hue_tol": 22,
+"within": [
+[
+0,
+0,
+70,
+58
+]
+],
+"excl": [
+[
+61,
+21,
+72,
+32
+]
+]
+},
+{
+"poly": [
+[
+58,
+46
+],
+[
+66,
+38
+],
+[
+86,
+38
+],
+[
+94,
+48
+],
+[
+94,
+94
+],
+[
+60,
+94
+],
+[
+56,
+70
+]
+],
+"hue": 36,
+"hue_tol": 30,
+"C_min": 12,
+"L_min": 5,
+"fill": 1
+},
+{
+"poly": [
+[
+58,
+46
+],
+[
+66,
+38
+],
+[
+86,
+38
+],
+[
+94,
+48
+],
+[
+94,
+94
+],
+[
+60,
+94
+],
+[
+56,
+70
+]
+],
+"hue": 282,
+"hue_tol": 40,
+"C_min": 15
+}
+],
+"note": "the whole red mask and the shield (red rim + blue pattern)"
+},
+"A_Ranged": {
+"parts": [
+{
+"mode": "hue",
+"hue": 95,
+"hue_tol": 25,
+"C_min": 30,
+"L_min": 50,
+"island": 1,
+"rim": 0,
+"within": [
+[
+54,
+14,
+68,
+27
+]
+]
+},
+{
+"mode": "hue",
+"hue": 115,
+"hue_tol": 30,
+"C_min": 25,
+"island": 1,
+"rim": 0,
+"within": [
+[
+36,
+6,
+50,
+24
+]
+]
+}
+],
+"note": "only the yellow eye and the green LEGO axle at the back of the head (tight boxes); the face stays"
+},
+"A_Mounted": {
+"parts": [
+{
+"mode": "hue",
+"hue": 95,
+"hue_tol": 20,
+"C_min": 30,
+"within": [
+[
+40,
+0,
+95,
+62
+]
+]
+},
+{
+"mode": "hue",
+"hue": 90,
+"hue_tol": 28,
+"C_min": 30,
+"L_min": 25,
+"within": [
+[
+0,
+40,
+95,
+95
+]
+],
+"island": 2
+}
+],
+"note": "the yellow canopy and the lime underside pieces"
+},
+"Monkey": {
+"mode": "hue",
+"hue": 45,
+"hue_tol": 16,
+"C_min": 20,
+"L_min": 6,
+"close": 1,
+"drop_hue": 80,
+"drop_tol": 28,
+"excl": [
+[
+18,
+64,
+32,
+86
+],
+[
+54,
+66,
+76,
+95
+],
+[
+74,
+60,
+92,
+78
+]
+],
+"note": "brown fur; the yellow hands and feet stay (hue drop + hand boxes)"
+},
+"W_Engineer": {
+"parts": [
+{
+"poly": [
+[
+28,
+40
+],
+[
+84,
+40
+],
+[
+84,
+56
+],
+[
+28,
+56
+]
+],
+"hue": 20,
+"hue_tol": 30,
+"C_min": 15,
+"L_min": 5,
+"fill": 1
+}
+],
+"note": "the maroon neckpiece (hand polygon); the bones stay"
+},
+"Wolf": {
+"parts": [
+{
+"poly": [
+[
+28,
+12
+],
+[
+30,
+9
+],
+[
+36,
+10
+],
+[
+46,
+10
+],
+[
+52,
+8
+],
+[
+57,
+5
+],
+[
+61,
+8
+],
+[
+62,
+18
+],
+[
+56,
+30
+],
+[
+56,
+40
+],
+[
+64,
+48
+],
+[
+72,
+60
+],
+[
+78,
+72
+],
+[
+80,
+84
+],
+[
+6,
+84
+],
+[
+6,
+66
+],
+[
+12,
+56
+],
+[
+18,
+48
+],
+[
+24,
+44
+],
+[
+28,
+40
+]
+],
+"hue": 0,
+"hue_tol": 181,
+"C_min": 0,
+"hue_Cmin": 0,
+"L_min": 8,
+"ignore_bg": true,
+"close": 1,
+"drop_hue": 85,
+"drop_tol": 40,
+"drop_Cmin": 5
+}
+],
+"excl_poly": [
+[
+[
+50,
+18
+],
+[
+64,
+18
+],
+[
+62,
+31
+],
+[
+52,
+31
+]
+]
+],
+"chroma_keep": 0.9,
+"note": "the whole grey body (traced outline; warm beige backdrop dropped by hue); the mouth stays"
+},
+"Islander": {
+"parts": [
+{
+"poly": [
+[
+20,
+72
+],
+[
+76,
+72
+],
+[
+76,
+86
+],
+[
+20,
+86
+]
+],
+"hue": 35,
+"hue_tol": 25,
+"C_min": 30,
+"L_min": 15
+},
+{
+"poly": [
+[
+22,
+84
+],
+[
+72,
+84
+],
+[
+72,
+95
+],
+[
+22,
+95
+]
+],
+"hue": 140,
+"hue_tol": 45,
+"C_min": 8,
+"L_min": 3,
+"fill": 2,
+"close": 1,
+"ignore_bg": true
+}
+],
+"note": "the red waist cloth and the green pants (whole)"
+},
+"WarJunk": {
+"mode": "hue",
+"hue_tol": 40,
+"C_min": 10,
+"L_min": 4,
+"close": 1,
+"fill": 2,
+"rim": 0,
+"within_poly": [
+[
+[
+13,
+22
+],
+[
+28,
+8
+],
+[
+52,
+13
+],
+[
+51,
+24
+],
+[
+26,
+30
+]
+]
+],
+"note": "the blue roof only (hand polygon)"
+},
+"E_EagleCommandBase": {
+"parts": [
+{},
+{
+"poly": [
+[
+0,
+40
+],
+[
+24,
+6
+],
+[
+70,
+2
+],
+[
+94,
+22
+],
+[
+94,
+84
+],
+[
+66,
+84
+],
+[
+60,
+64
+],
+[
+36,
+64
+],
+[
+24,
+84
+],
+[
+0,
+84
+]
+],
+"hue": 50,
+"hue_tol": 16,
+"C_min": 45,
+"L_min": 28,
+"fill": 1
+},
+{
+"poly": [
+[
+72,
+44
+],
+[
+92,
+44
+],
+[
+92,
+66
+],
+[
+72,
+66
+]
+],
+"hue": 55,
+"hue_tol": 30,
+"C_min": 20,
+"L_min": 12
+},
+{
+"poly": [
+[
+28,
+6
+],
+[
+64,
+6
+],
+[
+64,
+34
+],
+[
+28,
+34
+]
+],
+"hue": 55,
+"hue_tol": 30,
+"C_min": 20,
+"L_min": 12
+}
+],
+"excl": [
+[
+26,
+66,
+76,
+95
+]
+],
+"note": "orange domes, the dish on its right leg and the feet bits (hand silhouette)"
+},
+"W_Wizard_F": {
+"parts": [
+{
+"mode": "hue",
+"hue_tol": 22,
+"C_min": 18,
+"L_min": 8,
+"close": 1,
+"excl": [
+[
+0,
+0,
+95,
+30
+],
+[
+68,
+14,
+95,
+50
+]
+]
+},
+{
+"poly": [
+[
+70,
+50
+],
+[
+94,
+50
+],
+[
+94,
+88
+],
+[
+70,
+88
+]
+],
+"hue": 350,
+"hue_tol": 40,
+"C_min": 15,
+"L_min": 6
+},
+{
+"poly": [
+[
+0,
+60
+],
+[
+95,
+60
+],
+[
+95,
+90
+],
+[
+0,
+90
+]
+],
+"hue": 330,
+"hue_tol": 35,
+"C_min": 10,
+"L_min": 3,
+"close": 1
+}
+],
+"note": "purple dress incl. her left arm; hat and magic orb stay"
+},
+"E_SiegeTwo": {
+"mode": "hue",
+"hue_tol": 26,
+"C_min": 10,
+"hue_Cmin": 10,
+"L_min": 5,
+"close": 1,
+"fill": 3,
+"excl": [
+[
+20,
+68,
+72,
+95
+]
+],
+"note": "orange-red hull and the cockpit, whole"
+},
+"K_TransportShip": {
+"parts": [
+{
+"poly": [
+[
+6,
+12
+],
+[
+30,
+22
+],
+[
+34,
+12
+],
+[
+56,
+9
+],
+[
+62,
+30
+],
+[
+62,
+48
+],
+[
+48,
+56
+],
+[
+30,
+58
+],
+[
+6,
+52
+],
+[
+4,
+30
+]
+],
+"hue": 255,
+"hue_tol": 40,
+"C_min": 12,
+"L_min": 4,
+"L_max": 56,
+"ignore_bg": true,
+"close": 1
+},
+{
+"poly": [
+[
+62,
+34
+],
+[
+68,
+40
+],
+[
+92,
+72
+],
+[
+86,
+76
+],
+[
+66,
+74
+],
+[
+63,
+52
+]
+],
+"hue": 255,
+"hue_tol": 40,
+"C_min": 12,
+"L_min": 4,
+"L_max": 56,
+"ignore_bg": true,
+"close": 1
+}
+],
+"note": "the three blue sails only, clipped to traced sail outlines and to sail-dark blues (the sky is lighter)"
+},
+"K_Ballista": {
+"mode": "hue",
+"hue_tol": 30,
+"C_min": 18,
+"L_min": 4,
+"close": 1,
+"rim": 2,
+"note": "navy frame (hue-selected), the backdrop halo excluded"
+},
+"W_Skeleknight": {
+"parts": [
+{
+"poly": [
+[
+42,
+40
+],
+[
+56,
+36
+],
+[
+66,
+46
+],
+[
+72,
+52
+],
+[
+80,
+84
+],
+[
+44,
+86
+],
+[
+42,
+60
+]
+],
+"hue": 25,
+"hue_tol": 26,
+"C_min": 22,
+"L_min": 2,
+"L_max": 34,
+"close": 1
+},
+{
+"poly": [
+[
+0,
+56
+],
+[
+36,
+56
+],
+[
+36,
+92
+],
+[
+0,
+92
+]
+],
+"hue": 30,
+"hue_tol": 25,
+"C_min": 40,
+"L_min": 10
+}
+],
+"note": "maroon horse armour and the rider's red shield and waist; the rim light on the black horse stays"
+},
+"W_Dragon": {
+"mode": "hue",
+"hue_tol": 20,
+"C_min": 20,
+"L_min": 4,
+"close": 1,
+"fill": 1,
+"rim": 2,
+"parts": [
+{},
+{
+"poly": [
+[
+56,
+40
+],
+[
+95,
+40
+],
+[
+95,
+80
+],
+[
+56,
+80
+]
+],
+"hue": 45,
+"hue_tol": 30,
+"C_min": 20,
+"L_min": 10,
+"fill": 1
+},
+{
+"poly": [
+[
+34,
+74
+],
+[
+52,
+74
+],
+[
+52,
+88
+],
+[
+34,
+88
+]
+],
+"hue": 45,
+"hue_tol": 30,
+"C_min": 20,
+"L_min": 10,
+"fill": 1
+},
+{
+"poly": [
+[
+74,
+48
+],
+[
+94,
+48
+],
+[
+94,
+68
+],
+[
+74,
+68
+]
+],
+"hue": 45,
+"hue_tol": 35,
+"C_min": 20,
+"L_min": 10
+}
+],
+"note": "red dragon incl. the orange-lit head (hand polygon)"
+},
+"Wall": {
+"mode": "hue",
+"hue": 295,
+"hue_tol": 30,
+"C_min": 20,
+"L_min": 4,
+"rim": 0,
+"close": 1,
+"within": [
+[
+30,
+6,
+66,
+88
+]
+],
+"note": "the blue centre brick (team: walls take the owner's colour, docs/412)"
+},
+"Bridge": {
+"mode": "hue",
+"hue": 32,
+"hue_tol": 20,
+"C_min": 30,
+"L_min": 8,
+"rim": 0,
+"close": 1,
+"note": "the red bricks (team: bridges take the owner's colour through the level BG, docs/412)"
+},
+"E_SiegeOne": {
+"mode": "hue",
+"hue_tol": 22,
+"C_min": 25,
+"L_min": 12,
+"close": 1,
+"fill": 2,
+"note": "orange-red hull panels, whole"
+},
+"E_SiegeThree": {
+"mode": "hue",
+"hue_tol": 26,
+"C_min": 10,
+"hue_Cmin": 10,
+"L_min": 5,
+"close": 1,
+"fill": 3,
+"note": "orange-red hull and the cockpit, whole"
+},
+"E_TransportShip": {
+"mode": "hue",
+"hue_tol": 26,
+"C_min": 10,
+"hue_Cmin": 10,
+"L_min": 5,
+"close": 1,
+"fill": 3,
+"note": "orange-red hull and the translucent cockpit dome, whole"
+},
+"SpacePoliceShip": {
+"mode": "hue",
+"hue_tol": 25,
+"C_min": 35,
+"close": 1,
+"note": "blue hull only (hue-selected); white and grey stay"
+},
+"SpaceCriminalShip": {
+"mode": "hue",
+"hue_tol": 18,
+"C_min": 40,
+"island": 2,
+"note": "red stripes only (hue-selected)"
+},
+"W_Swordsman": {
+"excl": [
+[
+28,
+0,
+86,
+50
+]
+],
+"note": "red cape (grown); the helmet, incl. its back, carved out"
+},
+"W_Ballista": {
+"disabled": true,
+"note": "STOCK (owner option A): no clean team part on the card"
+},
+"W_Giant": {
+"parts": [
+{
+"poly": [
+[
+1,
+1
+],
+[
+94,
+1
+],
+[
+94,
+86
+],
+[
+1,
+86
+]
+],
+"hue": 0,
+"hue_tol": 181,
+"C_min": 0,
+"hue_Cmin": 0,
+"C_max": 28,
+"L_min": 14,
+"close": 1,
+"fill": 1,
+"L_max": 86
+}
+],
+"excl": [
+[
+62,
+0,
+82,
+14
+],
+[
+42,
+4,
+50,
+16
+]
+],
+"excl_poly": [
+[
+[
+50,
+14
+],
+[
+60,
+12
+],
+[
+70,
+18
+],
+[
+70,
+36
+],
+[
+64,
+44
+],
+[
+54,
+40
+],
+[
+50,
+28
+]
+]
+],
+"note": "the minty green body and the red-brown head block; the dark helmet, horns, nose peg and tusk stay"
+},
+"I_Governor_F": {
+"mode": "hue",
+"hue": 230,
+"hue_tol": 60,
+"C_min": 8,
+"within": [
+[
+22,
+44,
+74,
+95
+]
+],
+"close": 1,
+"fill": 1,
+"note": "the teal bow, lacing and crosses of her dress"
+},
+"E_Engineer": {
+"chroma_keep": 0.85,
+"parts": [
+{
+"mode": "hue",
+"hue_tol": 25,
+"C_min": 30,
+"within": [
+[
+50,
+18,
+70,
+32
+]
+],
+"island": 1,
+"rim": 0
+},
+{
+"poly": [
+[
+0,
+63
+],
+[
+20,
+70
+],
+[
+22,
+82
+],
+[
+14,
+82
+],
+[
+0,
+74
+]
+],
+"hue": 0,
+"hue_tol": 181,
+"C_min": 0,
+"hue_Cmin": 0,
+"L_min": 40,
+"ignore_bg": true
+},
+{
+"poly": [
+[
+49,
+63
+],
+[
+57,
+62
+],
+[
+64,
+74
+],
+[
+63,
+90
+],
+[
+53,
+90
+],
+[
+52,
+74
+]
+],
+"hue": 0,
+"hue_tol": 181,
+"C_min": 0,
+"hue_Cmin": 0,
+"L_min": 45
+}
+],
+"note": "the red eye glow and the pickaxe (the bar in his hand and the white head across his middle); the grey torso stays"
+},
+"A_AlienKing_F": {
+"parts": [
+{
+"seeds": [
+[
+20,
+50
+],
+[
+30,
+60
+],
+[
+70,
+40
+],
+[
+80,
+56
+],
+[
+22,
+70
+]
+],
+"hue_tol": 18,
+"seed_hue": 140
+},
+{
+"poly": [
+[
+40,
+36
+],
+[
+62,
+36
+],
+[
+64,
+74
+],
+[
+44,
+74
+]
+],
+"hue": 140,
+"hue_tol": 45,
+"C_min": 12,
+"L_min": 15,
+"fill": 1
+},
+{
+"poly": [
+[
+18,
+60
+],
+[
+32,
+60
+],
+[
+32,
+84
+],
+[
+18,
+84
+]
+],
+"hue": 135,
+"hue_tol": 22,
+"C_min": 30,
+"L_min": 20
+},
+{
+"poly": [
+[
+80,
+50
+],
+[
+94,
+50
+],
+[
+94,
+70
+],
+[
+80,
+70
+]
+],
+"hue": 135,
+"hue_tol": 22,
+"C_min": 30,
+"L_min": 20
+}
+],
+"note": "green limbs and chest (green 140, not the lime backdrop 118 seen between the legs); the HP band stays",
+"excl": [
+[
+0,
+84,
+95,
+95
+]
+]
+},
+"A_CraterBase": {
+"mode": "hue",
+"outline_bg": true,
+"outline_dark_L": 50,
+"outline_gap": 1,
+"parts": [
+{
+"poly": [
+[
+1,
+1
+],
+[
+94,
+1
+],
+[
+94,
+86
+],
+[
+1,
+86
+]
+],
+"hue": 110,
+"hue_tol": 30,
+"C_min": 28,
+"L_min": 34,
+"island": 1,
+"ignore_bg": true,
+"close": 0,
+"fill": 0,
+"outline_part": true,
+"excl": [
+[
+0,
+0,
+95,
+4
+],
+[
+0,
+0,
+4,
+95
+],
+[
+90,
+0,
+95,
+95
+],
+[
+0,
+84,
+95,
+95
+]
+]
+}
+],
+"note": "every lime / yellow-green part inside the structure's dark outline (backdrop = reachable from the border without crossing the outline)"
+},
+"A_SiegeOne": {
+"mode": "hue",
+"outline_bg": true,
+"outline_dark_L": 50,
+"outline_gap": 1,
+"parts": [
+{
+"poly": [
+[
+1,
+1
+],
+[
+94,
+1
+],
+[
+94,
+86
+],
+[
+1,
+86
+]
+],
+"hue": 110,
+"hue_tol": 30,
+"C_min": 28,
+"L_min": 34,
+"island": 1,
+"ignore_bg": true,
+"close": 0,
+"fill": 0,
+"outline_part": true,
+"excl": [
+[
+0,
+0,
+95,
+4
+],
+[
+0,
+0,
+4,
+95
+],
+[
+90,
+0,
+95,
+95
+],
+[
+0,
+84,
+95,
+95
+]
+]
+}
+],
+"note": "every lime / yellow-green part inside the structure's dark outline (backdrop = reachable from the border without crossing the outline)"
+},
+"Robot": {
+"mode": "hue",
+"hue_tol": 22,
+"C_min": 40,
+"L_min": 15,
+"close": 1,
+"fill": 1,
+"within": [
+[
+37,
+21,
+49,
+28
+],
+[
+4,
+52,
+42,
+86
+],
+[
+58,
+44,
+84,
+74
+]
+],
+"note": "only the orange neck and the wheels (hand boxes)"
+},
+"IslanderWarCanoe": {
+"parts": [
+{
+"poly": [
+[
+6,
+8
+],
+[
+18,
+5
+],
+[
+26,
+10
+],
+[
+30,
+6
+],
+[
+50,
+3
+],
+[
+60,
+6
+],
+[
+68,
+14
+],
+[
+84,
+17
+],
+[
+91,
+22
+],
+[
+89,
+37
+],
+[
+66,
+46
+],
+[
+66,
+56
+],
+[
+94,
+62
+],
+[
+94,
+86
+],
+[
+2,
+86
+],
+[
+2,
+58
+],
+[
+22,
+58
+],
+[
+24,
+44
+],
+[
+26,
+40
+],
+[
+8,
+30
+]
+],
+"hue": 0,
+"hue_tol": 181,
+"C_min": 0,
+"hue_Cmin": 0,
+"L_min": 20,
+"L_max": 85,
+"drop_hue": 60,
+"drop_tol": 25,
+"ignore_bg": true,
+"close": 1,
+"C_max": 40,
+"drop2_hue": 28,
+"drop2_tol": 9,
+"drop2_Cmin": 20
+}
+],
+"chroma_keep": 0.85,
+"note": "the grey LEGO stone parts (arms, head plate, body); the antler crest, eyes and tan blocks stay",
+"excl_poly": [
+[
+[
+26,
+0
+],
+[
+78,
+0
+],
+[
+66,
+16
+],
+[
+30,
+22
+]
+]
+]
+},
+"TrollBattleWheel": {
+"parts": [
+{
+"poly": [
+[
+4,
+4
+],
+[
+86,
+4
+],
+[
+86,
+78
+],
+[
+4,
+78
+]
+],
+"hue": 32,
+"hue_tol": 18,
+"C_min": 40,
+"L_min": 12,
+"island": 2,
+"close": 1
+}
+],
+"excl": [
+[
+0,
+60,
+40,
+95
+]
+],
+"note": "the red decals on the balloons"
+},
+"DwarfKing": {
+"parts": [
+{
+"poly": [
+[
+2,
+44
+],
+[
+30,
+44
+],
+[
+32,
+74
+],
+[
+2,
+76
+]
+],
+"hue": 285,
+"hue_tol": 40,
+"C_min": 15,
+"L_min": 4,
+"fill": 1
+},
+{
+"poly": [
+[
+60,
+22
+],
+[
+80,
+22
+],
+[
+80,
+42
+],
+[
+60,
+42
+]
+],
+"hue": 285,
+"hue_tol": 40,
+"C_min": 15,
+"L_min": 4,
+"fill": 1
+}
+],
+"note": "the blue arms only; the beard stays (the legs are not visible on the card)"
+},
+"TrollKing": {
+"parts": [
+{
+"poly": [
+[
+26,
+58
+],
+[
+40,
+56
+],
+[
+54,
+58
+],
+[
+66,
+56
+],
+[
+70,
+64
+],
+[
+68,
+90
+],
+[
+28,
+90
+],
+[
+24,
+72
+]
+],
+"hue": 0,
+"hue_tol": 181,
+"C_min": 0,
+"hue_Cmin": 0,
+"L_min": 0,
+"close": 1,
+"fill": 2,
+"drop_hue": 175,
+"drop_tol": 30,
+"ignore_bg": true
+}
+],
+"chroma_keep": 0.9,
+"note": "the whole chest armour incl. chains and emblem (hand outline); green skin and sword stay"
+},
+"Ghost": {
+"parts": [
+{
+"poly": [
+[
+48,
+54
+],
+[
+60,
+40
+],
+[
+72,
+34
+],
+[
+86,
+36
+],
+[
+92,
+50
+],
+[
+95,
+66
+],
+[
+50,
+70
+]
+],
+"hue": 0,
+"hue_tol": 181,
+"C_min": 0,
+"hue_Cmin": 0,
+"L_min": 0,
+"L_max": 28,
+"close": 1
+}
+],
+"chroma_keep": 0.9,
+"note": "the black lantern only; the white hand and its grey claw through the handle stay"
+},
+"ForestMan": {
+"parts": [
+{
+"poly": [
+[
+18,
+48
+],
+[
+60,
+44
+],
+[
+80,
+46
+],
+[
+88,
+70
+],
+[
+84,
+95
+],
+[
+18,
+95
+]
+],
+"hue": 135,
+"hue_tol": 45,
+"C_min": 8,
+"L_min": 4,
+"fill": 2,
+"close": 1,
+"drop_hue": 90,
+"drop_tol": 18
+}
+],
+"note": "the green tunic incl. the shoulder rim light"
+},
+"A_SiegeTwo": {
+"mode": "hue",
+"outline_bg": true,
+"outline_dark_L": 50,
+"outline_gap": 1,
+"parts": [
+{
+"poly": [
+[
+1,
+1
+],
+[
+94,
+1
+],
+[
+94,
+86
+],
+[
+1,
+86
+]
+],
+"hue": 110,
+"hue_tol": 30,
+"C_min": 28,
+"L_min": 34,
+"island": 1,
+"ignore_bg": true,
+"close": 0,
+"fill": 0,
+"outline_part": true,
+"excl": [
+[
+0,
+0,
+95,
+4
+],
+[
+0,
+0,
+4,
+95
+],
+[
+90,
+0,
+95,
+95
+],
+[
+0,
+84,
+95,
+95
+]
+]
+},
+{
+"poly": [
+[
+12,
+10
+],
+[
+38,
+10
+],
+[
+38,
+30
+],
+[
+12,
+30
+]
+],
+"hue": 105,
+"hue_tol": 35,
+"C_min": 15,
+"L_min": 15,
+"ignore_bg": true,
+"outline_part": true
+}
+],
+"note": "every lime / yellow-green part inside the structure's dark outline (backdrop = reachable from the border without crossing the outline)"
+},
+"A_SiegeThree": {
+"mode": "hue",
+"outline_bg": true,
+"outline_dark_L": 50,
+"outline_gap": 1,
+"parts": [
+{
+"poly": [
+[
+1,
+1
+],
+[
+94,
+1
+],
+[
+94,
+86
+],
+[
+1,
+86
+]
+],
+"hue": 110,
+"hue_tol": 30,
+"C_min": 28,
+"L_min": 34,
+"island": 1,
+"ignore_bg": true,
+"close": 0,
+"fill": 0,
+"outline_part": true,
+"excl": [
+[
+0,
+0,
+95,
+4
+],
+[
+0,
+0,
+4,
+95
+],
+[
+90,
+0,
+95,
+95
+],
+[
+0,
+84,
+95,
+95
+]
+]
+},
+{
+"poly": [
+[
+4,
+30
+],
+[
+26,
+30
+],
+[
+26,
+44
+],
+[
+4,
+44
+]
+],
+"hue": 105,
+"hue_tol": 35,
+"C_min": 15,
+"L_min": 15,
+"ignore_bg": true,
+"outline_part": true
+},
+{
+"poly": [
+[
+10,
+52
+],
+[
+24,
+52
+],
+[
+24,
+66
+],
+[
+10,
+66
+]
+],
+"hue": 105,
+"hue_tol": 35,
+"C_min": 15,
+"L_min": 15,
+"ignore_bg": true,
+"outline_part": true
+}
+],
+"note": "every lime / yellow-green part inside the structure's dark outline (backdrop = reachable from the border without crossing the outline)"
+},
+"A_TransportShip": {
+"mode": "hue",
+"outline_bg": true,
+"outline_dark_L": 50,
+"outline_gap": 1,
+"parts": [
+{
+"poly": [
+[
+1,
+1
+],
+[
+94,
+1
+],
+[
+94,
+86
+],
+[
+1,
+86
+]
+],
+"hue": 110,
+"hue_tol": 30,
+"C_min": 28,
+"L_min": 34,
+"island": 1,
+"ignore_bg": true,
+"close": 0,
+"fill": 0,
+"outline_part": true,
+"excl": [
+[
+0,
+0,
+95,
+4
+],
+[
+0,
+0,
+4,
+95
+],
+[
+90,
+0,
+95,
+95
+],
+[
+0,
+84,
+95,
+95
+]
+]
+},
+{
+"poly": [
+[
+2,
+4
+],
+[
+10,
+2
+],
+[
+34,
+24
+],
+[
+30,
+31
+],
+[
+24,
+31
+],
+[
+2,
+10
+]
+],
+"hue": 95,
+"hue_tol": 40,
+"C_min": 12,
+"L_min": 12,
+"ignore_bg": true,
+"outline_part": true
+}
+],
+"note": "every lime / yellow-green part inside the structure's dark outline (backdrop = reachable from the border without crossing the outline)"
+},
+"A_Harvester": {
+"mode": "hue",
+"outline_bg": true,
+"outline_dark_L": 50,
+"outline_gap": 1,
+"parts": [
+{
+"poly": [
+[
+1,
+1
+],
+[
+94,
+1
+],
+[
+94,
+86
+],
+[
+1,
+86
+]
+],
+"hue": 110,
+"hue_tol": 30,
+"C_min": 28,
+"L_min": 34,
+"island": 1,
+"ignore_bg": true,
+"close": 0,
+"fill": 0,
+"outline_part": true,
+"excl": [
+[
+0,
+0,
+95,
+4
+],
+[
+0,
+0,
+4,
+95
+],
+[
+90,
+0,
+95,
+95
+],
+[
+0,
+84,
+95,
+95
+]
+]
+}
+],
+"note": "every lime / yellow-green part inside the structure's dark outline (backdrop = reachable from the border without crossing the outline)"
+},
+"A_WellCap": {
+"mode": "hue",
+"outline_bg": true,
+"outline_dark_L": 50,
+"outline_gap": 1,
+"parts": [
+{
+"poly": [
+[
+1,
+1
+],
+[
+94,
+1
+],
+[
+94,
+86
+],
+[
+1,
+86
+]
+],
+"hue": 110,
+"hue_tol": 30,
+"C_min": 28,
+"L_min": 34,
+"island": 1,
+"ignore_bg": true,
+"close": 0,
+"fill": 0,
+"outline_part": true,
+"excl": [
+[
+0,
+0,
+95,
+4
+],
+[
+0,
+0,
+4,
+95
+],
+[
+90,
+0,
+95,
+95
+],
+[
+0,
+84,
+95,
+95
+]
+]
+}
+],
+"note": "every lime / yellow-green part inside the structure's dark outline (backdrop = reachable from the border without crossing the outline)"
+},
+"A_Hatchery": {
+"mode": "hue",
+"outline_bg": true,
+"outline_dark_L": 50,
+"outline_gap": 1,
+"parts": [
+{
+"poly": [
+[
+1,
+1
+],
+[
+94,
+1
+],
+[
+94,
+86
+],
+[
+1,
+86
+]
+],
+"hue": 110,
+"hue_tol": 30,
+"C_min": 28,
+"L_min": 34,
+"island": 1,
+"ignore_bg": true,
+"close": 0,
+"fill": 0,
+"outline_part": true,
+"excl": [
+[
+0,
+0,
+95,
+4
+],
+[
+0,
+0,
+4,
+95
+],
+[
+90,
+0,
+95,
+95
+],
+[
+0,
+84,
+95,
+95
+]
+]
+}
+],
+"note": "every lime / yellow-green part inside the structure's dark outline (backdrop = reachable from the border without crossing the outline)"
+},
+"A_BreedingPit": {
+"mode": "hue",
+"outline_bg": true,
+"outline_dark_L": 50,
+"outline_gap": 1,
+"parts": [
+{
+"poly": [
+[
+1,
+1
+],
+[
+94,
+1
+],
+[
+94,
+86
+],
+[
+1,
+86
+]
+],
+"hue": 110,
+"hue_tol": 30,
+"C_min": 28,
+"L_min": 34,
+"island": 1,
+"ignore_bg": true,
+"close": 0,
+"fill": 0,
+"outline_part": true,
+"excl": [
+[
+0,
+0,
+95,
+4
+],
+[
+0,
+0,
+4,
+95
+],
+[
+90,
+0,
+95,
+95
+],
+[
+0,
+84,
+95,
+95
+]
+]
+}
+],
+"note": "every lime / yellow-green part inside the structure's dark outline (backdrop = reachable from the border without crossing the outline)"
+},
+"A_CreationPit": {
+"mode": "hue",
+"outline_bg": true,
+"outline_dark_L": 50,
+"outline_gap": 1,
+"parts": [
+{
+"poly": [
+[
+1,
+1
+],
+[
+94,
+1
+],
+[
+94,
+86
+],
+[
+1,
+86
+]
+],
+"hue": 110,
+"hue_tol": 30,
+"C_min": 28,
+"L_min": 34,
+"island": 1,
+"ignore_bg": true,
+"close": 0,
+"fill": 0,
+"outline_part": true,
+"excl": [
+[
+0,
+0,
+95,
+4
+],
+[
+0,
+0,
+4,
+95
+],
+[
+90,
+0,
+95,
+95
+],
+[
+0,
+84,
+95,
+95
+]
+]
+}
+],
+"note": "every lime / yellow-green part inside the structure's dark outline (backdrop = reachable from the border without crossing the outline)"
+},
+"A_Spire": {
+"mode": "hue",
+"outline_bg": true,
+"outline_dark_L": 50,
+"outline_gap": 1,
+"parts": [
+{
+"poly": [
+[
+1,
+1
+],
+[
+94,
+1
+],
+[
+94,
+86
+],
+[
+1,
+86
+]
+],
+"hue": 110,
+"hue_tol": 30,
+"C_min": 28,
+"L_min": 34,
+"island": 1,
+"ignore_bg": true,
+"close": 0,
+"fill": 0,
+"outline_part": true,
+"excl": [
+[
+0,
+0,
+95,
+4
+],
+[
+0,
+0,
+4,
+95
+],
+[
+90,
+0,
+95,
+95
+],
+[
+0,
+84,
+95,
+95
+]
+]
+},
+{
+"poly": [
+[
+41,
+23
+],
+[
+46,
+19
+],
+[
+56,
+19
+],
+[
+61,
+23
+],
+[
+63,
+30
+],
+[
+63,
+42
+],
+[
+59,
+47
+],
+[
+48,
+45
+],
+[
+41,
+41
+],
+[
+39,
+30
+]
+],
+"hue": 112,
+"hue_tol": 30,
+"C_min": 20,
+"L_min": 20,
+"ignore_bg": true,
+"island": 1
+},
+{
+"poly": [
+[
+40,
+20
+],
+[
+48,
+16
+],
+[
+58,
+18
+],
+[
+64,
+26
+],
+[
+64,
+42
+],
+[
+58,
+48
+],
+[
+46,
+46
+],
+[
+38,
+40
+],
+[
+36,
+30
+]
+],
+"hue": 110,
+"hue_tol": 45,
+"C_min": 8,
+"L_min": 12,
+"ignore_bg": true,
+"island": 1,
+"outline_part": true
+},
+{
+"poly": [
+[
+38,
+22
+],
+[
+44,
+18
+],
+[
+56,
+17
+],
+[
+62,
+20
+],
+[
+64,
+28
+],
+[
+64,
+40
+],
+[
+60,
+46
+],
+[
+46,
+46
+],
+[
+38,
+40
+],
+[
+37,
+30
+]
+],
+"hue": 110,
+"hue_tol": 50,
+"C_min": 8,
+"L_min": 10,
+"ignore_bg": true,
+"island": 1
+}
+],
+"note": "every lime / yellow-green part inside the structure's dark outline (backdrop = reachable from the border without crossing the outline)"
+},
+"A_Spire2": {
+"mode": "hue",
+"outline_bg": true,
+"outline_dark_L": 50,
+"outline_gap": 1,
+"parts": [
+{
+"poly": [
+[
+1,
+1
+],
+[
+94,
+1
+],
+[
+94,
+86
+],
+[
+1,
+86
+]
+],
+"hue": 110,
+"hue_tol": 30,
+"C_min": 28,
+"L_min": 34,
+"island": 1,
+"ignore_bg": true,
+"close": 0,
+"fill": 0,
+"outline_part": true,
+"excl": [
+[
+0,
+0,
+95,
+4
+],
+[
+0,
+0,
+4,
+95
+],
+[
+90,
+0,
+95,
+95
+],
+[
+0,
+84,
+95,
+95
+]
+]
+},
+{
+"poly": [
+[
+41,
+23
+],
+[
+46,
+19
+],
+[
+56,
+19
+],
+[
+61,
+23
+],
+[
+63,
+30
+],
+[
+63,
+42
+],
+[
+59,
+47
+],
+[
+48,
+45
+],
+[
+41,
+41
+],
+[
+39,
+30
+]
+],
+"hue": 112,
+"hue_tol": 30,
+"C_min": 20,
+"L_min": 20,
+"ignore_bg": true,
+"island": 1
+},
+{
+"poly": [
+[
+40,
+20
+],
+[
+48,
+16
+],
+[
+58,
+18
+],
+[
+64,
+26
+],
+[
+64,
+42
+],
+[
+58,
+48
+],
+[
+46,
+46
+],
+[
+38,
+40
+],
+[
+36,
+30
+]
+],
+"hue": 110,
+"hue_tol": 45,
+"C_min": 8,
+"L_min": 12,
+"ignore_bg": true,
+"island": 1,
+"outline_part": true
+},
+{
+"poly": [
+[
+38,
+22
+],
+[
+44,
+18
+],
+[
+56,
+17
+],
+[
+62,
+20
+],
+[
+64,
+28
+],
+[
+64,
+40
+],
+[
+60,
+46
+],
+[
+46,
+46
+],
+[
+38,
+40
+],
+[
+37,
+30
+]
+],
+"hue": 110,
+"hue_tol": 50,
+"C_min": 8,
+"L_min": 10,
+"ignore_bg": true,
+"island": 1
+}
+],
+"note": "every lime / yellow-green part inside the structure's dark outline (backdrop = reachable from the border without crossing the outline)"
+},
+"A_Spire3": {
+"mode": "hue",
+"outline_bg": true,
+"outline_dark_L": 50,
+"outline_gap": 1,
+"parts": [
+{
+"poly": [
+[
+1,
+1
+],
+[
+94,
+1
+],
+[
+94,
+86
+],
+[
+1,
+86
+]
+],
+"hue": 110,
+"hue_tol": 30,
+"C_min": 28,
+"L_min": 34,
+"island": 1,
+"ignore_bg": true,
+"close": 0,
+"fill": 0,
+"outline_part": true,
+"excl": [
+[
+0,
+0,
+95,
+4
+],
+[
+0,
+0,
+4,
+95
+],
+[
+90,
+0,
+95,
+95
+],
+[
+0,
+84,
+95,
+95
+]
+]
+},
+{
+"poly": [
+[
+41,
+23
+],
+[
+46,
+19
+],
+[
+56,
+19
+],
+[
+61,
+23
+],
+[
+63,
+30
+],
+[
+63,
+42
+],
+[
+59,
+47
+],
+[
+48,
+45
+],
+[
+41,
+41
+],
+[
+39,
+30
+]
+],
+"hue": 112,
+"hue_tol": 30,
+"C_min": 20,
+"L_min": 20,
+"ignore_bg": true,
+"island": 1
+},
+{
+"poly": [
+[
+40,
+20
+],
+[
+48,
+16
+],
+[
+58,
+18
+],
+[
+64,
+26
+],
+[
+64,
+42
+],
+[
+58,
+48
+],
+[
+46,
+46
+],
+[
+38,
+40
+],
+[
+36,
+30
+]
+],
+"hue": 110,
+"hue_tol": 45,
+"C_min": 8,
+"L_min": 12,
+"ignore_bg": true,
+"island": 1,
+"outline_part": true
+},
+{
+"poly": [
+[
+38,
+22
+],
+[
+44,
+18
+],
+[
+56,
+17
+],
+[
+62,
+20
+],
+[
+64,
+28
+],
+[
+64,
+40
+],
+[
+60,
+46
+],
+[
+46,
+46
+],
+[
+38,
+40
+],
+[
+37,
+30
+]
+],
+"hue": 110,
+"hue_tol": 50,
+"C_min": 8,
+"L_min": 10,
+"ignore_bg": true,
+"island": 1
+}
+],
+"note": "every lime / yellow-green part inside the structure's dark outline (backdrop = reachable from the border without crossing the outline)"
+},
+"A_Shipyard": {
+"mode": "hue",
+"outline_bg": true,
+"outline_dark_L": 50,
+"outline_gap": 1,
+"parts": [
+{
+"poly": [
+[
+1,
+1
+],
+[
+94,
+1
+],
+[
+94,
+86
+],
+[
+1,
+86
+]
+],
+"hue": 110,
+"hue_tol": 30,
+"C_min": 28,
+"L_min": 34,
+"island": 1,
+"ignore_bg": true,
+"close": 0,
+"fill": 0,
+"outline_part": true,
+"excl": [
+[
+0,
+0,
+95,
+4
+],
+[
+0,
+0,
+4,
+95
+],
+[
+90,
+0,
+95,
+95
+],
+[
+0,
+84,
+95,
+95
+]
+]
+},
+{
+"poly": [
+[
+42,
+31
+],
+[
+60,
+31
+],
+[
+94,
+34
+],
+[
+94,
+39
+],
+[
+60,
+39
+],
+[
+44,
+40
+]
+],
+"hue": 100,
+"hue_tol": 12,
+"C_min": 40,
+"L_min": 40,
+"ignore_bg": true,
+"island": 1
+},
+{
+"lines": [
+[
+[
+49,
+37
+],
+[
+45,
+48
+],
+[
+41,
+58
+],
+[
+37,
+66
+],
+[
+34,
+73
+]
+]
+],
+"w": 6.0,
+"hue": 110,
+"hue_tol": 22,
+"C_min": 60,
+"L_min": 40
+}
+],
+"note": "every lime / yellow-green part inside the structure's dark outline (backdrop = reachable from the border without crossing the outline)",
+"outline_noseed": [
+[
+86,
+26,
+95,
+42
+]
+]
+},
+"A_LaserTrooper": {
+"parts": [
+{
+"mode": "hue"
+},
+{
+"poly": [
+[
+5,
+5
+],
+[
+89,
+5
+],
+[
+89,
+85
+],
+[
+5,
+85
+]
+],
+"hue": 112,
+"hue_tol": 22,
+"C_min": 35,
+"L_min": 30,
+"enclosed": 3,
+"island": 3,
+"close": 0,
+"fill": 0,
+"ignore_bg": true
+}
+],
+"mode": "hue",
+"note": "lime tubes, lights, tendrils and panels: hue parts + thin outlined parts (enclosed test) + hand polygons for the large ones"
+},
+"E_Harvester": {
+"parts": [
+{},
+{
+"poly": [
+[
+10,
+8
+],
+[
+60,
+4
+],
+[
+80,
+20
+],
+[
+94,
+46
+],
+[
+90,
+80
+],
+[
+60,
+88
+],
+[
+20,
+88
+],
+[
+2,
+70
+],
+[
+10,
+40
+]
+],
+"hue": 52,
+"hue_tol": 18,
+"C_min": 40,
+"L_min": 25,
+"fill": 1
+},
+{
+"poly": [
+[
+12,
+56
+],
+[
+56,
+56
+],
+[
+56,
+86
+],
+[
+12,
+86
+]
+],
+"hue": 58,
+"hue_tol": 26,
+"C_min": 25,
+"L_min": 18,
+"fill": 1
+},
+{
+"poly": [
+[
+38,
+52
+],
+[
+54,
+50
+],
+[
+58,
+62
+],
+[
+54,
+78
+],
+[
+40,
+80
+],
+[
+34,
+66
+]
+],
+"hue": 60,
+"hue_tol": 30,
+"C_min": 20,
+"L_min": 12,
+"fill": 1,
+"ignore_bg": true
+},
+{
+"poly": [
+[
+12,
+56
+],
+[
+32,
+56
+],
+[
+32,
+82
+],
+[
+12,
+82
+]
+],
+"hue": 70,
+"hue_tol": 40,
+"C_min": 20,
+"L_min": 12
+},
+{
+"poly": [
+[
+30,
+52
+],
+[
+48,
+52
+],
+[
+48,
+76
+],
+[
+30,
+76
+]
+],
+"hue": 70,
+"hue_tol": 40,
+"C_min": 20,
+"L_min": 12
+},
+{
+"poly": [
+[
+10,
+50
+],
+[
+34,
+50
+],
+[
+34,
+84
+],
+[
+10,
+84
+]
+],
+"hue": 70,
+"hue_tol": 45,
+"C_min": 18,
+"L_min": 15
+},
+{
+"poly": [
+[
+4,
+6
+],
+[
+62,
+6
+],
+[
+62,
+40
+],
+[
+4,
+40
+]
+],
+"hue": 65,
+"hue_tol": 40,
+"C_min": 18,
+"L_min": 15
+},
+{
+"poly": [
+[
+14,
+54
+],
+[
+30,
+54
+],
+[
+34,
+62
+],
+[
+32,
+80
+],
+[
+18,
+82
+],
+[
+12,
+70
+]
+],
+"hue": 70,
+"hue_tol": 45,
+"C_min": 18,
+"L_min": 15,
+"ignore_bg": true
+}
+],
+"note": "orange domes, glass and the whole orange door (hand polygons)"
+},
+"E_WellCap": {
+"parts": [
+{},
+{
+"poly": [
+[
+4,
+28
+],
+[
+30,
+6
+],
+[
+60,
+6
+],
+[
+94,
+34
+],
+[
+90,
+84
+],
+[
+60,
+88
+],
+[
+30,
+84
+],
+[
+4,
+60
+]
+],
+"hue": 50,
+"hue_tol": 28,
+"C_min": 25,
+"L_min": 12,
+"fill": 2,
+"close": 1
+},
+{
+"poly": [
+[
+48,
+22
+],
+[
+60,
+22
+],
+[
+60,
+38
+],
+[
+48,
+38
+]
+],
+"hue": 55,
+"hue_tol": 25,
+"C_min": 25,
+"L_min": 12,
+"ignore_bg": true
+}
+],
+"note": "orange wheels and pieces (hand silhouette)",
+"excl": [
+[
+30,
+78,
+64,
+95
+]
+]
+},
+"E_Biodome": {
+"parts": [
+{},
+{
+"poly": [
+[
+4,
+40
+],
+[
+30,
+10
+],
+[
+70,
+8
+],
+[
+94,
+40
+],
+[
+90,
+70
+],
+[
+50,
+86
+],
+[
+10,
+80
+]
+],
+"hue": 52,
+"hue_tol": 20,
+"C_min": 35,
+"L_min": 22,
+"fill": 2
+},
+{
+"poly": [
+[
+6,
+30
+],
+[
+30,
+22
+],
+[
+58,
+30
+],
+[
+90,
+34
+],
+[
+88,
+60
+],
+[
+50,
+74
+],
+[
+10,
+60
+]
+],
+"hue": 55,
+"hue_tol": 40,
+"C_min": 18,
+"L_min": 15,
+"fill": 2
+},
+{
+"poly": [
+[
+8,
+32
+],
+[
+28,
+26
+],
+[
+40,
+34
+],
+[
+40,
+58
+],
+[
+22,
+60
+],
+[
+8,
+50
+]
+],
+"hue": 70,
+"hue_tol": 30,
+"C_min": 15,
+"L_min": 15,
+"ignore_bg": false
+},
+{
+"poly": [
+[
+26,
+44
+],
+[
+48,
+40
+],
+[
+56,
+52
+],
+[
+52,
+68
+],
+[
+32,
+70
+],
+[
+24,
+58
+]
+],
+"hue": 70,
+"hue_tol": 30,
+"C_min": 15,
+"L_min": 15,
+"ignore_bg": false
+},
+{
+"poly": [
+[
+56,
+30
+],
+[
+80,
+30
+],
+[
+88,
+42
+],
+[
+82,
+56
+],
+[
+62,
+58
+],
+[
+54,
+44
+]
+],
+"hue": 70,
+"hue_tol": 30,
+"C_min": 15,
+"L_min": 15,
+"ignore_bg": false
+},
+{
+"poly": [
+[
+46,
+42
+],
+[
+56,
+42
+],
+[
+58,
+54
+],
+[
+50,
+56
+]
+],
+"hue": 70,
+"hue_tol": 30,
+"C_min": 15,
+"L_min": 15,
+"ignore_bg": true
+},
+{
+"poly": [
+[
+72,
+32
+],
+[
+82,
+32
+],
+[
+84,
+42
+],
+[
+76,
+44
+]
+],
+"hue": 70,
+"hue_tol": 30,
+"C_min": 15,
+"L_min": 15,
+"ignore_bg": true
+},
+{
+"poly": [
+[
+60,
+30
+],
+[
+90,
+30
+],
+[
+90,
+58
+],
+[
+60,
+58
+]
+],
+"hue": 60,
+"hue_tol": 30,
+"C_min": 15,
+"L_min": 12
+},
+{
+"poly": [
+[
+56,
+8
+],
+[
+76,
+8
+],
+[
+78,
+30
+],
+[
+56,
+30
+]
+],
+"hue": 60,
+"hue_tol": 30,
+"C_min": 15,
+"L_min": 12
+},
+{
+"poly": [
+[
+4,
+30
+],
+[
+34,
+30
+],
+[
+34,
+60
+],
+[
+4,
+60
+]
+],
+"hue": 55,
+"hue_tol": 30,
+"C_min": 15,
+"L_min": 12
+},
+{
+"poly": [
+[
+56,
+36
+],
+[
+64,
+36
+],
+[
+64,
+52
+],
+[
+56,
+52
+]
+],
+"hue": 65,
+"hue_tol": 30,
+"C_min": 25,
+"L_min": 20
+},
+{
+"poly": [
+[
+4,
+26
+],
+[
+92,
+26
+],
+[
+92,
+74
+],
+[
+4,
+74
+]
+],
+"hue": 65,
+"hue_tol": 40,
+"C_min": 18,
+"L_min": 15
+},
+{
+"poly": [
+[
+68,
+38
+],
+[
+78,
+38
+],
+[
+78,
+54
+],
+[
+68,
+54
+]
+],
+"hue": 70,
+"hue_tol": 40,
+"C_min": 18,
+"L_min": 15,
+"ignore_bg": true
+}
+],
+"note": "orange domes, whole (hand silhouette)"
+},
+"DwarfMineDefender": {
+"parts": [
+{
+"poly": [
+[
+20,
+12
+],
+[
+76,
+12
+],
+[
+76,
+52
+],
+[
+20,
+52
+]
+],
+"hue": 290,
+"hue_tol": 40,
+"C_min": 20,
+"L_min": 8,
+"island": 2
+}
+],
+"note": "the blue engines/props of the flying machine (model texture: small team bits)"
+},
+"I_Clipper": {
+"parts": [
+{
+"poly": [
+[
+26,
+22
+],
+[
+56,
+20
+],
+[
+62,
+58
+],
+[
+48,
+70
+],
+[
+30,
+72
+],
+[
+28,
+50
+]
+],
+"hue": 280,
+"hue_tol": 60,
+"C_min": 12,
+"hue_Cmin": 12,
+"L_min": 0,
+"L_max": 72,
+"ignore_bg": true,
+"close": 1
+},
+{
+"poly": [
+[
+60,
+46
+],
+[
+64,
+44
+],
+[
+84,
+74
+],
+[
+78,
+76
+],
+[
+62,
+72
+]
+],
+"hue": 230,
+"hue_tol": 55,
+"C_min": 8,
+"hue_Cmin": 8,
+"L_min": 0,
+"L_max": 50,
+"ignore_bg": true,
+"close": 1
+}
+],
+"note": "all blue sail stripes (hand outline of the sails); white stripes stay"
+},
+"I_Battleship": {
+"parts": [
+{
+"poly": [
+[
+16,
+18
+],
+[
+62,
+18
+],
+[
+66,
+40
+],
+[
+60,
+64
+],
+[
+38,
+66
+],
+[
+18,
+56
+]
+],
+"hue": 280,
+"hue_tol": 60,
+"C_min": 12,
+"hue_Cmin": 12,
+"L_min": 0,
+"L_max": 72,
+"ignore_bg": true,
+"close": 1
+},
+{
+"poly": [
+[
+52,
+44
+],
+[
+60,
+42
+],
+[
+92,
+80
+],
+[
+80,
+80
+],
+[
+56,
+64
+]
+],
+"hue": 230,
+"hue_tol": 55,
+"C_min": 8,
+"hue_Cmin": 8,
+"L_min": 0,
+"L_max": 50,
+"ignore_bg": true,
+"close": 1
+}
+],
+"note": "all blue sail stripes"
+},
+"I_Dirigible": {
+"parts": [
+{
+"poly": [
+[
+8,
+20
+],
+[
+40,
+10
+],
+[
+66,
+22
+],
+[
+66,
+62
+],
+[
+38,
+72
+],
+[
+18,
+66
+],
+[
+8,
+40
+]
+],
+"hue": 280,
+"hue_tol": 60,
+"C_min": 12,
+"hue_Cmin": 12,
+"L_min": 0,
+"L_max": 72,
+"ignore_bg": true,
+"close": 1
+},
+{
+"poly": [
+[
+64,
+40
+],
+[
+70,
+40
+],
+[
+92,
+74
+],
+[
+80,
+74
+],
+[
+66,
+66
+]
+],
+"hue": 230,
+"hue_tol": 55,
+"C_min": 8,
+"hue_Cmin": 8,
+"L_min": 0,
+"L_max": 50,
+"ignore_bg": true,
+"close": 1
+}
+],
+"note": "all blue sail stripes"
+},
+"I_TransportShip": {
+"parts": [
+{
+"poly": [
+[
+4,
+14
+],
+[
+30,
+14
+],
+[
+34,
+10
+],
+[
+56,
+10
+],
+[
+64,
+22
+],
+[
+62,
+48
+],
+[
+40,
+62
+],
+[
+30,
+62
+],
+[
+8,
+52
+]
+],
+"hue": 280,
+"hue_tol": 60,
+"C_min": 12,
+"hue_Cmin": 12,
+"L_min": 0,
+"L_max": 72,
+"ignore_bg": true,
+"close": 1
+},
+{
+"poly": [
+[
+60,
+38
+],
+[
+66,
+38
+],
+[
+92,
+72
+],
+[
+80,
+74
+],
+[
+62,
+68
+]
+],
+"hue": 230,
+"hue_tol": 55,
+"C_min": 8,
+"hue_Cmin": 8,
+"L_min": 0,
+"L_max": 50,
+"ignore_bg": true,
+"close": 1
+}
+],
+"note": "all blue sail stripes"
+},
+"E_VehicleFactory": {
+"parts": [
+{},
+{
+"poly": [
+[
+70,
+6
+],
+[
+84,
+6
+],
+[
+84,
+14
+],
+[
+70,
+14
+]
+],
+"hue": 40,
+"hue_tol": 14,
+"C_min": 50,
+"L_min": 10,
+"ignore_bg": true
+}
+]
+}
+}

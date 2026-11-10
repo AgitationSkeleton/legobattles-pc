@@ -668,6 +668,7 @@ struct Ui {
     int tool = kToolBrush, material = kMatGrass, brush = 2;
     bool round_brush = true, filled = true;
     int team = 0, building = 0, building_team = 0, marker_group = 0, bridge_len = 6;
+    int special_kind = 0;   // docs/485 (D): a placed special's subtype, 0..2 = Special One..Three
     bool bridge_posts = true;   // SG-0085: new bridge sites get posts and bank tiles (and are carved to fit)
     float zoom = 1.0f;
     ImVec2 pan = ImVec2(0, 0);
@@ -1251,6 +1252,12 @@ Grabbed object_at(int x, int y) {
             footprint(e.ents[k].type, &w, &h);
             if (x < e.ents[k].x || x >= e.ents[k].x + w || y < e.ents[k].y || y >= e.ents[k].y + h) continue;
             const EntityKind* kd = kind_of(e.ents[k].type);
+            if (e.ents[k].type == lvl::kSpecial) {   // docs/485 (D): which of the army's specials
+                static const char* const kWhich[3] = {"Special unit (Special One)", "Special unit (Special Two)",
+                                                      "Special unit (Special Three)"};
+                const uint8_t s = e.ents[k].subtype;
+                return {3, i, k, e.ents[k].x, e.ents[k].y, w, h, s < 3 ? kWhich[s] : "Special unit"};
+            }
             return {3, i, k, e.ents[k].x, e.ents[k].y, w, h, kd ? kd->name : "object"};
         }
     }
@@ -2845,10 +2852,23 @@ void apply_click(int x, int y, bool first) {
     }
     case kToolBuilding: {
         if (!first) break;
+        const uint8_t type = kBuildings[g_ui.building].type;
+        // docs/485 (D): with Special unit chosen, a click on a placed special
+        // sets which of the army's specials it is instead of adding another.
+        if (type == lvl::kSpecial) {
+            const Grabbed g = object_at(x, y);
+            if (g.kind == 3 && d.m.events[g.a].ents[g.b].type == lvl::kSpecial) {
+                push_undo();
+                d.m.events[g.a].ents[g.b].subtype = (uint8_t)std::clamp(g_ui.special_kind, 0, 2);
+                say(false, "Special set.");
+                break;
+            }
+        }
         push_undo();
         const int i = loose_event(true);
-        d.m.events[i].ents.push_back(
-            ent(x, y, g_ui.building_team, kBuildings[g_ui.building].type, 1));
+        lvl::Entity e = ent(x, y, g_ui.building_team, type, 1);
+        if (type == lvl::kSpecial) e.subtype = (uint8_t)std::clamp(g_ui.special_kind, 0, 2);
+        d.m.events[i].ents.push_back(e);
         break;
     }
     case kToolErase:
@@ -3492,6 +3512,14 @@ void panel_objects() {
         for (const EntityKind& k : kBuildings) names.push_back(k.name);
         ImGui::Combo("Type", &g_ui.building, names.data(), (int)names.size());
         ImGui::Combo("Owner", &g_ui.building_team, kTeamNames, 4);
+        if (kBuildings[g_ui.building].type == lvl::kSpecial) {   // docs/485 (D)
+            static const char* const kSpecials[3] = {"Special One", "Special Two", "Special Three"};
+            ImGui::Combo("Which special", &g_ui.special_kind, kSpecials, 3);
+            ImGui::SetItemTooltip("Which of the owner's army specials it is: the unit in that army's\n"
+                                  "Special One, Two or Three slot, so it follows the army it plays\n"
+                                  "with. An army with no unit in that slot gets none here. Click a\n"
+                                  "placed special with this tool to change it. Saved in the map.");
+        }
         ImGui::TextDisabled("Extra buildings and units at the start.\nFor neutral buildings, "
                             "give them a\nplayer who isn't in the match.");
         ImGui::TreePop();

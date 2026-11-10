@@ -120,6 +120,8 @@ def main():
     ap.add_argument("samples")
     ap.add_argument("--exe", default=DEFAULT_EXE)
     ap.add_argument("--last", type=float, default=0.0)
+    ap.add_argument("--skip-last", type=float, default=0.0,
+                    help="drop the final N seconds first (e.g. a match that ended)")
     ap.add_argument("--top", type=int, default=40)
     ap.add_argument("--callers", action="append", default=[])
     # A lifted guest call reaches its callee through runtime_dispatch, so the
@@ -138,6 +140,9 @@ def main():
     if load_base != pref:
         recs = [(q, [p - load_base + pref if load_base <= p < load_base + size
                      else p for p in pcs]) for q, pcs in recs]
+    if args.skip_last > 0:
+        cut = recs[-1][0] - args.skip_last * freq
+        recs = [r for r in recs if r[0] <= cut]
     if args.last > 0:
         end = recs[-1][0]
         recs = [r for r in recs if end - r[0] <= args.last * freq]

@@ -503,9 +503,22 @@ bool lb_nsbmd_render_teal(const uint8_t* bmd, size_t n, const uint16_t shades[3]
             const size_t base = pal_data + ((size_t)r.u16(pald.entry(i)) << 3);
             if (base + 7 * 32 > pal_end) continue;   // no bank 6: leave this palette alone
             std::memcpy(copy.data() + base + 5 * 32, copy.data() + base + 6 * 32, 32);
-            for (int k = 0; k < 3; ++k) {
-                copy[base + 5 * 32 + (size_t)(12 + k) * 2] = (uint8_t)shades[k];
-                copy[base + 5 * 32 + (size_t)(12 + k) * 2 + 1] = (uint8_t)(shades[k] >> 8);
+            // BR-0082 (docs/485): a re-skinned custom model (encode_model_texture)
+            // keeps its team pixels at the picture's own entries, each holding
+            // that bank's team shade, not only at 12-14. Every entry of bank 6
+            // that differs from Red's bank (1) and equals one of bank 6's team
+            // shades takes the matching teal shade, so it is not left grey.
+            auto at16 = [&](size_t o) { return (uint16_t)(copy[o] | (copy[o + 1] << 8)); };
+            uint16_t grey[3];
+            for (int k = 0; k < 3; ++k) grey[k] = at16(base + 6 * 32 + (size_t)(12 + k) * 2);
+            for (size_t j = 0; j < 16; ++j) {
+                uint16_t v = at16(base + 6 * 32 + j * 2);
+                if (j >= 12 && j <= 14) v = shades[j - 12];
+                else if (v != at16(base + 1 * 32 + j * 2))
+                    for (int k = 0; k < 3; ++k)
+                        if (v == grey[k]) { v = shades[k]; break; }
+                copy[base + 5 * 32 + j * 2] = (uint8_t)v;
+                copy[base + 5 * 32 + j * 2 + 1] = (uint8_t)(v >> 8);
             }
         }
     }

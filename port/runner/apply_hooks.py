@@ -2706,6 +2706,26 @@ def apply(runner_dir, imgui_dir):
             "#define LB_CODE_CYC0(pc) runtime_code_cycles(pc)\n"
             "#endif\n"
             "\n"
+            "/* PER-BLOCK CYCLE ACCOUNTING (docs/484; recompiler side:\n"
+            "   port/recomp/apply_finder_patch.py 5). An ordinary ARM9\n"
+            "   instruction's epilogue ticks through LB_TICK. With g_lb_batch\n"
+            "   clear (Native Game Logic off, every replay made before it,\n"
+            "   DS-exact timing) it is runtime_tick(x), unchanged. Set, the\n"
+            "   cost waits in g_lb_pending until the next runtime_tick (every\n"
+            "   block exit: branch, call, return, exception), a bus slow path\n"
+            "   (I/O reads the clock) or the scheduler after a dispatch, which\n"
+            "   all commit it first; interrupts are then taken at block exits.\n"
+            "   g_lb_pending only grows while the ARM9 runs and is committed\n"
+            "   before the scheduler leaves it. */\n"
+            "extern unsigned long long g_lb_pending;\n"
+            "extern unsigned char g_lb_batch;\n"
+            "#if defined(NDS_STATIC_CPU) && NDS_STATIC_CPU == 0\n"
+            "#define LB_TICK(x) do { if (__builtin_expect(g_lb_batch, 1)) g_lb_pending += (x); else runtime_tick(x); } while (0)\n"
+            "#else\n"
+            "#define LB_TICK(x) runtime_tick(x)\n"
+            "#endif\n"
+            "#define LB_FLUSH_PENDING() do { if (g_lb_pending) { g_runtime_cycles += g_lb_pending; g_lb_pending = 0; } } while (0)\n"
+            "\n"
             "/* THE DATA-ACCESS CHARGE, DTCM INLINE (2026-11-07; recompiler\n"
             "   side: port/recomp/apply_finder_patch.py 4). For the ARM9,\n"
             "   runtime_mem_cycles answers 1 for any address in the enabled\n"
@@ -6011,7 +6031,13 @@ def apply(runner_dir, imgui_dir):
             "        /* legobattles-decomp docs/354: the specialised loop, when\n"
             "           nothing it leaves out is in play. */\n"
             "        const int lb_fast_mode = lb_fastrow_mode();\n"
-            "        const bool lb_fast = lb_fast_mode != 0 && !lb_ht_have &&\n"
+            "        /* docs/484: host-terrain rows too (lb_fast_row takes the\n"
+            "           terrain row as its base); LB_FASTROW_HT=0 keeps them out. */\n"
+            "        static const bool lb_fast_ht = [] {\n"
+            "            const char* v = std::getenv(\"LB_FASTROW_HT\");\n"
+            "            return !(v && v[0] == '0');\n"
+            "        }();\n"
+            "        const bool lb_fast = lb_fast_mode != 0 && (!lb_ht_have || lb_fast_ht) &&\n"
             "                             !lb_obj_on && !emit_hd;\n"
             "        uint32_t* const lb_fast_dst =\n"
             "            (lb_fast && lb_fast_mode == 2)\n"
@@ -6030,7 +6056,8 @@ def apply(runner_dir, imgui_dir):
             "                            ? g_lb_layer.data() +\n"
             "                                  (size_t)y * output_width\n"
             "                            : nullptr,\n"
-            "                        lb_fast_dst);\n"
+            "                        lb_fast_dst,\n"
+            "                        lb_ht_have ? lb_ht_row : nullptr, lb_ht_lo, lb_ht_hi);\n"
             "        const auto lb_fast_t1 = lb_fast_timed\n"
             "            ? std::chrono::steady_clock::now()\n"
             "            : std::chrono::steady_clock::time_point{};\n"
@@ -8167,6 +8194,290 @@ def apply(runner_dir, imgui_dir):
             "                }\n"
             "                if (inactive_candidate)")
     done.append("runtime_arm.cpp: attribute static validation rejections")
+
+    # docs/484: CACHE A FUNCTION NONE OF WHOSE VARIANTS VALIDATES. A pc with
+    # more than one candidate (the stock bank and lb_arm9_patched, or several
+    # overlays at one address) of which none validates was never cached, so
+    # every call to it ran the whole bank search and a byte comparison again.
+    # At a 3440x1440 window that search was ~40% of lookup_static_cached, the
+    # largest item on the main thread (11%). The absent answer is now cached
+    # against the pages of the UNION of every candidate's validation range: any
+    # write that could make one of them validate changes one of those pages'
+    # generations and drops the entry, exactly as for a single candidate.
+    replace(rtarm,
+            "const CachedStaticLookup* lookup_static_cached(const CpuCtx& c, uint32_t pc,\n"
+            "                                               bool thumb) {",
+            "/* legobattles-decomp (docs/484): one synthetic candidate per such pc,\n"
+            "   whose validation is the union of every candidate's range (the\n"
+            "   cache below reads only its addr and size). nullptr when a\n"
+            "   candidate has no validation, which a lookup would have taken. */\n"
+            "const DispatchEntry* lb_union_candidate(const CpuCtx& c, uint32_t pc, bool thumb) {\n"
+            "    struct U { uint32_t pc; bool thumb; NdsStaticValidation v; DispatchEntry e; };\n"
+            "    static std::deque<U> pool;   // stable addresses; a few dozen entries\n"
+            "    for (U& u : pool)\n"
+            "        if (u.pc == pc && u.thumb == thumb) return &u.e;\n"
+            "    uint64_t lo = UINT64_MAX, hi = 0;\n"
+            "    for (const DispatchBank& bank : c.banks) {\n"
+            "        const DispatchEntry* t = bank.table;\n"
+            "        if (!t) continue;\n"
+            "        unsigned a = 0, b = bank.len;\n"
+            "        while (a < b) {\n"
+            "            const unsigned m = (a + b) >> 1u;\n"
+            "            if (t[m].addr < pc) a = m + 1u; else b = m;\n"
+            "        }\n"
+            "        for (unsigned i = a; i < bank.len && t[i].addr == pc; ++i) {\n"
+            "            if ((t[i].thumb != 0) != thumb) continue;\n"
+            "            const NdsStaticValidation* v = t[i].validation;\n"
+            "            if (!v) return nullptr;\n"
+            "            lo = std::min<uint64_t>(lo, v->addr);\n"
+            "            hi = std::max<uint64_t>(hi, uint64_t{v->addr} + v->size);\n"
+            "        }\n"
+            "    }\n"
+            "    if (hi <= lo) return nullptr;\n"
+            "    pool.emplace_back();\n"
+            "    U& u = pool.back();\n"
+            "    u.pc = pc;\n"
+            "    u.thumb = thumb;\n"
+            "    u.v.addr = static_cast<uint32_t>(lo);\n"
+            "    u.v.size = static_cast<uint32_t>(hi - lo);\n"
+            "    u.v.expected = nullptr;\n"
+            "    u.e.addr = pc;\n"
+            "    u.e.thumb = thumb ? 1u : 0u;\n"
+            "    u.e.fn = nullptr;\n"
+            "    u.e.validation = &u.v;\n"
+            "    return &u.e;\n"
+            "}\n"
+            "\n"
+            "const CachedStaticLookup* lookup_static_cached(const CpuCtx& c, uint32_t pc,\n"
+            "                                               bool thumb) {")
+    replace(rtarm,
+            "    if (!hit && candidate_count > 1u) return nullptr;",
+            "    if (!hit && candidate_count > 1u) {\n"
+            "        /* legobattles-decomp (docs/484): cached absent, over the union */\n"
+            "        static const bool lb_off = std::getenv(\"LB_NO_UNION_CACHE\") != nullptr;\n"
+            "        const DispatchEntry* lb_u = lb_off ? nullptr : lb_union_candidate(c, pc, thumb);\n"
+            "        if (!lb_u) return nullptr;\n"
+            "        inactive_candidate = lb_u;\n"
+            "    }")
+    if "#include <deque>" not in open(rtarm, encoding="utf-8").read():
+        replace(rtarm, "#include <vector>\n", "#include <vector>\n#include <deque>\n")
+    done.append("runtime_arm.cpp: cache absent multi-variant dispatches over their union (docs/484)")
+
+    # docs/484 MEASUREMENT: how many composites repeat the previous one?
+    # LB_COMPHASH=1 hashes the top composite (FNV over 64-bit words) and logs,
+    # every 600 frames, how many were identical to the frame before. Off: one
+    # cached getenv.
+    replace(front,
+            "        phase_adaptive_ticks +=\n"
+            "            SDL_GetPerformanceCounter() - adaptive_start;\n",
+            "        phase_adaptive_ticks +=\n"
+            "            SDL_GetPerformanceCounter() - adaptive_start;\n"
+            "        {   /* legobattles-decomp docs/484: LB_COMPHASH */\n"
+            "            static const bool lb_ch = std::getenv(\"LB_COMPHASH\") != nullptr;\n"
+            "            const uint32_t* lb_px = top_width > 256 ? top_pixels : bottom_pixels;\n"
+            "            const uint16_t lb_w = top_width > 256 ? top_width : bottom_width;\n"
+            "            if (lb_ch && lb_px && lb_w > 256) {\n"
+            "                static uint64_t lb_prev = 0;\n"
+            "                static unsigned lb_n = 0, lb_same = 0;\n"
+            "                const size_t lb_words = (size_t)lb_w * (size_t)nds_gpu3d_output_height() / 2u;\n"
+            "                const uint64_t* lb_p = reinterpret_cast<const uint64_t*>(lb_px);\n"
+            "                uint64_t lb_h = 1469598103934665603ull;\n"
+            "                for (size_t lb_i = 0; lb_i < lb_words; ++lb_i) lb_h = (lb_h ^ lb_p[lb_i]) * 1099511628211ull;\n"
+            "                if (lb_h == lb_prev) ++lb_same;\n"
+            "                lb_prev = lb_h;\n"
+            "                if (++lb_n == 600u) {\n"
+            "                    std::fprintf(stderr, \"[lb_comphash] %u of 600 composites repeated the previous one\\n\", lb_same);\n"
+            "                    std::fflush(stderr);\n"
+            "                    lb_n = lb_same = 0;\n"
+            "                }\n"
+            "            }\n"
+            "        }\n")
+    done.append("frontend.cpp: LB_COMPHASH counts repeated composites (docs/484)")
+
+    # docs/484: REUSE THE COMPOSITE WHILE NOTHING IT READS HAS CHANGED.
+    # Measured at a 3440x1440 window: 55-58% of composites repeated the one
+    # before (the game redraws once a pass, every 2 VBlanks or more), each
+    # costing ~4.3 ms. g_lb_disp_gen counts every change to what the
+    # compositor reads: a palette/VRAM/OAM write of a NEW value
+    # (nds_video_write), an ARM9 write that changes a display register (both
+    # engines' 0x00-0x6F, VRAMCNT, POWCNT1, the 3D render registers
+    # 0x320-0x3BF), a display capture or host texture write
+    # (nds_vram_note_capture_write) and the 3D engine's buffer swap
+    # (GPU3D FlushRequest). The compositor returns its last picture when the
+    # count, the size and the screen are unchanged and none of the paths that
+    # draw over or around it is on (the aspect box, the marquee, HD/hi-res 3D,
+    # the settings panel). LB_COMPOSITE_REUSE=0 turns it off; LB_REUSE_CHECK=1
+    # composes anyway and logs every frame where the reused picture would
+    # have differed.
+    replace(os.path.join(runner_dir, "src", "vram.cpp"),
+            "void nds_video_write(int cpu, uint32_t addr, uint32_t value, uint32_t width) {\n"
+            "    addr &= ~(width - 1u);\n",
+            "extern \"C\" { extern uint64_t g_lb_disp_gen; }   /* docs/484 */\n"
+            "void nds_video_write(int cpu, uint32_t addr, uint32_t value, uint32_t width) {\n"
+            "    addr &= ~(width - 1u);\n"
+            "    {   /* docs/484: a NEW value changes what is displayed */\n"
+            "        const uint32_t lb_mask = width >= 4u ? 0xFFFFFFFFu : (width == 2u ? 0xFFFFu : 0xFFu);\n"
+            "        if (((nds_video_read(cpu, addr, width) ^ value) & lb_mask) != 0u) ++g_lb_disp_gen;\n"
+            "    }\n")
+    replace(os.path.join(runner_dir, "src", "vram.cpp"),
+            "void nds_vram_note_capture_write() { ++g_texture_generation; }",
+            "extern \"C\" void lb_disp_gen_bump(void);   /* docs/484, gpu2d.cpp */\n"
+            "void nds_vram_note_capture_write() { ++g_texture_generation; lb_disp_gen_bump(); }")
+    replace(bus,
+            "void io_write(uint32_t addr, uint32_t value, uint32_t width) {\n"
+            "    nds_io_write(addr, value, width);\n"
+            "}",
+            "extern \"C\" { extern uint64_t g_lb_disp_gen; }   /* docs/484 */\n"
+            "void io_write(uint32_t addr, uint32_t value, uint32_t width) {\n"
+            "    /* docs/484: an ARM9 write that changes a display register */\n"
+            "    if (g_nds_active == NDS_ARM9 && addr < 0x04001070u) {\n"
+            "        const uint32_t o = addr - 0x04000000u;\n"
+            "        const bool lb_disp = o < 0x70u || (o >= 0x240u && o < 0x24Au) ||\n"
+            "                             (o >= 0x304u && o < 0x308u) || (o >= 0x320u && o < 0x3C0u) ||\n"
+            "                             (o >= 0x1000u && o < 0x1070u);\n"
+            "        if (lb_disp) {\n"
+            "            static uint8_t lb_shadow[0x1070];\n"
+            "            static bool lb_init = false;\n"
+            "            if (!lb_init) { std::memset(lb_shadow, 0xA5, sizeof lb_shadow); lb_init = true; }\n"
+            "            for (uint32_t i = 0; i < width && o + i < sizeof lb_shadow; ++i) {\n"
+            "                const uint8_t b = static_cast<uint8_t>(value >> (8u * i));\n"
+            "                if (lb_shadow[o + i] != b) { lb_shadow[o + i] = b; ++g_lb_disp_gen; }\n"
+            "            }\n"
+            "        }\n"
+            "    }\n"
+            "    nds_io_write(addr, value, width);\n"
+            "}")
+    replace(os.path.join(runner_dir, "vendor", "melonds", "GPU3D.cpp"),
+            "            NumOpaquePolygons = 0;\n"
+            "\n"
+            "            FlushRequest = 0;",
+            "            NumOpaquePolygons = 0;\n"
+            "\n"
+            "            FlushRequest = 0;\n"
+            "            lb_disp_3d_swapped();   /* docs/484: a new 3D frame */")
+    replace(os.path.join(runner_dir, "vendor", "melonds", "GPU3D.cpp"),
+            "#include <stdio.h>\n",
+            "#include <stdio.h>\n"
+            "extern \"C\" void lb_disp_3d_swapped(void);    /* docs/484, gpu2d.cpp */\n"
+            "extern \"C\" void lb_disp_3d_rendered(void);\n")
+    # The swap is at VCount 192 but the new raster is rendered at 215, and the
+    # composite may pair the snapshot (the raster before) for one more frame:
+    # a swap counts as a change at the swap and at the next two renders.
+    replace(os.path.join(runner_dir, "vendor", "melonds", "GPU3D.cpp"),
+            "void GPU3D::VCount215(GPU& gpu) noexcept\n"
+            "{\n"
+            "    CurrentRenderer->RenderFrame(gpu);",
+            "void GPU3D::VCount215(GPU& gpu) noexcept\n"
+            "{\n"
+            "    CurrentRenderer->RenderFrame(gpu);\n"
+            "    lb_disp_3d_rendered();   /* docs/484 */")
+    replace(gpu,
+            "const uint32_t* nds_gpu2d_adaptive_framebuffer(int screen, uint16_t* width) {\n"
+            "    uint16_t w = 256;\n"
+            "    const uint32_t* r = lb_adaptive_fb_inner(screen, &w);\n"
+            "    if (width) *width = w;\n",
+            "extern \"C\" { uint64_t g_lb_disp_gen = 1; }   /* docs/484 */\n"
+            "extern \"C\" void lb_disp_gen_bump(void) { ++g_lb_disp_gen; }\n"
+            "static int g_lb_3d_dirty = 0;\n"
+            "extern \"C\" void lb_disp_3d_swapped(void) { ++g_lb_disp_gen; g_lb_3d_dirty = 2; }\n"
+            "extern \"C\" void lb_disp_3d_rendered(void) { if (g_lb_3d_dirty > 0) { --g_lb_3d_dirty; ++g_lb_disp_gen; } }\n"
+            "extern \"C\" int lb_overlay_shown(void);\n"
+            "extern \"C\" int lb_setting_res3d(void);\n"
+            "extern \"C\" int lb_marquee_get(int* x0, int* y0, int* x1, int* y1);\n"
+            "const uint32_t* nds_gpu2d_adaptive_framebuffer(int screen, uint16_t* width) {\n"
+            "    uint16_t w = 256;\n"
+            "    /* docs/484: the last picture, while nothing it reads has changed */\n"
+            "    static int lb_mode = -1;   /* 0 off, 1 reuse, 2 check */\n"
+            "    if (lb_mode < 0) {\n"
+            "        /* OFF by default: LB_REUSE_CHECK found reused pictures that\n"
+            "           differed (the 3D raster and its pairing change on frames\n"
+            "           the counter cannot see). LB_COMPOSITE_REUSE=1 to study it. */\n"
+            "        const char* v = std::getenv(\"LB_COMPOSITE_REUSE\");\n"
+            "        lb_mode = std::getenv(\"LB_REUSE_CHECK\") ? 2 : ((v && v[0] == '1') ? 1 : 0);\n"
+            "    }\n"
+            "    static uint64_t lb_rgen[2] = {0u, 0u};\n"
+            "    static const uint32_t* lb_rptr[2] = {nullptr, nullptr};\n"
+            "    static uint16_t lb_rw[2] = {0u, 0u};\n"
+            "    static int lb_rh[2] = {0, 0}, lb_row[2] = {0, 0};\n"
+            "    static std::vector<uint32_t> lb_rcopy[2];\n"
+            "    const int lb_s = screen & 1;\n"
+            "    const int lb_h = (int)nds_gpu3d_output_height(), lb_ow = (int)nds_gpu3d_output_width();\n"
+            "    int lb_m0, lb_m1, lb_m2, lb_m3;\n"
+            "    const bool lb_clean = lb_mode != 0 && !lb_overlay_shown() && lb_setting_res3d() <= 1 &&\n"
+            "                          !lb_aspect_box_on() && !lb_marquee_get(&lb_m0, &lb_m1, &lb_m2, &lb_m3);\n"
+            "    const bool lb_same = lb_clean && lb_rptr[lb_s] && lb_rgen[lb_s] == g_lb_disp_gen &&\n"
+            "                         lb_rh[lb_s] == lb_h && lb_row[lb_s] == lb_ow;\n"
+            "    if (lb_same && lb_mode == 1) {\n"
+            "        if (width) *width = lb_rw[lb_s];\n"
+            "        return lb_rptr[lb_s];\n"
+            "    }\n"
+            "    const uint64_t lb_gen_now = g_lb_disp_gen;\n"
+            "    const uint32_t* r = lb_adaptive_fb_inner(screen, &w);\n"
+            "    if (width) *width = w;\n"
+            "    if (lb_mode == 2 && w > 256) {   /* LB_REUSE_CHECK */\n"
+            "        static unsigned lb_checked = 0, lb_differ = 0, lb_would = 0;\n"
+            "        const size_t lb_n = (size_t)w * (size_t)lb_h;\n"
+            "        if (lb_same) {\n"
+            "            ++lb_would;\n"
+            "            if (lb_rcopy[lb_s].size() != lb_n || std::memcmp(lb_rcopy[lb_s].data(), r, lb_n * 4u) != 0) {\n"
+            "                if (++lb_differ <= 12u && lb_rcopy[lb_s].size() == lb_n) {\n"
+            "                    int x0 = w, x1 = -1, y0 = lb_h, y1 = -1, n = 0;\n"
+            "                    for (int y = 0; y < lb_h; ++y)\n"
+            "                        for (int x = 0; x < (int)w; ++x)\n"
+            "                            if (lb_rcopy[lb_s][(size_t)y * w + x] != r[(size_t)y * w + x]) {\n"
+            "                                ++n; x0 = std::min(x0, x); x1 = std::max(x1, x); y0 = std::min(y0, y); y1 = std::max(y1, y);\n"
+            "                            }\n"
+            "                    std::fprintf(stderr, \"[lb_reuse] DIFFER: screen %d, %d px in x %d..%d y %d..%d of %dx%d\\n\",\n"
+            "                                 lb_s, n, x0, x1, y0, y1, (int)w, lb_h);\n"
+            "                }\n"
+            "            }\n"
+            "        }\n"
+            "        lb_rcopy[lb_s].assign(r, r + lb_n);\n"
+            "        if (++lb_checked % 600u == 0u)\n"
+            "            std::fprintf(stderr, \"[lb_reuse] check: %u composites, %u would be reused, %u of those differ\\n\",\n"
+            "                         lb_checked, lb_would, lb_differ);\n"
+            "    }\n"
+            "    /* Kept only for a widened, clean picture the HD path did not take over. */\n"
+            "    const bool lb_keep = lb_clean && w > 256 && !g_hd_frame_valid;\n"
+            "    lb_rptr[lb_s] = lb_keep ? r : nullptr;\n"
+            "    lb_rgen[lb_s] = lb_gen_now;\n"
+            "    lb_rw[lb_s] = w;\n"
+            "    lb_rh[lb_s] = lb_h;\n"
+            "    lb_row[lb_s] = lb_ow;\n")
+    done.append("gpu2d/vram/bus/GPU3D: reuse the composite while nothing it reads changed (docs/484)")
+
+    # docs/484: PER-BLOCK CYCLE ACCOUNTING, the runner's half (see the
+    # LB_TICK block in runtime_arm.h). The pending total is committed by
+    # runtime_tick, by every bus slow path (I/O, video, unmapped: the clock is
+    # read there) and by the scheduler after each dispatch returns.
+    replace(rtarm,
+            "extern \"C\" void runtime_tick(uint32_t cycles) {\n"
+            "    // Generated-code ticks are guest instruction boundaries. Commit any\n"
+            "    // ARM::Cycles debt carried across HALT together with this instruction.\n"
+            "    g_runtime_cycles += cycles + g_deferred_cycles;\n",
+            "/* docs/484: the per-block total (LB_TICK) and its switch. */\n"
+            "extern \"C\" unsigned long long g_lb_pending = 0;\n"
+            "extern \"C\" unsigned char g_lb_batch = 0;\n"
+            "extern \"C\" void runtime_tick(uint32_t cycles) {\n"
+            "    // Generated-code ticks are guest instruction boundaries. Commit any\n"
+            "    // ARM::Cycles debt carried across HALT together with this instruction.\n"
+            "    g_runtime_cycles += cycles + g_deferred_cycles + g_lb_pending;   /* docs/484 */\n"
+            "    g_lb_pending = 0;\n")
+    for fn in ("extern \"C\" uint32_t bus_read_u32_slow(uint32_t addr) {\n",
+               "extern \"C\" uint16_t bus_read_u16_slow(uint32_t addr) {\n",
+               "extern \"C\" uint8_t bus_read_u8_slow(uint32_t addr) {\n",
+               "extern \"C\" void bus_write_u32_slow(uint32_t addr, uint32_t val) {\n",
+               "extern \"C\" void bus_write_u16_slow(uint32_t addr, uint16_t val) {\n",
+               "extern \"C\" void bus_write_u8_slow(uint32_t addr, uint8_t val) {\n"):
+        replace(bus, fn, fn + "    LB_FLUSH_PENDING();   /* docs/484: I/O reads the clock */\n")
+    replace(os.path.join(runner_dir, "src", "scheduler.cpp"),
+            "        runtime_dispatch(pc | t);\n"
+            "        // An exact-index stop reached in Tier 3 may have unwound through a\n",
+            "        runtime_dispatch(pc | t);\n"
+            "        LB_FLUSH_PENDING();   /* docs/484: commit the block's cycles */\n"
+            "        // An exact-index stop reached in Tier 3 may have unwound through a\n")
+    done.append("runtime/bus/scheduler: per-block cycle accounting commits (docs/484)")
+
 
     # 0zz. NAME THE WRITER OF THE TWO CORRUPT ITCM BYTES (docs/326).
     #
@@ -11254,6 +11565,692 @@ def apply(runner_dir, imgui_dir):
             "        nds_gpu2d_invalidate_hd_frame();\n"
             "        lb_hires_prepare();   /* docs/434 */\n")
     done.append("3D resolution: a hi-res partner renderer, composited and presented (docs/434)")
+
+    # docs/484 MEASUREMENT: LB_COMPTIME=1 splits the engine-A composite into
+    # its serial prep, the parallel rows and the tail.
+    g2 = os.path.join(runner_dir, "src", "gpu2d.cpp")
+    replace(g2,
+            "    lb_parallel_rows(output_height, lb_row_body);\n",
+            "    static const bool lb_ct = std::getenv(\"LB_COMPTIME\") != nullptr;   /* docs/484 */\n"
+            "    const auto lb_ct1 = std::chrono::steady_clock::now();\n"
+            "    lb_parallel_rows(output_height, lb_row_body);\n"
+            "    const auto lb_ct2 = std::chrono::steady_clock::now();\n"
+            "    struct LbCtTail { std::chrono::steady_clock::time_point t1, t2; bool on;\n"
+            "        ~LbCtTail() { if (!on) return; static double p = 0, r = 0, t = 0; static unsigned n = 0;\n"
+            "            const auto t3 = std::chrono::steady_clock::now();\n"
+            "            p += std::chrono::duration<double, std::milli>(t1 - g_lb_ct0).count();\n"
+            "            r += std::chrono::duration<double, std::milli>(t2 - t1).count();\n"
+            "            t += std::chrono::duration<double, std::milli>(t3 - t2).count();\n"
+            "            if (++n == 600u) { std::fprintf(stderr, \"[lb_comptime] engine A: prep %.3f rows %.3f tail %.3f ms\\n\", p / n, r / n, t / n);\n"
+            "                std::fflush(stderr); p = r = t = 0; n = 0; } } } lb_ct_tail{lb_ct1, lb_ct2, lb_ct};\n")
+    replace(g2,
+            "extern \"C\" int lb_overlay_shown(void);\n",
+            "static std::chrono::steady_clock::time_point g_lb_ct0;   /* docs/484 LB_COMPTIME */\n"
+            "extern \"C\" int lb_overlay_shown(void);\n")
+    replace(g2,
+            "    const uint32_t* r = lb_adaptive_fb_inner(screen, &w);\n",
+            "    g_lb_ct0 = std::chrono::steady_clock::now();   /* docs/484 */\n"
+            "    const uint32_t* r = lb_adaptive_fb_inner(screen, &w);\n")
+    replace(g2,
+            "static std::chrono::steady_clock::time_point g_lb_ct0;   /* docs/484 LB_COMPTIME */\n",
+            "static std::chrono::steady_clock::time_point g_lb_ct0;   /* docs/484 LB_COMPTIME */\n"
+            "static double g_lb_ctm[8]; static std::chrono::steady_clock::time_point g_lb_ctl;\n"
+            "static inline void lb_ct_mark(int i) {\n"
+            "    const auto n = std::chrono::steady_clock::now();\n"
+            "    if (i == 0) g_lb_ctl = g_lb_ct0;\n"
+            "    g_lb_ctm[i] += std::chrono::duration<double, std::milli>(n - g_lb_ctl).count();\n"
+            "    g_lb_ctl = n;\n"
+            "}\n")
+    for i, p in enumerate(("        (void)nds_gpu3d_wide_line(output_height - 1);\n",
+                           "    if (!snapshot_matches) nds_gpu3d_hi_wait();\n",
+                           "    lb_widemap_compose_prep(output_width, output_height);\n",
+                           "    lb_hud_scan(output_width, output_height, extra, extra_y);\n",
+                           "    lb_hostterrain_prepare();\n")):
+        # mark 0 = start..3D wait start; each later mark = time since the previous
+        if i == 0:
+            replace(g2, "    if (!snapshot_matches && output_height > 0)\n" + p,
+                    "    lb_ct_mark(0);\n    if (!snapshot_matches && output_height > 0)\n" + p + "    lb_ct_mark(1);\n")
+        else:
+            replace(g2, p, p + "    lb_ct_mark(%d);\n" % (i + 1))
+    replace(g2,
+            "            if (++n == 600u) { std::fprintf(stderr, \"[lb_comptime] engine A: prep %.3f rows %.3f tail %.3f ms\\n\", p / n, r / n, t / n);\n",
+            "            if (++n == 600u) { std::fprintf(stderr, \"[lb_comptime] engine A: prep %.3f rows %.3f tail %.3f ms\\n\", p / n, r / n, t / n);\n"
+            "                std::fprintf(stderr, \"[lb_comptime] prep: head %.3f 3dwait %.3f hiwait %.3f widemap %.3f hud %.3f ht %.3f\\n\",\n"
+            "                    g_lb_ctm[0] / n, g_lb_ctm[1] / n, g_lb_ctm[2] / n, g_lb_ctm[3] / n, g_lb_ctm[4] / n, g_lb_ctm[5] / n);\n"
+            "                for (double& d : g_lb_ctm) d = 0;\n")
+    done.append("gpu2d.cpp: LB_COMPTIME splits the composite (docs/484)")
+
+    # docs/484: THE 3D FRAME RASTERISED IN ROW BANDS. LB_COMPTIME put ~2 ms a
+    # frame at 3440x1440 in the composite's wait for the one render thread.
+    # The bands, and why they are exact, are in src/lb_band_soft.inc.
+    sh4 = os.path.join(runner_dir, "vendor", "melonds", "GPU3D_Soft.h")
+    sc4 = os.path.join(runner_dir, "vendor", "melonds", "GPU3D_Soft.cpp")
+    replace(sh4, "#include <cstdlib>\n",
+            "#include <cstdlib>\n#include <mutex>\n#include <condition_variable>\n#include <functional>   /* docs/484 */\n")
+    replace(sh4, "    explicit SoftRenderer(bool lb_hi) noexcept;\n",
+            "    explicit SoftRenderer(bool lb_hi) noexcept;\n"
+            "    struct LbBandTag {};   /* docs/484: a band helper */\n"
+            "    explicit SoftRenderer(LbBandTag) noexcept;\n")
+    replace(sh4, "    bool lb_IsHi = false;\n",
+            "    bool lb_IsHi = false;\n"
+            "    /* docs/484: banded rasterisation (lb_band_soft.inc) */\n"
+            "    bool lb_IsBand = false;\n"
+            "    bool lb_BandNested = false;\n"
+            "    std::vector<std::unique_ptr<SoftRenderer>> lb_Bands;\n"
+            "    std::vector<u8> lb_BandStencil;\n"
+            "    std::vector<u32> lb_BandEdge;\n"
+            "    void lb_BandSync(const SoftRenderer& m, int j);\n"
+            "    void lb_BandRaster(const GPU& gpu, const SoftRenderer& m, int j, s32 y0, s32 y1);\n"
+            "    bool lb_RenderBanded(const GPU& gpu, bool threaded, Polygon** polygons, int npolys, int j);\n")
+    replace(sc4,
+            "    memset(lb_RowSplit[lb_Slot], 0, NumScanlines);\n"
+            "\n"
+            "    RenderScanline(gpu, 0, j);\n",
+            "    memset(lb_RowSplit[lb_Slot], 0, NumScanlines);\n"
+            "\n"
+            "    if (lb_RenderBanded(gpu, threaded, polygons, npolys, j)) return;   /* docs/484 */\n"
+            "\n"
+            "    RenderScanline(gpu, 0, j);\n")
+    replace(sc4, "#include \"lb_hires_soft.inc\"\n}",
+            "#include \"lb_hires_soft.inc\"\n#include \"lb_band_soft.inc\"   /* docs/484 */\n}")
+    done.append("GPU3D_Soft: the widened 3D frame rasterised in row bands (docs/484)")
+
+    # docs/484: A FASTER EMULATED ARM9 CLOCK under per-block accounting.
+    # g_lb_clock_q8 is the share of each ARM9 cycle charged, in 1/256 (256 =
+    # exact; 171 = a 1.5x clock). Only the ARM9's own instruction costs are
+    # scaled, at the commit, with the remainder carried, so the clock stays
+    # monotonic and the same inputs give the same timeline.
+    rta = os.path.join(runner_dir, "src", "runtime_arm.cpp")
+    replace(rta,
+            "extern \"C\" void runtime_tick(uint32_t cycles) {\n",
+            "extern \"C\" unsigned g_lb_clock_q8 = 256u;   /* docs/484 */\n"
+            "static unsigned long long g_lb_clock_frac = 0;\n"
+            "static inline void lb_clock_commit(unsigned long long c) {\n"
+            "    const unsigned long long p = c * g_lb_clock_q8 + g_lb_clock_frac;\n"
+            "    g_runtime_cycles += p >> 8;\n"
+            "    g_lb_clock_frac = p & 255u;\n"
+            "}\n"
+            "extern \"C\" void lb_commit_pending(void) {\n"
+            "    if (g_lb_clock_q8 != 256u) lb_clock_commit(g_lb_pending);\n"
+            "    else g_runtime_cycles += g_lb_pending;\n"
+            "    g_lb_pending = 0;\n"
+            "}\n"
+            "extern \"C\" void runtime_tick(uint32_t cycles) {\n")
+    replace(rta,
+            "    g_runtime_cycles += cycles + g_deferred_cycles + g_lb_pending;   /* docs/484 */\n",
+            "    if (__builtin_expect(g_lb_clock_q8 != 256u, 0) && g_nds_active == NDS_ARM9) {\n"
+            "        lb_clock_commit((unsigned long long)cycles + g_lb_pending);   /* docs/484 */\n"
+            "        g_runtime_cycles += g_deferred_cycles;\n"
+            "    } else\n"
+            "    g_runtime_cycles += cycles + g_deferred_cycles + g_lb_pending;   /* docs/484 */\n")
+    lb_flush = ("\n/* docs/484: the commit, through the clock factor (runtime_arm.cpp). */\n"
+                "extern \"C\" void lb_commit_pending(void);\n"
+                "#undef LB_FLUSH_PENDING\n"
+                "#define LB_FLUSH_PENDING() do { if (g_lb_pending) lb_commit_pending(); } while (0)\n")
+    replace(os.path.join(runner_dir, "src", "scheduler.cpp"),
+            "#include \"wifi.h\"\n", "#include \"wifi.h\"\n" + lb_flush)
+    replace(bus, "#include \"vram.h\"\n", "#include \"vram.h\"\n" + lb_flush)
+    done.append("runtime/bus/scheduler: an ARM9 clock factor under per-block accounting (docs/484)")
+
+    # docs/484: UNDER FASTER CPU, A FLAT ARM9 MEMORY MODEL. The cache model
+    # (region lookups, the cacheability memo, the code-timing latch) was ~9%
+    # of the main thread at 3440x1440. With Faster CPU the ARM9's timing is
+    # this port's own, not the DS's, so every access is charged as a cache
+    # hit: data 1 sequential / 3 not, a branch refill 3 or 4. Deterministic,
+    # and only while g_lb_batch is set (Faster CPU on).
+    replace(bus,
+            "extern \"C\" uint32_t runtime_mem_cycles(uint32_t addr, uint32_t width,\n"
+            "                                       uint32_t sequential) {\n",
+            "extern \"C\" uint32_t runtime_mem_cycles(uint32_t addr, uint32_t width,\n"
+            "                                       uint32_t sequential) {\n"
+            "    if (__builtin_expect(g_lb_batch, 0) && g_nds_active == NDS_ARM9)   /* docs/484 */\n"
+            "        return sequential ? 1u : 3u;\n")
+    replace(bus,
+            "extern \"C\" uint32_t arm9_refill_cycles(uint32_t target) {\n",
+            "extern \"C\" uint32_t arm9_refill_cycles(uint32_t target) {\n"
+            "    if (__builtin_expect(g_lb_batch, 0))   /* docs/484: a cached refill */\n"
+            "        return ((target & 1u) && !(target & 2u)) ? 3u : 4u;\n")
+    replace(bus,
+            "extern \"C\" uint32_t runtime_code_cycles(uint32_t pc) {\n",
+            "extern \"C\" uint32_t runtime_code_cycles(uint32_t pc) {\n"
+            "    if (__builtin_expect(g_lb_batch, 0) && g_nds_active == NDS_ARM9)   /* docs/484 */\n"
+            "        return 1u;\n")
+    done.append("bus.cpp: a flat ARM9 memory model under Faster CPU (docs/484)")
+
+    # docs/484: THE ARM9'S HALTED CYCLES, for the Faster CPU clock governor
+    # (lb_patches.cpp): how much of each frame the guest spent waiting.
+    sch = os.path.join(runner_dir, "src", "scheduler.cpp")
+    replace(sch,
+            "#include \"wifi.h\"\n",
+            "#include \"wifi.h\"\n"
+            "extern \"C\" { unsigned long long g_lb_idle9 = 0; }   /* docs/484 */\n")
+    replace(sch,
+            "        g_slot[cpu].cycles += quantum;\n",
+            "        g_slot[cpu].cycles += quantum;\n"
+            "        if (cpu == 0) g_lb_idle9 += quantum;   /* docs/484 */\n")
+    replace(sch,
+            "            g_runtime_cycles = nds_event_break_hit() ? enter : cap;\n",
+            "            g_runtime_cycles = nds_event_break_hit() ? enter : cap;\n"
+            "            if (cpu == 0 && g_runtime_cycles > enter) g_lb_idle9 += g_runtime_cycles - enter;   /* docs/484 */\n")
+    done.append("scheduler.cpp: count the ARM9's halted cycles (docs/484)")
+
+    # docs/484: UNDER FASTER CPU, A CARD WORD IS READY AT ONCE. The game reads
+    # the cartridge word by word, polling ROMCTRL (func_02117610), and each
+    # next word was made ready by a scheduler event 20 system cycles later --
+    # one whole scheduler round per 4 bytes (ARM9 slice, re-dispatch, ARM7,
+    # display, timers, sound). With Faster CPU the ARM9's timing is this
+    # port's own, so a CPU read of the data port readies the next word itself.
+    # A DMA read (the bus is the DMA's) keeps the event, which triggers it.
+    replace(os.path.join(runner_dir, "src", "io.cpp"),
+            "                    schedule_card_event(uint64_t{xfercycle} * delay, false);\n"
+            "                } else {\n",
+            "                    if (g_lb_batch && cpu == 0 && !nds_dma_cpu_stalled(0) && lb_cardfast_on())   /* docs/484 */\n"
+            "                        g_romctrl |= 0x00800000u;\n"
+            "                    else\n"
+            "                    schedule_card_event(uint64_t{xfercycle} * delay, false);\n"
+            "                } else {\n")
+    replace(os.path.join(runner_dir, "src", "io.cpp"), "#include \"io.h\"\n",
+            "#include \"io.h\"\n"
+            "#include <cstdlib>\n"
+            "extern \"C\" unsigned char g_lb_batch;   /* docs/484: Faster CPU */\n"
+            "static bool lb_cardfast_on() {\n"
+            "    static const bool on = std::getenv(\"LB_NO_CARDFAST\") == nullptr;\n"
+            "    return on;\n"
+            "}\n")
+    done.append("io.cpp: card words ready at once under Faster CPU (docs/484)")
+
+    # docs/484: THE CARD BLOCK DRAINED AT ONCE (for lb_patches' native card
+    # read, Faster CPU only). After a ROMCTRL start, copies every word of the
+    # block exactly as the data-port reads would (card_response_word, the
+    # same position bookkeeping) into guest memory, then finishes as the
+    # last word's read does: busy and ready cleared, the card IRQ if
+    # AUXSPICNT enables it, the completion trace. Returns the bytes stored
+    # (at most max_bytes, as the guest loop's `n < 0x200`), or -1 when no
+    # read block is active (the guest loop would read nothing either).
+    replace(os.path.join(runner_dir, "src", "io.cpp"),
+            "bool nds_gxfifo_stalled() { return g_gxfifo_stall; }\n",
+            "bool nds_gxfifo_stalled() { return g_gxfifo_stall; }\n"
+            "\n"
+            "extern \"C\" int nds_card_drain_block(uint32_t dst, uint32_t max_bytes) {   /* docs/484 */\n"
+            "    if (!(g_romctrl & 0x80000000u) || (g_romctrl & 0x40000000u)) return -1;\n"
+            "    uint32_t n = 0;\n"
+            "    while (g_card_transfer_pos < g_card_transfer_len) {\n"
+            "        const uint32_t word = card_response_word(g_card_transfer_pos);\n"
+            "        g_card_transfer_pos += 4u;\n"
+            "        if (n < max_bytes) { bus_write_u32(dst + n, word); n += 4u; }\n"
+            "    }\n"
+            "    g_card_deadline = UINT64_MAX;\n"
+            "    g_romctrl &= ~0x00800000u;\n"
+            "    g_romctrl &= ~0x80000000u;\n"
+            "    const uint32_t auxspicnt = g_auxspicnt;\n"
+            "    if (auxspicnt & 0x4000u)\n"
+            "        nds_raise_irq(g_card_irq_cpu, 0x00080000u);\n"
+            "    const uint32_t mode = static_cast<uint32_t>(g_card_mode);\n"
+            "    card_trace_push(NDS_CARD_TRACE_COMPLETE, g_card_irq_cpu,\n"
+            "                    g_card_command, g_romctrl, auxspicnt, 0,\n"
+            "                    mode, mode, g_card_data_mode,\n"
+            "                    g_card_data_mode, false);\n"
+            "    return static_cast<int>(n);\n"
+            "}\n")
+    done.append("io.cpp: a card block drained at once, for the native card read (docs/484)")
+
+    # docs/484: NO GEOMETRY COMMAND IS DROPPED ON A GXFIFO STALL. A write into
+    # a full geometry command FIFO goes to melonDS's 64-entry stall queue and
+    # stalls the ARM9 (CPUStop_GXStall), but the recompiled ARM9 stops only
+    # at its slice's end: it kept storing, and past 64 queued entries the
+    # queue's Write dropped the command. Dropped commands unpair commands from
+    # their parameters -- the scattered-streak units of a 3.4x-clock match.
+    # The queue now holds 4096 entries, so a burst is kept whole and drains
+    # in order; the scheduler's GX-stall branch holds the ARM9 from the next
+    # round. (Stopping the ARM9 at the store itself, by unwinding it like a
+    # HALT, corrupted the heap within 80 s of a live match: an unwind at an
+    # arbitrary store is not safe.)
+    replace(os.path.join(runner_dir, "vendor", "melonds", "GPU3D.h"),
+            "    FIFO<CmdFIFOEntry, 64> CmdStallQueue {};\n",
+            "    FIFO<CmdFIFOEntry, 4096> CmdStallQueue {};   /* docs/484 */\n")
+    replace(sch,
+            "            g_slot[0].cycles = std::min(arm9_target, g_slot[0].cycles + debt);\n",
+            "            /* docs/484: an idle engine (waiting for the VBlank flush)\n"
+            "               owes nothing; the stalled ARM9 just waits out the round. */\n"
+            "            static const bool lb_stockdebt = std::getenv(\"LB_GXDEBT_STOCK\") != nullptr;   /* A/B */\n"
+            "            g_slot[0].cycles = (debt || lb_stockdebt) ? std::min(arm9_target, g_slot[0].cycles + debt)\n"
+            "                                                      : arm9_target;\n")
+    gq = os.path.join(runner_dir, "vendor", "melonds", "GPU3D.cpp")
+    replace(gq,
+            "            CmdStallQueue.Write(entry);\n"
+            "            NDS.GXFIFOStall();\n",
+            "            static const bool lb_q64 = std::getenv(\"LB_GXQ64\") != nullptr;   /* A/B: the stock 64 */\n"
+            "            if (lb_q64 && CmdStallQueue.Level() >= 64u) { NDS.GXFIFOStall(); return; }\n"
+            "            if (CmdStallQueue.IsFull()) {   /* docs/484: a dropped command */\n"
+            "                static unsigned lb_drops = 0;\n"
+            "                if ((++lb_drops & (lb_drops - 1u)) == 0u)\n"
+            "                    std::fprintf(stderr, \"[lb_gxstall] stall queue full: %u geometry command(s) dropped\\n\", lb_drops);\n"
+            "            }\n"
+            "            CmdStallQueue.Write(entry);\n"
+            "            NDS.GXFIFOStall();\n")
+    done.append("gpu3d/runtime/scheduler: the ARM9 stops on a GXFIFO stall (docs/484)")
+
+    # docs/484: AN INTERRUPT THAT SWITCHES THREADS UNWINDS THE HOST STACK.
+    # runtime_irq runs the handler nested inside the interrupted code's host
+    # frames. NitroSDK switches threads at IRQ exit (the ITCM switch saves the
+    # interrupted thread A, loads thread B with ldmib ^, and the BIOS epilogue
+    # returns with subs pc, lr, #4). The epilogue's generated code returns to
+    # its host caller, so control went back up into A's generated code, which
+    # carried on -- writing its own next pc and executing on B's registers
+    # (the CPSR used as a pointer, the stack guard 0xFDDB597C as a pc, a
+    # corrupted heap). Tier 3 already treats this case by preserving the state
+    # and unwinding; the bank path now does the same: when the handler returns
+    # anywhere but the interrupted instruction, every host frame unwinds and
+    # run_slice dispatches the new thread's pc. Rare at the DS's clock; the
+    # faster clock made it a crash every few minutes.
+    replace(rta,
+            "    ++g_nds_dispatch_stats[g_nds_active].exception_dispatch;\n"
+            "    runtime_dispatch(base + 0x18u);\n"
+            "}\n",
+            "    ++g_nds_dispatch_stats[g_nds_active].exception_dispatch;\n"
+            "    runtime_dispatch(base + 0x18u);\n"
+            "    if (!g_unwinding && (g_cpu.R[15] & ~1u) != (return_address & ~1u)) {   /* docs/484 */\n"
+            "        static unsigned lb_switches = 0;\n"
+            "        const unsigned lb_n = ++lb_switches;\n"
+            "        if ((lb_n & (lb_n - 1u)) == 0u)\n"
+            "            std::fprintf(stderr, \"[lb_irqswitch] ARM%c interrupt returned to %08X, not %08X: unwinding (%u so far)\\n\",\n"
+            "                         g_nds_active == NDS_ARM9 ? '9' : '7', g_cpu.R[15], return_address, lb_n);\n"
+            "        nds_preserve_unwind_state();\n"
+            "    }\n"
+            "}\n")
+    done.append("runtime_arm.cpp: an interrupt that switches threads unwinds the host stack (docs/484)")
+
+    replace(bus, "#include \"vram.h\"\n",
+            "#include \"vram.h\"\n"
+            "extern \"C\" uint32_t g_runtime_deep_trace;   /* docs/484 diagnostic */\n"
+            "extern \"C\" void runtime_trace_dump_recent(uint32_t);\n")
+    replace(bus,
+            "            for (uint32_t i = 0; i < d && i < 16u; ++i)\n"
+            "                std::fprintf(stderr, \" %08X\", s[d - 1u - i]);\n"
+            "            std::fprintf(stderr, \"\\n\");\n"
+            "            std::fflush(stderr);\n"
+            "        }\n",
+            "            for (uint32_t i = 0; i < d && i < 16u; ++i)\n"
+            "                std::fprintf(stderr, \" %08X\", s[d - 1u - i]);\n"
+            "            std::fprintf(stderr, \"\\n\");\n"
+            "            {   /* docs/484 diagnostic: the event ring at the first fault */\n"
+            "                static bool lb_dumped = false;\n"
+            "                if (g_runtime_deep_trace && !lb_dumped) { lb_dumped = true; runtime_trace_dump_recent(1500); }\n"
+            "            }\n"
+            "            std::fflush(stderr);\n"
+            "        }\n")
+    replace(rta,
+            "    runtime_trace_dump_recent(16);\n",
+            "    runtime_trace_dump_recent(1500);   /* docs/484 diagnostic */\n")
+
+    # docs/484: THE BUS RING ONLY WITH THE DEEP TRACE. Every slow-path bus
+    # access (I/O, VRAM, the geometry FIFO -- a battle's hot path) pushed a
+    # bus event and a watch event with the caller's lr: ~1% of a 3440x1440
+    # battle. Only the debug server reads the two rings, and play mode turns
+    # the deep trace off; the sequence count still advances (the server
+    # reports it).
+    replace(bus,
+            "inline void ring_push(uint8_t write, uint8_t width, uint32_t addr, uint32_t value) {\n"
+            "    BusEvent& e = g_ring[g_ring_w];\n"
+            "    e.seq = ++g_ring_seq;\n",
+            "inline void ring_push(uint8_t write, uint8_t width, uint32_t addr, uint32_t value) {\n"
+            "    if (!g_runtime_deep_trace) { ++g_ring_seq; return; }   /* docs/484 */\n"
+            "    BusEvent& e = g_ring[g_ring_w];\n"
+            "    e.seq = ++g_ring_seq;\n")
+    done.append("bus.cpp: the bus and watch rings only with the deep trace (docs/484)")
+
+    # docs/484 DIAGNOSTIC: a dispatch miss prints the whole register file and
+    # the NitroSDK current thread (OSi_ThreadInfo 0x02166240: +8 -> the
+    # current-thread pointer), whose saved context a bad resume came from.
+    replace(rta,
+            "        \"[dispatch-miss] cpu=%s pc=0x%08X %s (lr=0x%08X)\\n\",\n"
+            "        cpu, t, mode, g_cpu.R[14]);\n",
+            "        \"[dispatch-miss] cpu=%s pc=0x%08X %s (lr=0x%08X)\\n\",\n"
+            "        cpu, t, mode, g_cpu.R[14]);\n"
+            "    {   /* docs/484 diagnostic */\n"
+            "        std::fprintf(stderr, \"  [regs] cpsr %08X\", g_cpu.cpsr);\n"
+            "        for (int i = 0; i < 16; ++i) std::fprintf(stderr, \" r%d=%08X\", i, g_cpu.R[i]);\n"
+            "        std::fprintf(stderr, \"\\n\");\n"
+            "        if (g_nds_active == NDS_ARM9) {\n"
+            "            const uint32_t pp = bus_read_u32(0x02166248u);\n"
+            "            const uint32_t cur = (pp >= 0x02000000u && pp < 0x02400000u) ? bus_read_u32(pp) : 0u;\n"
+            "            std::fprintf(stderr, \"  [thread] info+8=%08X current=%08X\", pp, cur);\n"
+            "            if (cur >= 0x02000000u && cur < 0x02400000u)\n"
+            "                for (uint32_t o = 0; o < 0xA0u; o += 4u) std::fprintf(stderr, \"%s%08X\", (o % 32u) ? \" \" : \"\\n    \", bus_read_u32(cur + o));\n"
+            "            std::fprintf(stderr, \"\\n  [stack@sp]\");\n"
+            "            const uint32_t sp = g_cpu.R[13];\n"
+            "            if (sp >= 0x02000000u && sp < 0x02400000u)\n"
+            "                for (uint32_t o = 0; o < 0x40u; o += 4u) std::fprintf(stderr, \" %08X\", bus_read_u32(sp + o));\n"
+            "            std::fprintf(stderr, \"\\n\");\n"
+            "        }\n"
+            "    }\n")
+
+    # docs/484: THE COMPOSITE OVERLAPPED WITH THE NEXT FRAME'S VISIBLE LINES.
+    #
+    # The engine-A composite runs at the 263->0 wrap and the frame is then
+    # presented; at 3440x1440 its rows took ~3 ms the emulator spent waiting.
+    # Now the composite runs on its own thread: its serial prep with the
+    # emulator stopped (it reads guest RAM and the 3D lists), then its rows
+    # while the emulator runs the next frame's lines 0..191, and the frame is
+    # presented at line 192. What the rows read changes during those lines
+    # only through a write to VRAM, palette or OAM, a display register, a
+    # display capture, or the widemap scan at line 191 -- and every one of
+    # those first waits for the composite (lb_comp_barrier), as does line 192.
+    # So the rows see exactly the state they would have seen at the wrap.
+    # LB_ASYNC_COMP=0 keeps the serial order; LB_COMPHASHLOG=1 logs a hash of
+    # every widened composite by guest frame, to compare the two.
+    replace(g2,
+            "static std::chrono::steady_clock::time_point g_lb_ct0;   /* docs/484 LB_COMPTIME */\n",
+            "static std::chrono::steady_clock::time_point g_lb_ct0;   /* docs/484 LB_COMPTIME */\n"
+            "/* docs/484: the composite's own thread. State 0 idle, 1 prep (the\n"
+            "   emulator waits), 2 rows (the emulator runs), 3 done. */\n"
+            "static std::mutex g_lbc_m;\n"
+            "static std::condition_variable g_lbc_cv;\n"
+            "static int g_lbc_state = 0;\n"
+            "static std::atomic<int> g_lbc_busy{0};\n"
+            "static unsigned g_lbc_gen = 0;\n"
+            "static int g_lbc_screen = 0;\n"
+            "static const uint32_t* g_lbc_out = nullptr;\n"
+            "static uint16_t g_lbc_w = 256;\n"
+            "static thread_local bool t_lbc_thread = false;\n"
+            "static unsigned long long g_lbc_barriers = 0, g_lbc_frames = 0;\n"
+            "const uint32_t* nds_gpu2d_adaptive_framebuffer(int screen, uint16_t* width);\n"
+            "static void lbc_loop() {\n"
+            "    t_lbc_thread = true;\n"
+            "    unsigned seen = 0;\n"
+            "    for (;;) {\n"
+            "        int scr;\n"
+            "        {\n"
+            "            std::unique_lock<std::mutex> lk(g_lbc_m);\n"
+            "            g_lbc_cv.wait(lk, [&] { return g_lbc_gen != seen; });\n"
+            "            seen = g_lbc_gen;\n"
+            "            scr = g_lbc_screen;\n"
+            "        }\n"
+            "        uint16_t w = 256;\n"
+            "        const uint32_t* r = nds_gpu2d_adaptive_framebuffer(scr, &w);\n"
+            "        {\n"
+            "            std::lock_guard<std::mutex> lk(g_lbc_m);\n"
+            "            g_lbc_out = r;\n"
+            "            g_lbc_w = w;\n"
+            "            g_lbc_state = 3;\n"
+            "            g_lbc_busy.store(0, std::memory_order_release);\n"
+            "        }\n"
+            "        g_lbc_cv.notify_all();\n"
+            "    }\n"
+            "}\n"
+            "/* On the composite thread, as its rows start: the emulator may go on. */\n"
+            "extern \"C\" void lb_comp_rows_go(void) {\n"
+            "    /* The skybox repair's attribute rows are recorded in place; serial. */\n"
+            "    if (!t_lbc_thread || g_adaptive_skybox_fill) return;\n"
+            "    {\n"
+            "        std::lock_guard<std::mutex> lk(g_lbc_m);\n"
+            "        g_lbc_state = 2;\n"
+            "        g_lbc_busy.store(1, std::memory_order_release);\n"
+            "    }\n"
+            "    g_lbc_cv.notify_all();\n"
+            "}\n"
+            "/* 1: the rows are running, join before line 192; 0: already done. */\n"
+            "extern \"C\" int lb_comp_begin(int screen) {\n"
+            "    static bool started = false;\n"
+            "    if (!started) { started = true; std::thread(lbc_loop).detach(); }\n"
+            "    {\n"
+            "        std::lock_guard<std::mutex> lk(g_lbc_m);\n"
+            "        g_lbc_screen = screen;\n"
+            "        g_lbc_state = 1;\n"
+            "        ++g_lbc_gen;\n"
+            "    }\n"
+            "    g_lbc_cv.notify_all();\n"
+            "    std::unique_lock<std::mutex> lk(g_lbc_m);\n"
+            "    g_lbc_cv.wait(lk, [] { return g_lbc_state >= 2; });\n"
+            "    ++g_lbc_frames;\n"
+            "    return g_lbc_state == 2 ? 1 : 0;\n"
+            "}\n"
+            "extern \"C\" const uint32_t* lb_comp_join(uint16_t* width) {\n"
+            "    std::unique_lock<std::mutex> lk(g_lbc_m);\n"
+            "    g_lbc_cv.wait(lk, [] { return g_lbc_state == 3; });\n"
+            "    g_lbc_state = 0;\n"
+            "    if (width) *width = g_lbc_w;\n"
+            "    return g_lbc_out;\n"
+            "}\n"
+            "/* Before the emulator changes anything the rows read. */\n"
+            "extern \"C\" void lb_comp_barrier(void) {\n"
+            "    if (!g_lbc_busy.load(std::memory_order_acquire) || t_lbc_thread) return;\n"
+            "    std::unique_lock<std::mutex> lk(g_lbc_m);\n"
+            "    if (g_lbc_state != 2) return;\n"
+            "    ++g_lbc_barriers;\n"
+            "    g_lbc_cv.wait(lk, [] { return g_lbc_state != 2; });\n"
+            "}\n"
+            "extern \"C\" int lb_comp_field_screen(void) { return lb_engine_a_on_top() ? 0 : 1; }\n"
+            "extern \"C\" void lb_comp_stats(unsigned long long* frames, unsigned long long* barriers) {\n"
+            "    *frames = g_lbc_frames; *barriers = g_lbc_barriers;\n"
+            "}\n")
+    # The 3D snapshot the rows read: frozen before the emulator resumes. The
+    # wrap's own processing (nds_gpu2d_finish_frame: g_front flips and the
+    # other slot is cleared) and the next frame's native lines (lb_keep_3d_row
+    # recording into g_front ^ 1) both reach the slot the rows read once the
+    # emulator runs on. The rows read the slot index and its row pointers as
+    # they were at the wrap; the rasters they point at are rewritten only by
+    # the next render (VCount215), after the join. A COPIED row is rewritten
+    # in place, so that path waits for the composite (lb_keep_3d_row).
+    replace(g2,
+            "    lb_parallel_rows(output_height, lb_row_body);\n",
+            "    lb_comp_rows_go();   /* docs/484: the emulator may run on */\n"
+            "    lb_parallel_rows(output_height, lb_row_body);\n")
+    replace(g2,
+            "    auto lb_row_body = [&](int lb_lo, int lb_hi) {\n",
+            "    /* docs/484: the snapshot slot and its rows, as at the wrap */\n"
+            "    const int lb_ff = g_front;\n"
+            "    static std::array<const uint32_t*, kMaxAdaptiveHeight> lb_frozen;\n"
+            "    lb_frozen = g_wide_3d_rows[lb_ff];\n"
+            "    auto lb_row_body = [&](int lb_lo, int lb_hi) {\n")
+    replace(g2,
+            "            ? lb_snap_row(g_front, y, output_width)   /* docs/359 */\n",
+            "            ? (lb_frozen[y] ? lb_frozen[y] : lb_snap_row(lb_ff, y, output_width))   /* docs/359, 484 */\n")
+    replace(g2,
+            "                ? g_wide_3d_attr_frame[g_front].data() +\n",
+            "                ? g_wide_3d_attr_frame[lb_ff].data() +\n")
+    replace(g2,
+            "    if (!must_copy && nds_gpu3d_line_persists(src)) {\n"
+            "        g_wide_3d_rows[slot][row] = src;\n"
+            "    } else {\n",
+            "    if (!must_copy && nds_gpu3d_line_persists(src)) {\n"
+            "        g_wide_3d_rows[slot][row] = src;\n"
+            "    } else {\n"
+            "        lb_comp_barrier();   /* docs/484: a copy is rewritten in place */\n")
+    replace(g2, "static void lb_keep_3d_row(int slot, int row, uint16_t width) {\n",
+            "extern \"C\" void lb_comp_barrier(void);   /* docs/484 */\n"
+            "static void lb_keep_3d_row(int slot, int row, uint16_t width) {\n")
+    # the barriers
+    vr = os.path.join(runner_dir, "src", "vram.cpp")
+    replace(vr,
+            "        if (((nds_video_read(cpu, addr, width) ^ value) & lb_mask) != 0u) ++g_lb_disp_gen;\n",
+            "        if (((nds_video_read(cpu, addr, width) ^ value) & lb_mask) != 0u) { lb_comp_barrier(); ++g_lb_disp_gen; }\n")
+    replace(vr,
+            "extern \"C\" void lb_disp_gen_bump(void);   /* docs/484, gpu2d.cpp */\n"
+            "void nds_vram_note_capture_write() { ++g_texture_generation; lb_disp_gen_bump(); }\n",
+            "extern \"C\" void lb_disp_gen_bump(void);   /* docs/484, gpu2d.cpp */\n"
+            "extern \"C\" void lb_comp_barrier(void);   /* docs/484, gpu2d.cpp */\n"
+            "void nds_vram_note_capture_write() { lb_comp_barrier(); ++g_texture_generation; lb_disp_gen_bump(); }\n")
+    replace(bus,
+            "                if (lb_shadow[o + i] != b) { lb_shadow[o + i] = b; ++g_lb_disp_gen; }\n",
+            "                if (lb_shadow[o + i] != b) { lb_comp_barrier(); lb_shadow[o + i] = b; ++g_lb_disp_gen; }\n")
+    replace(bus,
+            "extern \"C\" { extern uint64_t g_lb_disp_gen; }   /* docs/484 */\n"
+            "void io_write(",
+            "extern \"C\" { extern uint64_t g_lb_disp_gen; }   /* docs/484 */\n"
+            "extern \"C\" void lb_comp_barrier(void);   /* docs/484, gpu2d.cpp */\n"
+            "void io_write(")
+    iocpp = os.path.join(runner_dir, "src", "io.cpp")
+    replace(iocpp,
+            "        } else if (g_vcount == 192u) {\n"
+            "            g_in_vblank = true;\n",
+            "        } else if (g_vcount == 192u) {\n"
+            "            lb_comp_barrier();   /* docs/484: VBlank starts */\n"
+            "            g_in_vblank = true;\n")
+    replace(iocpp, "#include \"io.h\"\n",
+            "#include \"io.h\"\nextern \"C\" void lb_comp_barrier(void);   /* docs/484, gpu2d.cpp */\n")
+    replace(g2,
+            "    if (engine == 0 && y == lb_scan_line()) lb_widemap_scan();\n",
+            "    if (engine == 0 && y == lb_scan_line()) { lb_comp_barrier(); lb_widemap_scan(); }   /* docs/484 */\n")
+    replace(g2, "void render_engine_line(int engine, int y) {\n",
+            "extern \"C\" void lb_comp_barrier(void);   /* docs/484, below */\n"
+            "void render_engine_line(int engine, int y) {\n")
+    # the frontend: composite at the wrap, emulate to line 192, then present
+    replace(front,
+            "        while (!lb_tas_skip && running && scheduler_system_timestamp() < next_frame &&\n"
+            "               !(scheduler_cpu_terminal_halted(0) &&\n"
+            "                 scheduler_cpu_terminal_halted(1))) {\n"
+            "            scheduler_run_round();\n"
+            "        }\n",
+            "        while (!lb_tas_skip && running && scheduler_system_timestamp() < next_frame &&\n"
+            "               !(scheduler_cpu_terminal_halted(0) &&\n"
+            "                 scheduler_cpu_terminal_halted(1))) {\n"
+            "            scheduler_run_round();\n"
+            "        }\n"
+            "        /* docs/484: the composite at the wrap, its rows overlapped with\n"
+            "           the next frame's visible lines; presented at line 192. */\n"
+            "        bool lb_wrap_done = false, lb_wrap_inflight = false;\n"
+            "        const uint32_t* lb_w_top = nullptr;\n"
+            "        const uint32_t* lb_w_bot = nullptr;\n"
+            "        uint16_t lb_w_topw = 256, lb_w_botw = 256;\n"
+            "        uint64_t lb_w_ticks = 0;\n"
+            "        const uint64_t lb_w_frame = next_frame / kSystemCyclesPerFrame;\n"
+            "        {\n"
+            "            static const bool lb_async_on = [] {\n"
+            "                const char* v = std::getenv(\"LB_ASYNC_COMP\");\n"
+            "                return !(v && v[0] == '0');\n"
+            "            }();\n"
+            "            if (lb_async_on && !lb_tas_skip && running && !turbo_active &&\n"
+            "                scheduler_system_timestamp() >= next_frame &&\n"
+            "                !nds_powered_off() &&\n"
+            "                (options.adaptive_screens & (NDS_ADAPTIVE_TOP | NDS_ADAPTIVE_BOTTOM)) &&\n"
+            "                lb_setting_enhanced() &&\n"
+            "                !nds_gpu2d_direct_present_frame_active()) {\n"
+            "                const uint64_t lb_c0 = SDL_GetPerformanceCounter();\n"
+            "                nds_gpu2d_invalidate_hd_frame();\n"
+            "                lb_hires_prepare();   /* docs/434 */\n"
+            "                /* The screen engine A (the field) is on goes to the composite\n"
+            "                   thread; the other is composited here meanwhile. */\n"
+            "                const int lb_fs = lb_comp_field_screen();\n"
+            "                const uint32_t* lb_px[2] = {nullptr, nullptr};\n"
+            "                uint16_t lb_pw[2] = {256, 256};\n"
+            "                const unsigned lb_ad[2] = {NDS_ADAPTIVE_TOP, NDS_ADAPTIVE_BOTTOM};\n"
+            "                if (options.adaptive_screens & lb_ad[lb_fs]) {\n"
+            "                    lb_wrap_inflight = lb_comp_begin(lb_fs) != 0;\n"
+            "                    if (!lb_wrap_inflight) lb_px[lb_fs] = lb_comp_join(&lb_pw[lb_fs]);\n"
+            "                } else {\n"
+            "                    lb_px[lb_fs] = nds_gpu2d_framebuffer_raw(lb_fs);\n"
+            "                }\n"
+            "                const int lb_os = lb_fs ^ 1;\n"
+            "                if (options.adaptive_screens & lb_ad[lb_os])\n"
+            "                    lb_px[lb_os] = nds_gpu2d_adaptive_framebuffer(lb_os, &lb_pw[lb_os]);\n"
+            "                else\n"
+            "                    lb_px[lb_os] = nds_gpu2d_framebuffer_raw(lb_os);\n"
+            "                if (lb_wrap_inflight) {\n"
+            "                    /* The emulator is about to draw over the native frame. */\n"
+            "                    static std::vector<uint32_t> lb_nb;\n"
+            "                    if (lb_px[lb_os] == nds_gpu2d_framebuffer_raw(lb_os)) {\n"
+            "                        nds_gpu2d_native_complete(lb_os);\n"
+            "                        lb_nb.assign(lb_px[lb_os], lb_px[lb_os] + 256u * 192u);\n"
+            "                        lb_px[lb_os] = lb_nb.data();\n"
+            "                        lb_pw[lb_os] = 256;\n"
+            "                    }\n"
+            "                    observe_top_black_bands(nds_gpu2d_framebuffer_raw(0), shown_frames);\n"
+            "                }\n"
+            "                lb_wrap_done = true;\n"
+            "                lb_w_ticks = SDL_GetPerformanceCounter() - lb_c0;\n"
+            "                if (lb_wrap_inflight) {\n"
+            "                    const uint64_t lb_mid = next_frame + 192ull * 2130ull;\n"
+            "                    while (running && scheduler_system_timestamp() < lb_mid &&\n"
+            "                           !(scheduler_cpu_terminal_halted(0) &&\n"
+            "                             scheduler_cpu_terminal_halted(1))) {\n"
+            "                        scheduler_run_round();\n"
+            "                    }\n"
+            "                    const uint64_t lb_j0 = SDL_GetPerformanceCounter();\n"
+            "                    lb_px[lb_fs] = lb_comp_join(&lb_pw[lb_fs]);\n"
+            "                    lb_w_ticks += SDL_GetPerformanceCounter() - lb_j0;\n"
+            "                }\n"
+            "                lb_w_top = lb_px[0]; lb_w_topw = lb_pw[0];\n"
+            "                lb_w_bot = lb_px[1]; lb_w_botw = lb_pw[1];\n"
+            "            }\n"
+            "        }\n")
+    replace(front,
+            "            const uint64_t emu_ticks = SDL_GetPerformanceCounter() - phase0;\n",
+            "            const uint64_t emu_ticks = SDL_GetPerformanceCounter() - phase0 - lb_w_ticks;   /* docs/484 */\n")
+    replace(front,
+            "        const uint64_t adaptive_start = SDL_GetPerformanceCounter();\n"
+            "        // Direct-present frames skip the adaptive compositor, so the HD\n"
+            "        // surfaces must be invalidated here rather than inside it.\n"
+            "        nds_gpu2d_invalidate_hd_frame();\n"
+            "        lb_hires_prepare();   /* docs/434 */\n"
+            "        if ((options.adaptive_screens & NDS_ADAPTIVE_TOP) &&\n",
+            "        const uint64_t adaptive_start = SDL_GetPerformanceCounter();\n"
+            "        if (lb_wrap_done) {   /* docs/484: composited at the wrap */\n"
+            "            top_pixels = lb_w_top; top_width = lb_w_topw;\n"
+            "            bottom_pixels = lb_w_bot;\n"
+            "            bottom_width = lb_w_botw;\n"
+            "            phase_adaptive_ticks += lb_w_ticks;\n"
+            "        } else {\n"
+            "        // Direct-present frames skip the adaptive compositor, so the HD\n"
+            "        // surfaces must be invalidated here rather than inside it.\n"
+            "        nds_gpu2d_invalidate_hd_frame();\n"
+            "        lb_hires_prepare();   /* docs/434 */\n"
+            "        if ((options.adaptive_screens & NDS_ADAPTIVE_TOP) &&\n")
+    replace(front,
+            "            bottom_pixels =\n"
+            "                nds_gpu2d_adaptive_framebuffer(1, &bottom_width);\n"
+            "        phase_adaptive_ticks +=\n"
+            "            SDL_GetPerformanceCounter() - adaptive_start;\n",
+            "            bottom_pixels =\n"
+            "                nds_gpu2d_adaptive_framebuffer(1, &bottom_width);\n"
+            "        phase_adaptive_ticks +=\n"
+            "            SDL_GetPerformanceCounter() - adaptive_start;\n"
+            "        }\n"
+            "        {   /* docs/484: LB_COMPHASHLOG, one line per widened composite */\n"
+            "            static const bool lb_hl = std::getenv(\"LB_COMPHASHLOG\") != nullptr;\n"
+            "            for (int lb_sc = 0; lb_hl && lb_sc < 2; ++lb_sc) {\n"
+            "                const uint32_t* lb_p = lb_sc ? bottom_pixels : top_pixels;\n"
+            "                const unsigned lb_ww = lb_sc ? bottom_width : top_width;\n"
+            "                if (!lb_p) continue;\n"
+            "                const size_t lb_n = (size_t)lb_ww * (size_t)(lb_ww > 256 ? nds_gpu3d_output_height() : 192);\n"
+            "                uint64_t lb_h = 1469598103934665603ull;\n"
+            "                for (size_t lb_i = 0; lb_i < lb_n; ++lb_i) lb_h = (lb_h ^ lb_p[lb_i]) * 1099511628211ull;\n"
+            "                std::fprintf(stderr, \"[lb_chl] f=%llu s=%d w=%u h=%016llx%s\\n\", (unsigned long long)lb_w_frame, lb_sc,\n"
+            "                             lb_ww, (unsigned long long)lb_h, lb_wrap_inflight ? \" a\" : \"\");\n"
+            "                static const long long lb_dumpf = std::getenv(\"LB_CHLDUMP\") ? std::atoll(std::getenv(\"LB_CHLDUMP\")) : -1;\n"
+            "                if ((long long)lb_w_frame >= lb_dumpf && (long long)lb_w_frame < lb_dumpf + 4) {\n"
+            "                    char lb_fn[160];\n"
+            "                    std::snprintf(lb_fn, sizeof lb_fn, \"chl_%llu_s%d_w%u.raw\", (unsigned long long)lb_w_frame, lb_sc, lb_ww);\n"
+            "                    if (FILE* lb_f = std::fopen(lb_fn, \"wb\")) { std::fwrite(lb_p, 4, lb_n, lb_f); std::fclose(lb_f); }\n"
+            "                }\n"
+            "            }\n"
+            "            static unsigned lb_n2 = 0;\n"
+            "            if (lb_wrap_inflight && ++lb_n2 % 1800u == 0u) {\n"
+            "                unsigned long long lb_f = 0, lb_b = 0;\n"
+            "                lb_comp_stats(&lb_f, &lb_b);\n"
+            "                std::fprintf(stderr, \"[lb_async] %llu overlapped composites, %llu early joins\\n\", lb_f, lb_b);\n"
+            "            }\n"
+            "        }\n")
+    replace(front,
+            "        if (top_pixels == native_top)   /* docs/361 */\n"
+            "            nds_gpu2d_native_complete(0);\n"
+            "        if (bottom_pixels == nds_gpu2d_framebuffer_raw(1))\n"
+            "            nds_gpu2d_native_complete(1);\n"
+            "        observe_top_black_bands(native_top, shown_frames);\n",
+            "        if (!lb_wrap_inflight) {   /* docs/484: else done at the wrap */\n"
+            "        if (top_pixels == native_top)   /* docs/361 */\n"
+            "            nds_gpu2d_native_complete(0);\n"
+            "        if (bottom_pixels == nds_gpu2d_framebuffer_raw(1))\n"
+            "            nds_gpu2d_native_complete(1);\n"
+            "        observe_top_black_bands(native_top, shown_frames);\n"
+            "        }\n")
+    replace(front, "int lb_present_src_w[2] = {0, 0};   /* legobattles-decomp */\n",
+            "extern \"C\" int lb_comp_begin(int screen);   /* docs/484, gpu2d.cpp */\n"
+            "extern \"C\" int lb_comp_field_screen(void);\n"
+            "extern \"C\" const uint32_t* lb_comp_join(uint16_t* width);\n"
+            "extern \"C\" void lb_comp_stats(unsigned long long* frames, unsigned long long* barriers);\n"
+            "int lb_present_src_w[2] = {0, 0};   /* legobattles-decomp */\n")
+    done.append("gpu2d/frontend: the composite's rows overlapped with the next frame (docs/484)")
 
     # Last, once every patch has been written: hold the mtime of any file whose
     # patched CONTENT is unchanged since the previous build, so make does not
