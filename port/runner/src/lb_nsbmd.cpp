@@ -19,7 +19,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <initializer_list>
+#include <string>
 #include <vector>
 
 namespace {
@@ -322,8 +326,11 @@ struct Model {
     std::vector<Tex> texs;
 };
 
+template <class F>
+void run_sbc(const Rd& r, size_t mo, F&& shp);   // below
+
 bool load_model(const Rd& r, int bank, Model& M) {
-    if (r.n < 0x14 || std::memcmp(r.d, "BMD0", 4) != 0) return false;
+    if (r.n < 0x14|| std::memcmp(r.d, "BMD0", 4) != 0) return false;
     size_t mdl0 = 0, tex0 = 0;
     for (uint32_t i = 0, nb = r.u16(0x0E); i < nb && i < 8; ++i) {
         const size_t o = r.u32(0x10 + 4 * i);
@@ -336,9 +343,6 @@ bool load_model(const Rd& r, int bank, Model& M) {
     if (!models.count) return false;
     const size_t mo = mdl0 + r.u32(models.entry(0));
     const size_t sbc = mo + r.u32(mo + 4), matb = mo + r.u32(mo + 8), shpb = mo + r.u32(mo + 12);
-    const size_t evp = mo + r.u32(mo + 0x10), mend = mo + r.u32(mo);
-    const unsigned nnode = r.u8(mo + 0x17);
-    const float pos_scale = r.s32(mo + 0x1C) / 4096.0f, inv_scale = r.s32(mo + 0x20) / 4096.0f;
     if (mo >= r.n || sbc >= r.n || matb >= r.n || shpb >= r.n) return false;
 
     // Textures: each TEX0 texture decoded once per palette it is bound with.
@@ -392,7 +396,24 @@ bool load_model(const Rd& r, int bank, Model& M) {
         M.texs.push_back(std::move(tx));
     }
 
-    // The rest pose: the SBC run against a 32-entry matrix stack.
+    const Dict shps = read_dict(r, shpb);
+    run_sbc(r, mo, [&](unsigned id, int mat, const Mtx& cur, Mtx* stack) {
+        const size_t sh = shpb + r.u32(shps.entry(id));
+        run_display_list(r, sh + r.u32(sh + 8), r.u32(sh + 12), cur, stack, mat, M.tris);
+        return true;
+    });
+    return !M.tris.empty();
+}
+
+// The rest pose: the SBC of the model at `mo` run against a 32-entry matrix
+// stack. `shp(id, material, current matrix, stack)` is called for each SHP of
+// a visible node (id < the shape count); returning false stops the run.
+template <class F>
+void run_sbc(const Rd& r, size_t mo, F&& shp) {
+    const size_t sbc = mo + r.u32(mo + 4), matb = mo + r.u32(mo + 8), shpb = mo + r.u32(mo + 12);
+    const size_t evp = mo + r.u32(mo + 0x10), mend = mo + r.u32(mo);
+    const unsigned nnode = r.u8(mo + 0x17);
+    const float pos_scale = r.s32(mo + 0x1C) / 4096.0f, inv_scale = r.s32(mo + 0x20) / 4096.0f;
     const Dict nodes = read_dict(r, mo + 0x40);
     const Dict shps = read_dict(r, shpb);
     Mtx stack[32];
@@ -424,8 +445,7 @@ bool load_model(const Rd& r, int bank, Model& M) {
                 const unsigned id = r.u8(pc + 1);
                 pc += 2;
                 if (!visible[node] || id >= shps.count) break;
-                const size_t sh = shpb + r.u32(shps.entry(id));
-                run_display_list(r, sh + r.u32(sh + 8), r.u32(sh + 12), cur, stack, mat, M.tris);
+                if (!shp(id, mat, cur, stack)) return;
                 break;
             }
             case 0x06:   // NODEDESC node, parent, flags [, store] [, restore]
@@ -463,7 +483,6 @@ bool load_model(const Rd& r, int bank, Model& M) {
             default: pc = matb; break;              // unknown: stop
         }
     }
-    return !M.tris.empty();
 }
 
 // Nearest texel with the material's repeat / flip / clamp.
@@ -608,6 +627,388 @@ bool lb_nsbmd_render(const uint8_t* bmd, size_t n, int bank, float yaw, float pi
                 auto ch = [&](int sh) { return (uint32_t)std::min(255.0f, ((col >> sh) & 255) * shade) << sh; };
                 out[(size_t)y * w + x] = 0xFF000000u | ch(16) | ch(8) | ch(0);
             }
+    }
+    return true;
+}
+
+// ---- docs/492 (SG-0083): the model as an OBJ, and an OBJ as the model -------
+//
+// What every stock model is (measured over all 31): one model in MDL0, one
+// shape, one TEX0 texture; MDL0 ends exactly where TEX0 starts; the shape's
+// display list binds its vertices to the joints' matrices with MTX_RESTORE
+// (the slots the SBC's NODEDESCs store; node 0, the root, is stored in slot
+// 0) and applies the position scale with a SCALE after each restore. The
+// model info (at model + 0x14) holds the vertex/polygon/triangle/quad counts
+// at +0x10..+0x16 and the bounding box (x, y, z, w, h, d, fx16) at +0x18, in
+// units of its box scale (fx32, +0x24, and its inverse +0x28); the game reads
+// the box for a 3D unit's screen bounds (FUN_0203D148).
+//
+// The import writes ONE new display list -- MTX_RESTORE <root slot>, a SCALE
+// when the positions need it, then the OBJ's triangles as TEXCOORD [NORMAL]
+// VTX_16 -- at the end of the model (before TEX0), points the first drawn
+// shape at it and every other shape at a list of NOPs, and moves TEX0 on by
+// the bytes added (TEX0's own offsets are relative to TEX0, so it is intact).
+// The mesh then follows the root node: a ship's bob or a dragon's flight, not
+// a wing's flap.
+namespace {
+
+bool affine_inverse(const Mtx& m, Mtx* out) {
+    const auto& a = m.m;
+    const float det = a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1]) - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0]) +
+                      a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]);
+    if (!(std::fabs(det) > 1e-12f)) return false;
+    Mtx r = identity();
+    r.m[0][0] = (a[1][1] * a[2][2] - a[1][2] * a[2][1]) / det;
+    r.m[0][1] = (a[0][2] * a[2][1] - a[0][1] * a[2][2]) / det;
+    r.m[0][2] = (a[0][1] * a[1][2] - a[0][2] * a[1][1]) / det;
+    r.m[1][0] = (a[1][2] * a[2][0] - a[1][0] * a[2][2]) / det;
+    r.m[1][1] = (a[0][0] * a[2][2] - a[0][2] * a[2][0]) / det;
+    r.m[1][2] = (a[0][2] * a[1][0] - a[0][0] * a[1][2]) / det;
+    r.m[2][0] = (a[1][0] * a[2][1] - a[1][1] * a[2][0]) / det;
+    r.m[2][1] = (a[0][1] * a[2][0] - a[0][0] * a[2][1]) / det;
+    r.m[2][2] = (a[0][0] * a[1][1] - a[0][1] * a[1][0]) / det;
+    for (int j = 0; j < 3; ++j)
+        r.m[3][j] = -(a[3][0] * r.m[0][j] + a[3][1] * r.m[1][j] + a[3][2] * r.m[2][j]);
+    *out = r;
+    return true;
+}
+
+// The model's first MDL0 model: its offsets, or false.
+struct MdlAt {
+    size_t mdl0 = 0, mo = 0, mend = 0, sbc = 0, matb = 0, shpb = 0;
+    unsigned blocks = 0;
+};
+bool find_model(const Rd& r, MdlAt* m) {
+    if (r.n < 0x14 || std::memcmp(r.d, "BMD0", 4) != 0) return false;
+    m->blocks = std::min<unsigned>(r.u16(0x0E), 8u);
+    for (unsigned i = 0; i < m->blocks; ++i) {
+        const size_t o = r.u32(0x10 + 4 * (size_t)i);
+        if (o + 8 <= r.n && std::memcmp(r.d + o, "MDL0", 4) == 0) m->mdl0 = o;
+    }
+    if (!m->mdl0) return false;
+    const Dict models = read_dict(r, m->mdl0 + 8);
+    if (models.count != 1) return false;
+    m->mo = m->mdl0 + r.u32(models.entry(0));
+    if (m->mo + 0x48 > r.n) return false;
+    m->mend = m->mo + r.u32(m->mo);
+    m->sbc = m->mo + r.u32(m->mo + 4);
+    m->matb = m->mo + r.u32(m->mo + 8);
+    m->shpb = m->mo + r.u32(m->mo + 12);
+    return m->mend <= r.n && m->mend <= m->mdl0 + r.u32(m->mdl0 + 4) && m->sbc < m->mend && m->matb < m->mend &&
+           m->shpb < m->mend;
+}
+
+// One OBJ face corner: indices into v, vt, vn (-1 none).
+struct Corner {
+    int v = -1, t = -1, n = -1;
+};
+
+// A display list being written: up to four command ids a word, then their
+// parameters in order; unused ids are 0 (NOP, no parameters).
+struct DlWriter {
+    std::vector<uint32_t> words, params;
+    uint32_t head = 0;
+    int n = 0;
+    void cmd(uint32_t id, std::initializer_list<uint32_t> p) {
+        head |= id << (8 * n);
+        params.insert(params.end(), p.begin(), p.end());
+        if (++n == 4) flush();
+    }
+    void flush() {
+        if (!n) return;
+        words.push_back(head);
+        words.insert(words.end(), params.begin(), params.end());
+        params.clear();
+        head = 0;
+        n = 0;
+    }
+};
+
+uint32_t fx32(float v) { return (uint32_t)(int32_t)std::lround(v * 4096.0f); }
+int clamp16(long v) { return (int)std::min(32767L, std::max(-32768L, v)); }
+
+}  // namespace
+
+bool lb_nsbmd_export_obj(const uint8_t* bmd, size_t n, std::string* obj) {
+    if (!bmd || !obj) return false;
+    Model M;
+    if (!load_model(Rd{bmd, n}, 0, M)) return false;
+    std::string o =
+        "# LEGO Battles model, rest pose, model space (docs/492).\n"
+        "# Edit it in a 3D program and save it as model/model.obj beside texture.png:\n"
+        "# triangles or polygons, one texture (vt over texture.png), at most 400 triangles.\n"
+        "# Keep the winding of the faces: the game draws front faces only.\n";
+    char b[160];
+    for (const Tri& t : M.tris)
+        for (const Vert& v : t.v) {
+            std::snprintf(b, sizeof b, "v %.5f %.5f %.5f\n", v.p.x, v.p.y, v.p.z);
+            o += b;
+        }
+    for (const Tri& t : M.tris) {
+        const Mat* mt = t.mat >= 0 && (size_t)t.mat < M.mats.size() ? &M.mats[(size_t)t.mat] : nullptr;
+        const Tex* tx = mt && mt->tex >= 0 ? &M.texs[(size_t)mt->tex] : nullptr;
+        const float tw = tx ? (float)tx->w : 8.0f, th = tx ? (float)tx->h : 8.0f;
+        for (const Vert& v : t.v) {
+            std::snprintf(b, sizeof b, "vt %.5f %.5f\n", v.s / tw, 1.0f - v.t / th);
+            o += b;
+        }
+    }
+    for (size_t i = 0; i < M.tris.size(); ++i) {
+        const unsigned k = (unsigned)(i * 3 + 1);
+        std::snprintf(b, sizeof b, "f %u/%u %u/%u %u/%u\n", k, k, k + 1, k + 1, k + 2, k + 2);
+        o += b;
+    }
+    *obj = std::move(o);
+    return true;
+}
+
+bool lb_nsbmd_import_obj(std::vector<uint8_t>* bmdv, const std::string& text, std::string* note) {
+    auto fail = [&](const std::string& why) {
+        if (note) *note = why;
+        return false;
+    };
+    if (!bmdv) return fail("no model");
+    constexpr size_t kMaxTris = 400;   // stock models: 113..250; the model is loaded whole into the heap
+    // ---- the OBJ ----
+    std::vector<Vec3> vs, ns;
+    std::vector<float> ts;   // u, v pairs
+    std::vector<Corner> corners;   // three a triangle
+    size_t line_no = 0;
+    for (size_t at = 0; at < text.size();) {
+        size_t e = text.find('\n', at);
+        if (e == std::string::npos) e = text.size();
+        std::string ln = text.substr(at, e - at);
+        at = e + 1;
+        ++line_no;
+        if (!ln.empty() && ln.back() == '\r') ln.pop_back();
+        size_t p = ln.find_first_not_of(" \t");
+        if (p == std::string::npos || ln[p] == '#') continue;
+        const char* s = ln.c_str() + p;
+        if (s[0] == 'v' && (s[1] == ' ' || s[1] == '\t')) {
+            Vec3 v{0, 0, 0};
+            if (std::sscanf(s + 2, "%f %f %f", &v.x, &v.y, &v.z) != 3) return fail("line " + std::to_string(line_no) + ": a bad v");
+            if (!std::isfinite(v.x) || !std::isfinite(v.y) || !std::isfinite(v.z)) return fail("line " + std::to_string(line_no) + ": a bad v");
+            vs.push_back(v);
+        } else if (s[0] == 'v' && s[1] == 't' && (s[2] == ' ' || s[2] == '\t')) {
+            float u = 0, v = 0;
+            if (std::sscanf(s + 3, "%f %f", &u, &v) < 1 || !std::isfinite(u) || !std::isfinite(v))
+                return fail("line " + std::to_string(line_no) + ": a bad vt");
+            ts.push_back(u);
+            ts.push_back(v);
+        } else if (s[0] == 'v' && s[1] == 'n' && (s[2] == ' ' || s[2] == '\t')) {
+            Vec3 v{0, 0, 0};
+            if (std::sscanf(s + 3, "%f %f %f", &v.x, &v.y, &v.z) != 3) return fail("line " + std::to_string(line_no) + ": a bad vn");
+            ns.push_back(v);
+        } else if (s[0] == 'f' && (s[1] == ' ' || s[1] == '\t')) {
+            std::vector<Corner> poly;
+            const char* q = s + 2;
+            while (*q) {
+                while (*q == ' ' || *q == '\t') ++q;
+                if (!*q) break;
+                Corner c;
+                long idx[3] = {0, 0, 0};
+                for (int k = 0; k < 3; ++k) {
+                    char* end = nullptr;
+                    idx[k] = std::strtol(q, &end, 10);
+                    q = end;
+                    if (*q != '/') break;
+                    ++q;
+                }
+                while (*q && *q != ' ' && *q != '\t') ++q;
+                auto resolve = [](long i, size_t count) -> int {
+                    if (i > 0 && (size_t)i <= count) return (int)(i - 1);
+                    if (i < 0 && (size_t)(-i) <= count) return (int)((long)count + i);
+                    return -1;
+                };
+                c.v = resolve(idx[0], vs.size());
+                c.t = idx[1] ? resolve(idx[1], ts.size() / 2) : -1;
+                c.n = idx[2] ? resolve(idx[2], ns.size()) : -1;
+                if (c.v < 0) return fail("line " + std::to_string(line_no) + ": a face names a vertex that is not there");
+                poly.push_back(c);
+                if (poly.size() > 64) return fail("line " + std::to_string(line_no) + ": a face with more than 64 corners");
+            }
+            if (poly.size() < 3) return fail("line " + std::to_string(line_no) + ": a face with fewer than 3 corners");
+            for (size_t k = 2; k < poly.size(); ++k) {
+                corners.push_back(poly[0]);
+                corners.push_back(poly[k - 1]);
+                corners.push_back(poly[k]);
+            }
+            if (corners.size() / 3 > kMaxTris)
+                return fail("more than " + std::to_string(kMaxTris) + " triangles (the DS draws 2048 polygons a frame for everything)");
+        }
+        // o, g, s, usemtl, mtllib and anything else: ignored
+    }
+    if (corners.empty()) return fail("no faces");
+
+    // ---- the model ----
+    std::vector<uint8_t>& f = *bmdv;
+    MdlAt at;
+    {
+        const Rd r{f.data(), f.size()};
+        if (!find_model(r, &at)) return fail("the model is not one the importer knows (one MDL0 model, MDL0 before TEX0)");
+    }
+    const Rd r{f.data(), f.size()};
+    const Dict shps = read_dict(r, at.shpb);
+    if (!shps.count) return fail("the model has no shape");
+    // The first shape it draws, and the material it is drawn with.
+    unsigned id0 = ~0u;
+    int mat0 = 0;
+    Mtx stack0[32];
+    Mtx cur0 = identity();
+    run_sbc(r, at.mo, [&](unsigned id, int mat, const Mtx& cur, Mtx* stack) {
+        id0 = id;
+        mat0 = mat;
+        cur0 = cur;
+        for (int i = 0; i < 32; ++i) stack0[i] = stack[i];
+        return false;
+    });
+    if (id0 == ~0u) return fail("the model draws no shape");
+    // The root's slot: the SBC's first op is NODEDESC node 0 with a store
+    // (0x26 or 0x66 0 0 0 <slot>) in every stock model. Else the matrix
+    // current at the shape, with no restore.
+    int root_slot = -1;
+    {
+        const uint32_t op = r.u8(at.sbc);
+        if ((op & 0x1F) == 0x06 && r.u8(at.sbc + 1) == 0 && ((op >> 5) == 1 || (op >> 5) == 3))
+            root_slot = (int)(r.u8(at.sbc + 4) & 31);
+    }
+    const Mtx base = root_slot >= 0 ? stack0[root_slot] : cur0;
+    Mtx inv;
+    if (!affine_inverse(base, &inv)) return fail("the model's root matrix cannot be inverted");
+    // Its texture's size (texcoords are in texels) and whether it is lit.
+    Model M;
+    load_model(r, 0, M);
+    float tw = 8.0f, th = 8.0f;
+    bool lit = false;
+    if (mat0 >= 0 && (size_t)mat0 < M.mats.size()) {
+        const Mat& mt = M.mats[(size_t)mat0];
+        if (mt.tex >= 0) {
+            tw = (float)M.texs[(size_t)mt.tex].w;
+            th = (float)M.texs[(size_t)mt.tex].h;
+        }
+        lit = (mt.poly & 0xFu) != 0;
+    }
+    // Positions in the root's space, and the SCALE that brings them into
+    // VTX_16's range (4.12, below 8).
+    const size_t nc = corners.size();
+    std::vector<Vec3> lp(nc);
+    float mx = 0.0f;
+    Vec3 lo{1e30f, 1e30f, 1e30f}, hi{-1e30f, -1e30f, -1e30f};
+    for (size_t i = 0; i < nc; ++i) {
+        const Vec3& v = vs[(size_t)corners[i].v];
+        lo = {std::min(lo.x, v.x), std::min(lo.y, v.y), std::min(lo.z, v.z)};
+        hi = {std::max(hi.x, v.x), std::max(hi.y, v.y), std::max(hi.z, v.z)};
+        lp[i] = xform(v, inv);
+        mx = std::max({mx, std::fabs(lp[i].x), std::fabs(lp[i].y), std::fabs(lp[i].z)});
+    }
+    float k = 1.0f;
+    while (mx / k >= 7.99f) {
+        k *= 2.0f;
+        if (k > 1024.0f) return fail("the mesh is far larger than any model (positions up to " + std::to_string(mx) + ")");
+    }
+    // ---- the display list ----
+    DlWriter dl;
+    if (root_slot >= 0) dl.cmd(0x14, {(uint32_t)root_slot});
+    if (k != 1.0f) dl.cmd(0x1B, {fx32(k), fx32(k), fx32(k)});
+    dl.cmd(0x40, {0u});   // BEGIN_VTXS: separate triangles
+    for (size_t i = 0; i < nc; ++i) {
+        const Corner& c = corners[i];
+        if (c.t >= 0) {
+            const float u = ts[(size_t)c.t * 2], v = ts[(size_t)c.t * 2 + 1];
+            const int s = clamp16(std::lround(u * tw * 16.0f)), t = clamp16(std::lround((1.0f - v) * th * 16.0f));
+            dl.cmd(0x22, {((uint32_t)s & 0xFFFFu) | ((uint32_t)t << 16)});
+        }
+        if (lit) {
+            Vec3 nm{0, 1, 0};
+            if (c.n >= 0) {
+                nm = ns[(size_t)c.n];
+            } else {   // the face's own
+                const size_t t0 = i - i % 3;
+                const Vec3 a = vs[(size_t)corners[t0].v], b = vs[(size_t)corners[t0 + 1].v], d = vs[(size_t)corners[t0 + 2].v];
+                const Vec3 u{b.x - a.x, b.y - a.y, b.z - a.z}, w{d.x - a.x, d.y - a.y, d.z - a.z};
+                nm = {u.y * w.z - u.z * w.y, u.z * w.x - u.x * w.z, u.x * w.y - u.y * w.x};
+            }
+            // Into the root's space (its rotation, inverted), unit length.
+            Vec3 ln{nm.x * inv.m[0][0] + nm.y * inv.m[1][0] + nm.z * inv.m[2][0],
+                    nm.x * inv.m[0][1] + nm.y * inv.m[1][1] + nm.z * inv.m[2][1],
+                    nm.x * inv.m[0][2] + nm.y * inv.m[1][2] + nm.z * inv.m[2][2]};
+            const float l = std::sqrt(ln.x * ln.x + ln.y * ln.y + ln.z * ln.z);
+            if (l > 1e-9f) ln = {ln.x / l, ln.y / l, ln.z / l};
+            else ln = {0, 1, 0};
+            auto n10 = [](float x) { return (uint32_t)std::min(511L, std::max(-512L, std::lround(x * 511.0f))) & 0x3FFu; };
+            dl.cmd(0x21, {n10(ln.x) | (n10(ln.y) << 10) | (n10(ln.z) << 20)});
+        }
+        const int x = clamp16(std::lround(lp[i].x / k * 4096.0f)), y = clamp16(std::lround(lp[i].y / k * 4096.0f)),
+                  z = clamp16(std::lround(lp[i].z / k * 4096.0f));
+        dl.cmd(0x23, {((uint32_t)x & 0xFFFFu) | ((uint32_t)y << 16), (uint32_t)z & 0xFFFFu});
+    }
+    dl.cmd(0x41, {});   // END_VTXS
+    dl.flush();
+    // ---- into the file ----
+    // Everything to patch is read before the insert (it may move the buffer).
+    const size_t dl_bytes = dl.words.size() * 4;
+    size_t add = dl_bytes + 4;            // the list, then one NOP word for the other shapes
+    add = (add + 31) & ~(size_t)31;       // TEX0 keeps its alignment
+    std::vector<size_t> shape_at(shps.count);
+    for (unsigned i = 0; i < shps.count; ++i) shape_at[i] = at.shpb + r.u32(shps.entry(i));
+    for (size_t s : shape_at)
+        if (s + 16 > at.mend) return fail("a shape lies outside the model");
+    const uint32_t box_scale = r.u32(at.mo + 0x38);
+    const std::vector<uint8_t> before = f;
+    std::vector<uint8_t> ins(add, 0);
+    for (size_t i = 0; i < dl.words.size(); ++i)
+        for (int b = 0; b < 4; ++b) ins[i * 4 + (size_t)b] = (uint8_t)(dl.words[i] >> (8 * b));
+    f.insert(f.begin() + (long)at.mend, ins.begin(), ins.end());
+    auto put32 = [&](size_t o, uint32_t v) {
+        for (int b = 0; b < 4; ++b) f[o + (size_t)b] = (uint8_t)(v >> (8 * b));
+    };
+    auto put16 = [&](size_t o, uint32_t v) {
+        f[o] = (uint8_t)v;
+        f[o + 1] = (uint8_t)(v >> 8);
+    };
+    auto get32 = [&](size_t o) { return (uint32_t)f[o] | ((uint32_t)f[o + 1] << 8) | ((uint32_t)f[o + 2] << 16) | ((uint32_t)f[o + 3] << 24); };
+    put32(8, get32(8) + (uint32_t)add);                    // the file's size
+    for (unsigned i = 0; i < at.blocks; ++i) {             // blocks after the model (TEX0)
+        const uint32_t o = get32(0x10 + 4 * (size_t)i);
+        if (o >= at.mend) put32(0x10 + 4 * (size_t)i, o + (uint32_t)add);
+    }
+    put32(at.mdl0 + 4, get32(at.mdl0 + 4) + (uint32_t)add);   // MDL0's size
+    put32(at.mo, get32(at.mo) + (uint32_t)add);               // the model's size
+    for (unsigned i = 0; i < shps.count; ++i) {
+        const size_t s = shape_at[i];
+        if (i == id0) {
+            put32(s + 8, (uint32_t)(at.mend - s));
+            put32(s + 12, (uint32_t)dl_bytes);
+        } else {
+            put32(s + 8, (uint32_t)(at.mend + dl_bytes - s));
+            put32(s + 12, 4u);
+        }
+    }
+    const size_t ntri = nc / 3;
+    put16(at.mo + 0x24, (uint32_t)std::min<size_t>(nc, 65535));   // vertices
+    put16(at.mo + 0x26, (uint32_t)ntri);                          // polygons
+    put16(at.mo + 0x28, (uint32_t)ntri);                          // triangles
+    put16(at.mo + 0x2A, 0u);                                      // quads
+    // The box, in its scale's units (raised by powers of two until it fits).
+    float bs = (int32_t)box_scale > 0 ? (int32_t)box_scale / 4096.0f : 1.0f;
+    const float ext = std::max({std::fabs(lo.x), std::fabs(lo.y), std::fabs(lo.z), hi.x - lo.x, hi.y - lo.y, hi.z - lo.z});
+    while (ext / bs >= 7.99f && bs < 4096.0f) bs *= 2.0f;
+    const float box[6] = {lo.x, lo.y, lo.z, hi.x - lo.x, hi.y - lo.y, hi.z - lo.z};
+    for (int i = 0; i < 6; ++i) put16(at.mo + 0x2C + 2 * (size_t)i, (uint32_t)clamp16(std::lround(box[i] / bs * 4096.0f)) & 0xFFFFu);
+    put32(at.mo + 0x38, fx32(bs));
+    put32(at.mo + 0x3C, fx32(1.0f / bs));
+    // It must read back as a model with the new triangles.
+    Model back;
+    if (!load_model(Rd{f.data(), f.size()}, 0, back) || back.tris.size() != ntri) {
+        f = before;
+        return fail("the rebuilt model did not read back (" + std::to_string(back.tris.size()) + " of " +
+                    std::to_string(ntri) + " triangles); the stock shape is kept");
+    }
+    if (note) {
+        char b[200];
+        std::snprintf(b, sizeof b, "%zu triangles on shape %u (material %d)%s, scale %g, %zu bytes added", ntri, id0,
+                      mat0, lit ? ", lit" : "", (double)k, add);
+        *note = b;
     }
     return true;
 }

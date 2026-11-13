@@ -331,8 +331,17 @@ unsigned int lb_balance_extent(void);   // one past any pack's last byte
 // numbered within a kind: lb_balance_field_* name them.
 // docs/416: LB_BAL_GLOBALS, values in the code (record 209: field 0 a Gold
 // Brick's worth); lb_balance_global gives the one in force, or -1.
-enum { LB_BAL_UNITS = 0, LB_BAL_ATTACKS = 1, LB_BAL_GLOBALS = 2 };
+// docs/488 (SG-0079): LB_BAL_SPELLTAB, the spell table in the ARM9's static
+// data (FUN_02002AF8: id * 0x14 + 0x02126DA0), one record per spell id 0..0x22
+// at records 210..244. Field 8 (Startup) is in the code (FUN_02076F14), not
+// the table: lb_balance_spell_startup gives the one in force, or -1.
+enum { LB_BAL_UNITS = 0, LB_BAL_ATTACKS = 1, LB_BAL_GLOBALS = 2, LB_BAL_SPELLTAB = 3 };
+enum { LB_BAL_SPELL_DMG_START = 0, LB_BAL_SPELL_DMG_END = 1, LB_BAL_SPELL_HIT_START = 2,
+       LB_BAL_SPELL_HIT_END = 3, LB_BAL_SPELL_TAP = 4, LB_BAL_SPELL_AREA = 5,
+       LB_BAL_SPELL_COST = 6, LB_BAL_SPELL_DURATION = 7, LB_BAL_SPELL_STARTUP = 8 };
 int lb_balance_global(int field);
+int lb_balance_spell_startup(int spell_id);
+int lb_balance_spell_stock_startup(int spell_id);
 // docs/418: the host's balance online. A host sends its own set (seed and
 // values, lb_teams.cpp); a joiner runs the host's in place of its own.
 unsigned long long lb_balance_local_seed(int slot, int builders);
@@ -363,6 +372,10 @@ enum { LB_BAL_TRAIT_FIELD0 = 15, LB_BAL_TRAITS = 11, LB_BAL_SPEED_FIELD = 4 };
 // docs/482 34 Melee vs buildings, 35 Shot vs buildings (0 automatic, else
 // a bonus of value - LB_BAL_BONUS_ZERO).
 enum { LB_BAL_PORT_FIELD0 = 26, LB_BAL_PORT_FIELDS = 10 };
+// docs/488 (SG-0116): unit field 36, the occupancy ("collision") layers in
+// the record's padding +0x53: 0 automatic (the record's +0x1A/+0x1B/+0x1C),
+// else a mask of 1 ground, 2 air, 4 bridge (occ_layers_override).
+enum { LB_BAL_LAYER_FIELD = 36 };
 enum { LB_BAL_BONUS_ZERO = 80, LB_BAL_BONUS_MAX = 160 };
 // docs/426: a blueprint diffed against the player's own; fills msg; returns the
 // number of values set, or -1 on failure.
@@ -860,6 +873,22 @@ int          lb_demo_play_ai_more_mines(void);
 int          lb_ai_more_mines_live(void);
 // SG-0017: the AI casts single-target spells (Balance > Spells). Offline only.
 int          lb_setting_ai_tap_spells(void);
+/* docs/488 (SG-0113): recorded as demo kind 31 (the recording's, -1 when not
+   playing or before `aitap=1`); lb_ai_tap_spells_live is what the patch runs. */
+int          lb_demo_play_ai_tap_spells(void);
+int          lb_ai_tap_spells_live(void);
+/* docs/488: the second rule flags ('R' page after 'P'; the flags byte of
+   docs/406 is full). Set means ON, so an older host (no page) plays stock. */
+#define LB_RULE2_ANY_REPAIR     0x01   /* SG-0111: foot/ranged/mounted units repair and assist */
+#define LB_RULE2_UNIQUE_HEROES  0x02   /* SG-0107: one of each hero at a time */
+int          lb_setting_any_unit_repairs(void);   /* this machine's choice */
+int          lb_setting_unique_heroes(void);
+int          lb_rules2_local_flags(void);         /* this machine's (lb_overlay) */
+int          lb_rules_host_flags2(void);          /* the host's; -1 unless joined */
+int          lb_demo_play_rules2(void);           /* a replay's (kind 30), else -1 */
+int          lb_rules2_live(void);                /* replay, host, else this machine's */
+int          lb_any_unit_repairs_live(void);
+int          lb_unique_heroes_live(void);
 int          lb_setting_ai_spectate(void);   /* SG-0002 */
 /* docs/414: extra computer opponents in Free Play, packed (kind 17). */
 int          lb_setting_ai_opp_packed(void);
@@ -913,6 +942,22 @@ int          lb_creatures_live(void);
 int          lb_setting_teal(void);
 int          lb_setting_teal_style(void);   // 0 the cartridge's (default), 1 the port's ramp, 2 red/dark blue (docs/485)
 int          lb_teal_live(void);
+/* docs/489: the custom team colour, display only. Colours are 0xRRGGBB; "a set"
+   is 7 ints by stock colour (0 Red .. 5 Grey, 6 Teal), each 0xRRGGBB or -1 (stock). */
+int          lb_setting_custom_colour(unsigned* rgb);   /* 1 on (and the colour); LB_CUSTOM_COLOUR=RRGGBB|0 forces */
+int          lb_setting_custom_colour_host(void);       /* host rule: allow them online; LB_CUSTOM_COLOUR_HOST=0|1 */
+void         lb_custompal_ramp(unsigned rgb, unsigned short out[3]);   /* light, mid, dark (BGR555) */
+double       lb_custompal_delta(unsigned a, unsigned b);   /* OKLab dE x100, as the DS shows them */
+unsigned     lb_custompal_rgb_of(unsigned short bgr555);
+unsigned     lb_custompal_stock_mid(int colour);          /* a stock colour's mid shade (teal: its style's) */
+int          lb_custompal_separate(unsigned rgb, const unsigned* others, int n, unsigned* out);   /* 0 ok, 1 moved, -1 refused */
+int          lb_custompal_resolved(int out[7]);           /* the set in force (lb_patches); the count set */
+int          lb_custompal_shade(int colour, int i);       /* a custom colour's shade i, -1 when stock */
+int          lb_custompal_host_page(int out[7]);          /* joined: 1 the host allows (its set), 0 not; -1 not joined */
+int          lb_custompal_joiner_colour(int slot, unsigned* rgb);   /* hosting: 1 that slot's colour (fresh, on) */
+int          lb_custompal_outgoing(unsigned char* buf, int cap);    /* a joiner's LBK1, in the chat datagram */
+void         lb_custompal_incoming(const unsigned char* buf, int len, unsigned int sender);
+int          lb_demo_play_custompal(int out[7]);          /* a replay's recorded set: 1, or -1 none */
 int          lb_creature_slot_allowed(int creature_index, int slot);   /* docs/437, lb_patches.cpp */
 // docs/436: the army slot of each creature, packed 4 bits a creature (Wolf,
 // Robot, Shark; 0 the default, else 1 + the Team Builder slot), carried as the

@@ -41,6 +41,7 @@
 #include "lb_overlay.h"
 #include "lb_field.h"
 #include "lb_xdelta.h"   /* docs/474: Maps > Patches */
+#include "lb_pack.h"     /* docs/490: Balance > Content packs */
 #include "io.h"          /* legobattles-decomp: save manager tab */
 extern "C" {
 #include "runtime_arm.h"   /* SG-0035: bus_read/write for Action Replay */
@@ -316,6 +317,12 @@ struct Settings {
     // docs/453 (SG-0044): a hero stunned by ESP/EMP can still cast spells
     // (lb_patches.cpp, entity_state_override). Online, the host's.
     bool stun_cast = false;
+    // docs/488 (SG-0111): foot, ranged and mounted units may repair and help
+    // build (lb_patches.cpp repair_cloak). Online, the host's ('R' page).
+    bool any_unit_repairs = false;
+    // docs/488 (SG-0107): a team may have one of each hero at a time, however
+    // high the hero limit (produce_step_override). Online, the host's.
+    bool unique_heroes = false;
     // docs/469: Prevent Phantom Ties. On (default): online, every machine
     // plays the host's cheats (BR-0011). Off: each its own, as on a DS --
     // where two machines' Super Magic / Far Reaching differ, ESP and EMP
@@ -356,6 +363,12 @@ bool card_tint = false;
     // How teal looks: 0 the cartridge's own unused shades (white, pale teal,
     // teal), the default; 1 the port's saturated ramp. This machine's own.
     int teal_style = 0;
+    // docs/489: a custom team colour, shown in place of this player's stock
+    // colour (display only), and the host rule that allows custom colours
+    // online. Both off by default.
+    bool custom_colour = false;
+    int custom_colour_rgb = 0x8C5528;   // 0xRRGGBB
+    bool custom_colour_host = false;
     // docs/436: the army slot each creature falls under (Wolf, Robot, Shark):
     // 0 the default, else 1 + the Team Builder slot (0 Hero, 2 Close Combat,
     // 3 Ranged, 4 Mounted, 5/6/7 Special One/Two/Three). Online, the host's.
@@ -465,6 +478,9 @@ bool card_tint = false;
     int  notify_sound = 1;         // 0 off, 1 Group set (default) .. 8 Magic
     int  notify_volume = 60;       // percent
     int  cunit_volume = 100;       // BR-0047: custom unit sounds, percent of the normalised level
+    bool remember_volumes = true;  // SG-0112: the game's music/effects volumes, kept between launches
+    int  music_volume = -1;        // SG-0112: last applied, 0..127 (-1 none yet)
+    int  sfx_volume = -1;
     bool own_research_sound = true;   // BR-0067: research chimes only for this player's own army
     bool hide_fogged_specials = true; // BR-0063: enemy specials hidden while their cell is fogged
     bool big_sprite_pool = true;      // docs/479: sheets past the DS's 33 slots get slots of their own
@@ -697,7 +713,9 @@ void json_put_str(std::string& o, const char* key, const char* v, bool comma) {
 
 }  // namespace
 
-extern "C" void lb_settings_save(void) {
+// settings.json's text for the settings as they are now (docs/490: the content
+// pack's settings preset reads its keys from this too).
+static std::string settings_text() {
     char buf[128];
     std::string o = "{\n";
     o += "  \"_comment\": \"LEGO Battles port settings. Written beside the "
@@ -809,6 +827,10 @@ extern "C" void lb_settings_save(void) {
                   g_set.many_mines ? "true" : "false"); o += buf;   // SG-0077
     std::snprintf(buf, sizeof buf, "  \"stun_cast\": %s,\n",
                   g_set.stun_cast ? "true" : "false"); o += buf;   // docs/453
+    std::snprintf(buf, sizeof buf, "  \"any_unit_repairs\": %s,\n",
+                  g_set.any_unit_repairs ? "true" : "false"); o += buf;   // docs/488
+    std::snprintf(buf, sizeof buf, "  \"unique_heroes\": %s,\n",
+                  g_set.unique_heroes ? "true" : "false"); o += buf;   // docs/488
     std::snprintf(buf, sizeof buf, "  \"phantom_guard\": %s,\n",
                   g_set.phantom_guard ? "true" : "false"); o += buf;   // docs/469
     std::snprintf(buf, sizeof buf, "  \"ai_hero_rebuild\": %s,\n",
@@ -844,6 +866,11 @@ extern "C" void lb_settings_save(void) {
     std::snprintf(buf, sizeof buf, "  \"teal_colour\": %s,\n",
                   g_set.teal_colour ? "true" : "false"); o += buf;     // docs/412
     std::snprintf(buf, sizeof buf, "  \"teal_style\": %d,\n", g_set.teal_style); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"custom_colour\": %s,\n",
+                  g_set.custom_colour ? "true" : "false"); o += buf;   // docs/489
+    std::snprintf(buf, sizeof buf, "  \"custom_colour_rgb\": %d,\n", g_set.custom_colour_rgb & 0xFFFFFF); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"custom_colour_host\": %s,\n",
+                  g_set.custom_colour_host ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"creature_slots\": [%d, %d, %d, %d],\n",
                   g_set.creature_slot[0], g_set.creature_slot[1],
                   g_set.creature_slot[2], g_set.creature_slot[3]); o += buf;   // docs/436
@@ -911,6 +938,10 @@ extern "C" void lb_settings_save(void) {
                   g_set.notify_volume); o += buf;
     std::snprintf(buf, sizeof buf, "  \"cunit_volume\": %d,\n",
                   g_set.cunit_volume); o += buf;   // BR-0047
+    std::snprintf(buf, sizeof buf, "  \"remember_volumes\": %s,\n",
+                  g_set.remember_volumes ? "true" : "false"); o += buf;   // SG-0112
+    std::snprintf(buf, sizeof buf, "  \"music_volume\": %d,\n", g_set.music_volume); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"sfx_volume\": %d,\n", g_set.sfx_volume); o += buf;
     std::snprintf(buf, sizeof buf, "  \"own_research_sound\": %s,\n",
                   g_set.own_research_sound ? "true" : "false"); o += buf;   // BR-0067
     std::snprintf(buf, sizeof buf, "  \"hide_fogged_specials\": %s,\n",
@@ -1006,7 +1037,10 @@ extern "C" void lb_settings_save(void) {
     }
     json_put_str(o, "player_name", g_set.player_name, false);
     o += "}\n";
+    return o;
+}
 
+static void settings_write_text(const std::string& o) {
     const std::string path = settings_path("settings.json");
     // Write to a temporary and rename, so an interrupted write cannot leave a
     // truncated settings file where a valid one used to be.
@@ -1018,6 +1052,8 @@ extern "C" void lb_settings_save(void) {
         std::rename(tmp.c_str(), path.c_str());
     }
 }
+
+extern "C" void lb_settings_save(void) { settings_write_text(settings_text()); }
 
 // One on/off setting read straight from settings.json, for a caller that runs
 // before lb_settings_load (the session recorder starts at the first vblank).
@@ -1139,6 +1175,8 @@ extern "C" void lb_settings_load(void) {
     json_get_bool(s, "emp_transports", &g_set.emp_transports);   // docs/406
     json_get_bool(s, "many_mines", &g_set.many_mines);           // SG-0077
     json_get_bool(s, "stun_cast", &g_set.stun_cast);             // docs/453
+    json_get_bool(s, "any_unit_repairs", &g_set.any_unit_repairs);   // docs/488
+    json_get_bool(s, "unique_heroes", &g_set.unique_heroes);         // docs/488
     json_get_bool(s, "phantom_guard", &g_set.phantom_guard);     // docs/469
     json_get_bool(s, "ai_hero_rebuild", &g_set.ai_hero_rebuild);
     json_get_bool(s, "ai_more_mines", &g_set.ai_more_mines);   // SG-0032
@@ -1158,6 +1196,10 @@ extern "C" void lb_settings_load(void) {
     json_get_bool(s, "teal_colour", &g_set.teal_colour);       // docs/412
     json_get_int(s, "teal_style", &g_set.teal_style);
     if (g_set.teal_style < 0 || g_set.teal_style > 2) g_set.teal_style = 0;   // docs/485: 2 Red/Dark Blue
+    json_get_bool(s, "custom_colour", &g_set.custom_colour);   // docs/489
+    json_get_int(s, "custom_colour_rgb", &g_set.custom_colour_rgb);
+    g_set.custom_colour_rgb &= 0xFFFFFF;
+    json_get_bool(s, "custom_colour_host", &g_set.custom_colour_host);
     json_get_ints(s, "creature_slots", g_set.creature_slot, 4);   // docs/436
     for (int& c : g_set.creature_slot)
         if (c < 0 || c > 8 || c <= 2) c = 0;   // 1 + slot; Hero (1) and Builder (2) are not offered
@@ -1204,6 +1246,11 @@ extern "C" void lb_settings_load(void) {
     json_get_int(s, "music_mode", &g_set.music_mode);
     json_get_int(s, "notify_sound", &g_set.notify_sound);       // docs/427
     json_get_int(s, "notify_volume", &g_set.notify_volume);
+    json_get_bool(s, "remember_volumes", &g_set.remember_volumes);   // SG-0112
+    json_get_int(s, "music_volume", &g_set.music_volume);
+    json_get_int(s, "sfx_volume", &g_set.sfx_volume);
+    if (g_set.music_volume > 127) g_set.music_volume = 127;
+    if (g_set.sfx_volume > 127) g_set.sfx_volume = 127;
     g_set.notify_sound = std::max(0, std::min(8, g_set.notify_sound));
     g_set.notify_volume = std::max(0, std::min(100, g_set.notify_volume));
     json_get_int(s, "cunit_volume", &g_set.cunit_volume);   // BR-0047
@@ -1821,16 +1868,17 @@ void tab_display() {
     // settings.json -> lb_setting_steady_cadence -> lb_cadence_effective ->
     // get_ms_override (lb_patches.cpp), consulted on every pass. A replay
     // plays at the pacing it was recorded with, whatever this says.
-    help("Smooth, even game steps instead of the cartridge's uneven ones.\n"
-         "The game runs about 19% slower, likely the DS's real pace.\n"
-         "Off: the pace melonDS plays at (units build and move about\n"
-         "19% faster, with the uneven steps).\n"
+    // BR-0089: off is pace 21, the cartridge's rule on a clock calibrated to
+    // a melonDS stopwatch (get_ms_override); the raw clock ran ~30% fast.
+    help("On: smooth, even game steps, 30 a second.\n"
+         "Off: the cartridge's own uneven steps, at about the pace\n"
+         "melonDS plays at (units build and move about 6% faster).\n"
          "Online, everyone plays at the host's choice.");
     badge(WIRED);
     // docs/459: joined, the host's pace applies (lb_cadence_effective).
     if (const int hp = lb_rules_host_pace(); hp > 0)
         ImGui::TextDisabled("  In this lobby the host's pacing applies: %s.",
-                            hp == 30 ? "steady 30 Hz" : "the cartridge's (uneven, faster)");
+                            hp == 30 ? "steady 30 Hz" : "the cartridge's (uneven, a little faster)");
 
     // docs/387: a Level Palettes option (Per-Mod/Vanilla/FactionWars/Random,
     // default Per-Mod) and Force Tileset (Off/Castle/Pirates/Mars/Random,
@@ -2302,6 +2350,20 @@ void tab_balance_spells() {
                             lb_stun_cast_live() ? "On" : "Off");
     ImGui::Spacing();
 
+    // docs/488 (SG-0111): the hero/builder test of the repair and help-build
+    // orders, read as a builder for foot, ranged and mounted units.
+    ImGui::Checkbox("Soldiers Repair Buildings", &g_set.any_unit_repairs);
+    help("Foot, ranged and mounted units can repair your damaged buildings\n"
+         "and help build new ones, as builders do. Select them together\n"
+         "with a builder and tap the building: the game gives the order to\n"
+         "the whole selection. Off: only heroes and builders, as in the game.\n"
+         "Online, the host's setting applies.");
+    badge(WIRED);
+    if (lb_rules_host_flags2() >= 0)
+        ImGui::TextDisabled("In this lobby, the host's: %s",
+                            lb_any_unit_repairs_live() ? "On" : "Off");
+    ImGui::Spacing();
+
     {
         bool fh = hw_lock ? g_hs.fix_healing != 0 : g_set.fix_hotwired_healing;
         ImGui::Checkbox("Fix Hotwired Healing", &fh);
@@ -2317,7 +2379,81 @@ void tab_balance_spells() {
     ImGui::Spacing();
     ImGui::Checkbox("AI Uses Targeted Spells", &g_set.ai_tap_spells);
     help("Computer heroes also cast spells aimed at a unit (damage, boosts,\n"
-         "Hotwire, EMP), not just area and self spells. Not online.");
+         "Hotwire, EMP), not just area and self spells. Hotwire is cast on\n"
+         "an enemy siege or special unit near a computer hero. Recordings\n"
+         "keep it. Not online.");
+    badge(WIRED);
+    tab_end();
+}
+
+// docs/488 (SG-0079): the spell table's values, in Balance > Spell Values.
+// Records 210.. (lb_balance.cpp), one per spell id; the cells are the
+// Balance tab's own (bal_cell), so a value is recorded, sent by a host and
+// reverted like every other.
+void bal_cell(int kind, int rec, int field, bool locked);
+void tab_balance_spell_values() {
+    if (!tab_begin("Balance Spell Values")) return;
+    guide("Each spell's damage, hit chance, ranges, mana cost, duration and startup. "
+          "Online, the host's balance applies.");
+    const int first = lb_balance_record_first(LB_BAL_SPELLTAB);
+    const int count = lb_balance_record_count(LB_BAL_SPELLTAB);
+    const int nf = lb_balance_field_count(LB_BAL_SPELLTAB);
+    if (lb_balance_value(first + 1, LB_BAL_SPELL_TAP) < 0) {
+        ImGui::TextDisabled("The spell table is read once the game is running.");
+        tab_end();
+        return;
+    }
+    const bool locked = lb_balance_custom_blocked() != nullptr;
+    if (locked) ImGui::TextDisabled("%s", lb_balance_custom_blocked());
+    static const char* const kTips[] = {
+        "Damage per hit when the spell starts (record +4). Damage spells only: "
+        "Earthquake, Thunder Hammer, Roar, the swarms, Coconut Storm, Artillery, "
+        "Arrow Volley, Space Laser, Cluster Bomb and the Fireball and Lightning impacts. "
+        "Each frame, every victim in the area is hit with the hit chance.",
+        "Damage per hit when the spell ends (record +2); it changes evenly in between.",
+        "Chance in percent that a victim is hit on a frame, at the start (record +5).",
+        "The hit chance at the end (record +3).",
+        "How far from the hero the spell can be aimed, in tiles (record +6). "
+        "Long Range Magic adds half.",
+        "The area's radius in tiles (record +7). A damage spell's area grows from "
+        "nothing to this over its duration.",
+        "Mana it costs (record +0xC). The hero needs more mana than this.",
+        "How long it lasts in frames, 30 a second (record +0x12): a damage spell's "
+        "life, a boost's length, ESP's and EMP's stun. Super Magic adds half. At least 1.",
+        "Frames a damage spell waits before it first hurts a victim, added to its "
+        "life. In the game's code, not its table: 0 for every spell but Monkey Swarm 15, "
+        "Coconut Storm, Artillery, Space Laser and Cluster Bomb 20, Arrow Volley 10."};
+    if (ImGui::BeginTable("balspelltab", 1 + nf,
+                          ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                              ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY |
+                              ImGuiTableFlags_SizingFixedFit)) {
+        ImGui::TableSetupScrollFreeze(1, 1);
+        ImGui::TableSetupColumn("Spell");
+        for (int f = 0; f < nf; ++f)
+            ImGui::TableSetupColumn(lb_balance_field_name(LB_BAL_SPELLTAB, f));
+        ImGui::TableNextRow(ImGuiTableRowFlags_Headers);
+        for (int c = 0; c < nf + 1; ++c) {
+            ImGui::TableSetColumnIndex(c);
+            ImGui::TableHeader(ImGui::TableGetColumnName(c));
+            if (c >= 1 && c - 1 < (int)(sizeof kTips / sizeof kTips[0]) && ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s", kTips[c - 1]);
+        }
+        // Id 0 is no spell; 3 (Area Heal) no hero's brick offers (docs/408),
+        // but a pack can give it, so it stays.
+        for (int id = 1; id < count; ++id) {
+            const int rec = first + id;
+            char name[64];
+            lb_balance_record_name(rec, name, (int)sizeof name);
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("%s (%d)", name, id);
+            for (int f = 0; f < nf; ++f) {
+                ImGui::TableNextColumn();
+                bal_cell(LB_BAL_SPELLTAB, rec, f, locked);
+            }
+        }
+        ImGui::EndTable();
+    }
     badge(WIRED);
     tab_end();
 }
@@ -2400,6 +2536,17 @@ void tab_balance_caps() {
         ImGui::PopID();
     }
     badge(WIRED);
+    // docs/488 (SG-0107): with a raised hero limit, not two of the same hero.
+    ImGui::Spacing();
+    ImGui::Checkbox("One Of Each Hero", &g_set.unique_heroes);
+    help("With the hero limit above 1, a team still has only one of each\n"
+         "hero at a time: a second copy waits in the queue until the first\n"
+         "one dies. Heroes of other kinds (custom hero units) still count\n"
+         "towards the limit. Online, the host's setting applies.");
+    badge(WIRED);
+    if (lb_rules_host_flags2() >= 0)
+        ImGui::TextDisabled("In this lobby, the host's: %s",
+                            lb_unique_heroes_live() ? "On" : "Off");
     tab_end();
 }
 
@@ -4451,6 +4598,136 @@ void draw_random_army_bans() {
     }
 }
 
+// docs/489: the custom team colour: the picker, its presets, the closest stock
+// colour, the host rule, and what is in force now.
+ImVec4 cc_vec(unsigned rgb) {
+    return ImVec4(((rgb >> 16) & 255u) / 255.0f, ((rgb >> 8) & 255u) / 255.0f, (rgb & 255u) / 255.0f, 1.0f);
+}
+void draw_custom_colour() {
+    struct Preset { const char* name; unsigned rgb; bool ds; };   // ds: rgb is a BGR555 mid shade
+    // Canon: the colours the game's own art is drawn in before a level gives it
+    // a team colour (Sprites/KingFaction.NCLR: bank 2 blue, the King's army art;
+    // bank 4 green; bank 6 orange; the unused banks 10 teal and 13 red), and the
+    // faction accents of the headshots (docs/454's rules: the aliens' green, the
+    // Earth soldiers' orange, the Space Police's blue).
+    static const Preset kCanon[] = {
+        {"King's art blue (KingFaction bank 2)", 0x6920u, true},
+        {"Art green (KingFaction bank 4)", 0x02C6u, true},
+        {"Art orange (KingFaction bank 6)", 0x027Fu, true},
+        {"Alien green (the aliens' headshots)", 0x02CEu, true},
+        {"Earth orange (the Earth soldiers' headshots)", 0x02FFu, true},
+        {"Space Police blue (their collars)", 0x4880u, true},
+        {"Unused teal (KingFaction bank 10)", 0x6B73u, true},
+        {"Unused red (KingFaction bank 13)", 0x08BFu, true},
+    };
+    static const Preset kMore[] = {
+        {"Brown", 0x8C5528u, false}, {"Lime", 0x96E628u, false},  {"Pink", 0xFF78BEu, false},
+        {"Cyan", 0x20C8E0u, false},  {"Navy", 0x203C8Cu, false},  {"Gold", 0xD8A820u, false},
+        {"Maroon", 0x801828u, false}, {"Olive", 0x707820u, false}, {"White", 0xE8E8E8u, false},
+        {"Black", 0x303030u, false},
+    };
+    unsigned live_rgb = 0;
+    const int live = lb_setting_custom_colour(&live_rgb);
+    const bool forced = std::getenv("LB_CUSTOM_COLOUR") != nullptr;
+    ImGui::Checkbox("Custom team colour", &g_set.custom_colour);
+    help("Draws your team in a colour of your choice instead of your stock\n"
+         "colour. You still pick a stock colour on the colour screen; only how\n"
+         "it is drawn changes: units, buildings, walls, the minimap, portraits\n"
+         "and cards. Walls change from the next level, the rest at once.\n"
+         "Too close to another team's colour, it is moved a little, or shown\n"
+         "stock. Online only if the host allows it (below); everyone then sees\n"
+         "everyone's custom colours.");
+    badge(WIRED);
+    ImGui::SameLine();
+    float col[3] = {((g_set.custom_colour_rgb >> 16) & 255) / 255.0f, ((g_set.custom_colour_rgb >> 8) & 255) / 255.0f,
+                    (g_set.custom_colour_rgb & 255) / 255.0f};
+    if (ImGui::ColorEdit3("##custom_colour", col,
+                          ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel)) {
+        auto b = [](float v) { return (int)std::lround(std::min(1.0f, std::max(0.0f, v)) * 255.0f); };
+        g_set.custom_colour_rgb = (b(col[0]) << 16) | (b(col[1]) << 8) | b(col[2]);
+    }
+    // The three shades the game will draw with (light, mid, dark).
+    const unsigned rgb = forced ? live_rgb : (unsigned)g_set.custom_colour_rgb & 0xFFFFFFu;
+    unsigned short sh[3];
+    lb_custompal_ramp(rgb, sh);
+    for (int i = 0; i < 3; ++i) {
+        ImGui::SameLine();
+        char id[16];
+        std::snprintf(id, sizeof id, "##ccsh%d", i);
+        ImGui::ColorButton(id, cc_vec(lb_custompal_rgb_of(sh[i])), ImGuiColorEditFlags_NoTooltip,
+                           ImVec2(16.0f * g_ui_scale, 16.0f * g_ui_scale));
+    }
+    if (forced)
+        ImGui::TextDisabled("Forced by LB_CUSTOM_COLOUR: %s, #%06X.", live ? "on" : "off", live_rgb);
+    // The closest stock colour, by OKLab distance x100 (the closest stock pair is 16.9).
+    {
+        static const char* const kNames[7] = {"Red", "Blue", "Green", "Yellow", "Purple", "Grey", "Teal"};
+        int best = 0;
+        double bd = 1e9;
+        for (int c = 0; c < (lb_teal_live() ? 7 : 6); ++c) {
+            const double d = lb_custompal_delta(rgb, lb_custompal_stock_mid(c));
+            if (d < bd) { bd = d; best = c; }
+        }
+        if (bd < 10.0)
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.35f, 1.0f),
+                               "Very close to %s (%.1f): against a %s team it is moved or shown stock.",
+                               kNames[best], bd, kNames[best]);
+        else if (bd < 17.0)
+            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f),
+                               "Close to %s (%.1f): may be hard to tell from a %s team.", kNames[best], bd,
+                               kNames[best]);
+        else
+            ImGui::TextDisabled("Closest stock colour: %s (%.1f).", kNames[best], bd);
+    }
+    // Presets.
+    auto row = [&](const Preset* p, int n, const char* tag) {
+        for (int i = 0; i < n; ++i) {
+            const unsigned v = p[i].ds ? lb_custompal_rgb_of((unsigned short)p[i].rgb) : p[i].rgb;
+            if (i) ImGui::SameLine();
+            char id[64];
+            std::snprintf(id, sizeof id, "%s##cc%s%d", p[i].name, tag, i);
+            if (ImGui::ColorButton(id, cc_vec(v), 0, ImVec2(18.0f * g_ui_scale, 18.0f * g_ui_scale)))
+                g_set.custom_colour_rgb = (int)v;
+        }
+    };
+    ImGui::TextDisabled("Canon:");
+    ImGui::SameLine();
+    row(kCanon, (int)IM_ARRAYSIZE(kCanon), "c");
+    help("The game's own art colours: the shades its sprites are drawn in before\n"
+         "a level gives them a team colour, the two team palettes it never used,\n"
+         "and the factions' accent colours from their headshots.");
+    ImGui::TextDisabled("More:");
+    ImGui::SameLine();
+    row(kMore, (int)IM_ARRAYSIZE(kMore), "m");
+    // The host rule.
+    ImGui::Checkbox("Allow custom team colours online (host)", &g_set.custom_colour_host);
+    help("When you host: players' custom colours are allowed, and everyone sees\n"
+         "them. Colours too close to another player's are moved or refused.\n"
+         "Off: everyone is drawn in the stock colours.");
+    badge(WIRED);
+    {
+        int page[7];
+        const int host = lb_custompal_host_page(page);
+        if (host >= 0) ImGui::TextDisabled("In this lobby, the host's: %s", host ? "Allowed" : "Not allowed");
+    }
+    // What is in force now.
+    int now[7];
+    if (lb_custompal_resolved(now) > 0) {
+        static const char* const kNames[7] = {"Red", "Blue", "Green", "Yellow", "Purple", "Grey", "Teal"};
+        ImGui::TextDisabled("Drawn now:");
+        for (int c = 0; c < 7; ++c) {
+            if (now[c] < 0) continue;
+            ImGui::SameLine();
+            char id[24];
+            std::snprintf(id, sizeof id, "##ccnow%d", c);
+            ImGui::ColorButton(id, cc_vec((unsigned)now[c]), ImGuiColorEditFlags_NoTooltip,
+                               ImVec2(14.0f * g_ui_scale, 14.0f * g_ui_scale));
+            ImGui::SameLine();
+            ImGui::TextDisabled("for %s", kNames[c]);
+        }
+    }
+}
+
 void tab_team_builder() {
     if (!tab_begin("Team Builder")) return;
     static int slot = 0, preset = 0;
@@ -4557,6 +4834,7 @@ void tab_team_builder() {
              "unused team palette: red, with dark blue where units are grey.\n"
              "Only you see it. From the next level.");
     }
+    draw_custom_colour();   // docs/489
     // docs/454 (SG-0041): the selection portraits on the top screen.
     ImGui::Checkbox("Team-Colour Unit Portraits", &g_set.portrait_tint);
     help("The small round portraits of the selected units on the top screen\n"
@@ -5498,6 +5776,15 @@ void tab_music() {
     help("How loud custom units' own sounds play. 100% is the level every\n"
          "custom sound is normalised to, close to the game's own effects.\n"
          "Only you hear this; it is not sent to other players.");
+    badge(WIRED);
+    ImGui::Spacing();
+    // SG-0112: the cartridge restores its saved volumes only once a profile
+    // is loaded; LanguageSelect starts every boot at 127/127/50.
+    ImGui::Checkbox("Remember Music And Effects Volume", &g_set.remember_volumes);
+    help("The game's own Options volumes apply from the moment the game\n"
+         "starts, instead of the full volume the intro and title screens\n"
+         "always started at. Saving in the game's Options still decides\n"
+         "what a profile keeps. Only you hear this.");
     badge(WIRED);
     ImGui::Spacing();
     // BR-0067 (docs/477): the cartridge plays the "upgrade complete" chime
@@ -8059,7 +8346,7 @@ void tab_balance_traits() {
             "Hitbox", "Uninteract.", "Speed: none", "Projectile", "AI priority",
             "Defogged", "Mountains", "Hotwire imm.", "EMP imm.", "ESP imm.",
             "Build effect", "Trained at", "Speed icon", "Transport",
-            "Melee vs bldg", "Shot vs bldg"};
+            "Melee vs bldg", "Shot vs bldg", "Collision layer"};
         static const char* const kTips[] = {
             "Can walk on land.",
             "Can enter water. Ticking Land or Water also sets the next three "
@@ -8109,11 +8396,17 @@ void tab_balance_traits() {
             "Added to the damage of this unit's projectiles when they land on a "
             "building, wall, gate or bridge (in an explosion, scaled down with "
             "the distance like the rest of it). Automatic: nothing, as in the "
-            "game. A shot whose shooter has died on the way gets no bonus."};
+            "game. A shot whose shooter has died on the way gets no bonus.",
+            // docs/488 (SG-0116).
+            "Which units it bumps into and stacks with. Ground: soldiers, "
+            "vehicles and buildings. Air: flyers. Bridge: bridges and gates. "
+            "Units on different layers pass through each other. Automatic: "
+            "the unit's own (from Bld collision and Land<->water). Where it "
+            "can walk is still Land, Water and Trees."};
         static const char* const kTrainedNames[3] = {"Automatic", "Special Factory", "Shipyard"};
         static const char* const kIconNames[3] = {"Automatic", "Legs", "Wheels"};
         static const char* const kBoardNames[3] = {"Automatic", "Can board", "Cannot board"};
-        const int nc = 22;
+        const int nc = 23;
         if (ImGui::BeginTable("baltraits", 2 + nc,
                               ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                                   ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY |
@@ -8251,6 +8544,38 @@ void tab_balance_traits() {
                 bal_bonus(rec, LB_BAL_PORT_FIELD0 + 8, locked, stock);
                 ImGui::TableNextColumn();
                 bal_bonus(rec, LB_BAL_PORT_FIELD0 + 9, locked, "no bonus (the game has none for projectiles)");
+                // docs/488 (SG-0116): the occupancy layers, 0 automatic or a mask.
+                ImGui::TableNextColumn();
+                {
+                    static const char* const kLayer[8] = {
+                        "Automatic", "Ground", "Air", "Ground + air", "Bridge",
+                        "Ground + bridge", "Air + bridge", "All three"};
+                    const int field = LB_BAL_LAYER_FIELD;
+                    const int live = lb_balance_value(rec, field);
+                    const int custom = lb_balance_custom_get(rec, field);
+                    const int cur = live >= 0 && live <= 7 ? live : 0;
+                    ImGui::PushID(rec * 64 + field);
+                    if (custom >= 0) ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.82f, 0.25f, 1.0f));
+                    ImGui::BeginDisabled(locked || live < 0);
+                    ImGui::SetNextItemWidth(118.0f);
+                    if (ImGui::BeginCombo("##layer", kLayer[cur])) {
+                        for (int s = 0; s < 8; ++s)
+                            if (ImGui::Selectable(kLayer[s], s == cur)) bal_set(rec, field, s);
+                        ImGui::EndCombo();
+                    }
+                    ImGui::EndDisabled();
+                    if (custom >= 0) {
+                        ImGui::PopStyleColor();
+                        if (ImGui::IsItemHovered()) {
+                            const int b = lb_balance_base(rec, field);
+                            ImGui::SetTooltip("Yours. Original: %s. Right-click to restore.",
+                                              kLayer[b >= 0 && b <= 7 ? b : 0]);
+                        }
+                        if (!locked && ImGui::IsItemClicked(ImGuiMouseButton_Right))
+                            bal_set(rec, field, -1);
+                    }
+                    ImGui::PopID();
+                }
             }
             ImGui::EndTable();
         }
@@ -8484,6 +8809,33 @@ void tab_balance_heroes() {
     tab_end();
 }
 
+// The "Export my balance" file: the Balance Presets pack and every value the
+// player changed. docs/490: a content pack's balance.json is this file.
+std::string balance_file_text() {
+    static char text[32768];
+    lb_balance_custom_text(text, (int)sizeof text);
+    std::string o = "{\n  \"lb_balance\": 1,\n";
+    char b[64];
+    std::snprintf(b, sizeof b, "  \"pack\": %d,\n", g_set.balance_patch);
+    o += b;
+    json_put_str(o, "values", text, false);
+    o += "}\n";
+    return o;
+}
+
+// Such a file applied: the pack (when in range) and the values. The number of
+// values, or -1 when `s` is not a balance file.
+int balance_file_apply(const std::string& s) {
+    if (s.find("\"lb_balance\"") == std::string::npos) return -1;
+    static char text[32768];
+    text[0] = 0;
+    json_get_str(s, "values", text, sizeof text);
+    int pack = g_set.balance_patch;
+    json_get_int(s, "pack", &pack);
+    if (pack >= 0 && pack <= lb_balance_pack_count()) g_set.balance_patch = pack;
+    return lb_balance_custom_parse(text);
+}
+
 void tab_balance_presets() {
     if (!tab_begin("Balance Presets")) return;
     guide("Pick a mod's balance, or import one from a mod's .nds. Your own changes "
@@ -8514,14 +8866,7 @@ void tab_balance_presets() {
     ImGui::InputText("File", g_bal_path, sizeof g_bal_path);
     if (ImGui::Button("Export my balance (.json)...")) {
         if (lb_pick_json_file(g_bal_path, (int)sizeof g_bal_path, 1)) {
-            static char text[32768];
-            lb_balance_custom_text(text, (int)sizeof text);
-            std::string o = "{\n  \"lb_balance\": 1,\n";
-            char b[64];
-            std::snprintf(b, sizeof b, "  \"pack\": %d,\n", g_set.balance_patch);
-            o += b;
-            json_put_str(o, "values", text, false);
-            o += "}\n";
+            const std::string o = balance_file_text();
             FILE* f = std::fopen(g_bal_path, "wb");
             g_bal_msg_bad = !f || std::fwrite(o.data(), 1, o.size(), f) != o.size();
             if (f) std::fclose(f);
@@ -8557,17 +8902,11 @@ void tab_balance_presets() {
                     s.append(chunk, got);
                 std::fclose(f);
             }
-            if (s.find("\"lb_balance\"") == std::string::npos) {
+            const int n = balance_file_apply(s);
+            if (n < 0) {
                 g_bal_msg = "That is not a balance file.";
                 g_bal_msg_bad = true;
             } else {
-                static char text[32768];
-                text[0] = 0;
-                json_get_str(s, "values", text, sizeof text);
-                int pack = g_set.balance_patch;
-                json_get_int(s, "pack", &pack);
-                if (pack >= 0 && pack <= lb_balance_pack_count()) g_set.balance_patch = pack;
-                const int n = lb_balance_custom_parse(text);
                 g_bal_msg = "Imported " + std::to_string(n) + " value(s) and the " +
                             lb_balance_name(g_set.balance_patch) + " pack.";
                 g_bal_msg_bad = false;
@@ -9439,6 +9778,587 @@ void tab_community_units() {
     tab_end();
 }
 
+// ---- docs/490 (SG-0114): CONTENT PACKS ------------------------------------------
+//
+// Balance > Content packs. One .lbpack (lb_pack.cpp) with a mod's custom
+// units, maps, Balance values and a preset of gameplay settings. The units and
+// maps are files (lb_pack.cpp installs them); the other two live here: the
+// Balance values are the Presets page's own "Export my balance" file
+// (balance_file_text / balance_file_apply), and the settings preset is the
+// chosen groups' keys of settings.json, applied by writing them into
+// settings.json and loading it again (lb_settings_load), so each value is
+// read, checked and clamped exactly as a settings file's always is.
+extern "C" int lb_pick_pack_file(char* buf, int cap, int saving);   /* lb_filedlg.cpp */
+
+// The settings a preset may carry: game rules a mod is balanced around. Never
+// display, window, sound, controls, network, online identity or anything
+// else personal.
+const char* const kPackKeysRules[] = {
+    "hotwire_mode", "hotwire_neutrals", "hotwire_transport", "emp_transports", "many_mines", "stun_cast",
+    "any_unit_repairs", "unique_heroes", "phantom_guard", "transport_release", "attack_boost_ranged",
+    "fix_hotwired_healing", "own_hero_spells", "same_builders_from", "start_position", "gold_rush_target",
+    nullptr};
+const char* const kPackKeysAi[] = {
+    "ai_hero_rebuild", "ai_more_mines", "ai_cross_fire", "ai_bridges", "ai_shipyards", "ai_finish_upgrades",
+    "ai_keep_bridges", "ai_stuck_bridges", "ai_transports_on_request", "ai_cheats", "ai_cheats_only",
+    "ai_tap_spells", nullptr};
+const char* const kPackKeysCaps[] = {"cap", "cheat", nullptr};
+const char* const kPackKeysBans[] = {
+    "banned_units", "banned_maps", "unit_map_bans", "ban_preset", "ban_preset_maps", "random_maps",
+    "tourney_team", "random_army_bans", nullptr};
+const char* const kPackKeysCreatures[] = {"creatures", "creature_slots", "creature_unlock_with", nullptr};
+const char* const kPackKeysStore[] = {"store_prices", "free_play_win_studs", nullptr};
+
+struct PackSetGroup {
+    const char* name;
+    const char* tip;
+    const char* const* keys;
+};
+constexpr int kPackSetGroups = 6;
+const PackSetGroup kPackGroups[kPackSetGroups] = {
+    {"Gameplay rules", "Hotwiring, EMP on transports, mines, stun, repairs, unique heroes,\n"
+                       "same builders, the attack boost, start position and Gold Rush.", kPackKeysRules},
+    {"AI opponents", "Every AI toggle of Enhancements (rebuilding heroes, bridges, shipyards,\n"
+                     "cheats and spells).", kPackKeysAi},
+    {"Unit caps and cheats", "Balance > Unit Caps and the Cheats page's 18 cheats.", kPackKeysCaps},
+    {"Bans and random teams", "Banned units and maps, per-map bans, the ban preset, random maps,\n"
+                              "random teams and the Randomizer's bans.", kPackKeysBans},
+    {"Creatures", "Creatures on or off, their army slots and what unlocks them.", kPackKeysCreatures},
+    {"Store prices and rewards", "Your LEGO Store prices and the studs a Free Play win gives.", kPackKeysStore},
+};
+
+// The raw value token after "key": in a flat JSON text, as [*b, *e).
+bool json_raw_span(const std::string& s, const char* key, size_t* b, size_t* e) {
+    const char* p = json_find(s, key);
+    if (!p) return false;
+    size_t i = (size_t)(p - s.c_str());
+    while (i < s.size() && (s[i] == ' ' || s[i] == '\t')) ++i;
+    size_t j = i;
+    if (j < s.size() && s[j] == '"') {
+        for (++j; j < s.size() && s[j] != '"'; ++j)
+            if (s[j] == '\\') ++j;
+        if (j >= s.size()) return false;
+        ++j;
+    } else if (j < s.size() && s[j] == '[') {
+        while (j < s.size() && s[j] != ']') ++j;
+        if (j >= s.size()) return false;
+        ++j;
+    } else {
+        while (j < s.size() && s[j] != ',' && s[j] != '\n' && s[j] != '\r' && s[j] != '}') ++j;
+        while (j > i && s[j - 1] == ' ') --j;
+    }
+    if (j == i) return false;
+    *b = i;
+    *e = j;
+    return true;
+}
+
+// A value a preset may carry: a plain string (no quote, backslash or control
+// character, so it can never end early and start another key), a list of
+// numbers or true/false, or one number or true/false.
+bool preset_value_ok(const std::string& v) {
+    if (v.empty() || v.size() > 4096) return false;
+    if (v.front() == '"') {
+        if (v.size() < 2 || v.back() != '"') return false;
+        for (size_t i = 1; i + 1 < v.size(); ++i) {
+            const unsigned char c = (unsigned char)v[i];
+            if (c < 0x20 || c == '"' || c == '\\') return false;
+        }
+        return true;
+    }
+    if (v.front() == '[') {
+        if (v.size() < 2 || v.back() != ']') return false;
+        for (size_t i = 1; i + 1 < v.size(); ++i) {
+            const char c = v[i];
+            if (!(std::isdigit((unsigned char)c) || std::islower((unsigned char)c) || c == ' ' || c == ',' ||
+                  c == '-'))
+                return false;
+        }
+        return true;
+    }
+    if (v.size() > 24) return false;
+    for (char c : v)
+        if (!(std::isdigit((unsigned char)c) || std::islower((unsigned char)c) || c == '-' || c == '.'))
+            return false;
+    return true;
+}
+
+// The preset of the ticked groups, as settings.json's own values.
+std::string settings_preset_text(const bool* on, int* keys) {
+    const std::string s = settings_text();
+    std::string o = "{\n  \"lb_settings_preset\": 1,\n", groups;
+    *keys = 0;
+    for (int g = 0; g < kPackSetGroups; ++g) {
+        if (!on[g]) continue;
+        groups += std::string(groups.empty() ? "" : ", ") + kPackGroups[g].name;
+        for (const char* const* k = kPackGroups[g].keys; *k; ++k) {
+            size_t b = 0, e = 0;
+            if (!json_raw_span(s, *k, &b, &e)) continue;
+            const std::string v = s.substr(b, e - b);
+            if (!preset_value_ok(v)) continue;   // e.g. a ban preset named with a quote
+            o += std::string("  \"") + *k + "\": " + v + ",\n";
+            ++*keys;
+        }
+    }
+    json_put_str(o, "groups", groups.c_str(), false);
+    o += "}\n";
+    return o;
+}
+
+// The preset's keys (only those of the groups above) written into
+// settings.json and the file loaded again. The number set, or -1 when `frag`
+// is not a preset; `bad` counts values refused.
+int settings_preset_apply(const std::string& frag, int* bad) {
+    *bad = 0;
+    if (frag.find("\"lb_settings_preset\"") == std::string::npos) return -1;
+    std::string s = settings_text();
+    int n = 0;
+    for (const PackSetGroup& g : kPackGroups)
+        for (const char* const* k = g.keys; *k; ++k) {
+            size_t b = 0, e = 0;
+            if (!json_raw_span(frag, *k, &b, &e)) continue;
+            const std::string v = frag.substr(b, e - b);
+            if (!preset_value_ok(v)) {
+                ++*bad;
+                continue;
+            }
+            size_t sb = 0, se = 0;
+            if (json_raw_span(s, *k, &sb, &se)) s.replace(sb, se - sb, v);
+            else s.insert(2, std::string("  \"") + *k + "\": " + v + ",\n");   // after "{\n"
+            ++n;
+        }
+    if (n) {
+        settings_write_text(s);
+        lb_settings_load();
+    }
+    return n;
+}
+
+int preset_key_count(const std::string& frag) {
+    int n = 0;
+    for (const PackSetGroup& g : kPackGroups)
+        for (const char* const* k = g.keys; *k; ++k) {
+            size_t b = 0, e = 0;
+            if (json_raw_span(frag, *k, &b, &e) && preset_value_ok(frag.substr(b, e - b))) ++n;
+        }
+    return n;
+}
+
+struct PackPage {
+    bool listed = false;
+    std::vector<LbPackUnitFolder> units;
+    std::vector<LbPackMapFolder> maps;
+    std::vector<char> unit_on, map_on;
+    bool inc_units = true, inc_maps = true, inc_balance = true, inc_settings = false;
+    bool group_on[kPackSetGroups] = {true, true, true, true, true, true};
+    char name[64] = "My pack";
+    char desc[256] = "";
+    char path[1024] = "";
+    std::string msg;
+    bool bad = false;
+    // The opened pack.
+    bool open = false;
+    std::string open_path, in_name, in_desc, in_groups;
+    LbPackContents in;
+    int in_values = 0, in_keys = 0, in_bal_pack = -1;
+    bool do_units = true, do_maps = true, do_balance = false, do_settings = false;
+    std::vector<std::string> report;
+    bool report_bad = false;
+    bool installed = false;   // something a Load new units now brings in
+    bool loading = false;
+};
+PackPage g_pk;
+
+void pack_log(const std::string& line) {
+    std::fprintf(stderr, "[lb_pack] %s\n", line.c_str());
+    std::fflush(stderr);
+}
+
+// What this machine can put in a pack. Enabled units start ticked; maps not.
+void pack_list(PackPage& pg) {
+    pg.units = lb_pack_list_units();
+    pg.maps = lb_pack_list_maps();
+    pg.unit_on.assign(pg.units.size(), 0);
+    for (size_t i = 0; i < pg.units.size(); ++i) pg.unit_on[i] = pg.units[i].enabled ? 1 : 0;
+    pg.map_on.assign(pg.maps.size(), 0);
+    pg.listed = true;
+}
+
+bool pack_export(const std::string& path, const PackPage& pg, std::string* msg) {
+    std::vector<LbPackEntry> e;
+    std::vector<std::string> skipped;
+    int nu = 0, nm = 0, keys = 0, values = 0;
+    if (pg.inc_units)
+        for (size_t i = 0; i < pg.units.size(); ++i) {
+            if (!pg.unit_on[i]) continue;
+            std::string why;
+            if (lb_pack_add_unit(pg.units[i].folder, &e, &why)) ++nu;
+            else skipped.push_back("unit " + pg.units[i].folder + ": " + why);
+        }
+    if (pg.inc_maps) {
+        auto low = [](std::string s) {
+            for (char& c : s) c = (char)std::tolower((unsigned char)c);
+            return s;
+        };
+        std::set<std::string> leaves;   // two folders of one name get "(2)"
+        for (size_t i = 0; i < pg.maps.size(); ++i) {
+            if (!pg.map_on[i]) continue;
+            std::string leaf = pg.maps[i].leaf;
+            for (int n = 2; leaves.count(low(leaf)); ++n) leaf = pg.maps[i].leaf + " (" + std::to_string(n) + ")";
+            std::string why;
+            if (lb_pack_add_map(pg.maps[i], leaf, &e, &why)) {
+                leaves.insert(low(leaf));
+                ++nm;
+            } else {
+                skipped.push_back("map " + pg.maps[i].rel + ": " + why);
+            }
+        }
+    }
+    if (pg.inc_balance) {
+        const std::string t = balance_file_text();
+        e.push_back({"balance.json", std::vector<uint8_t>(t.begin(), t.end())});
+        values = lb_balance_custom_size();
+    }
+    if (pg.inc_settings) {
+        const std::string t = settings_preset_text(pg.group_on, &keys);
+        if (keys) e.push_back({"settings.json", std::vector<uint8_t>(t.begin(), t.end())});
+    }
+    if (nu + nm == 0 && !pg.inc_balance && keys == 0) {
+        *msg = "Nothing to export: tick some units, maps, the balance or settings groups.";
+        for (const std::string& s : skipped) *msg += "\n" + s;
+        pack_log("export " + path + " refused: nothing chosen");
+        return false;
+    }
+    std::string m = "{\n  \"lb_pack\": 1,\n";
+    json_put_str(m, "name", pg.name, true);
+    json_put_str(m, "description", pg.desc, true);
+    char b[160];
+    std::snprintf(b, sizeof b,
+                  "  \"units\": %d,\n  \"maps\": %d,\n  \"balance\": %s,\n  \"settings_keys\": %d\n}\n", nu, nm,
+                  pg.inc_balance ? "true" : "false", keys);
+    m += b;
+    e.insert(e.begin(), LbPackEntry{"pack.json", std::vector<uint8_t>(m.begin(), m.end())});
+    std::string why;
+    if (!lb_pack_write(path, e, &why)) {
+        *msg = "Could not export the pack: " + why + ".";
+        pack_log("export " + path + " failed: " + why);
+        return false;
+    }
+    char line[320];
+    std::snprintf(line, sizeof line, "%d unit(s), %d map(s), balance %s (%d value(s)), settings %d key(s)", nu, nm,
+                  pg.inc_balance ? "yes" : "no", values, keys);
+    *msg = std::string("Exported ") + line + ".";
+    for (const std::string& s : skipped) *msg += "\nLeft out: " + s;
+    pack_log("export " + path + ": " + line + ", " + std::to_string(skipped.size()) + " left out");
+    for (const std::string& s : skipped) pack_log("left out: " + s);
+    return true;
+}
+
+bool pack_open(const std::string& path, PackPage& pg, std::string* msg) {
+    pg.open = false;
+    pg.report.clear();
+    pg.installed = pg.loading = false;
+    std::vector<LbPackEntry> e;
+    std::string why;
+    if (!lb_pack_read(path, &e, &why) || !lb_pack_split(e, &pg.in, &why)) {
+        *msg = "Could not open the pack: " + why + ".";
+        pack_log("open " + path + " failed: " + why);
+        return false;
+    }
+    char name[96] = "", desc[512] = "", groups[256] = "";
+    json_get_str(pg.in.manifest, "name", name, sizeof name);
+    json_get_str(pg.in.manifest, "description", desc, sizeof desc);
+    pg.in_name = name[0] ? name : "(unnamed)";
+    pg.in_desc = desc;
+    pg.in_values = 0;
+    pg.in_bal_pack = -1;
+    if (pg.in.has_balance) {
+        static char v[32768];
+        v[0] = 0;
+        json_get_str(pg.in.balance, "values", v, sizeof v);
+        for (const char* c = v; *c; ++c) pg.in_values += *c == '=';
+        json_get_int(pg.in.balance, "pack", &pg.in_bal_pack);
+    }
+    pg.in_keys = pg.in.has_settings ? preset_key_count(pg.in.settings) : 0;
+    if (pg.in.has_settings) json_get_str(pg.in.settings, "groups", groups, sizeof groups);
+    pg.in_groups = groups;
+    pg.do_units = !pg.in.units.empty();
+    pg.do_maps = !pg.in.maps.empty();
+    pg.do_balance = pg.do_settings = false;   // only when ticked
+    pg.open = true;
+    pg.open_path = path;
+    char line[320];
+    std::snprintf(line, sizeof line,
+                  "opened %s: \"%s\": %d unit(s), %d map(s), balance %s (%d value(s)), settings %d key(s), "
+                  "%d ignored",
+                  path.c_str(), pg.in_name.c_str(), (int)pg.in.units.size(), (int)pg.in.maps.size(),
+                  pg.in.has_balance ? "yes" : "no", pg.in_values, pg.in_keys, (int)pg.in.ignored.size());
+    pack_log(line);
+    for (const std::string& s : pg.in.ignored) pack_log("ignored: " + s);
+    return true;
+}
+
+void pack_install(PackPage& pg, bool units, bool maps, bool balance, bool settings) {
+    pg.report.clear();
+    pg.report_bad = false;
+    int loadable = 0, failed = 0;
+    auto say = [&](const std::string& s, bool bad) {
+        pg.report.push_back(s);
+        if (bad) {
+            pg.report_bad = true;
+            ++failed;
+        }
+        pack_log(s);
+    };
+    if (units)
+        for (size_t i = 0; i < pg.in.units.size(); ++i) {
+            const std::string& want = pg.in.units[i].first;
+            const std::string& shown = pg.in.unit_names[i].empty() ? want : pg.in.unit_names[i];
+            std::string folder, why;
+            const int r = lb_pack_install_unit(want, pg.in.units[i].second, &folder, &why);
+            if (r == 1) say("Unit " + shown + ": installed as mods/units/" + folder + ".", false);
+            else if (r == 2) say("Unit " + shown + ": already in mods/units/" + folder + " (ticked).", false);
+            else say("Unit " + shown + ": not installed (" + why + ").", true);
+            if (r > 0) ++loadable;
+        }
+    if (maps)
+        for (const LbPackMap& m : pg.in.maps) {
+            std::string folder, why;
+            const int r = lb_pack_install_map(m, &folder, &why);
+            if (r == 1) say("Map " + m.leaf + ": installed in " + folder + ".", false);
+            else if (r == 2) say("Map " + m.leaf + ": already in " + folder + ".", false);
+            else say("Map " + m.leaf + ": not installed (" + why + ").", true);
+            if (r == 1) ++loadable;
+        }
+    const char* blocked = lb_balance_custom_blocked();
+    // The settings first: loading settings.json again also reads the Balance
+    // values it holds, which the pack's then replace.
+    if (settings && pg.in.has_settings) {
+        if (blocked) {
+            say(std::string("Settings preset: not applied (") + blocked + ").", true);
+        } else {
+            int bad = 0;
+            const int n = settings_preset_apply(pg.in.settings, &bad);
+            if (n < 0) say("Settings preset: not a settings preset.", true);
+            else say("Settings preset: applied " + std::to_string(n) + " setting(s)" +
+                     (bad ? ", refused " + std::to_string(bad) + " bad value(s)" : std::string()) + ".", bad > 0);
+        }
+    }
+    if (balance && pg.in.has_balance) {
+        if (blocked) {
+            say(std::string("Balance: not applied (") + blocked + ").", true);
+        } else {
+            const int n = balance_file_apply(pg.in.balance);
+            if (n < 0) say("Balance: not a balance file.", true);
+            else say("Balance: applied " + std::to_string(n) + " value(s) and the " +
+                     lb_balance_name(g_set.balance_patch) + " pack.", false);
+        }
+    }
+    if (pg.report.empty()) say("Nothing was ticked to install.", false);
+    pg.installed = loadable > 0;
+    pack_log("import done: " + std::to_string(pg.report.size()) + " line(s), " + std::to_string(failed) +
+             " failed" + (pg.installed ? "; Load new units now to use the units and maps" : ""));
+}
+
+// TEST AIDS, once at start-up (after settings.json is loaded):
+//   LB_PACK_EXPORT=<file>  a pack of every enabled custom unit, every map
+//                          folder in mods/maps, the Balance values and every
+//                          settings group.
+//   LB_PACK_IMPORT=<file>  that pack opened and installed with every box
+//                          ticked; LB_PACK_IMPORT_LOAD=1 also loads the new
+//                          units and maps (Load new units now).
+void pack_env_aids() {
+    if (const char* p = std::getenv("LB_PACK_EXPORT")) {
+        if (*p) {
+            PackPage pg;
+            pack_list(pg);
+            pg.map_on.assign(pg.maps.size(), 1);
+            pg.inc_units = pg.inc_maps = pg.inc_balance = pg.inc_settings = true;
+            std::snprintf(pg.name, sizeof pg.name, "%s", "Test pack");
+            std::string m;
+            pack_export(p, pg, &m);
+        }
+    }
+    if (const char* p = std::getenv("LB_PACK_IMPORT")) {
+        if (*p) {
+            std::string m;
+            if (pack_open(p, g_pk, &m)) {
+                pack_install(g_pk, true, true, true, true);
+                if (g_pk.installed && std::getenv("LB_PACK_IMPORT_LOAD")) {
+                    const int ok = lb_mods_request_rebuild();
+                    pack_log(ok ? "loading the new units and maps (the game resets)"
+                                : "could not load them now: restart the game");
+                    g_pk.loading = ok != 0;
+                }
+            }
+        }
+    }
+}
+
+void tab_content_packs() {
+    if (!tab_begin("Content packs")) return;
+    guide("A content pack is one .lbpack file holding custom units, maps, Balance values and gameplay "
+          "settings, to share a mod in one file. Importing installs only the parts you tick.");
+    PackPage& pg = g_pk;
+    if (!pg.listed) pack_list(pg);
+    const ImVec4 good(0.5f, 1.0f, 0.5f, 1.0f), red(1.0f, 0.5f, 0.4f, 1.0f);
+
+    ImGui::SeparatorText("Export a pack");
+    ImGui::SetNextItemWidth(320.0f * g_ui_scale);
+    ImGui::InputText("Pack name", pg.name, sizeof pg.name);
+    help("Shown to whoever opens the pack.");
+    ImGui::SetNextItemWidth(320.0f * g_ui_scale);
+    ImGui::InputText("Description", pg.desc, sizeof pg.desc);
+    help("One line about the mod: what it changes and who made it.");
+
+    ImGui::Checkbox("Custom units", &pg.inc_units);
+    help("The ticked folders of mods/units, each as a lobby sends it (at most 1 MB a unit).\n"
+         "Your enabled units start ticked.");
+    if (pg.inc_units) {
+        if (pg.units.empty()) {
+            ImGui::TextDisabled("    No custom units in mods/units.");
+        } else {
+            const float h = ImGui::GetTextLineHeightWithSpacing() * (float)std::min<size_t>(pg.units.size() + 1, 8);
+            ImGui::BeginChild("##pkunits", ImVec2(0.0f, h), true);
+            for (size_t i = 0; i < pg.units.size(); ++i) {
+                const LbPackUnitFolder& u = pg.units[i];
+                bool on = pg.unit_on[i] != 0;
+                const std::string label = (u.name.empty() ? u.folder : u.name + "  (" + u.folder + ")") +
+                                          (u.enabled ? "" : "  - not enabled") + "##pku" + std::to_string(i);
+                if (ImGui::Checkbox(label.c_str(), &on)) pg.unit_on[i] = on ? 1 : 0;
+            }
+            ImGui::EndChild();
+        }
+    }
+    ImGui::Checkbox("Maps", &pg.inc_maps);
+    help("The ticked map folders of mods/maps: Level Editor saves, Community levels,\n"
+         "map archive downloads. A map in the pack is installed under mods/maps/Packs.");
+    if (pg.inc_maps) {
+        if (pg.maps.empty()) {
+            ImGui::TextDisabled("    No map folders in mods/maps.");
+        } else {
+            const float h = ImGui::GetTextLineHeightWithSpacing() * (float)std::min<size_t>(pg.maps.size() + 1, 8);
+            ImGui::BeginChild("##pkmaps", ImVec2(0.0f, h), true);
+            for (size_t i = 0; i < pg.maps.size(); ++i) {
+                bool on = pg.map_on[i] != 0;
+                const std::string label = pg.maps[i].rel + "##pkm" + std::to_string(i);
+                if (ImGui::Checkbox(label.c_str(), &on)) pg.map_on[i] = on ? 1 : 0;
+            }
+            ImGui::EndChild();
+        }
+    }
+    ImGui::Checkbox("Balance values", &pg.inc_balance);
+    help("Your Balance Presets pack and every value you changed, the same file\n"
+         "Balance > Presets' Export my balance writes.");
+    ImGui::SameLine();
+    ImGui::TextDisabled("(%d value(s), %s)", lb_balance_custom_size(), lb_balance_name(g_set.balance_patch));
+    ImGui::Checkbox("Gameplay settings preset", &pg.inc_settings);
+    help("Your current values of the ticked groups below. Display, window, sound,\n"
+         "controls, network and personal settings never go in a pack.");
+    if (pg.inc_settings) {
+        ImGui::Indent();
+        for (int g = 0; g < kPackSetGroups; ++g) {
+            ImGui::PushID(g);
+            ImGui::Checkbox(kPackGroups[g].name, &pg.group_on[g]);
+            ImGui::SetItemTooltip("%s", kPackGroups[g].tip);
+            ImGui::PopID();
+        }
+        ImGui::Unindent();
+    }
+    if (ImGui::Button("Refresh lists")) pack_list(pg);
+    help("Reads mods/units and mods/maps again.");
+    ImGui::SameLine();
+    if (ImGui::Button("Export pack...") && lb_pick_pack_file(pg.path, (int)sizeof pg.path, 1))
+        pg.bad = !pack_export(pg.path, pg, &pg.msg);
+    help("Writes the ticked parts to one .lbpack file.");
+    if (!pg.msg.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, pg.bad ? red : good);
+        ImGui::TextWrapped("%s", pg.msg.c_str());
+        ImGui::PopStyleColor();
+    }
+
+    ImGui::SeparatorText("Import a pack");
+    if (ImGui::Button("Open pack...") && lb_pick_pack_file(pg.path, (int)sizeof pg.path, 0)) {
+        std::string m;
+        if (!pack_open(pg.path, pg, &m)) {
+            pg.msg = m;
+            pg.bad = true;
+        } else {
+            pg.msg.clear();
+        }
+    }
+    help("Shows what a .lbpack holds. Nothing is installed until you press Install.");
+    if (pg.open) {
+        ImGui::Text("Pack: %s", pg.in_name.c_str());
+        if (!pg.in_desc.empty()) ImGui::TextWrapped("%s", pg.in_desc.c_str());
+        ImGui::TextDisabled("%s", pg.open_path.c_str());
+        const char* blocked = lb_balance_custom_blocked();
+        if (!pg.in.units.empty()) {
+            ImGui::Checkbox("Install its custom units", &pg.do_units);
+            help("Each goes to mods/units (a new folder name when one is taken; nothing is\n"
+                 "overwritten) and is ticked in your custom units.");
+            ImGui::SameLine();
+            ImGui::TextDisabled("(%d)", (int)pg.in.units.size());
+            for (size_t i = 0; i < pg.in.units.size(); ++i)
+                ImGui::TextDisabled("    %s", pg.in.unit_names[i].empty() ? pg.in.units[i].first.c_str()
+                                                                         : pg.in.unit_names[i].c_str());
+        }
+        if (!pg.in.maps.empty()) {
+            ImGui::Checkbox("Install its maps", &pg.do_maps);
+            help("Each goes to mods/maps/Packs. A folder that is taken is never overwritten.");
+            ImGui::SameLine();
+            ImGui::TextDisabled("(%d)", (int)pg.in.maps.size());
+            for (const LbPackMap& m : pg.in.maps) ImGui::TextDisabled("    %s", m.leaf.c_str());
+        }
+        if (pg.in.has_balance) {
+            ImGui::BeginDisabled(blocked != nullptr);
+            ImGui::Checkbox("Apply its balance values", &pg.do_balance);
+            help("Replaces your Balance values and the Balance Presets pack with the pack's.\n"
+                 "Export yours first to keep them.");
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::TextDisabled("(%d value(s), %s)", pg.in_values,
+                                pg.in_bal_pack >= 0 && pg.in_bal_pack <= lb_balance_pack_count()
+                                    ? lb_balance_name(pg.in_bal_pack)
+                                    : "unknown pack");
+        }
+        if (pg.in.has_settings && pg.in_keys > 0) {
+            ImGui::BeginDisabled(blocked != nullptr);
+            ImGui::Checkbox("Apply its settings preset", &pg.do_settings);
+            help("Sets the pack's gameplay settings. Nothing else in your settings changes.");
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::TextDisabled("(%d setting(s): %s)", pg.in_keys, pg.in_groups.c_str());
+        }
+        if (blocked && (pg.in.has_balance || pg.in.has_settings)) ImGui::TextDisabled("%s", blocked);
+        if (!pg.in.ignored.empty())
+            ImGui::TextDisabled("%d file(s) in the pack are not used by this port.", (int)pg.in.ignored.size());
+        if (ImGui::Button("Install"))
+            pack_install(pg, pg.do_units, pg.do_maps, pg.do_balance && !blocked, pg.do_settings && !blocked);
+        help("Installs the ticked parts. New units and maps are used after Load new units now.");
+        if (!pg.report.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, pg.report_bad ? red : good);
+            for (const std::string& s : pg.report) ImGui::TextWrapped("%s", s.c_str());
+            ImGui::PopStyleColor();
+        }
+        if (pg.installed) {
+            if (pg.loading) {
+                ImGui::TextDisabled("Loading: the game returns to the title screen.");
+            } else if (ImGui::Button("Load new units now")) {
+                if (lb_mods_request_rebuild()) {
+                    pg.loading = true;
+                } else {
+                    pg.report.push_back("Restart the game to load the new units and maps.");
+                    pg.report_bad = true;
+                }
+            }
+            help("Rebuilds the game with the pack's units and maps and returns to the title\n"
+                 "screen. A match in progress ends.");
+        }
+    }
+    tab_end();
+}
+
 void tab_level_editor() {
     if (!tab_begin("Level Editor")) return;
     lb_leveledit_draw(g_maps_ren);
@@ -9648,12 +10568,14 @@ const std::vector<MenuHeader>& menu_headers() {
                      {"Traits", "Balance Traits", tab_balance_traits},
                      {"Attacks", "Balance Attacks", tab_balance_attacks},
                      {"Spells", "Balance Spells", tab_balance_spells},
+                     {"Spell Values", "Balance Spell Values", tab_balance_spell_values},   // docs/488
                      {"Unit Caps", "Balance Caps", tab_balance_caps},
                      {"Ban Units", "Ban Units", tab_ban_units},
                      {"Ban Maps", "Ban Maps", tab_ban_maps},
                      {"Presets", "Balance Presets", tab_balance_presets},
                      {"Custom units", "Custom units", tab_custom_units},
-                     {"Community units", "Community units", tab_community_units}}},
+                     {"Community units", "Community units", tab_community_units},
+                     {"Content packs", "Content packs", tab_content_packs}}},   // docs/490
         {"Cheats", {{"Cheats", "Cheats", tab_cheats},
                     {"Action Replay", "Action Replay", tab_action_replay}}},
         {"Network", {{"Multiplayer", "Multiplayer", tab_multiplayer},
@@ -9996,6 +10918,16 @@ extern "C" void lb_overlay_notice(const char* text) {
 
 extern "C" int lb_setting_notify_sound(void) { return g_set.notify_sound; }
 extern "C" int lb_setting_notify_volume(void) { return g_set.notify_volume; }
+// SG-0112: the game's music (0) and effects (1) volume, 0..127; -1 none or off.
+extern "C" int lb_volume_remembered(int which) {
+    if (!g_set.remember_volumes) return -1;
+    return which ? g_set.sfx_volume : g_set.music_volume;
+}
+extern "C" void lb_volume_remember(int which, int v) {
+    if (v < 0) v = 0;
+    if (v > 127) v = 127;
+    (which ? g_set.sfx_volume : g_set.music_volume) = v;
+}
 
 // BR-0047: custom unit sound volume, 0..200 percent. LB_CUNIT_VOLUME forces it.
 // docs/479: LB_NATIVE_LOGIC=0|1 forces it.
@@ -10106,6 +11038,7 @@ extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
         static std::string ini = settings_path("imgui.ini");
         ImGui::GetIO().IniFilename = ini.c_str();
         lb_settings_load();
+        pack_env_aids();       // docs/490: LB_PACK_EXPORT / LB_PACK_IMPORT
         lb_update_cleanup();   // docs/435: the files the last update replaced
         ImGui::StyleColorsDark();
         if (!ImGui_ImplSDL2_InitForSDLRenderer(window, renderer)) {
@@ -11404,6 +12337,32 @@ extern "C" int lb_setting_stun_cast(void) {
     return forced >= 0 ? forced : (g_set.stun_cast ? 1 : 0);
 }
 
+// docs/488: Soldiers Repair Buildings (SG-0111, LB_ANY_REPAIR=0|1 forces it)
+// and One Of Each Hero (SG-0107, LB_UNIQUE_HEROES=0|1), this machine's
+// choices. What a match runs is lb_any_unit_repairs_live /
+// lb_unique_heroes_live (lb_patches.cpp): a replay's, the host's, or these.
+extern "C" int lb_setting_any_unit_repairs(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_ANY_REPAIR");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.any_unit_repairs ? 1 : 0);
+}
+extern "C" int lb_setting_unique_heroes(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_UNIQUE_HEROES");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.unique_heroes ? 1 : 0);
+}
+// The second rule flags a host sends its players ('R' page, lb_teams.cpp).
+extern "C" int lb_rules2_local_flags(void) {
+    return (lb_setting_any_unit_repairs() ? LB_RULE2_ANY_REPAIR : 0) |
+           (lb_setting_unique_heroes() ? LB_RULE2_UNIQUE_HEROES : 0);
+}
+
 // docs/469: Prevent Phantom Ties, this machine's choice (LB_PHANTOM_GUARD=0|1
 // forces it). What a match runs is lb_phantom_guard_live: the host's online.
 extern "C" int lb_setting_phantom_guard(void) {
@@ -11561,6 +12520,47 @@ extern "C" int lb_teal_live(void) {
     const int host = lb_rules_host_flags();
     if (host >= 0) return (host & LB_RULE_TEAL) ? 1 : 0;
     return lb_setting_teal();
+}
+
+// docs/489: the custom team colour (display only). LB_CUSTOM_COLOUR=RRGGBB (or
+// #RRGGBB) forces it on in that colour, a test aid; LB_CUSTOM_COLOUR=0 (or
+// anything else) forces it off.
+namespace {
+int g_cc_forced = -2;
+unsigned g_cc_forced_rgb = 0;
+void custom_colour_env() {
+    if (g_cc_forced != -2) return;
+    g_cc_forced = -1;
+    if (const char* v = std::getenv("LB_CUSTOM_COLOUR")) {
+        const char* p = v[0] == '#' ? v + 1 : v;
+        char* end = nullptr;
+        const unsigned long x = std::strtoul(p, &end, 16);
+        if (std::strlen(p) == 6 && end && *end == '\0') {
+            g_cc_forced = 1;
+            g_cc_forced_rgb = (unsigned)x & 0xFFFFFFu;
+        } else {
+            g_cc_forced = 0;
+        }
+    }
+}
+}  // namespace
+extern "C" int lb_setting_custom_colour(unsigned* rgb) {
+    custom_colour_env();
+    if (g_cc_forced >= 0) {
+        if (rgb) *rgb = g_cc_forced_rgb;
+        return g_cc_forced;
+    }
+    if (rgb) *rgb = (unsigned)g_set.custom_colour_rgb & 0xFFFFFFu;
+    return g_set.custom_colour ? 1 : 0;
+}
+// docs/489: the host rule allowing custom colours online. LB_CUSTOM_COLOUR_HOST=0|1 forces it.
+extern "C" int lb_setting_custom_colour_host(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_CUSTOM_COLOUR_HOST");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.custom_colour_host ? 1 : 0);
 }
 
 // docs/437: Tint creatures by team (default on). LB_CREATURE_TINT=0|1 forces it.
@@ -12346,6 +13346,8 @@ extern "C" const char* lb_net_lobby_options_json(void) {
     kv.push_back({"Faster CPU", g_set.faster_cpu ? "On" : "Off"});               // docs/484
     kv.push_back({"Prevent phantom ties", g_set.phantom_guard ? "On" : "Off"});   // docs/469
     kv.push_back({"Stunned heroes can cast", g_set.stun_cast ? "On" : "Off"});
+    kv.push_back({"Soldiers repair buildings", g_set.any_unit_repairs ? "On" : "Off"});   // docs/488
+    kv.push_back({"One of each hero", g_set.unique_heroes ? "On" : "Off"});               // docs/488
     kv.push_back({"AI rebuilds its hero", g_set.ai_hero_rebuild ? "On" : "Off"});
     kv.push_back({"AI builds more mines", g_set.ai_more_mines ? "On" : "Off"});
     kv.push_back({"Computers attack each other", g_set.ai_cross_fire ? "On" : "Off"});   // SG-0051

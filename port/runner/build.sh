@@ -61,6 +61,9 @@ cp -p "$W/port/runner/src/lb_filedlg.cpp" "$TREE/runner/src/"
 # xdelta patches of the ROM: the VCDIFF codec, export and import (docs/474).
 cp -p "$W/port/runner/src/lb_xdelta.cpp" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_xdelta.h" "$TREE/runner/src/"
+# Content packs (.lbpack): units, maps, balance, a settings preset (docs/490).
+cp -p "$W/port/runner/src/lb_pack.cpp" "$TREE/runner/src/"
+cp -p "$W/port/runner/src/lb_pack.h" "$TREE/runner/src/"
 # The LB_SAMPLE profiler (docs/349). Its own TU for the same <windows.h> reason.
 cp -p "$W/port/runner/src/lb_prof.cpp" "$TREE/runner/src/"
 # The event pump on its own fiber (docs/385). Its own TU for <windows.h> too.
@@ -167,6 +170,7 @@ TRACE_DEF=""
 mkdir -p "$BUILD"
 cmake -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_C_FLAGS="$TRACE_DEF" \
+      -DCMAKE_EXE_LINKER_FLAGS="-static-libgcc -static-libstdc++ -Wl,-Bstatic,--whole-archive -lwinpthread -Wl,--no-whole-archive,-Bdynamic" \
       -DCMAKE_CXX_COMPILER=/c/msys64/ucrt64/bin/g++.exe \
       -DCMAKE_C_COMPILER=/c/msys64/ucrt64/bin/gcc.exe \
       -DNDS_BOOTSTRAP_FIRMWARE=ON \

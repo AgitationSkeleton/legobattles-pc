@@ -456,7 +456,9 @@ extern "C" void lb_chat_close(void) {
 
 extern "C" int lb_chat_outgoing(unsigned char* buf, int cap) {
     std::lock_guard<std::mutex> lk(g_mu);
-    if (g_outbox.empty()) return 0;
+    // docs/489: with nothing to say, a joiner's custom colour for the host
+    // ("LBK1", at most once a second; lb_teams.cpp).
+    if (g_outbox.empty()) return lb_custompal_outgoing(buf, cap);
     std::vector<uint8_t> d = std::move(g_outbox.front());
     g_outbox.pop_front();
     if ((int)d.size() > cap) return 0;
@@ -466,7 +468,12 @@ extern "C" int lb_chat_outgoing(unsigned char* buf, int cap) {
 
 extern "C" void lb_chat_incoming(const unsigned char* buf, int len,
                                  unsigned int sender) {
-    (void)sender;
+    // docs/489: a joiner's custom team colour rides this datagram type as its
+    // own message; only a host keeps it, and it is never passed on.
+    if (buf && len >= 4 && std::memcmp(buf, "LBK1", 4) == 0) {
+        lb_custompal_incoming(buf, len, sender);
+        return;
+    }
     if (!buf || len < 16 || std::memcmp(buf, "LBC1", 4) != 0) return;
     if (!online()) return;
     auto le32 = [&](int at) {

@@ -14,6 +14,9 @@
 //   frames/<action>/d<d>_<n>.png  one frame (drawn over the sheet)
 //   portraits/card.png, card_top_screen.png   the army-screen / battle cards
 //   model/texture.png           a transport's or siege unit's re-skin
+//   model/model.obj             a new mesh for the model (docs/492, lb_nsbmd.cpp)
+//   "model": N                  a 2D unit drawn with stock 3D unit N's model (docs/492)
+//   "sprites_from": N           a hero or special drawn with stock 2D unit N's sheets (docs/492)
 //
 // Anything missing is the template's. PNGs are read as the export writes them
 // (indexed on the faction palette, used as they are) or as truecolour (each
@@ -52,6 +55,7 @@
 #include "lb_cunits.h"
 #include "lb_levelmap.h"   // lvl::comp_wrap
 #include "lb_xdelta.h"     // docs/474: units from an xdelta patch
+#include "lb_nsbmd.h"      // docs/492: model/model.obj
 
 #include <algorithm>
 #include <array>
@@ -89,6 +93,7 @@ constexpr size_t kPool = 4 + 182 * 0x7C + 27 * 0x74 + 342 * 0x70;   // docs/11
 constexpr uint32_t kPtrArray = 0x02150944u;   // data +4, count +8, capacity (bytes) +0xC
 constexpr uint32_t kUnitVtable = 0x0213AC40u; // a unit blueprint's wrapper (func_02002B68)
 constexpr uint32_t kMagic = 0x314E5543u;      // "CUN1"
+constexpr size_t kMaxObjBytes = 512u << 10;   // docs/492: model/model.obj
 
 struct Entity {
     std::vector<uint8_t> rec;   // 0x7C bytes
@@ -113,6 +118,27 @@ struct Entity {
     // card recolour; empty when the unit has none.
     std::vector<uint8_t> card_mask;
     int card_mask_w = 0, card_mask_h = 0;
+    // docs/487: the battle's small icons, 24x24 RGBA (0xAABBGGRR) each, or
+    // empty. hud_icon: portraits/hud_icon.png, the battle HUD's head (group
+    // selection, training queue, transport occupants). build_icon:
+    // portraits/build_icon.png, the build menu's icon. lb_teams.cpp decides
+    // what reaches the battle (lb_teams_battle_icon).
+    std::vector<uint32_t> hud_icon, build_icon;
+    // docs/487: whether the cartridge has its end pictures (Victory, Defeat)
+    // as UI/Heroes/cu/<k>V and <k>D, built from portraits/end_victory.png and
+    // portraits/end_defeat.png.
+    bool end_pic[2] = {false, false};
+    // docs/492 (SG-0082). model_src: the stock 3D unit (category 5/6) whose
+    // model and animation table this unit is drawn with, or -1 (its own
+    // template's). model_drawn: the record is a 2D category (0..4) drawn with
+    // that model, through the draw cloak in lb_patches.cpp. A 3D unit whose
+    // "asset" names another stock model also gets model_src, so its animation
+    // ranges are that model's.
+    int model_src = -1;
+    bool model_drawn = false;
+    // "sprites_from": the stock 2D unit whose sheets and layout a hero or a
+    // special is drawn with (art_cat is that unit's category), or -1.
+    int sprites_from = -1;
 };
 size_t g_array_off = 0;    // the larger blueprint array, in the file
 constexpr size_t kColBase = 4 + 182 * 0x7C + 27 * 0x74;   // collectable 209 (docs/11)
@@ -130,6 +156,7 @@ std::vector<Entity> g_ents;
 std::vector<uint8_t> g_stock;   // the stock file, for lb_cunits_finish
 size_t g_block_off = 0;    // where "CUN1" sits in the file
 bool g_built = false;      // the cartridge carries our block
+uint64_t g_icons_sig = 0;  // docs/487: lb_cunits_icons_sig, 0 until worked out for this build
 uint32_t g_pushed_base = 0;   // the file buffer we last registered into
 std::string g_report;      // what the last build did, for the menu
 std::vector<uint64_t> g_hashes;               // the built set's identities, in order (docs/448)
@@ -637,6 +664,50 @@ bool encode_card(std::vector<uint8_t>* ncgr, std::vector<uint8_t>* nclr, const s
     return true;
 }
 
+// docs/487: AN END PICTURE (the Victory / Defeat screen's top screen). The
+// cartridge's are UI/Heroes/<name>.NCBR (COMP-wrapped) + .NCLR: an 8bpp LINEAR
+// bitmap, 256x192 (RAHC: 24 x 32 tiles, depth 4, the flag at +0x24 = 1, data
+// at 0x30), and a 256-colour palette (TTLP depth 4, colours at 0x28). A copy
+// of the template files with the picture's 255 most used colours (entry 0
+// stays the backdrop, black) and its pixels. False when the picture is not
+// the template's size or the files are not that layout.
+bool encode_end_picture(std::vector<uint8_t>* ncbr, std::vector<uint8_t>* nclr, const Img& im) {
+    g_card_approx = 0;
+    std::vector<uint8_t>& g = *ncbr;
+    std::vector<uint8_t>& c = *nclr;
+    if (g.size() < 0x30 || c.size() < 0x28 + 512 || std::memcmp(g.data() + 0x10, "RAHC", 4) != 0 ||
+        std::memcmp(c.data() + 0x10, "TTLP", 4) != 0)
+        return false;
+    const uint32_t th = get16(g, 0x18), tw = get16(g, 0x1A), depth = get32(g, 0x1C);
+    const size_t dsize = get32(g, 0x28), data = 0x18 + get32(g, 0x2C);
+    if (depth != 4 || (get32(g, 0x24) & 0xFFu) != 1u || (int)tw * 8 != im.w || (int)th * 8 != im.h ||
+        dsize < (size_t)im.w * im.h || data + (size_t)im.w * im.h > g.size())
+        return false;
+    std::vector<uint32_t> pal = make_palette(im.rgba, 256);
+    pal[0] = 0xFF000000u;   // the backdrop (the stock pictures' entry 0 is black)
+    {   // what did not fit the palette, for the report (docs/485 (A)'s count)
+        std::map<uint16_t, bool> seen;
+        for (uint32_t px : im.rgba) {
+            if ((px >> 24) < 128) continue;
+            const uint16_t k = to555(px);
+            if (seen.count(k)) continue;
+            bool in = false;
+            for (size_t i = 1; i < pal.size() && !in; ++i) in = to555(pal[i]) == k;
+            seen[k] = in;
+            if (!in) ++g_card_approx;
+        }
+    }
+    for (size_t i = 0; i < 256; ++i) {
+        const uint16_t v = i < pal.size() ? to555(pal[i]) : 0;
+        c[0x28 + i * 2] = (uint8_t)v;
+        c[0x28 + i * 2 + 1] = (uint8_t)(v >> 8);
+    }
+    for (int y = 0; y < im.h; ++y)
+        for (int x = 0; x < im.w; ++x)
+            g[data + (size_t)y * (size_t)im.w + (size_t)x] = (uint8_t)nearest(im.rgba[(size_t)y * im.w + x], pal);
+    return true;
+}
+
 // ---- model textures ----------------------------------------------------------
 // A copy of the template's .nsbmd with its one TEX0 texture and palette taken
 // from a picture of the same size (every stock model: format 4, 32x32, a
@@ -806,11 +877,16 @@ const Field kFields[] = {
     // 0xA1 in all 182 stock records; written only when nonzero.
     {"melee_vs_buildings", 0x0B, 1, 160},
     {"shot_vs_buildings", 0x57, 1, 160},
+    // docs/488 (SG-0116): the collision (occupancy) layers. 0 automatic (the
+    // template's own), else a mask: 1 ground, 2 air, 4 bridge. Padding +0x53
+    // (0xA1 in all 182 stock records); written only when nonzero.
+    {"collision_layer", 0x53, 1, 7},
 };
 // The "auto" fields: 0 leaves the template's padding byte (0xA2) in place, so
 // a unit left on Automatic has a record byte-identical to before.
 bool auto_when_zero(int off) {
-    return off == 0x5B || off == 0x5A || off == 0x0A || off == 0x0B || off == 0x57;
+    return off == 0x5B || off == 0x5A || off == 0x0A || off == 0x0B || off == 0x57 ||
+           off == 0x53;   // docs/488
 }
 bool name_ok(const std::string& n) {
     if (n.empty() || n.size() > 24) return false;
@@ -974,6 +1050,62 @@ bool load_unit(const std::string& folder, const std::string& tag, const std::vec
     std::string tasset = pool_str(stock, get32(stock, r + 0x24));
     const std::string tname = pool_str(stock, get32(stock, r + 0x00));
     e->name = "cu/" + tag;
+    // docs/492 (SG-0082): "model" draws a 2D unit (hero, builder, close
+    // combat, ranged, mounted) with a stock 3D unit's model; "sprites_from"
+    // draws a hero or a special with a stock 2D unit's sheets and frame layout
+    // (a hero on a horse: a Mounted unit's 32x32 sheet). Both are top-level
+    // numbers (stock indices). The record's category never changes: only the
+    // drawing does (the draw cloak, lb_patches.cpp), so the hero stays a hero.
+    {
+        const size_t top = j.find("\"fields\"");
+        const size_t to = top == std::string::npos ? j.size() : top;
+        auto stock_cat = [&](long i) { return (int)stock[4 + (size_t)i * 0x7C + 0x5C]; };
+        auto stock_asset = [&](long i) { return pool_str(stock, get32(stock, 4 + (size_t)i * 0x7C + 0x24)); };
+        auto stock_name = [&](long i) { return pool_str(stock, get32(stock, 4 + (size_t)i * 0x7C)); };
+        long m = -1, s = -1;
+        if (jnum(j, 0, to, "model", &m) && m >= 0) {
+            if (m >= 182 || (stock_cat(m) != 5 && stock_cat(m) != 6) || stock_asset(m).compare(0, 7, "Models/") != 0)
+                g_report += folder + ": \"model\" " + std::to_string(m) + " is not a stock transport or special; ignored\n";
+            else if (cat > 4)
+                g_report += folder + ": \"model\" is for a hero, builder or ground unit; a transport or special picks "
+                            "its model with \"asset\"; ignored\n";
+            else {
+                e->model_src = (int)m;
+                e->model_drawn = true;
+                g_report += folder + ": drawn with the 3D model of " + stock_name(m) + " (#" + std::to_string(m) +
+                            ", " + stock_asset(m) + ")\n";
+            }
+        }
+        if (jnum(j, 0, to, "sprites_from", &s) && s >= 0) {
+            // HELD BACK (2026-11-13): a mounted-layout hero (sprites_from 5) in a
+            // 2-army Free Play took the last mounted-sheet slot and the battle
+            // then read and wrote 0xE7910130 (run md5). Until that is found,
+            // "sprites_from" is honoured only with LB_SPRITES_FROM=1.
+            static const bool sf_on = [] {
+                const char* v = std::getenv("LB_SPRITES_FROM");
+                return v && v[0] == '1';
+            }();
+            if (!sf_on)
+                g_report += folder + ": \"sprites_from\" is not available in this version yet; ignored\n";
+            else if (e->model_drawn)
+                g_report += folder + ": \"sprites_from\" is ignored: \"model\" is set\n";
+            else if (s >= 182 || stock_cat(s) < 1 || stock_cat(s) > 4 || stock_asset(s).compare(0, 8, "Sprites/") != 0)
+                g_report += folder + ": \"sprites_from\" " + std::to_string(s) +
+                            " is not a stock builder, close combat, ranged or mounted unit; ignored\n";
+            else if (cat != 0 && cat != 5 && cat != 6)
+                g_report += folder + ": \"sprites_from\" is for a hero, transport or special; ignored\n";
+            else {
+                e->sprites_from = (int)s;
+                e->art_cat = stock_cat(s);
+                g_report += folder + ": drawn with the sprites of " + stock_name(s) + " (#" + std::to_string(s) +
+                            ", " + stock_asset(s) + ")\n";
+            }
+        }
+        if (e->model_drawn || e->sprites_from >= 0)
+            std::fprintf(stderr, "[lb_cunits] %s: drawn with %s %ld (category %d unit, its record stays category %d)\n",
+                         folder.c_str(), e->model_drawn ? "the model of stock unit" : "the sprites of stock unit",
+                         e->model_drawn ? m : s, e->model_drawn ? stock_cat(m) : stock_cat(s), cat);
+    }
     // unit.json's "asset" picks another stock model or sprite set to start
     // from (e.g. a transport on the Claw Tank's model): a model for a model
     // template, or a sprite base whose sheets this category's layout finds.
@@ -997,16 +1129,32 @@ bool load_unit(const std::string& folder, const std::string& tag, const std::vec
                          ok ? "used in place of the template's" : "is not a stock asset this template can use; the template's kept");
         }
     }
-    // Sprites: each template sheet, overlaid with the folder's sheet, then its frames.
-    if (tasset.compare(0, 8, "Sprites/") == 0) {
-        const std::string tbase = tasset.substr(8);
-        e->asset = "Sprites/cu/" + tag;
-        const std::vector<Frame> frs = frames_of(cat, tbase, e->rec);
+    // docs/492: a transport or special on another stock model takes that
+    // model's animation table too (FUN_0200CE5C keys it by the blueprint
+    // number, which stays the template's), through the same draw cloak.
+    if ((cat == 5 || cat == 6) && tasset.compare(0, 7, "Models/") == 0 &&
+        tasset != pool_str(stock, get32(stock, r + 0x24)))
+        for (int i = 0; i < 182 && e->model_src < 0; ++i) {
+            const size_t ri = 4 + (size_t)i * 0x7C;
+            if ((stock[ri + 0x5C] == 5 || stock[ri + 0x5C] == 6) && pool_str(stock, get32(stock, ri + 0x24)) == tasset) {
+                e->model_src = i;
+                std::fprintf(stderr, "[lb_cunits] %s: animated with stock unit %d's frame ranges (its model)\n",
+                             folder.c_str(), i);
+            }
+        }
+    // Sprites: one layout's sheets (`lcat`'s, from the stock base `tbase`),
+    // each overlaid with the folder's sheet, then its frames. `main` false: a
+    // fallback set (docs/492: a hero drawn with another unit's sprites also
+    // carries its own hero sheets) -- sheets by name only, no frames, no notes.
+    // `extra`: more sheet names the folder may hold without a note.
+    auto build_sprites = [&](int lcat, const std::string& tbase, bool main,
+                             const std::vector<std::string>* extra) -> bool {
+        const std::vector<Frame> frs = main ? frames_of(lcat, tbase, e->rec) : std::vector<Frame>();
         // What the folder's art did, for the menu's Last build: a sheet or
         // frame that is the wrong size or format, or a sheet named for no
         // sheet of this template, is ignored, and saying so is the only way a
         // player can tell (a report: "replaced the sprites, still the template").
-        const std::vector<std::string> names = sheets_of(cat, tbase);
+        const std::vector<std::string> names = sheets_of(lcat, tbase);
         int sheets_used = 0, frames_used = 0;
         std::string notes;
         auto wh = [](int w, int h) { return std::to_string(w) + "x" + std::to_string(h); };
@@ -1064,6 +1212,7 @@ bool load_unit(const std::string& folder, const std::string& tag, const std::vec
             const std::string mine_name = tag + ts.substr(tbase.size());   // k_eng_0 -> Folder_0
             files->push_back({"Sprites", mine_name + ".NCBR", lvl::comp_wrap(encode_sheet(s))});
         }
+        if (!main) return true;
         std::error_code dec;
         std::string expect;
         for (const std::string& n : names) expect += (expect.empty() ? "" : ", ") + n;
@@ -1074,40 +1223,94 @@ bool load_unit(const std::string& folder, const std::string& tag, const std::vec
             if (ext != ".png" && ext != ".ncbr") continue;   // unit.json and the rest, beside the sheets
             const std::string stem = utf8(de.path().stem());
             if (std::find(names.begin(), names.end(), stem) == names.end() &&
-                std::find(claimed.begin(), claimed.end(), stem) == claimed.end())
+                std::find(claimed.begin(), claimed.end(), stem) == claimed.end() &&
+                !(extra && std::find(extra->begin(), extra->end(), stem) != extra->end()))
                 notes += "  sheets/" + utf8(de.path().filename()) + " is not one of this unit's sheets (" + expect + "); ignored\n";
         }
         notes += mapped_note(mapped, fpal);   // BR-0075
         g_report +=folder + ": " + std::to_string(sheets_used) + " of " + std::to_string((int)names.size()) +
                     " sheets and " + std::to_string(frames_used) + " frames from the folder\n" + notes;
         if (!notes.empty()) std::fprintf(stderr, "[lb_cunits] %s:\n%s", folder.c_str(), notes.c_str());
-    } else if (tasset.compare(0, 7, "Models/") == 0) {
-        e->asset = "Models/cu/" + tag;
+        return true;
+    };
+    // A model: stock `masset`'s .nsbmd with model/texture.png and (docs/492,
+    // SG-0083) model/model.obj applied, and its .nsbca, as files under
+    // `parent`/cu named after the unit. Raw, as the cartridge ships its
+    // models (BMD0/BCA0, no COMP wrapper). The game finds them as the
+    // record's asset path + ".nsbmd"/".nsbca" (FUN_02035C48), whatever the
+    // directory, so a 2D unit drawn with a model keeps its sheets beside it.
+    auto write_model = [&](const std::string& masset, const char* parent) -> bool {
         std::vector<uint8_t> mdl, anim, mine;
-        if (!read(tasset + ".nsbmd", &mdl)) { *why = "the template's model is unreadable"; return false; }
+        if (!read(masset + ".nsbmd", &mdl)) { *why = "the model " + masset + " is unreadable"; return false; }
         Img im;
         if (slurp(dir / "model" / "texture.png", &mine) && read_png(mine, &im) && !encode_model_texture(&mdl, im))
             std::fprintf(stderr, "[lb_cunits] %s: model/texture.png could not be applied: it must be exactly the template's texture size (the exported texture.png's size; 32x32 for every stock model); ignored\n", folder.c_str());
-        // Raw, as the cartridge ships its models (BMD0/BCA0, no COMP wrapper).
-        files->push_back({"Models", tag + ".nsbmd", mdl});
-        if (read(tasset + ".nsbca", &anim)) files->push_back({"Models", tag + ".nsbca", anim});
+        std::vector<uint8_t> objb;
+        if (slurp(dir / "model" / "model.obj", &objb, kMaxObjBytes)) {
+            std::string note;
+            const bool ok = lb_nsbmd_import_obj(&mdl, std::string(objb.begin(), objb.end()), &note);
+            g_report += folder + ": model/model.obj " + (ok ? "used: " : "not used: ") + note + "\n";
+            std::fprintf(stderr, "[lb_cunits] %s: model/model.obj %s: %s\n", folder.c_str(), ok ? "used" : "not used",
+                         note.c_str());
+        } else {
+            std::error_code oec;
+            if (fs::exists(dir / "model" / "model.obj", oec))
+                g_report += folder + ": model/model.obj not used: empty, unreadable or over 512 KB\n";
+        }
+        files->push_back({parent, tag + ".nsbmd", mdl});
+        if (read(masset + ".nsbca", &anim)) files->push_back({parent, tag + ".nsbca", anim});
+        return true;
+    };
+    const bool tmpl_model = tasset.compare(0, 7, "Models/") == 0;
+    if (e->sprites_from >= 0) {
+        // docs/492: a hero or special drawn with another unit's sheets. The
+        // sheets go in under the unit's name in that unit's layout; a hero
+        // also carries its hero sheets and a special its model, which the
+        // battle uses when the draw cloak cannot take it (a full mounted
+        // loader, lb_patches.cpp).
+        const std::string sasset = pool_str(stock, get32(stock, 4 + (size_t)e->sprites_from * 0x7C + 0x24));
+        e->asset = "Sprites/cu/" + tag;
+        std::vector<std::string> own;
+        if (!tmpl_model && tasset.size() > 8) own = sheets_of(cat, tasset.substr(8));
+        if (!build_sprites(e->art_cat, sasset.substr(8), true, &own)) return false;
+        if (tmpl_model ? !write_model(tasset, "Sprites") : !build_sprites(cat, tasset.substr(8), false, nullptr))
+            return false;
+    } else if (tasset.compare(0, 8, "Sprites/") == 0) {
+        e->asset = "Sprites/cu/" + tag;
+        if (!build_sprites(cat, tasset.substr(8), true, nullptr)) return false;
+        if (e->model_drawn) {
+            const std::string masset = pool_str(stock, get32(stock, 4 + (size_t)e->model_src * 0x7C + 0x24));
+            if (!write_model(masset, "Sprites")) return false;
+        }
+    } else if (tmpl_model) {
+        e->asset = "Models/cu/" + tag;
+        if (!write_model(tasset, "Models")) return false;
     } else {
         *why = "the template's asset is neither a sprite nor a model";
         return false;
     }
     // Its head (the army screen's and the Team Builder's): portraits/head.png,
-    // fitted to 24x24 by nearest pixel.
-    {
+    // fitted to 24x24 by nearest pixel. docs/487: the battle's two small
+    // icons the same way (portraits/hud_icon.png, portraits/build_icon.png).
+    auto icon24 = [&](const char* file, std::vector<uint32_t>* out) {
         std::vector<uint8_t> hb;
         Img hi;
-        if (slurp(dir / "portraits" / "head.png", &hb, 1u << 20) && read_png(hb, &hi) && hi.w > 0 && hi.h > 0 &&
-            hi.w <= 512 && hi.h <= 512) {
-            e->head.assign(576, 0u);
-            for (int y = 0; y < 24; ++y)
-                for (int x = 0; x < 24; ++x)
-                    e->head[(size_t)(y * 24 + x)] = hi.rgba[(size_t)(y * hi.h / 24) * (size_t)hi.w + (size_t)(x * hi.w / 24)];
+        if (!slurp(dir / "portraits" / file, &hb, 1u << 20)) return;
+        if (!read_png(hb, &hi) || hi.w <= 0 || hi.h <= 0 || hi.w > 512 || hi.h > 512) {
+            g_report += folder + ": portraits/" + file + " is not a PNG it can read (up to 512x512); ignored\n";
+            return;
         }
-    }
+        if ((hi.w != 24 || hi.h != 24) && std::strcmp(file, "head.png") != 0)   // a head of any size is usual
+            g_report += folder + ": portraits/" + file + " is " + std::to_string(hi.w) + "x" + std::to_string(hi.h) +
+                        "; it was fitted to 24x24\n";
+        out->assign(576, 0u);
+        for (int y = 0; y < 24; ++y)
+            for (int x = 0; x < 24; ++x)
+                (*out)[(size_t)(y * 24 + x)] = hi.rgba[(size_t)(y * hi.h / 24) * (size_t)hi.w + (size_t)(x * hi.w / 24)];
+    };
+    icon24("head.png", &e->head);
+    icon24("hud_icon.png", &e->hud_icon);
+    icon24("build_icon.png", &e->build_icon);
     // Cards, found by the internal name. A missing army-screen card hangs the
     // game (docs/436), so the template's is always copied.
     const struct { const char* parent; const char* pic; } kCards[2] = {
@@ -1188,12 +1391,61 @@ void collect_test(const std::vector<uint8_t>& stock) {
 void load_unit_sounds(const fs::path& dir, std::array<std::shared_ptr<const std::vector<int16_t>>, 5>* snd,
                       std::string* report);   // below
 
+// docs/487: custom unit k's end pictures. portraits/end_victory.png and
+// portraits/end_defeat.png (256x192; one alone serves both) become
+// UI/Heroes/cu/<k>V and <k>D, built on the cartridge's K_Victory files'
+// layout. The file names are short on purpose: the end screen's path string
+// is rewritten in place (lb_patches.cpp, end_picture_override), and
+// "UI/Heroes/cu/127V" (17 characters) is shorter than every stock name
+// ("UI/Heroes/K_Defeat", 18). Only the local player's hero's is ever shown.
+static void end_pictures(const fs::path& dir, const std::string& folder, int k, const CuReader& read,
+                  std::vector<CuFile>* files, Entity* e) {
+    const char* const kPic[2] = {"end_victory.png", "end_defeat.png"};
+    Img im[2];
+    bool have[2] = {false, false};
+    for (int i = 0; i < 2; ++i) {
+        std::vector<uint8_t> b;
+        if (!slurp(dir / "portraits" / kPic[i], &b)) continue;
+        if (read_png(b, &im[i])) have[i] = true;
+        else g_report += folder + ": portraits/" + kPic[i] + " is not a PNG it can read; ignored\n";
+    }
+    if (!have[0] && !have[1]) return;
+    if (!have[0]) { im[0] = im[1]; have[0] = true; }
+    if (!have[1]) { im[1] = im[0]; have[1] = true; }
+    std::vector<uint8_t> tg, tc;
+    if (!read("UI/Heroes/K_Victory.NCBR", &tg) || !read("UI/Heroes/K_Victory.NCLR", &tc)) {
+        g_report += folder + ": the cartridge's end picture (UI/Heroes/K_Victory) is unreadable; end pictures not built\n";
+        return;
+    }
+    for (int i = 0; i < 2; ++i) {
+        std::vector<uint8_t> g = tg, c = tc;
+        if (!encode_end_picture(&g, &c, im[i])) {
+            g_report += folder + ": portraits/" + kPic[i] + " is " + std::to_string(im[i].w) + "x" +
+                        std::to_string(im[i].h) + ", an end picture is 256x192; ignored\n";
+            continue;
+        }
+        if (g_card_approx > 0)
+            g_report += folder + ": portraits/" + kPic[i] + ": " + std::to_string(g_card_approx) +
+                        " colour(s) beyond the picture's palette (255 colours) were drawn as the nearest\n";
+        const std::string name = std::to_string(k) + (i == 0 ? "V" : "D");
+        // As the cartridge ships one: the NCBR COMP-wrapped, the NCLR raw.
+        files->push_back({"UI/Heroes", name + ".NCBR", lvl::comp_wrap(g)});
+        files->push_back({"UI/Heroes", name + ".NCLR", c});
+        e->end_pic[i] = true;
+    }
+    if (e->end_pic[0] || e->end_pic[1])
+        g_report += folder + ": end pictures built (" + std::string(e->end_pic[0] ? "Victory" : "") +
+                    (e->end_pic[0] && e->end_pic[1] ? ", " : "") + (e->end_pic[1] ? "Defeat" : "") +
+                    "); the end screen shows them when this unit is your hero\n";
+}
+
 bool lb_cunits_prepare(const std::vector<uint8_t>& stock, const CuReader& read, std::vector<CuFile>* files,
                        std::vector<std::string>* names) {
     g_ents.clear();
     g_hashes.clear();
     g_bundles.clear();
     g_built = false;
+    g_icons_sig = 0;
     g_report.clear();
     files->clear();
     names->clear();
@@ -1235,6 +1487,7 @@ bool lb_cunits_prepare(const std::vector<uint8_t>& stock, const CuReader& read, 
             continue;
         }
         files->insert(files->end(), std::make_move_iterator(fl.begin()), std::make_move_iterator(fl.end()));
+        end_pictures(units_dir() / fs::u8path(folder), folder, (int)g_ents.size(), read, files, &e);
         e.card_src = find_card(stock, e.tmpl);
         std::string snd_notes;   // docs/485 (B)
         load_unit_sounds(units_dir() / fs::u8path(folder), &e.snd, &snd_notes);
@@ -1244,6 +1497,15 @@ bool lb_cunits_prepare(const std::vector<uint8_t>& stock, const CuReader& read, 
         g_hashes.push_back(hash);
         g_bundles.push_back(std::move(bundle));
     }
+    // docs/492: the game keys a 3D unit's model record by (the number at
+    // record +0x04, team), and a custom unit's +0x04 is its template's: two
+    // units drawn with models from the same template, in one army, share the
+    // first one's model.
+    for (size_t a = 0; a < g_ents.size(); ++a)
+        for (size_t b = a + 1; b < g_ents.size(); ++b)
+            if (g_ents[a].model_drawn && g_ents[b].model_drawn && g_ents[a].tmpl == g_ents[b].tmpl)
+                g_report += g_ents[b].folder + ": drawn with a model and made from the same unit as " +
+                            g_ents[a].folder + "; in one army both show the first one's model\n";
     for (const Entity& e : g_ents) names->push_back(!e.ingame.empty() ? e.ingame : e.display.empty() ? e.name : e.display);
     return !g_ents.empty();
 }
@@ -1358,6 +1620,35 @@ extern "C" int lb_cunits_head(int k, unsigned int out[576]) {
     return 1;
 }
 extern "C" int lb_cunits_template(int k) { return g_built && k >= 0 && k < (int)g_ents.size() ? g_ents[(size_t)k].tmpl : -1; }
+// docs/487: custom unit k's battle icons as 24x24 RGBA: which 0 hud_icon.png,
+// 1 build_icon.png. 0 when the folder has no such file.
+extern "C" int lb_cunits_icon(int k, int which, unsigned int out[576]) {
+    if (!g_built || k < 0 || k >= (int)g_ents.size() || !out) return 0;
+    const std::vector<uint32_t>& v = which == 1 ? g_ents[(size_t)k].build_icon : g_ents[(size_t)k].hud_icon;
+    if (v.size() != 576u) return 0;
+    for (int i = 0; i < 576; ++i) out[i] = v[(size_t)i];
+    return 1;
+}
+// docs/487: whether custom unit k has its own end picture (victory 1: Victory,
+// 0: Defeat) in the cartridge, as UI/Heroes/cu/<k>V or <k>D.
+extern "C" int lb_cunits_end_picture(int k, int victory) {
+    return g_built && k >= 0 && k < (int)g_ents.size() && g_ents[(size_t)k].end_pic[victory ? 0 : 1] ? 1 : 0;
+}
+// docs/487: a set signature of the custom units' battle icons, so a rebuilt
+// cartridge drops what lb_teams.cpp worked out for the old set.
+extern "C" unsigned long long lb_cunits_icons_sig(void) {
+    if (g_icons_sig && g_built) return g_icons_sig;
+    uint64_t h = 1469598103934665603ull;
+    const size_t n = g_built ? g_ents.size() : 0;
+    for (size_t k = 0; k < n; ++k)
+        for (const std::vector<uint32_t>* v : {&g_ents[k].head, &g_ents[k].hud_icon, &g_ents[k].build_icon}) {
+            h = (h ^ (uint64_t)(v->size() + 1)) * 1099511628211ull;
+            for (uint32_t px : *v) h = (h ^ px) * 1099511628211ull;
+        }
+    h ^= (uint64_t)n;
+    if (g_built) g_icons_sig = h ? h : 1;
+    return g_built ? g_icons_sig : h;
+}
 // docs/485 (A): the top-screen card's team mask of the custom unit with
 // blueprint index `bp` (its identity 551+k or battle record 551+n+k): one byte
 // a pixel, row-major, 0 = keep, 255 = team colour; null when it has none.
@@ -1381,6 +1672,20 @@ extern "C" int lb_cunits_role_slot(int k) {
 }
 extern "C" int lb_cunits_category(int k) {
     return g_built && k >= 0 && k < (int)g_ents.size() ? g_ents[(size_t)k].rec[0x5C] : -1;
+}
+// docs/492 (SG-0082): the stock 3D unit whose model and animation table custom
+// unit k is drawn with (-1: its own template's); whether its record is a 2D
+// category (0..4) drawn with that model; and the stock 2D unit whose sprites a
+// hero or special is drawn with (-1). The draw cloak in lb_patches.cpp reads
+// these; the record itself keeps its category.
+extern "C" int lb_cunits_model_src(int k) {
+    return g_built && k >= 0 && k < (int)g_ents.size() ? g_ents[(size_t)k].model_src : -1;
+}
+extern "C" int lb_cunits_model_drawn(int k) {
+    return g_built && k >= 0 && k < (int)g_ents.size() && g_ents[(size_t)k].model_drawn ? 1 : 0;
+}
+extern "C" int lb_cunits_sprites_from(int k) {
+    return g_built && k >= 0 && k < (int)g_ents.size() ? g_ents[(size_t)k].sprites_from : -1;
 }
 extern "C" const char* lb_cunits_name(int k) {
     return g_built && k >= 0 && k < (int)g_ents.size() ? g_ents[(size_t)k].display.c_str() : "";
@@ -1653,9 +1958,11 @@ bool lb_cunits_folder_sheet(const std::string& folder, int tmpl, const std::stri
 //
 // A bundle is what the importer reads, nothing else:
 //   "LBUB" 1, u16 count, then per file: u16 path length, path, u32 length, bytes
-// over unit.json, sheets/*, frames/*/*.png, portraits/card.png,
-// portraits/card_top_screen.png, model/texture.png. Its identity is the FNV-1a
-// 64 of the bundle bytes.
+// over unit.json, sheets/*, frames/*/*.png, sounds/*.wav, the portraits/
+// files (card, card_top_screen, card_mask, head, hud_icon, build_icon,
+// end_victory, end_defeat), model/texture.png and model/model.obj
+// (bundle_files). Its identity
+// is the FNV-1a 64 of the bundle bytes.
 
 // ---- sounds (docs/448) ---------------------------------------------------------
 // A unit's sounds/<NAME>.wav, by the name's ending: ONSELECT, ONDEATH,
@@ -1836,6 +2143,28 @@ void load_unit_sounds(const fs::path& dir, std::array<std::shared_ptr<const std:
     }
 }
 
+// BR-0086 (docs/487): the Unit Lab's preview of a folder's own sound, as the
+// battle will play it: wav_to_mix (6 s at most, mono, peak-normalised), then
+// taken from the game's mix rate to the preview device's 32,000 Hz
+// (lb_sfx.cpp open_device) and scaled by "Custom Unit Sound Volume". Returns
+// "" when it worked, else why the build would not use the file.
+std::string lb_cunits_preview_wav(const std::vector<uint8_t>& wav, std::vector<int16_t>* out) {
+    std::vector<int16_t> mix;
+    const std::string why = wav_to_mix(wav, &mix);
+    if (!why.empty()) return why;
+    const double step = (double)kMixRate / 32000.0;
+    const size_t n = (size_t)((double)mix.size() / step);
+    const int vol = std::max(0, std::min(100, lb_setting_cunit_volume()));
+    out->resize(n);
+    for (size_t i = 0; i < n; ++i) {
+        const size_t a = std::min(mix.size() - 1, (size_t)((double)i * step));
+        (*out)[i] = (int16_t)((int)mix[a] * vol / 100);
+    }
+    return std::string();
+}
+// The sound index (0 SELECT .. 4 SPECIAL) a file stem is read as, or -1.
+int lb_cunits_sound_role(const std::string& stem) { return sound_role(stem); }
+
 // The frontend's audio callback: add the voices to `frames` stereo frames.
 extern "C" void lb_cunits_audio_mix(int16_t* stereo, unsigned frames) {
     std::lock_guard<std::mutex> lk(g_mix_mu);
@@ -1943,8 +2272,11 @@ std::vector<std::string> bundle_files(const fs::path& dir) {
         }
         if (e.is_regular_file(ec) && n.size() > 4 && n.substr(n.size() - 4) == ".wav") v.push_back("sounds/" + n);
     }
+    // card_mask: docs/485 (A); hud_icon, build_icon, end_victory, end_defeat: docs/487.
     for (const char* f : {"portraits/card.png", "portraits/card_top_screen.png", "portraits/card_mask.png",
-                          "portraits/head.png", "model/texture.png"})   // card_mask: docs/485 (A)
+                          "portraits/head.png", "portraits/hud_icon.png", "portraits/build_icon.png",
+                          "portraits/end_victory.png", "portraits/end_defeat.png", "model/texture.png",
+                          "model/model.obj"})   // docs/492 (SG-0083)
         if (fs::exists(dir / f, ec)) v.push_back(f);
     std::sort(v.begin(), v.end());
     return v;
@@ -1981,7 +2313,9 @@ bool bundle_path_ok(const std::string& p) {
             p.find('/', 7) == std::string::npos) ||
            p == "portraits/card.png" || p == "portraits/card_top_screen.png" || p == "portraits/head.png" ||
            p == "portraits/card_mask.png" ||   // docs/485 (A)
-           p == "model/texture.png";
+           p == "portraits/hud_icon.png" || p == "portraits/build_icon.png" ||        // docs/487
+           p == "portraits/end_victory.png" || p == "portraits/end_defeat.png" ||    // docs/487
+           p == "model/texture.png" || p == "model/model.obj";                       // docs/492
 }
 
 std::string hex16(uint64_t h) {

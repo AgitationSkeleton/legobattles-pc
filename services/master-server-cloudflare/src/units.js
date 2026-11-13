@@ -17,7 +17,7 @@
 // format, "LBUB" 1) is parsed with a bound on every read; every path must be
 // one of the shapes the importer reads (unit.json, sheets/<name>.png|.NCBR,
 // frames/<action>/<frame>.png, two portraits, model/texture.png,
-// sounds/<name>.wav); every PNG
+// model/model.obj, sounds/<name>.wav); every PNG
 // must be a PNG and every NCBR an NCBR (raw or COMP); unit.json must parse as
 // JSON with a template index 0..181 and numeric fields. The preview sheet, the
 // thumbnail and the sounds are checked as PNG and PCM WAV and bounded. Names
@@ -33,7 +33,7 @@ const CREDITS_OK = /^[\w \-'.,&!?]{1,60}$/u;
 export const MAX_UNIT_BODY = Math.ceil((MAX_BUNDLE + MAX_SHEET + MAX_THUMB + MAX_SOUNDS * MAX_WAV) * 4 / 3) + 16384;
 const NAME_OK = /^[\w \-'.!?]{1,24}$/u;
 const KEY_OK = /^[0-9a-fA-F]{32}$/;
-const PATH_OK = /^(unit\.json|sheets\/[A-Za-z0-9_-]{1,48}\.(png|NCBR)|frames\/[A-Za-z0-9_-]{1,24}\/[A-Za-z0-9_-]{1,32}\.png|portraits\/card\.png|portraits\/card_top_screen\.png|portraits\/card_mask\.png|portraits\/head\.png|model\/texture\.png|sounds\/[A-Za-z0-9_-]{1,48}\.wav)$/;
+const PATH_OK = /^(unit\.json|sheets\/[A-Za-z0-9_-]{1,48}\.(png|NCBR)|frames\/[A-Za-z0-9_-]{1,24}\/[A-Za-z0-9_-]{1,32}\.png|portraits\/card\.png|portraits\/card_top_screen\.png|portraits\/card_mask\.png|portraits\/head\.png|portraits\/hud_icon\.png|portraits\/build_icon\.png|portraits\/end_victory\.png|portraits\/end_defeat\.png|model\/texture\.png|model\/model\.obj|sounds\/[A-Za-z0-9_-]{1,48}\.wav)$/;
 // The record's category byte (+0x5C), as the game's records use it.
 export const CATEGORY_NAMES = ['Hero', 'Builder', 'Melee', 'Ranged', 'Mounted', 'Transport', 'Special', 'Base',
   'Lumber mill', 'Mine', 'Farm', 'Barracks', 'Factory', 'Tower', 'Tower 2', 'Tower 3', 'Shipyard', 'Bridge',
@@ -87,6 +87,17 @@ export function isWav(b) {
   const fmt = u16(b, 20), ch = u16(b, 22), rate = u32(b, 24), bits = u16(b, 34);
   return fmt === 1 && ch >= 1 && ch <= 2 && rate >= 4000 && rate <= 96000 && (bits === 8 || bits === 16);
 }
+// docs/492 (SG-0083): model/model.obj is plain text (printable ASCII, tabs and
+// line breaks), at most MAX_OBJ bytes; the port parses only v, vt, vn and f.
+const MAX_OBJ = 512 * 1024;
+export function isObjText(b) {
+  if (!b || b.length < 1 || b.length > MAX_OBJ) return false;
+  for (let i = 0; i < b.length; ++i) {
+    const c = b[i];
+    if (!(c === 9 || c === 10 || c === 13 || (c >= 32 && c < 127))) return false;
+  }
+  return true;
+}
 
 // The bundle: {ok, why, unit: {template, fields}} with every file checked.
 export function validateBundle(b) {
@@ -108,6 +119,7 @@ export function validateBundle(b) {
     const d = b.subarray(at, at + dl); at += dl;
     if (path.endsWith('.png') && !isPng(d, 1024)) return { ok: false, why: 'not a PNG: ' + path };
     if (path.endsWith('.wav') && !isWav(d)) return { ok: false, why: 'not a PCM WAV: ' + path };
+    if (path.endsWith('.obj') && !isObjText(d)) return { ok: false, why: 'not a text OBJ: ' + path };
     if (path.endsWith('.NCBR')) {
       const t = String.fromCharCode(d[0], d[1], d[2], d[3]);
       if (t !== 'RGCN' && t !== 'PMOC') return { ok: false, why: 'not an NCBR: ' + path };

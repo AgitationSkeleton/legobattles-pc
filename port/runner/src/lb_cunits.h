@@ -43,6 +43,12 @@ bool lb_cunits_unpack(const std::vector<uint8_t>& bundle, const std::string& fol
 bool lb_cunits_png_rgba(const std::vector<uint8_t>& png, int* w, int* h, std::vector<uint32_t>* px);
 // BR-0078: model/texture.png onto a model's bytes, as the importer applies it.
 bool lb_cunits_apply_model_texture(std::vector<uint8_t>* nsbmd, const std::vector<uint8_t>& png);
+// BR-0086 (docs/487): a folder's sounds/<NAME>.wav as the battle will play it,
+// as 16-bit mono at the preview device's 32,000 Hz; "" when it worked, else
+// why the build would leave the file out. And the sound index a file name is
+// read as (0 SELECT, 1 DEATH, 2 STRIKE, 3 HIT, 4 SPECIAL), or -1.
+std::string lb_cunits_preview_wav(const std::vector<uint8_t>& wav, std::vector<int16_t>* out);
+int lb_cunits_sound_role(const std::string& stem);
 
 // SG-0061, the lab's Convert tool. An .NCBR (raw or COMP-wrapped, 4bpp, linear
 // or tiled) as 4-bit palette indices; false with `why` set otherwise.

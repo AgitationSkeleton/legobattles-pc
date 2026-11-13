@@ -308,6 +308,13 @@ const BalField kUnitFields[] = {
     //      a structure (apply_damage_observer); the cartridge has none.
     {"Melee vs buildings", 0x0B, 1, 0, 160},
     {"Shot vs buildings", 0x57, 1, 0, 160},
+    // docs/488 (SG-0116): the occupancy ("collision") layers, APPENDED (36).
+    // +0x53 is the pad of entry 10 of the +0x2C array (0xA1 in all 182 stock
+    // records; no bundled pack writes it, checked over every run in
+    // lb_balance_data.h). 0 (or the stock 0xA1) is Automatic; 1..7 is the
+    // mask FUN_0200159C would compute: 1 ground, 2 air, 4 bridge
+    // (lb_patches.cpp occ_layers_override).
+    {"Collision layer", 0x53, 1, 0, 7},
 };
 constexpr int kPortField0 = 26;   // the first of them (lb_overlay.h LB_BAL_PORT_FIELD0)
 // docs/408: +0x70/+0x72 are NOT a copy of +0x6C/+0x6E. The hit (FUN_0206E408,
@@ -357,6 +364,79 @@ const BalField kGlobalFields[] = {
 constexpr int kGoldBrickStock = 1000;
 constexpr int kUnitRecords = 182, kAttackRecords = 27;
 constexpr int kGlobalRecord = kUnitRecords + kAttackRecords;   // 209
+
+// ── docs/488 (SG-0079): THE SPELL TABLE ────────────────────────────────────
+//
+// FUN_02002AF8(id) = id * 0x14 + [0x02002B08] = 0x02126DA0 (ARM9 static
+// data, resident in main RAM, read through the bus like the build limits at
+// 0x02126D94). 0x23 records, id 0..0x22; byte 0 is the id. The fields, with
+// their readers:
+//   +2 / +4  damage per hit at the END / START of the effect: DamageSpell's
+//            ctor FUN_02076040 starts [this+0x64] at +4 << 12 and steps it to
+//            +2 over the duration ([this+0x68]); Sim::DamageSpell::virtual_03
+//            (0x02076D84) subtracts [this+0x64] >> 12 from each victim's HP.
+//   +3 / +5  hit chance in percent at the END / START (FUN_02076998 and
+//            FUN_02076AB8 start [this+0x50] at +5 and step to +3; virtual_03
+//            hits when rand(100) + 1 <= [this+0x50] >> 12). FUN_02076998 ramps
+//            only when +3 < 0x65, FUN_02076AB8 only when +5 != 0xFF, so 0..100.
+//   +6       tap range (FUN_02002AD4, x1.5 with cheat byte 8).
+//   +7       area range: FUN_02076B70 grows the radius from 0 to +7 over the
+//            duration; EAttackSpell (FUN_02077130), ForrestSpell and the
+//            FireBall / ThunderHammer blasts read it too.
+//   +0xC     mana cost (FUN_0207B830, `& 0xFFFF`, spent when below the
+//            hero's mana +0x1A2).
+//   +0x12    duration / stun length in frames (FUN_02002AA8, x1.5 with
+//            cheat byte 9). Divided into the ramps: never 0.
+// "Startup" is not in the table: FUN_02076F14 is a switch on the id (0x14 15,
+// 0x16 20, 0x17 20, 0x19 10, 0x1C 20, 0x1F 20, else 0), the frames a
+// DamageSpell waits before a victim is hit (entity +0x230) and adds to its
+// life. The patcher answers it from the set (lb_patches.cpp).
+constexpr int kSpellRecord0 = kGlobalRecord + 1;   // 210: spell id 0
+constexpr int kSpellRecords = 0x23;
+constexpr uint32_t kSpellTable = 0x02126DA0u, kSpellSize = 0x14u;
+const BalField kSpellFields[] = {
+    {"Damage (start)", 0x04, 1, 0, 255},
+    {"Damage (end)", 0x02, 1, 0, 255},
+    {"Hit chance % (start)", 0x05, 1, 0, 100},
+    {"Hit chance % (end)", 0x03, 1, 0, 100},
+    {"Tap range", 0x06, 1, 0, 255},
+    {"Area range", 0x07, 1, 0, 255},
+    {"Mana cost", 0x0C, 2, 0, 65535},
+    {"Duration", 0x12, 2, 0, 65535},
+    {"Startup", 0x00, 0, 0, 255},   // width 0: in the code (FUN_02076F14)
+};
+constexpr int kSpellFieldCount = (int)(sizeof kSpellFields / sizeof kSpellFields[0]);
+int spell_stock_startup(int id) {
+    switch (id) {
+        case 0x14: return 15;
+        case 0x16: case 0x17: case 0x1C: case 0x1F: return 20;
+        case 0x19: return 10;
+        default: return 0;
+    }
+}
+// The table as the game loaded it, taken before the first write; every
+// value not in the set is written back from it, so taking a value out (or the
+// whole set) needs no record of what was written.
+std::vector<uint8_t> g_spell_stock;
+bool spell_table_valid() {
+    for (int id = 1; id < kSpellRecords; ++id)
+        if (bus_read_u8(kSpellTable + (uint32_t)id * kSpellSize) != (uint8_t)id) return false;
+    return true;
+}
+bool spell_snapshot() {
+    if (!g_spell_stock.empty()) return true;
+    if (!spell_table_valid()) return false;
+    g_spell_stock.resize((size_t)kSpellRecords * kSpellSize);
+    for (uint32_t i = 0; i < g_spell_stock.size(); ++i)
+        g_spell_stock[i] = bus_read_u8(kSpellTable + i);
+    return true;
+}
+uint32_t spell_stock_value(int id, const BalField& f) {
+    uint32_t v = 0u;
+    for (int k = 0; k < f.width; ++k)
+        v |= (uint32_t)g_spell_stock[(size_t)id * kSpellSize + f.off + (uint32_t)k] << (8 * k);
+    return v;
+}
 constexpr uint32_t kFirstRecord = 4u, kUnitSize = 0x7Cu, kAttackSize = 0x74u;
 // docs/438 (SG-0022): four projectile records no unit fires and no code names
 // (the only literal index lookups are record 202, ProjectileSpell, by the
@@ -403,6 +483,7 @@ int kind_of(int rec) {
     if (rec >= 0 && rec < kUnitRecords) return LB_BAL_UNITS;
     if (rec >= kUnitRecords && rec < kUnitRecords + kAttackRecords) return LB_BAL_ATTACKS;
     if (rec == kGlobalRecord) return LB_BAL_GLOBALS;   // docs/416
+    if (rec >= kSpellRecord0 && rec < kSpellRecord0 + kSpellRecords) return LB_BAL_SPELLTAB;
     return -1;
 }
 
@@ -417,6 +498,8 @@ const BalField* field_of(int rec, int field) {
     if (k == LB_BAL_GLOBALS && field >= 0 &&
         field < (int)(sizeof kGlobalFields / sizeof kGlobalFields[0]))
         return &kGlobalFields[field];
+    if (k == LB_BAL_SPELLTAB && field >= 0 && field < kSpellFieldCount)   // docs/488
+        return &kSpellFields[field];
     return nullptr;
 }
 
@@ -436,6 +519,31 @@ void write_w(uint32_t a, int w, uint32_t v) {
     if (w == 1) bus_write_u8(a, (uint8_t)v);
     else if (w == 2) bus_write_u16(a, (uint16_t)v);
     else bus_write_u32(a, v);
+}
+
+// docs/488: the spell table as `set` has it over the loaded table (nullptr:
+// the loaded table back). Every field not in the set is written back from
+// the snapshot, so this is its own revert. Returns the set's spell values.
+int spell_write(const std::vector<Edit>* set) {
+    if (!spell_snapshot()) return 0;
+    int n = 0;
+    for (int id = 0; id < kSpellRecords; ++id)
+        for (int fi = 0; fi < kSpellFieldCount; ++fi) {
+            const BalField& f = kSpellFields[fi];
+            if (f.width == 0) continue;   // Startup: in the code
+            uint32_t want = spell_stock_value(id, f);
+            if (set)
+                for (const Edit& e : *set)
+                    if (e.rec == kSpellRecord0 + id && e.field == fi) {
+                        want = (uint32_t)e.value;
+                        ++n;
+                    }
+            // The duration divides the ramps (FX_Div): never 0.
+            if (fi == LB_BAL_SPELL_DURATION && want == 0u) want = 1u;
+            const uint32_t a = kSpellTable + (uint32_t)id * kSpellSize + f.off;
+            if (read_w(a, f.width) != want) write_w(a, f.width, want);
+        }
+    return n;
 }
 
 bool guest_ram(uint32_t a) { return a >= 0x02000000u && a < 0x02400000u; }
@@ -472,6 +580,7 @@ extern "C" int lb_balance_field_count(int kind) {
     return kind == LB_BAL_UNITS ? (int)(sizeof kUnitFields / sizeof kUnitFields[0])
          : kind == LB_BAL_ATTACKS ? (int)(sizeof kAttackFields / sizeof kAttackFields[0])
          : kind == LB_BAL_GLOBALS ? (int)(sizeof kGlobalFields / sizeof kGlobalFields[0])
+         : kind == LB_BAL_SPELLTAB ? kSpellFieldCount   // docs/488
          : 0;
 }
 
@@ -486,6 +595,22 @@ extern "C" int lb_balance_global(int field) {
         if (e.rec == kGlobalRecord && e.field == field) return e.value;
     return -1;
 }
+// docs/488: a DamageSpell's startup frames for spell `spell_id` in force now
+// (the replay's, the host's or the player's set), or -1 for the cartridge's
+// own (FUN_02076F14). Gated like lb_balance_global.
+extern "C" int lb_balance_spell_startup(int spell_id) {
+    if (spell_id < 0 || spell_id >= kSpellRecords) return -1;
+    const int net = lb_net_guest_state();
+    const bool hosting = net == 10 || net == 2 || net == 3 || net == 4 || net == 11;
+    if (lb_balance_custom_blocked() && !g_host_on && !hosting) return -1;
+    for (const Edit& e : active())
+        if (e.rec == kSpellRecord0 + spell_id && e.field == LB_BAL_SPELL_STARTUP)
+            return e.value;
+    return -1;
+}
+extern "C" int lb_balance_spell_stock_startup(int spell_id) {
+    return spell_stock_startup(spell_id);
+}
 extern "C" const char* lb_balance_field_name(int kind, int field) {
     const int first = lb_balance_record_first(kind);
     const BalField* f = field_of(first, field);
@@ -497,20 +622,31 @@ extern "C" int lb_balance_field_max(int kind, int field) {
 }
 extern "C" int lb_balance_record_first(int kind) {
     return kind == LB_BAL_ATTACKS ? kUnitRecords
-         : kind == LB_BAL_GLOBALS ? kGlobalRecord : 0;
+         : kind == LB_BAL_GLOBALS ? kGlobalRecord
+         : kind == LB_BAL_SPELLTAB ? kSpellRecord0 : 0;
 }
 extern "C" int lb_balance_record_count(int kind) {
     return kind == LB_BAL_ATTACKS ? kAttackRecords
          : kind == LB_BAL_UNITS ? kUnitRecords
-         : kind == LB_BAL_GLOBALS ? 1 : 0;
+         : kind == LB_BAL_GLOBALS ? 1
+         : kind == LB_BAL_SPELLTAB ? kSpellRecords : 0;
 }
 
 // The record's own name, from the string the loader pointed +0x00 at.
+extern "C" const char* lb_spell_label(int id);   // lb_overlay.cpp
 extern "C" int lb_balance_record_name(int rec, char* out, int cap) {
     if (!out || cap <= 0) return 0;
     out[0] = 0;
     if (kind_of(rec) == LB_BAL_GLOBALS)   // docs/416
         return std::snprintf(out, (size_t)cap, "%s", "Pickups");
+    if (kind_of(rec) == LB_BAL_SPELLTAB) {   // docs/488
+        const int id = rec - kSpellRecord0;
+        // 0x21 and 0x22 are no hero's: the Lightning's and the Fireball's
+        // impacts (FUN_02079B94 and FUN_020795AC look them up).
+        if (id == 0x21) return std::snprintf(out, (size_t)cap, "%s", "Lightning (impact)");
+        if (id == 0x22) return std::snprintf(out, (size_t)cap, "%s", "Fireball (impact)");
+        return std::snprintf(out, (size_t)cap, "%s", lb_spell_label(id));
+    }
     const int sp = spare_number(rec);   // docs/438
     if (sp && !g_spare_claimed[sp - 1])
         return std::snprintf(out, (size_t)cap, "Spare projectile %d", sp);
@@ -551,6 +687,18 @@ extern "C" int lb_balance_value(int rec, int field) {
             if (e.rec == rec && e.field == field) return e.value;
         return global_stock(field);
     }
+    if (kind_of(rec) == LB_BAL_SPELLTAB) {   // docs/488: the table in RAM, or the code's
+        const BalField* f = field_of(rec, field);
+        const int id = rec - kSpellRecord0;
+        if (!f) return -1;
+        if (f->width == 0) {
+            for (const Edit& e : active())
+                if (e.rec == rec && e.field == field) return e.value;
+            return spell_stock_startup(id);
+        }
+        if (!spell_table_valid()) return -1;
+        return (int)read_w(kSpellTable + (uint32_t)id * kSpellSize + f->off, f->width);
+    }
     const uint32_t base = lb_patches_blueprint_base();
     const BalField* f = field_of(rec, field);
     if (!base || !f || !applies(base, rec, *f)) return -1;
@@ -558,6 +706,14 @@ extern "C" int lb_balance_value(int rec, int field) {
 }
 extern "C" int lb_balance_base(int rec, int field) {
     if (kind_of(rec) == LB_BAL_GLOBALS) return global_stock(field);   // docs/416
+    if (kind_of(rec) == LB_BAL_SPELLTAB) {   // docs/488: as the game loaded it
+        const BalField* f = field_of(rec, field);
+        const int id = rec - kSpellRecord0;
+        if (!f) return -1;
+        if (f->width == 0) return spell_stock_startup(id);
+        if (g_spell_stock.empty()) return lb_balance_value(rec, field);
+        return (int)spell_stock_value(id, *f);
+    }
     const uint32_t base = lb_patches_blueprint_base();
     const BalField* f = field_of(rec, field);
     if (!base || !f) return -1;
@@ -791,7 +947,8 @@ extern "C" int lb_balance_export_ebp(const char* path, char* msg, int msg_cap) {
     }
     int n = 0;
     for (const Edit& e : g_live) {
-        if (kind_of(e.rec) == LB_BAL_GLOBALS) continue;   // docs/416: in the code, not the file
+        // docs/416: in the code, not the file; docs/488: the spells are in the ARM9.
+        if (kind_of(e.rec) != LB_BAL_UNITS && kind_of(e.rec) != LB_BAL_ATTACKS) continue;
         const BalField* f = field_of(e.rec, e.field);
         if (!f) continue;
         const uint32_t r = record_at(0u, e.rec);
@@ -817,6 +974,7 @@ extern "C" void lb_balance_custom_revert(unsigned int base) {
         write_w(g_written[i].addr, g_written[i].width, g_written[i].before);
     g_written.clear();
     g_written_gen = 0u;
+    if (!g_spell_stock.empty()) spell_write(nullptr);   // docs/488: the loaded table back
     (void)base;
 }
 
@@ -899,8 +1057,14 @@ extern "C" int lb_balance_custom_apply(unsigned int base) {
         }
     }
     int n = 0;
+    // docs/488: the spell table (ARM9 static data, not the blueprints).
+    const int spells = spell_write(&active());
+    if (spells)
+        std::fprintf(stderr, "[lb_balance] %d spell value(s) written to the spell table "
+                     "at 0x%08X\n", spells, (unsigned)kSpellTable);
     for (const Edit& e : active()) {
         if (kind_of(e.rec) == LB_BAL_GLOBALS) continue;   // docs/416: not in RAM
+        if (kind_of(e.rec) == LB_BAL_SPELLTAB) continue;  // docs/488: above
         const BalField* f = field_of(e.rec, e.field);
         if (!f || !applies(base, e.rec, *f)) continue;
         const uint32_t r = record_at(base, e.rec);

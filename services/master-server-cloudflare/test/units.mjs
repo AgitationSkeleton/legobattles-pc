@@ -34,7 +34,9 @@ function files(dir) {
     for (const n of readdirSync(join(dir, 'sheets'))) if (/\.(png|NCBR)$/.test(n)) v.push('sheets/' + n);
   if (existsSync(join(dir, 'sounds')))
     for (const n of readdirSync(join(dir, 'sounds'))) if (n.endsWith('.wav')) v.push('sounds/' + n);
-  for (const f of ['portraits/card.png', 'portraits/card_top_screen.png', 'portraits/card_mask.png', 'portraits/head.png', 'model/texture.png'])
+  for (const f of ['portraits/card.png', 'portraits/card_top_screen.png', 'portraits/card_mask.png', 'portraits/head.png',
+    'portraits/hud_icon.png', 'portraits/build_icon.png', 'portraits/end_victory.png', 'portraits/end_defeat.png',
+    'model/texture.png', 'model/model.obj'])
     if (existsSync(join(dir, f))) v.push(f);
   return v.sort();
 }
@@ -73,6 +75,12 @@ r = await up({ bundle: b64(bundle([...entries, ['sounds/x.exe', thumb]])) });
 check('a file the importer does not read is refused', r.status === 400, r);
 r = await up({ bundle: b64(bundle([...entries, ['sounds/x.wav', thumb]])) });
 check('a bundled sound that is not a WAV is refused', r.status === 400 && /WAV/.test(r.data.error), r);
+// docs/492 (SG-0083): model/model.obj must be plain text.
+const noObj = entries.filter(([p]) => p !== 'model/model.obj');
+r = await up({ bundle: b64(bundle([...noObj, ['model/model.obj', thumb]])) });
+check('a model.obj that is not text is refused', r.status === 400 && /OBJ/.test(r.data.error), r);
+r = await up({ bundle: b64(bundle([...noObj, ['model/other.obj', Buffer.from('v 0 0 0\n')]])) });
+check('an OBJ under another name is refused', r.status === 400 && /path/.test(r.data.error), r);
 check('the bundle carries its sounds', entries.some(([p]) => p.startsWith('sounds/')));
 r = await up({ bundle: b64(bundle(entries.map(([p, d]) => [p, p.endsWith('.png') ? Buffer.from('not a png') : d]))) });
 check('a PNG that is not a PNG is refused', r.status === 400 && /PNG/.test(r.data.error), r);

@@ -238,17 +238,40 @@ const uint16_t kTeamShades[6][3] = {{0x113F, 0x005C, 0x0015}, {0x7628, 0x6D60, 0
 // (KingFaction.NCLR bank 13), whose entries 2-5 are dark blue for the greys.
 const uint16_t kTealShades[3][3] = {{0x7FFF, 0x6B73, 0x56EA}, {0x6764, 0x4E80, 0x31A0}, {0x221F, 0x08BF, 0x0017}};
 const uint16_t kRdbBlue[4] = {0x7ED0, 0x7D80, 0x4501, 0x2462};
-const char* const kTeamNames[7] = {"Red", "Blue", "Green", "Yellow", "Purple", "Grey", "Teal"};
+// docs/489: entry 7, "Custom", is this player's custom team colour, offered while
+// that setting is on.
+const char* const kTeamNames[8] = {"Red", "Blue", "Green", "Yellow", "Purple", "Grey", "Teal", "Custom"};
 constexpr int kTeams = 7;
 extern "C" int lb_setting_teal_style(void);   // lb_overlay.cpp
+extern "C" int lb_setting_custom_colour(unsigned* rgb);   // lb_overlay.cpp, docs/489
+extern "C" void lb_custompal_ramp(unsigned rgb, unsigned short out[3]);   // lb_patches.cpp, docs/489
+constexpr int kCustomKey = 16;   // team_key of the custom colour: 16 + 0xRRGGBB
+
+int teams_offered() {
+    unsigned rgb = 0;
+    return lb_setting_custom_colour(&rgb) ? kTeams + 1 : kTeams;
+}
 
 // The preview's team number with the teal style folded in (6, 7 or 8), so the
-// texture cache follows the style setting.
+// texture cache follows the style setting; docs/489: the custom colour is 16 +
+// its 0xRRGGBB, so the cache follows the colour too.
 int team_key(int t) {
+    if (t == 7) {
+        unsigned rgb = 0;
+        if (lb_setting_custom_colour(&rgb)) return kCustomKey + (int)(rgb & 0xFFFFFFu);
+        t = 0;
+    }
     const int s = lb_setting_teal_style();
     return t == 6 ? 6 + (s == 1 || s == 2 ? s : 0) : t;
 }
 const uint16_t* team_shades(int t) {
+    if (t >= kCustomKey) {   // docs/489: the custom ramp (the game's own, lb_patches.cpp)
+        static uint16_t sh[3];
+        unsigned short r[3];
+        lb_custompal_ramp((unsigned)(t - kCustomKey), r);
+        for (int i = 0; i < 3; ++i) sh[i] = r[i];
+        return sh;
+    }
     return t >= 6 ? kTealShades[t >= 6 && t <= 8 ? t - 6 : 0] : kTeamShades[t];
 }
 
@@ -269,7 +292,7 @@ std::array<uint32_t, 16> palette(int t) {
     }
     std::array<uint32_t, 16> p{};
     for (int i = 0; i < 16; ++i) p[(size_t)i] = ds_rgba(bank[i]);
-    const uint16_t* sh = team_shades(t < 0 || t > 8 ? 0 : t);   // t: 0..5, 6..8 teal (team_key)
+    const uint16_t* sh = team_shades(t >= kCustomKey ? t : t < 0 || t > 8 ? 0 : t);   // t: 0..5, 6..8 teal, 16+ custom (team_key)
     for (int k = 0; k < 3; ++k) p[(size_t)(12 + k)] = ds_rgba(sh[k]);
     if (t == 8)   // docs/485: style 2's dark blue where the greys are
         for (int k = 0; k < 4; ++k) p[(size_t)(2 + k)] = ds_rgba(kRdbBlue[k]);
@@ -524,6 +547,13 @@ extern "C" const char* lb_sfx_seq_name(int arc, int seq);
 extern "C" int lb_sfx_render(int arc, int seq, int16_t* out, int cap);
 extern "C" int lb_teams_head_rgba(int bp, unsigned int out[576]);       // lb_teams.cpp
 extern "C" int lb_teams_hud_icon_rgba(int bp, unsigned int out[576]);   // lb_teams.cpp
+// docs/487: the build menu's icon of a stock blueprint, and a 24x24 picture
+// as the battle draws a custom unit's icon (build 0: the battle icon, 1: the
+// build menu's), both lb_teams.cpp.
+extern "C" int lb_teams_build_icon_rgba(int bp, unsigned int out[576]);
+extern "C" int lb_teams_icon_as_battle(const unsigned int in[576], int build, unsigned int out[576]);
+extern "C" int lb_teams_custom_icon_pick(int tmpl, int build, const unsigned int* build_px, const unsigned int* hud_px,
+                                         const unsigned int* head_px, unsigned int out[576]);
 
 // The sequence archive a record's sounds are in, or -1. Records 0..119 are the
 // six factions' 20 roles in sound_data.sadl's own order (SEQARC__KING_HEROM =
@@ -634,8 +664,14 @@ const Field kFields[] = {
     // docs/482 (SG-0097): damage against structures, 0 automatic, else
     // 80 + bonus (padding: +0x0B 0xA2, +0x57 0xA1 in every stock record).
     {"melee_vs_buildings", 0x0B, 1}, {"shot_vs_buildings", 0x57, 1},
+    // docs/488 (SG-0116): the collision layers, 0 automatic, else a mask of
+    // 1 ground, 2 air, 4 bridge (padding +0x53, stock 0xA1 reads as 0).
+    {"collision_layer", 0x53, 1},
     {"display_name_id", 0x06, 2},
 };
+const char* const kLayerNames[8] = {
+    "Automatic", "Ground", "Air", "Ground + air", "Bridge",
+    "Ground + bridge", "Air + bridge", "All three"};
 
 // docs/482: a damage bonus against structures is stored as kBonusZero + the
 // bonus (1..kBonusMax); 0 (or the stock padding) is Automatic.
@@ -659,6 +695,7 @@ int port_field_max(const char* key) {
         !std::strcmp(key, "speed_icon") || !std::strcmp(key, "boarding"))
         return 2;
     if (is_bonus_key(key)) return kBonusMax;   // docs/482
+    if (!std::strcmp(key, "collision_layer")) return 7;   // docs/488
     return !std::strcmp(key, "construction_style") ? 3 : 0;
 }
 // The names of a three-way field's values.
@@ -727,6 +764,12 @@ const char* port_field_tip(const char* key) {
                "Cannot board: it never boards a transport.\n"
                "A transport still holds at most 4 hero, builder, foot and mounted units and\n"
                "2 siege/special units.";
+    if (!std::strcmp(key, "collision_layer"))   // docs/488
+        return "Which units it bumps into and stacks with.\n"
+               "Ground: soldiers, vehicles and buildings. Air: flyers. Bridge: bridges and gates.\n"
+               "Units on different layers pass through each other.\n"
+               "Automatic: the unit it was made from (building_collision and land_water).\n"
+               "Where it can walk is still land, water and trees.";
     return "The brick animation shown while this unit is trained.\n"
            "Auto: its faction's (a custom unit is Human). Skeleton is the Wizards', Alien the Aliens'.";
 }
@@ -802,6 +845,18 @@ const HowStep kHowTo[] = {
      "one. Use at most 16 colours. The exported texture's three team blues stay\n"
      "the owner's team colour in play: keep them exactly where the team colour\n"
      "should show. The texture must be a PNG (a .tga is not read)."},
+    {"A new shape for a model (optional)",
+     "model/model_export.obj is the stock model as an OBJ. Edit it in a 3D program\n"
+     "(keep its scale and position; at most 400 triangles; UVs over texture.png)\n"
+     "and save it as model/model.obj. It replaces the whole mesh and moves with the\n"
+     "model's root as one rigid piece: a dragon's wings no longer flap. Keep the\n"
+     "faces' winding (the game draws front faces only). Preview shows it."},
+    {"3D models and other sprites (heroes and others)",
+     "On the Stats tab, \"3D model\" draws a hero, builder or ground unit with a\n"
+     "transport's or special's model (unit.json \"model\": its number); it stays a\n"
+     "hero (spells, respawn, mana) or whatever it was. model/texture.png and\n"
+     "model/model.obj apply to that model. When a level has no room (12 model\n"
+     "records) the unit is drawn with its sprites there and the log says so."},
     {"Portraits",
      "portraits/head.png is the small round head on the army screen, the Team\n"
      "Builder and the top screen (any size, fitted to 24x24). portraits/card.png and\n"
@@ -811,6 +866,20 @@ const HowStep kHowTo[] = {
      "as the nearest, and Files > Last build says how many). Optional:\n"
      "portraits/card_mask.png, the same size, greyscale: white where the card should\n"
      "take the owner's team colour."},
+    {"Battle icons and end pictures",
+     "Three small 24x24 icons (bigger pictures are fitted):\n"
+     "  portraits/head.png       the army screen's round head (see Portraits)\n"
+     "  portraits/hud_icon.png   the battle's icon: group selection, the training\n"
+     "                           queue and a transport's passengers\n"
+     "  portraits/build_icon.png the icon in a building's build menu (optional;\n"
+     "                           without it hud_icon.png is used)\n"
+     "In a battle they are drawn in the game's own 16-colour icon palettes: the\n"
+     "battle icon in the palette that fits it best, the build icon in the build\n"
+     "menu's red palette. The Look tab shows them as the battle will. An icon that\n"
+     "is still the starting unit's leaves the starting unit's in place.\n"
+     "End pictures (a hero's Victory and Defeat screen, 256x192, up to 255\n"
+     "colours): portraits/end_victory.png and portraits/end_defeat.png; one alone\n"
+     "is used for both. They show when this unit is your hero."},
     {"Sounds",
      "Put WAV files in sounds/ named for when they play: SELECT, DEATH, STRIKE,\n"
      "HIT or SPECIAL (a name ending in one of these also counts, e.g.\n"
@@ -841,11 +910,13 @@ std::string how_to_text() {
         t += "\n\n";
     }
     t += "Files in a unit folder\n"
-         "  unit.json                  name, stats, starting unit, asset\n"
+         "  unit.json                  name, stats, starting unit, asset, model, sprites_from\n"
          "  sheets/                    whole sprite sheets (.png or .NCBR)\n"
          "  frames/<action>/d<D>_<N>.png  single frames\n"
          "  model/texture.png          a 3D unit's texture\n"
-         "  portraits/                 head.png, card.png, card_top_screen.png, card_mask.png\n"
+         "  model/model.obj            a 3D unit's new mesh (from model_export.obj)\n"
+         "  portraits/                 head.png, card.png, card_top_screen.png, card_mask.png,\n"
+         "                             hud_icon.png, build_icon.png, end_victory.png, end_defeat.png\n"
          "  sounds/                    WAVs by role\n"
          "Anything missing is taken from the starting unit.\n";
 #ifdef _WIN32
@@ -947,6 +1018,14 @@ int export_one(const Rec& r, const fs::path& root) {
             const std::vector<uint8_t> m = rom_file(r.asset + ext);
             if (!m.empty() && write_file(dir / "model" / (leaf + ext), m)) ++files;
         }
+        // docs/492 (SG-0083): the mesh as an OBJ to start from. It is named
+        // model_export.obj so a unit made from this export keeps the stock
+        // mesh (with its moving parts); saved as model/model.obj it replaces it.
+        const std::vector<uint8_t> m = rom_file(r.asset + ".nsbmd");
+        std::string obj;
+        if (!m.empty() && lb_nsbmd_export_obj(m.data(), m.size(), &obj) &&
+            write_file(dir / "model" / "model_export.obj", std::vector<uint8_t>(obj.begin(), obj.end())))
+            ++files;
     }
     // Portraits: the two cards, the army-screen head and the battle HUD icon.
     fs::create_directories(dir / "portraits", ec);
@@ -968,6 +1047,10 @@ int export_one(const Rec& r, const fs::path& root) {
         ++files;
     if (lb_teams_hud_icon_rgba(r.index, icon) && rgba_png(24, 24, icon, &png) &&
         write_file(dir / "portraits" / "hud_icon.png", png))
+        ++files;
+    // docs/487: the build menu's icon (the red one), to start from.
+    if (lb_teams_build_icon_rgba(r.index, icon) && rgba_png(24, 24, icon, &png) &&
+        write_file(dir / "portraits" / "build_icon.png", png))
         ++files;
     // Sounds: every sequence of the record's archive, as 32 kHz mono WAV.
     const int arc = sound_arc(r);
@@ -1041,10 +1124,20 @@ fs::path units_root();   // below
 // an edited PNG never showed until a restart. A folder's key now carries the
 // modification time of the file(s) it was made from; a new time makes a new
 // texture and frees the old one.
+// BR-0078 (docs/487): the time alone missed a file replaced by one with the
+// same modification time (a copy keeps the original's time, and some tools
+// keep it when they save), so the stamp is the time, the size and the Reload
+// art generation together: Reload art (g_reload_gen) makes every custom
+// unit's preview part new, whatever the files say. 0 still means no file.
+unsigned g_reload_gen = 0;
 long long file_stamp(const fs::path& p) {
     std::error_code ec;
     const auto t = fs::last_write_time(p, ec);
-    return ec ? 0 : (long long)t.time_since_epoch().count();
+    if (ec) return 0;
+    const auto n = fs::file_size(p, ec);
+    const long long v = (long long)t.time_since_epoch().count() ^ ((long long)(ec ? 0 : n) * 1000003LL) ^
+                        ((long long)g_reload_gen << 48);
+    return v ? v : 1;
 }
 template <class F>
 const Tex& stamped_tex(const std::string& base, long long stamp, F make) {
@@ -1186,16 +1279,108 @@ bool pick_combo(const char* id, View& v) {
     return changed;
 }
 
+bool slurp_file(const fs::path& p, std::vector<uint8_t>* out, size_t cap);   // below
+
+// BR-0086 (docs/487): A CUSTOM UNIT'S OWN SOUNDS IN THE PREVIEW. The buttons
+// played the starting unit's sounds only (sounds_for reads the template's
+// archive), so a replaced WAV was never heard here. A custom unit's
+// sounds/*.wav are read as the build reads them (lb_cunits_preview_wav: the
+// same reader, roles and order as load_unit_sounds), re-read whenever a file
+// is added, removed or changes (file_stamp, and Reload art). Roles with no
+// usable file keep the starting unit's, as in the battle.
+struct OwnSound { std::string file; int role = -1; std::vector<int16_t> pcm; std::string why; };
+struct OwnSounds { long long stamp = 0; std::vector<OwnSound> v; };
+std::map<std::string, OwnSounds> g_own_snd;
+
+const OwnSounds& own_sounds(const std::string& folder) {
+    const fs::path sdir = units_root() / fs::u8path(folder) / "sounds";
+    std::vector<fs::path> files;
+    std::error_code ec;
+    for (const auto& de : fs::directory_iterator(sdir, ec))
+        if (de.is_regular_file(ec) && is_wav(de.path())) files.push_back(de.path());
+    // The build takes the first file of a role in the folder's own order; on
+    // Windows that is the name's order without case.
+    std::sort(files.begin(), files.end(), [](const fs::path& a, const fs::path& b) {
+        std::string x = utf8(a.filename()), y = utf8(b.filename());
+        for (char& c : x) c = (char)std::tolower((unsigned char)c);
+        for (char& c : y) c = (char)std::tolower((unsigned char)c);
+        return x < y;
+    });
+    long long st = 17 + (long long)g_reload_gen;
+    for (const fs::path& p : files) {
+        st = st * 1000003LL ^ file_stamp(p);
+        for (char c : utf8(p.filename())) st = st * 31 + (unsigned char)c;
+    }
+    OwnSounds& os = g_own_snd[folder];
+    if (os.stamp == st && st != 0) return os;
+    os.stamp = st;
+    os.v.clear();
+    bool taken[5] = {};
+    for (const fs::path& p : files) {
+        OwnSound s;
+        s.file = utf8(p.filename());
+        s.role = lb_cunits_sound_role(utf8(p.stem()));
+        std::vector<uint8_t> b;
+        if (s.role < 0) s.why = "not used: name it SELECT, DEATH, STRIKE, HIT or SPECIAL (or end the name with one)";
+        else if (taken[s.role]) s.why = "not used: another file already has this role";
+        else if (!slurp_file(p, &b, 64u << 20)) s.why = "could not be read (unreadable, or over 64 MB)";
+        else {
+            const std::string why = lb_cunits_preview_wav(b, &s.pcm);
+            if (!why.empty()) s.why = "not used: " + why;
+            else taken[s.role] = true;
+        }
+        os.v.push_back(std::move(s));
+    }
+    return os;
+}
+
 // One button per sound of the record (sounds_for), played on the
-// notification device.
-void draw_sounds(const Rec& r) {
+// notification device; a custom unit's own files first (BR-0086).
+void draw_sounds(const View& v, const Rec& r) {
+    static const char* const kRole[5] = {"Select", "Death", "Strike", "Hit", "Special"};
+    bool own_role[5] = {false, false, false, false, false};
+    if (!v.folder.empty()) {
+        const OwnSounds& os = own_sounds(v.folder);
+        if (!os.v.empty()) {
+            ImGui::TextDisabled("Own sounds:");
+            for (size_t i = 0; i < os.v.size(); ++i) {
+                const OwnSound& s = os.v[i];
+                ImGui::SameLine();
+                ImGui::PushID(1000 + (int)i);
+                if (s.why.empty()) {
+                    own_role[s.role] = true;
+                    if (ImGui::SmallButton(kRole[s.role]))
+                        lb_sfx_play_pcm(s.pcm.data(), (int)s.pcm.size());
+                    ImGui::SetItemTooltip("sounds/%s, as the battle plays it (Load new units now to use an edit "
+                                          "in a battle)", s.file.c_str());
+                } else {
+                    ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f), "%s", s.file.c_str());
+                    ImGui::SetItemTooltip("%s", s.why.c_str());
+                }
+                ImGui::PopID();
+            }
+        }
+    }
     const SoundSet& ss = sounds_for(r);
     if (ss.names.empty()) {
-        ImGui::TextDisabled("No sounds.");
+        if (!own_role[0] && !own_role[1] && !own_role[2] && !own_role[3] && !own_role[4])
+            ImGui::TextDisabled("No sounds.");
         return;
     }
-    ImGui::TextDisabled("Sounds:");
+    bool first = true;
     for (size_t i = 0; i < ss.names.size(); ++i) {
+        bool replaced = false;   // a role the folder's own file plays in the battle
+        for (int k = 0; k < 5; ++k) {
+            std::string a = ss.names[i], b = kRole[k];
+            for (char& c : a) c = (char)std::tolower((unsigned char)c);
+            for (char& c : b) c = (char)std::tolower((unsigned char)c);
+            if (own_role[k] && a == b) replaced = true;
+        }
+        if (replaced) continue;
+        if (first) {
+            ImGui::TextDisabled(v.folder.empty() ? "Sounds:" : "Starting unit's sounds:");
+            first = false;
+        }
         ImGui::SameLine();
         ImGui::PushID((int)i);
         if (ImGui::SmallButton(ss.names[i].c_str()))
@@ -1244,26 +1429,72 @@ void draw_portraits(const View& v, const Rec& r, float z) {
         ImGui::Image((ImTextureID)(intptr_t)head.t, ImVec2(24.0f * z * 0.5f, 24.0f * z * 0.5f));
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("The head (portraits/head.png, fitted to 24x24)");
     }
-    // BR-0078 (docs/485): THE GROUP SELECTION ICON, the battle HUD's head (a
-    // multi-unit selection, the build lists). The battle draws it from the
-    // stock sheet UI/MiniHeadsGame at the blueprint number the battle record
-    // keeps, which for a custom unit is its template's (lb_cunits.cpp), so the
-    // icon in a battle is the template's. The preview shows that icon, and the
-    // folder's portraits/hud_icon.png (which the export writes) beside it,
-    // re-read when it changes, marked as not reaching the battle.
-    const Tex hud = pic_tex("hud:" + std::to_string(r.index), [&] {
-        Pic p;
-        unsigned int px[576];
-        if (lb_teams_hud_icon_rgba(r.index, px)) { p.w = p.h = 24; p.px.assign(px, px + 576); }
-        return p;
-    });
-    if (hud.t) {
+    // BR-0078 / BR-0087 (docs/487): THE BATTLE'S TWO SMALL ICONS, as the battle
+    // draws them: the battle icon (group selection, the training queue, a
+    // transport's passengers) and the build menu's icon. A custom unit's come
+    // from its own files (lb_teams_custom_icon_pick: build_icon.png, then
+    // hud_icon.png, then head.png, each only when it is not the starting
+    // unit's), drawn in the battle's 16-colour palettes
+    // (lb_teams_icon_as_battle); otherwise the starting unit's. Re-read when
+    // any of those files changes.
+    const long long s_hudf = own("hud_icon.png"), s_bldf = own("build_icon.png");
+    for (int which = 0; which < 2; ++which) {
+        const long long st = v.folder.empty() ? 0 : (s_hudf ^ (s_bldf * 31) ^ (s_head * 131) ^ 7);
+        int src = 0;
+        static const char* const kSrc[4] = {"the starting unit's", "portraits/build_icon.png",
+                                            "portraits/hud_icon.png", "portraits/head.png"};
+        auto make = [&] {
+            Pic p;
+            unsigned int px[576], q[576];
+            if (!v.folder.empty()) {
+                const Pic b = s_bldf ? folder_png(pdir / "build_icon.png", 24, 24) : Pic();
+                const Pic h = s_hudf ? folder_png(pdir / "hud_icon.png", 24, 24) : Pic();
+                const Pic d = s_head ? folder_png(pdir / "head.png", 24, 24) : Pic();
+                auto ptr = [](const Pic& x) { return x.px.size() == 576u ? (const unsigned int*)x.px.data() : nullptr; };
+                const int pick = lb_teams_custom_icon_pick(r.index, which, which ? ptr(b) : nullptr, ptr(h), ptr(d), px);
+                if (pick > 0 && lb_teams_icon_as_battle(px, which, q)) {
+                    p.w = p.h = 24;
+                    p.px.assign(q, q + 576);
+                    return p;
+                }
+            }
+            if (which ? lb_teams_build_icon_rgba(r.index, px) : lb_teams_hud_icon_rgba(r.index, px)) {
+                p.w = p.h = 24;
+                p.px.assign(px, px + 576);
+            }
+            return p;
+        };
+        const std::string base = std::string(which ? "Fbld:" : "Fhud:") + v.folder + "#" + std::to_string(r.index);
+        const Tex ic = v.folder.empty() ? pic_tex(std::string(which ? "bld:" : "hud:") + std::to_string(r.index), make)
+                                        : stamped_tex(base, st, make);
+        if (!ic.t) continue;
+        if (!v.folder.empty()) {   // which file the battle takes it from, for the tooltip
+            static std::map<std::string, int> picked;   // per key: which file won (0 none)
+            const std::string pk = base + "@" + std::to_string(st);
+            auto it = picked.find(pk);
+            if (it == picked.end()) {
+                unsigned int px[576];
+                const Pic b = which && s_bldf ? folder_png(pdir / "build_icon.png", 24, 24) : Pic();
+                const Pic h = s_hudf ? folder_png(pdir / "hud_icon.png", 24, 24) : Pic();
+                const Pic d = s_head ? folder_png(pdir / "head.png", 24, 24) : Pic();
+                auto ptr = [](const Pic& x) { return x.px.size() == 576u ? (const unsigned int*)x.px.data() : nullptr; };
+                if (picked.size() > 256) picked.clear();
+                it = picked.emplace(pk, lb_teams_custom_icon_pick(r.index, which, ptr(b), ptr(h), ptr(d), px)).first;
+            }
+            src = std::clamp(it->second, 0, 3);
+        }
         ImGui::SameLine();
-        ImGui::Image((ImTextureID)(intptr_t)hud.t, ImVec2(24.0f * z * 0.5f, 24.0f * z * 0.5f));
+        ImGui::Image((ImTextureID)(intptr_t)ic.t, ImVec2(24.0f * z * 0.5f, 24.0f * z * 0.5f));
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("The group selection icon, as a battle draws it (the battle HUD's head).\n"
-                              "%s", v.folder.empty() ? "" : "A custom unit shows its template's here: the battle's icon "
-                                                            "sheet has one cell per stock unit.");
+            ImGui::SetTooltip("%s, as the battle draws it.\nFrom %s.%s",
+                              which ? "The build menu's icon" : "The battle icon (group selection, training queue, "
+                                                                "a transport's passengers)",
+                              kSrc[src],
+                              v.folder.empty() ? ""
+                              : which ? "\nportraits/build_icon.png, else hud_icon.png; drawn in the build menu's "
+                                        "red palette."
+                                      : "\nportraits/hud_icon.png, else head.png; drawn in the icon palette that "
+                                        "fits it best.");
     }
     // docs/485 (A): the battle card's team mask (portraits/card_mask.png), re-read when it changes.
     const long long s_mask = own("card_mask.png");
@@ -1277,25 +1508,58 @@ void draw_portraits(const View& v, const Rec& r, float z) {
                                   "It must be the battle card's size (96x96).");
         }
     }
-    const long long s_hud = own("hud_icon.png");
-    if (s_hud) {
-        const Tex mine = stamped_tex("Fhud:" + v.folder, s_hud, [&] { return folder_png(pdir / "hud_icon.png", 24, 24); });
-        if (mine.t) {
-            ImGui::SameLine();
-            ImGui::Image((ImTextureID)(intptr_t)mine.t, ImVec2(24.0f * z * 0.5f, 24.0f * z * 0.5f));
-            if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("portraits/hud_icon.png (re-read when it changes).\n"
-                                  "Not used in a battle: the group selection icon stays the template's.\n"
-                                  "portraits/head.png is the head the army screen and the Team Builder show.");
-        }
+    // docs/487: a hero's end pictures (portraits/end_victory.png, end_defeat.png), re-read when they change.
+    for (const char* f : {"end_victory.png", "end_defeat.png"}) {
+        const long long s_end = own(f);
+        if (!s_end) continue;
+        const Tex ep = stamped_tex(std::string("Fend:") + f + ":" + v.folder, s_end, [&] { return folder_png(pdir / f); });
+        if (!ep.t) continue;
+        ImGui::SameLine();
+        ImGui::Image((ImTextureID)(intptr_t)ep.t, ImVec2(ep.w * cs * 0.25f, ep.h * cs * 0.25f));
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("portraits/%s: the %s screen when this unit is your hero.%s", f,
+                              f[4] == 'v' ? "Victory" : "Defeat",
+                              ep.w == 256 && ep.h == 192 ? "" : "\nIt must be 256x192 or the build leaves it out.");
     }
+}
+
+// docs/492: a custom unit's "model" and "sprites_from" (-1 none), re-read
+// when its unit.json changes.
+bool json_value_at(const std::string& j, size_t from, size_t to, const char* key, size_t* vb, size_t* ve);   // below
+void custom_draw_of(const std::string& folder, int* model, int* sprites_from) {
+    struct Seen { long long stamp = -1; int m = -1, s = -1; };
+    static std::map<std::string, Seen> seen;
+    const fs::path p = units_root() / fs::u8path(folder) / "unit.json";
+    const long long st = file_stamp(p);
+    Seen& c = seen[folder];
+    if (c.stamp != st) {
+        c = Seen{st, -1, -1};
+        const std::string j = read_text(p);
+        const size_t fb0 = j.find("\"fields\"");
+        const size_t to = fb0 == std::string::npos ? j.size() : fb0;
+        size_t b, en;
+        if (json_value_at(j, 0, to, "model", &b, &en)) c.m = std::atoi(j.c_str() + b);
+        if (json_value_at(j, 0, to, "sprites_from", &b, &en)) c.s = std::atoi(j.c_str() + b);
+    }
+    *model = c.m;
+    *sprites_from = c.s;
 }
 
 void draw_view(const View& v, int frame_tick) {
     const std::vector<Rec>& rs = records();
     if (rs.empty()) return;
     const Rec& r = rs[(size_t)v.pick];
-    const Layout L = layout_of(r);
+    // docs/492: drawn with a stock special's model, or a hero or special with
+    // a stock unit's sheets and layout, as the battle will.
+    int dm = -1, ds = -1;
+    if (!v.folder.empty()) custom_draw_of(v.folder, &dm, &ds);
+    const bool as_model = dm >= 0 && dm < (int)rs.size() && dm < 182 && r.category <= 4 &&
+                          (rs[(size_t)dm].category == 5 || rs[(size_t)dm].category == 6);
+    const bool as_other = !as_model && ds >= 0 && ds < (int)rs.size() && ds < 182 &&
+                          (r.category == 0 || r.category == 5 || r.category == 6) &&
+                          rs[(size_t)ds].category >= 1 && rs[(size_t)ds].category <= 4;
+    const Rec& lr = as_other ? rs[(size_t)ds] : r;   // whose layout and sheets the frames come from
+    const Layout L = layout_of(lr);
     ImGui::BeginGroup();
     // The page names the unit above its tabs; side by side, each view says which it is.
     if (g_st.compare) {
@@ -1307,7 +1571,7 @@ void draw_view(const View& v, int frame_tick) {
             ImGui::TextDisabled("custom, from %s (%s), mods/units/%s", r.name.c_str(), category_name(r.category), v.folder.c_str());
         }
     }
-    if (L.actions.empty()) {
+    if (L.actions.empty() || as_model) {
         // A 3D unit: the model itself, turning while Play is on (else at the
         // Direction), in the Team's colour, and its texture beside it.
         std::string asset = r.asset;
@@ -1315,17 +1579,32 @@ void draw_view(const View& v, int frame_tick) {
             const std::string a = json_get_s(read_text(units_root() / fs::u8path(v.folder) / "unit.json"), "asset");
             if (a.compare(0, 7, "Models/") == 0) asset = a;
         }
+        if (as_model) asset = rs[(size_t)dm].asset;   // docs/492: "model"
         // BR-0078: a custom unit's model/texture.png on the model, as the
-        // importer applies it, re-read when the file changes.
+        // importer applies it, re-read when the file changes. docs/492: and
+        // its model/model.obj.
         const fs::path tex_png = v.folder.empty() ? fs::path() : units_root() / fs::u8path(v.folder) / "model" / "texture.png";
         const long long tex_stamp = v.folder.empty() ? 0 : file_stamp(tex_png);
-        const std::string held_key = asset + "|" + v.folder + "@" + std::to_string(tex_stamp);
+        const fs::path obj_path = v.folder.empty() ? fs::path() : units_root() / fs::u8path(v.folder) / "model" / "model.obj";
+        const long long obj_stamp = v.folder.empty() ? 0 : file_stamp(obj_path);
+        const std::string held_key = asset + "|" + v.folder + "@" + std::to_string(tex_stamp) + "@" + std::to_string(obj_stamp);
         static std::string held_name;
         static std::vector<uint8_t> held;
         static bool held_custom = false;
+        static std::string obj_note;   // what model/model.obj did, as the build will
+        static bool obj_ok = false;
         if (asset.compare(0, 7, "Models/") == 0 && held_name != held_key) {
             held = rom_file(asset + ".nsbmd");
             held_custom = false;
+            obj_note.clear();
+            obj_ok = false;
+            if (obj_stamp) {
+                const std::string text = read_text(obj_path);
+                std::vector<uint8_t> m = held;
+                obj_ok = !text.empty() && text.size() <= (512u << 10) && lb_nsbmd_import_obj(&m, text, &obj_note);
+                if (obj_ok) held = std::move(m);
+                else if (obj_note.empty()) obj_note = "unreadable or over 512 KB";
+            }
             if (tex_stamp) {
                 std::vector<uint8_t> png;
                 std::error_code ec;
@@ -1376,6 +1655,11 @@ void draw_view(const View& v, int frame_tick) {
         if (!v.folder.empty() && tex_stamp && !held_custom)
             ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
                                "model/texture.png could not be applied (it must be the exported texture's size, 16 colours at most).");
+        if (!v.folder.empty() && obj_stamp)   // docs/492 (SG-0083)
+            ImGui::TextColored(obj_ok ? ImVec4(0.5f, 1.0f, 0.5f, 1.0f) : ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
+                               "model/model.obj %s: %s", obj_ok ? "used" : "not used", obj_note.c_str());
+        if (as_model)
+            ImGui::TextDisabled("Drawn with this model in battle; its sprites stay for when the level's 12 model records are taken.");
         // The texture as the model now carries it (the folder's, once applied).
         const Tex mt = held_custom && held_name == held_key
                            ? stamped_tex("model:" + asset + "|" + v.folder, tex_stamp,
@@ -1387,7 +1671,7 @@ void draw_view(const View& v, int frame_tick) {
         // (beside the model and its texture they fall off the page).
         ImGui::Dummy(ImVec2(0.0f, 0.0f));
         draw_portraits(v, r, g_st.zoom);
-        draw_sounds(r);
+        draw_sounds(v, r);
         ImGui::EndGroup();
         return;
     }
@@ -1403,7 +1687,7 @@ void draw_view(const View& v, int frame_tick) {
     dl->AddRectFilled(p, ImVec2(p.x + box.x, p.y + box.y), IM_COL32(52, 92, 52, 255), 4.0f);
     if (!fr.empty()) {
         const Frame& f = fr[(size_t)frame_tick % fr.size()];
-        const Tex& t = v.folder.empty() ? sheet_tex(f.sheet, g_st.team) : folder_tex(v.folder, r.index, f.sheet, g_st.team);
+        const Tex& t = v.folder.empty() ? sheet_tex(f.sheet, g_st.team) : folder_tex(v.folder, lr.index, f.sheet, g_st.team);
         if (t.t) {
             float u0 = (float)f.x / t.w, u1 = (float)(f.x + f.w) / t.w;
             if (mirror) std::swap(u0, u1);
@@ -1421,7 +1705,10 @@ void draw_view(const View& v, int frame_tick) {
     ImGui::TextDisabled("%s, %s (%s%s), %zu frame%s", a.name.c_str(), kCompass[d8], kDirNames[d5],
                         mirror ? " mirrored" : "", fr.size(), fr.size() == 1 ? "" : "s");
     if (!L.note.empty()) ImGui::TextDisabled("%s", L.note.c_str());
-    draw_sounds(r);
+    if (as_other)   // docs/492
+        ImGui::TextDisabled("Drawn with the sprites and layout of %s (%s); sheets/ and frames/ are read in that layout.",
+                            lr.name.c_str(), lr.asset.c_str());
+    draw_sounds(v, r);
     ImGui::EndGroup();
 }
 
@@ -1577,6 +1864,8 @@ struct Edit {
     char credits[61] = "";      // SG-0070: "credits", the collaborators
     int unlock_with = 0;        // SG-0096: "unlocked_with", a stock unit, 0 always available
     int role = -1;              // SG-0109: "role", the army slot it plays in; -1 its template's
+    int model = -1;             // docs/492: "model", a stock 3D unit whose model a 2D unit is drawn with
+    int sprites_from = -1;      // docs/492: "sprites_from", a stock 2D unit whose sheets a hero/special uses
     std::string asset;
     long field[sizeof kFields / sizeof kFields[0]] = {};
     bool has[sizeof kFields / sizeof kFields[0]] = {};
@@ -1601,6 +1890,14 @@ void edit_open(const Mine& m, const Rec& tmpl) {
         if (json_value_at(j, 0, fb0 == std::string::npos ? j.size() : fb0, "role", &b, &en)) {   // SG-0109
             const long v = std::atol(j.c_str() + b);
             e.role = v >= 2 && v <= 7 ? (int)v : -1;
+        }
+        if (json_value_at(j, 0, fb0 == std::string::npos ? j.size() : fb0, "model", &b, &en)) {   // docs/492
+            const long v = std::atol(j.c_str() + b);
+            e.model = v >= 0 && v < 182 ? (int)v : -1;
+        }
+        if (json_value_at(j, 0, fb0 == std::string::npos ? j.size() : fb0, "sprites_from", &b, &en)) {
+            const long v = std::atol(j.c_str() + b);
+            e.sprites_from = v >= 0 && v < 182 ? (int)v : -1;
         }
     }
     e.asset = json_get_s(j, "asset");
@@ -1651,6 +1948,19 @@ bool edit_save() {
             const size_t ib = j.find("\"index\"");
             const size_t nl = ib == std::string::npos ? std::string::npos : j.find('\n', ib);
             if (nl != std::string::npos) j.insert(nl + 1, "  \"role\": " + v + ",\n");
+        }
+    }
+    // docs/492: "model" and "sprites_from", top-level numbers the same way; -1 is none.
+    for (const auto& kv : {std::make_pair("model", g_edit.model), std::make_pair("sprites_from", g_edit.sprites_from)}) {
+        size_t b, en;
+        const size_t fb0 = j.find("\"fields\"");
+        const std::string v = std::to_string(kv.second);
+        if (json_value_at(j, 0, fb0 == std::string::npos ? j.size() : fb0, kv.first, &b, &en)) {
+            j.replace(b, en - b, v);
+        } else if (kv.second >= 0) {
+            const size_t ib = j.find("\"index\"");
+            const size_t nl = ib == std::string::npos ? std::string::npos : j.find('\n', ib);
+            if (nl != std::string::npos) j.insert(nl + 1, std::string("  \"") + kv.first + "\": " + v + ",\n");
         }
     }
     size_t fb, fe;
@@ -1709,21 +2019,58 @@ void draw_files(const Mine& m, const Rec& t) {
             ImGui::TextDisabled("%s", note);
         }
     };
-    const Layout L = layout_of(t);
-    const std::string tbase = t.asset.size() > 8 ? t.asset.substr(8) : t.asset;
+    int dm = -1, ds = -1;   // docs/492: "model", "sprites_from"
+    custom_draw_of(m.folder, &dm, &ds);
+    const std::vector<Rec>& all = records();
+    // A hero or special drawn with another unit's sprites lists that unit's sheets.
+    const bool other = dm < 0 && ds >= 0 && ds < (int)all.size() && ds < 182 &&
+                       (t.category == 0 || t.category == 5 || t.category == 6) && all[(size_t)ds].category >= 1 &&
+                       all[(size_t)ds].category <= 4;
+    const Rec& lt = other ? all[(size_t)ds] : t;
+    const Layout L = layout_of(lt);
+    const std::string tbase = lt.asset.size() > 8 ? lt.asset.substr(8) : lt.asset;
     for (const std::string& sh : L.sheets) {
         // In sheets/ or, the community's way, beside unit.json.
         const bool own = fs::exists(dir / "sheets" / (sh + ".png"), ec) || fs::exists(dir / "sheets" / (sh + ".NCBR"), ec) ||
                          fs::exists(dir / (sh + ".png"), ec) || fs::exists(dir / (sh + ".NCBR"), ec);
         row("sheets/" + sh + " (.png or .NCBR)", own, own ? "" : "missing: the starting unit's is used");
     }
-    if (t.asset.compare(0, 7, "Models/") == 0)
+    if (t.asset.compare(0, 7, "Models/") == 0 || dm >= 0) {
         row("model/texture.png", fs::exists(dir / "model" / "texture.png", ec), "a 3D unit's re-skin");
+        row("model/model.obj", fs::exists(dir / "model" / "model.obj", ec),
+            "a new mesh (start from model/model_export.obj; at most 400 triangles)");
+        // docs/492: a unit drawn with another unit's model starts from that
+        // model's texture and mesh; write them here to edit.
+        const std::string masset = dm >= 0 && dm < (int)all.size() && dm < 182 ? all[(size_t)dm].asset : t.asset;
+        if (masset.compare(0, 7, "Models/") == 0 && !fs::exists(dir / "model" / "model_export.obj", ec) &&
+            ImGui::SmallButton("Write the model's texture.png and model_export.obj here")) {
+            fs::create_directories(dir / "model", ec);
+            const Pic tp = decode_model_texture(masset);
+            std::vector<uint8_t> png;
+            if (tp.w > 0 && !fs::exists(dir / "model" / "texture.png", ec) && rgba_png(tp.w, tp.h, tp.px.data(), &png))
+                write_file(dir / "model" / "texture.png", png);
+            const std::vector<uint8_t> mb = rom_file(masset + ".nsbmd");
+            std::string obj;
+            if (!mb.empty() && lb_nsbmd_export_obj(mb.data(), mb.size(), &obj))
+                write_file(dir / "model" / "model_export.obj", std::vector<uint8_t>(obj.begin(), obj.end()));
+        }
+    }
     row("portraits/head.png", fs::exists(dir / "portraits" / "head.png", ec), "the round head");
     row("portraits/card.png", fs::exists(dir / "portraits" / "card.png", ec), "the army screen's card");
     row("portraits/card_top_screen.png", fs::exists(dir / "portraits" / "card_top_screen.png", ec), "the battle card");
     row("portraits/card_mask.png", fs::exists(dir / "portraits" / "card_mask.png", ec),
         "the battle card's team mask (white = team colour)");   // docs/485 (A)
+    // docs/487: the battle's icons and the end pictures.
+    row("portraits/hud_icon.png", fs::exists(dir / "portraits" / "hud_icon.png", ec),
+        "the battle icon (group selection, queue, passengers)");
+    row("portraits/build_icon.png", fs::exists(dir / "portraits" / "build_icon.png", ec),
+        "the build menu's icon (else hud_icon.png)");
+    if (t.category == 0) {
+        row("portraits/end_victory.png", fs::exists(dir / "portraits" / "end_victory.png", ec),
+            "the Victory screen, 256x192 (a hero's)");
+        row("portraits/end_defeat.png", fs::exists(dir / "portraits" / "end_defeat.png", ec),
+            "the Defeat screen, 256x192 (a hero's)");
+    }
     int wavs = 0;
     for (const auto& de : fs::directory_iterator(dir / "sounds", ec))
         if (is_wav(de.path())) ++wavs;
@@ -1798,6 +2145,14 @@ bool draw_named_field(size_t i, const std::vector<Rec>& rs) {
             if (ImGui::BeginCombo(key, kTri[cur])) {
                 for (int s = 0; s < 3; ++s)
                     if (ImGui::Selectable(kTri[s], s == cur)) g_edit.field[i] = s;
+                ImGui::EndCombo();
+            }
+        } else if (pmax == 7) {   // docs/488: the collision layers
+            const int cur = (int)std::clamp<long>(g_edit.field[i], 0, 7);
+            ImGui::SetNextItemWidth(180.0f);
+            if (ImGui::BeginCombo(key, kLayerNames[cur])) {
+                for (int s = 0; s < 8; ++s)
+                    if (ImGui::Selectable(kLayerNames[s], s == cur)) g_edit.field[i] = s;
                 ImGui::EndCombo();
             }
         } else {
@@ -2040,6 +2395,69 @@ void draw_edit_fields(const Mine& m, const std::vector<Rec>& rs) {
                                        "effect when custom units are loaded again."
                                      : "Which special slot it is picked for: Special One, Two or Three.\n"
                                        "Takes effect when custom units are loaded again.");
+    }
+    // docs/492 (SG-0082): a 2D unit drawn with a stock special's model, and a
+    // hero or special drawn with a stock builder's or ground unit's sheets.
+    // The unit stays what it is (a hero keeps its spells and respawn); only
+    // the drawing changes. lb_cunits.cpp and the draw cloak (lb_patches.cpp)
+    // apply them at the next load.
+    if (t.category <= 4) {
+        const std::string none = "None (its sprites)";
+        const std::string cur_m = g_edit.model >= 0 && g_edit.model < (int)rs.size()
+                                      ? rs[(size_t)g_edit.model].name + "  (" + rs[(size_t)g_edit.model].asset + ")"
+                                      : none;
+        ImGui::SetNextItemWidth(380.0f);
+        if (ImGui::BeginCombo("3D model", cur_m.c_str())) {
+            if (ImGui::Selectable(none.c_str(), g_edit.model < 0)) g_edit.model = -1;
+            for (size_t i = 0; i < rs.size() && i < 182; ++i) {
+                if ((rs[i].category != 5 && rs[i].category != 6) || rs[i].asset.compare(0, 7, "Models/") != 0) continue;
+                const std::string label = rs[i].name + "  (" + rs[i].asset + ")##m" + std::to_string(i);
+                if (ImGui::Selectable(label.c_str(), g_edit.model == (int)i)) g_edit.model = (int)i;
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SetItemTooltip("Draw this unit with a transport's or special's 3D model, as a special is drawn.\n"
+                              "It stays a %s: its stats, spells, army slot and the rest are unchanged.\n"
+                              "model/texture.png re-skins the model (the model's texture size) and\n"
+                              "model/model.obj replaces its mesh. Its sprites are still built, and used\n"
+                              "when a level's 12 model records are taken. Takes effect when custom units\n"
+                              "are loaded again.",
+                              category_name(t.category));
+    }
+    // docs/492: "Sprites of" is held back this version (a mounted-layout hero
+    // corrupted memory in a live test); LB_SPRITES_FROM=1 shows it.
+    static const bool sf_on = [] {
+        const char* v = std::getenv("LB_SPRITES_FROM");
+        return v && v[0] == '1';
+    }();
+    if (sf_on && (t.category == 0 || t.category == 5 || t.category == 6)) {
+        const std::string own = "Its own";
+        const std::string cur_s = g_edit.sprites_from >= 0 && g_edit.sprites_from < (int)rs.size()
+                                      ? rs[(size_t)g_edit.sprites_from].name + "  (" +
+                                            category_name(rs[(size_t)g_edit.sprites_from].category) + ", " +
+                                            rs[(size_t)g_edit.sprites_from].asset + ")"
+                                      : own;
+        const bool off = g_edit.model >= 0;
+        if (off) ImGui::BeginDisabled();
+        ImGui::SetNextItemWidth(380.0f);
+        if (ImGui::BeginCombo("Sprites of", cur_s.c_str())) {
+            if (ImGui::Selectable(own.c_str(), g_edit.sprites_from < 0)) g_edit.sprites_from = -1;
+            for (size_t i = 0; i < rs.size() && i < 182; ++i) {
+                if (rs[i].category < 1 || rs[i].category > 4 || rs[i].asset.compare(0, 8, "Sprites/") != 0) continue;
+                const std::string label = rs[i].name + "  (" + category_name(rs[i].category) + ", " + rs[i].asset +
+                                          ")##s" + std::to_string(i);
+                if (ImGui::Selectable(label.c_str(), g_edit.sprites_from == (int)i)) g_edit.sprites_from = (int)i;
+            }
+            ImGui::EndCombo();
+        }
+        if (off) ImGui::EndDisabled();
+        ImGui::SetItemTooltip("Draw this %s with a builder's or ground unit's sprite sheets and frame\n"
+                              "layout: a Mounted unit's for a hero on a horse or creature (32x32 frames,\n"
+                              "four walk and four attack), a Close Combat unit's for a 24x24 special.\n"
+                              "Your sheets/ and frames/ files are read in that unit's layout. It stays a\n"
+                              "%s. A Mounted sheet needs one of the level's three mounted slots; when they\n"
+                              "are taken the unit is drawn its own way that level. Not with a 3D model.",
+                              category_name(t.category), category_name(t.category));
     }
     const auto choices = asset_choices(rs, t);
     std::string cur = g_edit.asset;
@@ -2314,8 +2732,12 @@ void draw_lab_detail(const std::vector<Rec>& rs, const std::vector<Mine>& mine, 
                 g_edit.msg = edit_save() ? "Saved. Press Load new units now to use it." : "Could not write unit.json.";
             ImGui::SetItemTooltip("Writes the Stats tab's name, art and values into unit.json.");
             ImGui::SameLine();
-            if (ImGui::Button("Reload art")) drop_folder_textures(m->folder);
-            ImGui::SetItemTooltip("Reads the folder's sheets and frames again after you edit them.");
+            if (ImGui::Button("Reload art")) {
+                ++g_reload_gen;   // docs/487: every stamped part (cards, icons, model texture, sounds) too
+                drop_folder_textures(m->folder);
+            }
+            ImGui::SetItemTooltip("Reads the folder's files again: sheets, frames, cards, icons, the model's\n"
+                                  "texture and sounds. The preview also follows a file as soon as it changes.");
             ImGui::SameLine();
         }
         if (ImGui::Button("Open this folder")) {
@@ -2378,7 +2800,8 @@ void draw_lab_detail(const std::vector<Rec>& rs, const std::vector<Mine>& mine, 
                                   "The compass names are a reading of the art.");
             ImGui::SameLine();
             ImGui::SetNextItemWidth(110.0f);
-            ImGui::Combo("Team", &s.team, kTeamNames, kTeams);
+            if (s.team >= teams_offered()) s.team = 0;   // docs/489: Custom only while that setting is on
+            ImGui::Combo("Team", &s.team, kTeamNames, teams_offered());
             ImGui::Checkbox("Play", &s.playing);
             ImGui::SameLine();
             ImGui::SetNextItemWidth(140.0f);

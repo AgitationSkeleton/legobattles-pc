@@ -3587,6 +3587,9 @@ static void lb_governor_pass(void) {
     else if (g_gov_q8 < 256u) ++g_gov_q8;
 }
 
+#ifndef LB_PACEK_DEFAULT
+#define LB_PACEK_DEFAULT 68    /* BR-0089: measured: k 65 gave 0.51-0.56 passes per VBlank over a 3-army match's first 40 s, k 72 0.53-0.59, the raw clock 0.64-0.67; melonDS ~0.53 */
+#endif
 void get_ms_override(void) {
     const uint32_t lr = g_cpu.R[14];
     if (lr == kLoopT0Ret) {   // docs/484: the pass is about to wait for its VBlank
@@ -3605,7 +3608,12 @@ void get_ms_override(void) {
         ++passes;
         if (t1_last && vb - t1_last > 2u) ++slow;
         t1_last = vb;
-        if (vb - vb0 >= 1800u) {
+        static const uint32_t every = [] {   // LB_PASSLOG=<VBlanks>: a shorter window
+            const char* v = std::getenv("LB_PASSLOG");
+            const int n = v ? std::atoi(v) : 1800;
+            return (uint32_t)(n < 60 ? 60 : n);
+        }();
+        if (vb - vb0 >= every) {
             std::fprintf(stderr, "[lb_passes] %.3f passes per VBlank (%u passes, %u longer than 2 VBlanks)\n",
                          (double)passes / (double)(vb - vb0), passes, slow);
             passes = 0u; slow = 0u; vb0 = vb;
@@ -3614,6 +3622,30 @@ void get_ms_override(void) {
     if ((lr == kLoopT0Ret || lr == kLoopT1Ret) && lb_cadence_effective() == 30) {
         const uint64_t t = (uint64_t)bus_read_u32(kVBlankCounter) * 17u;
         g_cpu.R[0] = (uint32_t)t;           // u64 in r0:r1, as the real one
+        g_cpu.R[1] = (uint32_t)(t >> 32);
+        lb_override_return();
+        return;
+    }
+    // BR-0089: pace 21, the cartridge's own 20 ms rule timed by a clock at k%
+    // of real time. The rule waits a second VBlank only when t1 - t0 (which
+    // spans the first VBlank wait too) is under 20 ms; on the raw clock the
+    // port measured more passes at 20+ than melonDS does, so it skipped the
+    // second wait more often and stepped ~39 times a second where melonDS
+    // steps ~32 (a player's stopwatch: one builder, 3.86 s here, 4.73 s in
+    // melonDS, 5.0 s at an even 30 Hz). A slower clock (k < 100) restores
+    // waits; the default was measured live (pass rate at a match's start).
+    // Only the difference of NitroMain's two reads is used (020F6910), so
+    // scaled emulated time is all it takes; emulated only, so replays and
+    // peers agree. LB_PACEK=<percent> for measurements.
+    if ((lr == kLoopT0Ret || lr == kLoopT1Ret) && lb_cadence_effective() == 21) {
+        static const uint64_t k = [] {
+            const char* v = std::getenv("LB_PACEK");
+            const int n = v ? std::atoi(v) : LB_PACEK_DEFAULT;
+            return (uint64_t)(n < 40 ? 40 : (n > 200 ? 200 : n));
+        }();
+        const uint64_t sys = g_runtime_cycles >> 1;   // ARM9 -> 33.514 MHz system clock
+        const uint64_t t = sys * k / (33514ull * 100ull);
+        g_cpu.R[0] = (uint32_t)t;
         g_cpu.R[1] = (uint32_t)(t >> 32);
         lb_override_return();
         return;
@@ -6405,6 +6437,30 @@ void occ_layers_override(void) {
     const uint32_t rec = bus_read_u32(g_cpu.R[1] + 4u);
     const uint32_t a = bus_read_u8(rec + 0x1Au), b = bus_read_u8(rec + 0x1Bu), c = bus_read_u8(rec + 0x1Cu);
     uint32_t m = a | (b ? 2u : 0u) | (c ? 4u : 0u);
+    // docs/488 (SG-0116): a record whose padding byte +0x53 is 1..7 (Balance
+    // Traits "Collision layer", unit.json "collision_layer") names its layers
+    // outright: 1 ground, 2 air, 4 bridge. The stock 0xA1 (and 0) keep the
+    // cartridge's mask. The Balance set travels to every machine and into
+    // recordings, so every machine stacks the units alike.
+    {
+        const uint32_t forced = bus_read_u8(rec + 0x53u);
+        if (forced >= 1u && forced <= 7u) {
+            if (forced != m) {
+                static uint32_t said[16] = {};
+                static int ns = 0;
+                bool seen = false;
+                for (int i = 0; i < ns; ++i) seen = seen || said[i] == rec;
+                if (!seen && ns < 16) {
+                    said[ns++] = rec;
+                    std::fprintf(stderr, "[lb_layers] blueprint record %08X: collision layers %u "
+                                 "(the record's own %u), from its Collision layer setting\n",
+                                 (unsigned)rec, (unsigned)forced, (unsigned)m);
+                    std::fflush(stderr);
+                }
+            }
+            m = forced;
+        }
+    }
     if (!m && bus_read_u8(rec + 0x5Cu) <= 6u) {
         m = 1u;
         static uint32_t said[8] = {};
@@ -6420,6 +6476,225 @@ void occ_layers_override(void) {
     }
     bus_write_u8(out, (uint8_t)m);
     lb_override_return();
+}
+
+// ---- docs/488: THE SECOND RULE FLAGS, AND THE RULES THEY CARRY -----------------
+//
+// The rules datagram's flags byte (docs/406) is full, so the host's further
+// simulation rules travel in an 'R' page after the 'P' page (lb_teams.cpp):
+// 'R', version 1, a u32 of LB_RULE2_* bits. What a match runs is a replay's
+// (demo kind 30), else the host's while joined (0 for a host that sends no
+// page: stock), else this machine's.
+extern "C" int lb_rules2_live(void) {
+    const int played = lb_demo_play_rules2();
+    if (played >= 0) return played;
+    const int host = lb_rules_host_flags2();
+    if (host >= 0) return host;
+    return lb_rules2_local_flags();
+}
+extern "C" int lb_any_unit_repairs_live(void) {
+    return (lb_rules2_live() & LB_RULE2_ANY_REPAIR) ? 1 : 0;
+}
+extern "C" int lb_unique_heroes_live(void) {
+    return (lb_rules2_live() & LB_RULE2_UNIQUE_HEROES) ? 1 : 0;
+}
+
+// SG-0113 (docs/488): "AI Uses Targeted Spells" patches the AI's spell
+// chooser (apply_ai_tap_spells), which changes the simulation, yet no
+// recording carried it: a replay ran this machine's choice. Now a recording
+// says it (kind 31, from `aitap=1`); an older one keeps this machine's.
+extern "C" int lb_net_guest_state(void);   /* src/lb_net.cpp */
+extern "C" int lb_ai_tap_spells_live(void) {
+    const int played = lb_demo_play_ai_tap_spells();
+    if (played >= 0) return played ? 1 : 0;
+    return (lb_net_guest_state() <= 0 && lb_setting_ai_tap_spells()) ? 1 : 0;
+}
+
+// SG-0079 (docs/488): A DAMAGE SPELL'S STARTUP FRAMES. FUN_02076F14 (ARM, a
+// leaf) answers from a switch on the spell's id (byte 0 of the record at
+// [this+0xC]): 0x14 15, 0x16/0x17/0x1C/0x1F 20, 0x19 10, else 0. Its callers
+// (DamageSpell's ctor FUN_02076040, FUN_02076998, FUN_02076A70, FUN_02076AB8
+// and Sim::DamageSpell::virtual_05) add it to the spell's life and set it as
+// each victim's wait (entity +0x230, a byte) before the first hit. With a
+// Balance value for the spell, that value; otherwise a pure tail call.
+constexpr uint32_t kSpellStartup = 0x02076F14u;   // arm, leaf
+void spell_startup_override(void) {
+    const uint32_t self = g_cpu.R[0];
+    const uint32_t rec = guest_ptr(self) ? bus_read_u32(self + 0xCu) : 0u;
+    const int id = guest_ptr(rec) ? (int)bus_read_u8(rec) : -1;
+    const int v = id >= 0 ? lb_balance_spell_startup(id) : -1;
+    if (v >= 0) {
+        g_cpu.R[0] = (uint32_t)(v > 255 ? 255 : v);
+        static unsigned said = 0;
+        const unsigned n = ++said;
+        if ((n & (n - 1u)) == 0u)   // 1, 2, 4, 8, ...
+            std::fprintf(stderr, "[lb_spells] spell 0x%02X: startup %d frames (Balance; the "
+                         "game's %d; %u so far)\n", (unsigned)id, (int)g_cpu.R[0],
+                         lb_balance_spell_stock_startup(id), n);
+        lb_override_return();
+        return;
+    }
+    void (*original)(void) = lb_dispatch_original(0, kSpellStartup);
+    if (original) original();
+}
+
+// SG-0111 (docs/488): NON-BUILDERS REPAIR AND ASSIST.
+//
+// The cartridge lets only a hero (category 0) or a builder (1) repair or help
+// build: three tests of `1 < [[e+0x160]+8]+0x5C`, one per path --
+//   0x020728EC  Sim::RepairStructureEntityCommand::virtual_08 (r1 the unit):
+//               refusal = state 6, before the target checks;
+//   0x02060240  Sim::AssistStructureEntityCommand::virtual_08 (r1 the unit):
+//               refusal = state 7;
+//   0x02084218  AssistStructureCommand's executor (r1 the command: +0x18 the
+//               units' handles, +0x1C their count) gives the order only to
+//               units of category < 2.
+// RepairStructureCommand's executor (FUN_02084BBC) and the repair and build
+// steps (Sim::RepairStructureAction::virtual_02, ConstructProgressAction)
+// test no category. With the rule on, foot, ranged and mounted units
+// (categories 2..4: the minifigure sprites; not ships, vehicles or specials)
+// read as builders for each call: the category cloak of docs/438, the byte
+// put back when the call returns. The stylus already orders every selected
+// unit when the selection holds a builder (FUN_020A90C4 takes the whole
+// selection, FUN_020E2A04), so select a builder with them.
+constexpr uint32_t kAssistCmdExec = 0x02084218u;   // arm
+constexpr uint32_t kAssistCheck   = 0x02060240u;   // arm, vtable
+constexpr uint32_t kRepairCheck   = 0x020728ECu;   // arm, vtable
+CallWrap g_wrap_assist_exec, g_wrap_assist_check, g_wrap_repair_check;
+
+static void repair_cloak_add(CallWrap& w, uint32_t e) {
+    const uint32_t rec = guest_ptr(e) ? unit_blueprint(e) : 0u;
+    if (!rec || w.n >= kWrapBytes) return;
+    const uint8_t cat = bus_read_u8(rec + 0x5Cu);
+    if (cat < 2u || cat > 4u) return;
+    for (int i = 0; i < w.n; ++i)
+        if (w.rec[i] == rec) return;
+    w.rec[w.n] = rec;
+    w.old[w.n] = cat;
+    ++w.n;
+}
+// One of the three: `cmd` false -> r1 is the unit, true -> r1 is the command.
+static void repair_cloak(CallWrap& w, uint32_t target, bool cmd, const char* what) {
+    void (*original)(void) = lb_dispatch_original(0, target);
+    const int st = wrap_state(w, original);
+    if (st == 1) return;
+    if (st == 2) {
+        for (int i = w.n - 1; i >= 0; --i) bus_write_u8(w.rec[i] + 0x5Cu, w.old[i]);
+        w.n = 0;
+        wrap_finish(w);
+        return;
+    }
+    w.n = 0;
+    if (lb_any_unit_repairs_live()) {
+        if (!cmd) {
+            repair_cloak_add(w, g_cpu.R[1]);
+        } else if (guest_ptr(g_cpu.R[1])) {
+            const uint32_t hs = bus_read_u32(g_cpu.R[1] + 0x18u);
+            const int32_t cnt = (int32_t)bus_read_u32(g_cpu.R[1] + 0x1Cu);
+            for (int32_t i = 0; guest_ptr(hs) && i < cnt && i < 64; ++i)
+                repair_cloak_add(w, unit_resolve(hs + 2u * (uint32_t)i));
+        }
+    }
+    if (!w.n) {
+        if (original) original();
+        return;
+    }
+    static unsigned said = 0;
+    const unsigned n = ++said;
+    if ((n & (n - 1u)) == 0u)
+        std::fprintf(stderr, "[lb_repair] %s: %d non-builder unit type(s) read as builders "
+                     "(Soldiers Repair Buildings; %u so far)\n", what, w.n, n);
+    for (int i = 0; i < w.n; ++i) bus_write_u8(w.rec[i] + 0x5Cu, 1u);
+    wrap_start(w, target);
+}
+void assist_exec_override(void) {
+    repair_cloak(g_wrap_assist_exec, kAssistCmdExec, true, "help-build order");
+}
+void assist_check_override(void) {
+    repair_cloak(g_wrap_assist_check, kAssistCheck, false, "help-build start");
+}
+void repair_check_override(void) {
+    repair_cloak(g_wrap_repair_check, kRepairCheck, false, "repair start");
+}
+
+// SG-0107 (docs/488): ONE OF EACH HERO.
+//
+// Sim::ProduceUnitEntityCommand::virtual_09 (0x02072080, ARM, its vtable's
+// step; r0 the command, r1 the producing building) starts the queue's front
+// item in state 0 only when FUN_02071DC4 agrees, and that asks FUN_020860A8
+// for the room left in the item's build-limit class (the record's +4 holder's
+// +9; heroes are class 0): the allowance byte at 0x02126D94 + class minus
+// the team's count. Otherwise the item waits, as an unaffordable one does.
+// With the rule on, when the front item is a hero (category 0) and the
+// building's team already has a living unit of the same record, the class-0
+// byte reads 0 for that one call, so the hero waits until the first one
+// dies. The byte is put back when the call returns (CallWrap). A second copy
+// started at the same moment at another building is not seen (only living
+// units are counted), which the raised hero cap alone allows anyway.
+constexpr uint32_t kProduceStep = 0x02072080u;   // arm, vtable
+constexpr uint32_t kHeroAllowance = 0x02126D94u; // class 0 of the allowance table
+CallWrap g_wrap_produce;
+
+static bool team_has_living(uint32_t owner, uint32_t rec) {
+    const uint32_t pool = bus_read_u32(kEntityPoolPtr);
+    const uint32_t arr = guest_ptr(pool) ? bus_read_u32(pool + 8u) : 0u;
+    const int32_t cnt = guest_ptr(pool) ? (int32_t)bus_read_u32(pool + 0xCu) : 0;
+    for (int32_t i = 0; guest_ptr(arr) && i < cnt && i < 4096; ++i) {
+        const uint32_t e = bus_read_u32(arr + 4u * (uint32_t)i);
+        if (!guest_ptr(e) || !bus_read_u8(e + 0x227u)) continue;
+        if (bus_read_u8(e + 0xE4u) != owner) continue;
+        if (unit_blueprint(e) == rec) return true;
+    }
+    return false;
+}
+
+void produce_step_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kProduceStep);
+    CallWrap& w = g_wrap_produce;
+    const int st = wrap_state(w, original);
+    if (st == 1) return;
+    if (st == 2) {
+        bus_write_u8(w.a, w.old[0]);
+        w.n = 0;
+        wrap_finish(w);
+        return;
+    }
+    const uint32_t cmd = g_cpu.R[0], bld = g_cpu.R[1];
+    bool hold = false;
+    uint32_t cls_byte = kHeroAllowance;
+    if (lb_unique_heroes_live() && guest_ptr(cmd) && guest_ptr(bld) &&
+        bus_read_u32(cmd + 0x18u) == 0u) {   // state 0: about to start the front item
+        const uint32_t holder = bus_read_u32(cmd + 0x20u);
+        const uint32_t rec = guest_ptr(holder) ? bus_read_u32(holder + 8u) : 0u;
+        // The class FUN_02071DC4 asks about: [holder+4]+9 (0 for the heroes).
+        const uint32_t ids = guest_ptr(holder) ? bus_read_u32(holder + 4u) : 0u;
+        const uint32_t cls = guest_ptr(ids) ? bus_read_u8(ids + 9u) : 0xFFu;
+        if (cls < 10u) cls_byte = kHeroAllowance + cls;
+        if (cls < 10u && guest_ptr(rec) && bus_read_u8(rec + 0x5Cu) == 0u &&
+            team_has_living(bus_read_u8(bld + 0xE4u), rec))
+            hold = true;
+        if (hold) {
+            static uint32_t last_rec = 0;
+            static uint32_t last_owner = 0xFFu;
+            const uint32_t owner = bus_read_u8(bld + 0xE4u);
+            if (rec != last_rec || owner != last_owner) {
+                last_rec = rec;
+                last_owner = owner;
+                std::fprintf(stderr, "[lb_heroes] team %u: hero record %08X waits, one is "
+                             "alive (One Of Each Hero)\n", (unsigned)owner, (unsigned)rec);
+                std::fflush(stderr);
+            }
+        }
+    }
+    if (!hold) {
+        if (original) original();
+        return;
+    }
+    w.n = 1;
+    w.a = cls_byte;
+    w.old[0] = bus_read_u8(cls_byte);
+    bus_write_u8(cls_byte, 0u);
+    wrap_start(w, kProduceStep);
 }
 
 // SG-0106 (docs/481): WHO MAY BOARD A TRANSPORT, PER UNIT.
@@ -6598,6 +6873,46 @@ void options_update_override(void) {
     }
     if (original) original();
 }
+
+// ---- SG-0112: THE VOLUMES, FROM THE FIRST SCREEN ------------------------------
+//
+// The sound manager's music and effects volumes are set by FUN_020898C4 and
+// FUN_02089898 (Thumb; r0 = 0..127). The cartridge restores a profile's saved
+// pair (save record 0x02154E08 +0x30/+0x31, FUN_0204F668) only when a profile
+// is loaded (FUN_020B706C, FUN_020C2890, FUN_020AD64C); before that,
+// LanguageSelect::v08 (0x020BC634, 630 bytes) sets 127 and 50 on every boot,
+// so the intro and title always played at full volume. With "Remember Music
+// And Effects Volume" on, a call from that boot handler is given the last
+// volume any other caller applied (the Options sliders, a profile load);
+// every other call is remembered. Audio only: the guest's own value is all
+// that changes, and nothing the simulation reads.
+constexpr uint32_t kSetMusicVol = 0x020898C4u;   // thumb
+constexpr uint32_t kSetSfxVol = 0x02089898u;     // thumb
+extern "C" int lb_volume_remembered(int which);
+extern "C" void lb_volume_remember(int which, int v);
+static void volume_set_common(int which, uint32_t addr) {
+    void (*original)(void) = lb_dispatch_original(0, addr);
+    const uint32_t lr = g_cpu.R[14] & ~1u;
+    const bool boot = lr >= 0x020BC634u && lr < 0x020BC634u + 630u;
+    if (boot) {
+        const int v = lb_volume_remembered(which);
+        if (v >= 0) {
+            g_cpu.R[0] = (uint32_t)v;
+            static bool said[2] = {false, false};
+            if (!said[which]) {
+                said[which] = true;
+                std::fprintf(stderr, "[lb_volume] boot: %s volume %d (remembered; the cartridge's default "
+                             "until a profile loads)\n", which ? "effects" : "music", v);
+                std::fflush(stderr);
+            }
+        }
+    } else {
+        lb_volume_remember(which, (int)g_cpu.R[0]);
+    }
+    if (original) original();
+}
+void set_music_volume_override(void) { volume_set_common(0, kSetMusicVol); }
+void set_sfx_volume_override(void) { volume_set_common(1, kSetSfxVol); }
 
 // ---- SG-0078 (docs/471): AI SHIPYARD SITES ON MAPS WITH NONE -----------------
 //
@@ -6953,6 +7268,305 @@ void train_list_override(void) {
     }
     for (int i = 0; i < w.n; ++i) bus_write_u8(w.rec[i], newv[i]);   // put back in reverse when it returns
     wrap_start(w, kTrainList | 1u);
+}
+
+// BR-0092 (docs/487): "TRAINED AT" IN THE BUILD MENU BAR TOO. train_list_override
+// covers FUN_020D9844, the top screen's list. Two more functions read the same
+// movement bytes inline, so a custom unit whose trained_at disagrees with them
+// (a Shark-based unit given Land but set to the Shipyard) was still listed by
+// its bytes in the bottom screen's build menu:
+//  * FUN_020DE1D0 (Thumb; r0 the HUD, r1 the selected building's entity, r2
+//    the category it lists, r3 the first widget id, three more words on the
+//    stack) fills the build menu bar's items. For categories 5 and 6 it keeps
+//    a unit only at the building its bytes name (0x020DE288..0x020DE2D4:
+//    water-only at a Shipyard (0x10), any other at a Special Factory (0xC));
+//  * FUN_020D9320 (Thumb; r1 a building blueprint's holder) answers whether
+//    that building has anything to train for its owner's army, the same
+//    test; the builder's menu (FUN_020DE1D0 for categories 0x10/0xC, call at
+//    0x020DE2E6) and the AI's building choice (0x020973FE, 0x0209741A) ask it.
+// Both now get the same byte swap for the length of the call (trainat_swaps,
+// the CallWrap pattern). FUN_020DE1D0 takes stack arguments, so its wrapper
+// copies its three stack words below the stack pointer it calls with
+// (wrap_start_args). Only records whose trained_at is set (custom units, or
+// stock records through a Balance set, SG-0100) are touched.
+//
+// The bytes trained_at says a record should read as, for these rules; returns
+// how many bytes it queued in w (and newv), 0 for none.
+static int trainat_swaps(CallWrap& w, uint8_t* newv, const char* who) {
+    const int ncu = lb_cunits_count();
+    const uint32_t bpbase = lb_patches_blueprint_base();
+    const int nstock = bpbase ? 182 : 0;
+    w.n = 0;
+    for (int k = 0; k < ncu + nstock; ++k) {
+        const bool custom = k < ncu;
+        const uint32_t rec = custom ? lb_cunits_battle_record(k) : bpbase + 4u + (uint32_t)(k - ncu) * 0x7Cu;
+        const int want = trained_at_kind(rec);
+        if (!want || (want == 16) == list_rule_shipyard(rec)) continue;
+        static const uint8_t kShip[4][2] = {{0x16, 0}, {0x17, 0}, {0x18, 1}, {0x1A, 1}};
+        static const uint8_t kFactory[1][2] = {{0x16, 1}};
+        const uint8_t(*set)[2] = want == 16 ? &kShip[0] : &kFactory[0];
+        const int m = want == 16 ? 4 : 1;
+        if (w.n + m > kWrapBytes) break;
+        for (int b = 0; b < m; ++b) {
+            w.rec[w.n] = rec + set[b][0];
+            w.old[w.n] = bus_read_u8(rec + set[b][0]);
+            newv[w.n] = set[b][1];
+            ++w.n;
+        }
+        static uint32_t said[16] = {};
+        static int ns = 0;
+        bool seen = false;
+        for (int i = 0; i < ns; ++i) seen = seen || said[i] == rec;
+        if (!seen && ns < 16) {
+            said[ns++] = rec;
+            std::fprintf(stderr, "[lb_trainat] %s: %s %d (record %08X) reads as a %s unit (trained_at)\n", who,
+                         custom ? "custom unit" : "stock unit", custom ? k + 1 : k - ncu, (unsigned)rec,
+                         want == 16 ? "shipyard" : "special factory");
+            std::fflush(stderr);
+        }
+    }
+    return w.n;
+}
+// wrap_start for a function with `nwords` stack arguments: they are copied to
+// the stack pointer the function is called with.
+static void wrap_start_args(CallWrap& w, uint32_t target_with_mode, int nwords) {
+    w.lr = g_cpu.R[14];
+    w.sp = g_cpu.R[13];
+    w.sp_call = (g_cpu.R[13] - 8u - 4u * (uint32_t)nwords) & ~7u;
+    for (int i = 0; i < nwords; ++i) bus_write_u32(w.sp_call + 4u * (uint32_t)i, bus_read_u32(w.sp + 4u * (uint32_t)i));
+    w.active = true;
+    w.calling = true;
+    g_cpu.R[13] = w.sp_call;
+    g_cpu.R[14] = target_with_mode;   // the return lands back in the override
+    g_cpu.R[15] = target_with_mode & ~1u;
+    runtime_dispatch_with_exchange(target_with_mode);
+}
+// A building's category from its blueprint holder (FUN_020D9320's r1: the
+// record at +8) or from its entity (FUN_020DE1D0's r1: [[e+0x160]+8]).
+static uint32_t trainat_kind_of_holder(uint32_t holder) {
+    const bool ok = guest_ptr(holder) || (holder >= 0x027C0000u && holder < 0x02800000u);
+    const uint32_t rec = ok ? bus_read_u32(holder + 8u) : 0u;
+    return guest_ptr(rec) ? bus_read_u8(rec + 0x5Cu) : 0xFFu;
+}
+constexpr uint32_t kTrainAny = 0x020D9320u;   // thumb
+constexpr uint32_t kBrickList = 0x020DE1D0u;  // thumb
+CallWrap g_wrap_trainany, g_wrap_bricklist;
+void train_any_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kTrainAny);
+    CallWrap& w = g_wrap_trainany;
+    const int st = wrap_state(w, original);
+    if (st == 1) return;
+    if (st == 2) {
+        for (int i = w.n - 1; i >= 0; --i) bus_write_u8(w.rec[i], w.old[i]);
+        w.n = 0;
+        wrap_finish(w);
+        return;
+    }
+    const uint32_t kind = trainat_kind_of_holder(g_cpu.R[1]);
+    uint8_t newv[kWrapBytes];
+    w.n = 0;
+    if ((kind != 12u && kind != 16u) || !trainat_swaps(w, newv, "a building's has-anything test")) {
+        if (original) original();
+        return;
+    }
+    for (int i = 0; i < w.n; ++i) bus_write_u8(w.rec[i], newv[i]);
+    wrap_start(w, kTrainAny | 1u);
+}
+void brick_list_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kBrickList);
+    CallWrap& w = g_wrap_bricklist;
+    const int st = wrap_state(w, original);
+    if (st == 1) return;
+    if (st == 2) {
+        for (int i = w.n - 1; i >= 0; --i) bus_write_u8(w.rec[i], w.old[i]);
+        w.n = 0;
+        wrap_finish(w);
+        return;
+    }
+    const uint32_t ent = g_cpu.R[1];
+    const uint32_t obj = guest_ptr(ent) ? bus_read_u32(ent + 0x160u) : 0u;
+    const uint32_t kind = trainat_kind_of_holder(obj);
+    const uint32_t cat = g_cpu.R[2];
+    uint8_t newv[kWrapBytes];
+    w.n = 0;
+    if ((cat != 5u && cat != 6u) || (kind != 12u && kind != 16u) || !trainat_swaps(w, newv, "the build menu bar")) {
+        if (original) original();
+        return;
+    }
+    for (int i = 0; i < w.n; ++i) bus_write_u8(w.rec[i], newv[i]);
+    wrap_start_args(w, kBrickList | 1u, 3);
+}
+
+// BR-0078 / BR-0087 (docs/487): A CUSTOM UNIT'S OWN SMALL ICONS IN A BATTLE.
+// FUN_020D85F4 (Thumb; r0 a blueprint index, r1 heads, r2 upgrade) names the
+// Game UIMgrData record of a unit's icon (lb_teams.cpp has the whole story).
+// Its 11 callers are split Thumb BLs, each dispatched; every one passes the
+// unit record's +0x04, which for a custom unit is its template's number. The
+// record each call is about is found from the call site (the return address)
+// as the caller holds it at the BL:
+//   how 0: the blueprint holder in a register;
+//   how 1: the holder at [sp + a];
+//   how 2: a building's training queue, the building at [sp + a] and the
+//          slot at [sp + b] (or register `reg` when b = 0xFFFF): the holder
+//          is [[building + 0x200] + 4 * slot] (FUN_0205E5B4);
+//   how 3: a transport's passengers, their handle array (entity + 0xFC: data
+//          +4, count +8) at [sp + a] and the slot at [sp + b]: the holder is
+//          [passenger + 0x160].
+// The holder's +4 is the record; it counts only when its +0x04 is the index
+// the call passes. lb_teams_battle_icon then answers a record of ours for a
+// custom unit with icons of its own, or lets the cartridge answer (and notes
+// what a stock unit took). With no custom units: a pure tail call.
+constexpr uint32_t kIconRecord = 0x020D85F4u;   // thumb
+extern "C" int lb_teams_battle_icon(int k, int index, int heads, int upgrade);   // lb_teams.cpp
+struct IconSite { uint32_t bl; uint8_t how, reg; uint16_t a, b; };
+const IconSite kIconSites[] = {
+    {0x020D0E78u, 1, 0, 0x30, 0},        // FUN_020D0CF8 (heads 0: a build icon)
+    {0x020D1116u, 1, 0, 0x20, 0},        // FUN_020D0CF8 (heads 1)
+    {0x020D12F2u, 0, 6, 0, 0},           // FUN_020D1244 (heads 1)
+    {0x020D1C6Au, 3, 0, 0x2C, 0x3C},     // FUN_020D1744: a transport's passengers
+    {0x020D1DF8u, 2, 0, 0x2C, 0x38},     // FUN_020D1744: a building's training queue
+    {0x020D34F4u, 0, 6, 0, 0},           // FUN_020D33D8, the InfoTab: the group selection
+    {0x020D3F9Cu, 1, 0, 0x4C, 0},        // FUN_020D3ACC: a transport's passengers
+    {0x020D4162u, 2, 6, 0x10, 0xFFFF},   // FUN_020D3ACC: a building's training queue
+    {0x020D42BCu, 1, 0, 0x18, 0},        // FUN_020D4258 (heads 1)
+    {0x020DE34Cu, 0, 4, 0, 0},           // FUN_020DE1D0, the build menu bar (heads 0)
+    {0x020DE3D8u, 0, 4, 0, 0},           // FUN_020DE1D0, its frame 4 (heads 0)
+};
+uint32_t icon_site_record(uint32_t site) {
+    for (const IconSite& s : kIconSites) {
+        if (s.bl != site) continue;
+        const uint32_t sp = g_cpu.R[13];   // the caller's own: the BL does not move it (DTCM)
+        uint32_t holder = 0u;
+        if (s.how == 0) {
+            holder = g_cpu.R[s.reg];
+        } else if (s.how == 1) {
+            holder = bus_read_u32(sp + s.a);
+        } else if (s.how == 2) {
+            const uint32_t bld = bus_read_u32(sp + s.a);
+            const uint32_t slot = s.b == 0xFFFFu ? g_cpu.R[s.reg] : bus_read_u32(sp + s.b);
+            const uint32_t q = guest_ptr(bld) ? bus_read_u32(bld + 0x200u) : 0u;
+            const uint32_t qn = guest_ptr(bld) ? bus_read_u32(bld + 0x204u) : 0u;
+            if (guest_ptr(q) && slot < qn && slot < 64u) holder = bus_read_u32(q + 4u * slot);
+        } else {
+            const uint32_t arr = bus_read_u32(sp + s.a);
+            const uint32_t slot = bus_read_u32(sp + s.b);
+            const uint32_t data = guest_ptr(arr) ? bus_read_u32(arr + 4u) : 0u;
+            if (guest_ptr(data) && slot < bus_read_u32(arr + 8u) && slot < 64u) {
+                const uint32_t e = unit_resolve(data + 2u * slot);
+                if (e) holder = bus_read_u32(e + 0x160u);
+            }
+        }
+        return guest_ptr(holder) ? bus_read_u32(holder + 4u) : 0u;
+    }
+    return 0u;
+}
+void icon_record_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kIconRecord);
+    if (lb_cunits_count() > 0) {
+        const uint32_t site = (g_cpu.R[14] & ~1u) - 4u;
+        const uint32_t rec = icon_site_record(site);
+        const int k = guest_ptr(rec) && bus_read_u16(rec + 4u) == (g_cpu.R[0] & 0xFFFFu)
+                          ? lb_cunits_of_battle_record(rec) : -1;
+        const int use = lb_teams_battle_icon(k, (int)g_cpu.R[0], g_cpu.R[1] != 0u ? 1 : 0, (int)g_cpu.R[2]);
+        static const bool log = std::getenv("LB_ICON_LOG") != nullptr;   // docs/487 test aid
+        if (log && (k >= 0 || use >= 0)) {
+            std::fprintf(stderr, "[lb_icons] site %08X index %u heads %u: custom unit %d -> record %03X\n",
+                         (unsigned)site, (unsigned)g_cpu.R[0], (unsigned)g_cpu.R[1], k + 1, (unsigned)use);
+            std::fflush(stderr);
+        }
+        if (use >= 0) {
+            g_cpu.R[0] = (uint32_t)use;
+            lb_override_return();
+            return;
+        }
+    }
+    if (original) original();
+}
+
+// docs/487: A CUSTOM HERO'S END PICTURE. User::SkirmishScoreTopScreen's
+// FUN_020C63E8 (ARM; r0 the screen, called from 0x020C5F7C and 0x020C63DC)
+// switches on the local player's hero index, [0x021571A4 + 0x4C], to build
+// "UI/Heroes/" + K_Victory, W_Defeat_2, ... and hands that path to the
+// picture widget [r0 + 0x3C] (FUN_020E5278: its string at +0x14 = {capacity,
+// length + 1 (-1: unknown), chars}; the picture loads later). A custom hero's
+// index (551 or more) matched no case, so the path was an uninitialised stack
+// string (docs/463). For the length of the call the index reads as the
+// template's (or the King's, when the template has no end picture), so the
+// cartridge builds a stock name; when it returns, and the unit has its own
+// end picture (portraits/end_victory.png, end_defeat.png, built as
+// UI/Heroes/cu/<k>V / <k>D by lb_cunits.cpp), the widget's path is rewritten
+// in place to that name, which is shorter than every stock one. Whether the
+// stock name was a victory or a defeat says which. Otherwise a pure tail call.
+constexpr uint32_t kEndPicture = 0x020C63E8u;   // arm
+constexpr uint32_t kEndHero = 0x021571A4u + 0x4Cu;
+extern "C" int lb_cunits_end_picture(int k, int victory);   // lb_cunits.cpp
+extern "C" int lb_cunits_template(int k);
+extern "C" int lb_cunits_of_any(int bp);
+CallWrap g_wrap_endpic;
+int g_endpic_k = -1;
+uint32_t g_endpic_screen = 0, g_endpic_hero = 0;
+bool end_picture_stock(int i) {   // the indices FUN_020C63E8 has a case for (docs/463)
+    static const int kHas[] = {0, 1, 0x14, 0x15, 0x28, 0x29, 0x3C, 0x3D, 0x50, 0x51, 100, 101, 0x81, 0x85,
+                               0x91, 0x95, 0xA1, 0xA5, 0xAF, 0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5};
+    for (int h : kHas)
+        if (h == i) return true;
+    return false;
+}
+extern "C" void lb_card_score_screen_mark(void);   // BR-0085, card_tint_refresh
+void end_picture_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kEndPicture);
+    lb_card_score_screen_mark();   // BR-0085: the result screen is up
+    CallWrap& w = g_wrap_endpic;
+    const int st = wrap_state(w, original);
+    if (st == 1) return;
+    if (st == 2) {
+        bus_write_u32(kEndHero, g_endpic_hero);   // the session's own value back
+        const uint32_t widget = guest_ptr(g_endpic_screen) ? bus_read_u32(g_endpic_screen + 0x3Cu) : 0u;
+        const uint32_t str = guest_ptr(widget) ? widget + 0x14u : 0u;
+        const uint32_t cap = str ? bus_read_u32(str) : 0u;
+        const uint32_t chars = str ? bus_read_u32(str + 8u) : 0u;
+        if (guest_ptr(chars) && cap < 4096u) {
+            std::string now;
+            for (uint32_t i = 0; i < cap && i < 96u; ++i) {
+                const char c = (char)bus_read_u8(chars + i);
+                if (!c) break;
+                now += c;
+            }
+            std::string low = now;
+            for (char& c : low) c = (char)std::tolower((unsigned char)c);
+            const bool victory = low.find("victory") != std::string::npos;
+            if (low.find("ui/heroes/") == 0 && lb_cunits_end_picture(g_endpic_k, victory ? 1 : 0)) {
+                const std::string mine = "UI/Heroes/cu/" + std::to_string(g_endpic_k) + (victory ? "V" : "D");
+                if (mine.size() + 1u <= cap) {
+                    for (size_t i = 0; i < mine.size(); ++i) bus_write_u8(chars + (uint32_t)i, (uint8_t)mine[i]);
+                    bus_write_u8(chars + (uint32_t)mine.size(), 0u);
+                    bus_write_u32(str + 4u, (uint32_t)mine.size() + 1u);
+                    std::fprintf(stderr, "[lb_endpic] custom hero %d: %s in place of %s\n", g_endpic_k + 1,
+                                 mine.c_str(), now.c_str());
+                } else {
+                    std::fprintf(stderr, "[lb_endpic] custom hero %d: no room for %s (capacity %u); %s stays\n",
+                                 g_endpic_k + 1, mine.c_str(), (unsigned)cap, now.c_str());
+                }
+                std::fflush(stderr);
+            }
+        }
+        g_endpic_k = -1;
+        wrap_finish(w);
+        return;
+    }
+    const uint32_t hero = bus_read_u32(kEndHero);
+    const int k = hero < 0x10000u ? lb_cunits_of_any((int)hero) : -1;
+    if (k < 0) {
+        if (original) original();
+        return;
+    }
+    const int tmpl = lb_cunits_template(k);
+    g_endpic_k = k;
+    g_endpic_screen = g_cpu.R[0];
+    g_endpic_hero = hero;
+    bus_write_u32(kEndHero, (uint32_t)(end_picture_stock(tmpl) ? tmpl : 0));
+    w.n = 0;
+    wrap_start(w, kEndPicture);   // ARM: the return lands back here
 }
 
 // BR-0070 (docs/472): THE AI CANCELS ITS OWN TOWER UPGRADES.
@@ -9255,6 +9869,16 @@ constexpr uint32_t kCreatureSprAnim = 0x0203ABC8u;   // Unit_BuildBillboard (it 
 constexpr uint32_t kCreatureSprLoad = 0x02035F7Cu;
 void creature_sprite_anim_override(void);
 void creature_sprite_load_override(void);
+// docs/492 (SG-0082): the draw cloak, defined with the creature cloak below.
+constexpr uint32_t kAnimFactory = 0x0200D504u;   // arm: the animation set, r2 the entity
+constexpr uint32_t kModelLoad = 0x02035C48u;     // arm: the level's model records
+constexpr uint32_t kDrawIsUnit = 0x02036CA0u;    // arm leaf: drawn as a billboard unit
+constexpr uint32_t kDrawIsModel = 0x02036CD0u;   // arm leaf: drawn as a model
+void anim_factory_override(void);
+void model_load_override(void);
+void draw_is_unit_override(void);
+void draw_is_model_override(void);
+int cud_kind_of_bp(uint32_t bp);
 // The larger sprite pool (docs/479): the slot allocator, the page writer and
 // the level's sprite teardown. Defined with the cloak, below.
 constexpr uint32_t kSprSlotAlloc = 0x0202DD18u;   // arm
@@ -10190,6 +10814,7 @@ uint32_t ds_host_rgb(uint16_t c) {
 extern "C" int lb_setting_creature_portraits(void);                       // lb_overlay.cpp
 extern "C" int lb_teams_hud_icon_rgba(int bp, unsigned int out[576]);     // lb_teams.cpp
 bool creature_head(int bp) { return bp == 169 || bp == 155; }   // Wolf, Shark
+extern "C" int lb_teams_battle_icon_own(int k);   // lb_teams.cpp, docs/487
 
 void portrait_tint_refresh() {
     const int on = lb_setting_portrait_tint();   // Team-Colour Unit Portraits (docs/454)
@@ -10217,12 +10842,17 @@ void portrait_tint_refresh() {
             const bool owned = o != bus_read_u8(kNeutralOwnerByte) && o < (unsigned)kTintPlayers;
             const uint32_t bpr = unit_blueprint(ent);
             const int bpi = guest_ptr(bpr) ? (int)bus_read_u16(bpr + 4u) : -1;
+            // docs/487: a custom unit drawn with its own battle icon is not its
+            // template's head: no creature head over it, and only the stock
+            // team colours are repainted (no template's head rules).
+            const int cu = guest_ptr(bpr) ? lb_cunits_of_battle_record(bpr) : -1;
+            const bool own_icon = cu >= 0 && lb_teams_battle_icon_own(cu) != 0;
             t.head_on[t.n] = false;
             // Test aid: LB_TEST_PORTRAIT_HEAD=<blueprint> draws that creature's
             // head on every selected unit's portrait.
             static const int force_head = std::getenv("LB_TEST_PORTRAIT_HEAD") ? std::atoi(std::getenv("LB_TEST_PORTRAIT_HEAD")) : 0;
             const int head_bp = force_head > 0 ? force_head : bpi;
-            if (heads && creature_head(head_bp)) {   // wild ones too
+            if (heads && creature_head(head_bp) && !own_icon) {   // wild ones too
                 unsigned int px[576];
                 if (lb_teams_hud_icon_rgba(head_bp, px)) {
                     for (int i = 0; i < 576; ++i)   // 0xAABBGGRR -> 0xFFRRGGBB
@@ -10236,7 +10866,7 @@ void portrait_tint_refresh() {
             if (!t.tint[t.n] && !t.head_on[t.n]) continue;
             if (owned) std::memcpy(t.sh[t.n], e + vpal + (uint32_t)(2u * o) * 0x20u + 12u * 2u, sizeof t.sh[0]);
             for (int i = 0; i < 4; ++i) t.r[t.n][i] = r[i];
-            t.bp[t.n] = bpi;
+            t.bp[t.n] = own_icon ? -1 : bpi;
             static const bool log = std::getenv("LB_PTINT_LOG") != nullptr;
             if (log) {
                 static int said[9][5];
@@ -10575,6 +11205,190 @@ constexpr uint16_t kRdbGrey[4] = {0x5EF7, 0x4A52, 0x294A, 0x0C63};   // bank 0, 
 constexpr uint16_t kRdbBlue[4] = {0x7ED0, 0x7D80, 0x4501, 0x2462};   // bank 13, entries 2-5
 int teal_style_now() { const int s = lb_setting_teal_style(); return s >= 0 && s <= 2 ? s : 0; }
 uint16_t teal_shade(unsigned i) { return kTealShades[teal_style_now()][i]; }
+
+// ---- docs/489: THE CUSTOM TEAM COLOUR (display only) -------------------------
+//
+// A player keeps a stock colour underneath (0-5, or 6 while teal is live); only
+// how that colour is DRAWN changes. g_cp_* is the set in force, by stock
+// colour, decided once a frame by apply_custompal (cp_resolve, below): a
+// replay's recorded set, the host's 'K' page when joined, this machine's
+// resolution when hosting (its own and its joiners' colours) or offline (its
+// own). Nothing the simulation reads is written: the colour tables are read
+// only by the level's palette setup and the minimap, the sprite banks and the
+// model palettes only by the renderer.
+//
+// The ramp (cp_ramp): OKLab. The mid shade is the chosen colour; light and dark
+// are the stock six's average L step (+0.132, -0.134) with chroma x1.0 and x0.9
+// (also the stock average), the light shade's L capped at 0.97 and the dark's
+// floored at 0.05 (a very light or very dark choice), each reduced in chroma
+// until it is in gamut.
+constexpr uint16_t kStockShades[6][3] = {{0x113F, 0x005C, 0x0015}, {0x7628, 0x6D60, 0x5880},
+                                         {0x03AF, 0x02A6, 0x01E0}, {0x035F, 0x023F, 0x011D},
+                                         {0x7C1F, 0x4419, 0x1C12}, {0x3D8A, 0x3106, 0x1880}};
+// The minimap dots (0x02127A68): 3 worlds x 6 colours, Green differs in world 3.
+constexpr uint16_t kStockMini[3][6] = {{0x015F, 0x7140, 0x23E8, 0x037F, 0x7C1F, 0x0421},
+                                       {0x015F, 0x7140, 0x23E8, 0x037F, 0x7C1F, 0x0421},
+                                       {0x015F, 0x7140, 0x1D84, 0x037F, 0x7C1F, 0x0421}};
+const char* const kCpNames[7] = {"Red", "Blue", "Green", "Yellow", "Purple", "Grey", "Teal"};
+constexpr int kCpColours = 7;
+
+struct CpLab { double L, a, b; };
+double cp_lin(double c8) {
+    const double c = c8 / 255.0;
+    return c <= 0.04045 ? c / 12.92 : std::pow((c + 0.055) / 1.055, 2.4);
+}
+double cp_srgb(double c) {
+    c = std::min(1.0, std::max(0.0, c));
+    return 255.0 * (c <= 0.0031308 ? 12.92 * c : 1.055 * std::pow(c, 1.0 / 2.4) - 0.055);
+}
+CpLab cp_oklab(double r8, double g8, double b8) {
+    const double r = cp_lin(r8), g = cp_lin(g8), b = cp_lin(b8);
+    const double l = std::cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+    const double m = std::cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+    const double s = std::cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+    return {0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s,
+            1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s,
+            0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s};
+}
+// OKLab -> linear sRGB, unclamped (out of gamut shows as <0 or >1).
+void cp_linear(const CpLab& p, double out[3]) {
+    double l = p.L + 0.3963377774 * p.a + 0.2158037573 * p.b;
+    double m = p.L - 0.1055613458 * p.a - 0.0638541728 * p.b;
+    double s = p.L - 0.0894841775 * p.a - 1.2914855480 * p.b;
+    l = l * l * l;
+    m = m * m * m;
+    s = s * s * s;
+    out[0] = 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s;
+    out[1] = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s;
+    out[2] = -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s;
+}
+uint16_t cp_bgr555(double r8, double g8, double b8) {
+    auto q = [](double v) { return (unsigned)std::min(31.0, std::max(0.0, std::round(v * 31.0 / 255.0))); };
+    return (uint16_t)(q(r8) | (q(g8) << 5) | (q(b8) << 10));
+}
+// A DS colour as 8-bit sRGB, widened as the ramp's prototype did (x<<3 | x>>2).
+void cp_rgb8(uint16_t c, double out[3]) {
+    for (int i = 0; i < 3; ++i) {
+        const unsigned v = (c >> (5 * i)) & 31u;
+        out[i] = (double)((v << 3) | (v >> 2));
+    }
+}
+unsigned cp_rgb24_of(uint16_t c) {
+    double v[3];
+    cp_rgb8(c, v);
+    return ((unsigned)v[0] << 16) | ((unsigned)v[1] << 8) | (unsigned)v[2];
+}
+// 0xRRGGBB as the DS will show it (its 5-bit step), so comparisons see that.
+unsigned cp_q(unsigned rgb) {
+    return cp_rgb24_of(cp_bgr555((rgb >> 16) & 255u, (rgb >> 8) & 255u, rgb & 255u));
+}
+CpLab cp_lab24(unsigned rgb) { return cp_oklab((rgb >> 16) & 255u, (rgb >> 8) & 255u, rgb & 255u); }
+// L, C, h (radians) -> a DS colour, the chroma reduced until it is in gamut.
+uint16_t cp_from_lch(double L, double C, double h) {
+    L = std::min(1.0, std::max(0.0, L));
+    double lin[3] = {L, L, L};
+    for (int k = 0; k < 60; ++k) {
+        cp_linear(CpLab{L, C * std::cos(h), C * std::sin(h)}, lin);
+        if (std::min({lin[0], lin[1], lin[2]}) >= -1e-4 && std::max({lin[0], lin[1], lin[2]}) <= 1.0 + 1e-4) break;
+        C *= 0.95;
+    }
+    return cp_bgr555(cp_srgb(lin[0]), cp_srgb(lin[1]), cp_srgb(lin[2]));
+}
+// The stock ramps' average shape: the L steps to the light and dark shades and
+// their chroma against the mid's (Grey, nearly neutral, is left out of those).
+struct CpShape { double dl1, dl2, k1, k2; };
+const CpShape& cp_shape() {
+    static const CpShape s = [] {
+        double d1 = 0, d2 = 0, c1 = 0, c2 = 0;
+        int nc = 0;
+        for (const auto& t : kStockShades) {
+            CpLab p[3];
+            for (int i = 0; i < 3; ++i) {
+                double v[3];
+                cp_rgb8(t[i], v);
+                p[i] = cp_oklab(v[0], v[1], v[2]);
+            }
+            d1 += p[0].L - p[1].L;
+            d2 += p[1].L - p[2].L;
+            const double cm = std::hypot(p[1].a, p[1].b);
+            if (cm > 0.03) {
+                c1 += std::hypot(p[0].a, p[0].b) / cm;
+                c2 += std::hypot(p[2].a, p[2].b) / cm;
+                ++nc;
+            }
+        }
+        return CpShape{d1 / 6.0, d2 / 6.0, nc ? c1 / nc : 1.0, nc ? c2 / nc : 0.9};
+    }();
+    return s;
+}
+// 0xRRGGBB -> light, mid, dark.
+void cp_ramp(unsigned rgb, uint16_t out[3]) {
+    const CpLab p = cp_lab24(rgb);
+    const double C = std::hypot(p.a, p.b), h = std::atan2(p.b, p.a);
+    const CpShape& s = cp_shape();
+    out[0] = cp_from_lch(std::min(p.L + s.dl1, 0.97), C * s.k1, h);
+    out[1] = cp_bgr555((rgb >> 16) & 255u, (rgb >> 8) & 255u, rgb & 255u);
+    out[2] = cp_from_lch(std::max(p.L - s.dl2, 0.05), C * s.k2, h);
+}
+// The minimap dot: the chosen hue a little lighter (the stock dots sit between
+// their light and mid shades).
+uint16_t cp_dot(unsigned rgb) {
+    const CpLab p = cp_lab24(rgb);
+    return cp_from_lch(std::min(std::max(p.L + 0.05, 0.25), 0.92), std::hypot(p.a, p.b), std::atan2(p.b, p.a));
+}
+// OKLab distance x100 between two 0xRRGGBB colours. The closest stock pair (the
+// mid shades of Red and Purple) is 16.9.
+double cp_delta(unsigned x, unsigned y) {
+    const CpLab a = cp_lab24(x), b = cp_lab24(y);
+    return 100.0 * std::sqrt((a.L - b.L) * (a.L - b.L) + (a.a - b.a) * (a.a - b.a) + (a.b - b.b) * (a.b - b.b));
+}
+// Keep a colour at least 10 from every colour in `others` (their mid shades):
+// 0 as it is, 1 moved (lightness first, then hue, in small steps), -1 nothing
+// near it is far enough (refused: the player shows the stock colour).
+int cp_separate(unsigned rgb, const unsigned* others, int n, unsigned* out) {
+    rgb = cp_q(rgb);
+    *out = rgb;
+    auto ok = [&](unsigned c) {
+        for (int i = 0; i < n; ++i)
+            if (cp_delta(c, others[i]) < 10.0) return false;
+        return true;
+    };
+    if (ok(rgb)) return 0;
+    const CpLab p = cp_lab24(rgb);
+    const double C = std::hypot(p.a, p.b), h = std::atan2(p.b, p.a);
+    for (int k = 1; k <= 8; ++k)
+        for (int sgn = 1; sgn >= -1; sgn -= 2) {
+            const double L = p.L + sgn * 0.03 * k;
+            if (L < 0.12 || L > 0.95) continue;
+            const unsigned c = cp_rgb24_of(cp_from_lch(L, C, h));
+            if (ok(c)) { *out = c; return 1; }
+        }
+    for (int k = 1; k <= 6; ++k)
+        for (int sgn = 1; sgn >= -1; sgn -= 2) {
+            const unsigned c = cp_rgb24_of(cp_from_lch(p.L, std::max(C, 0.08), h + sgn * 0.17 * k));
+            if (ok(c)) { *out = c; return 1; }
+        }
+    return -1;
+}
+
+// The set in force (emulation thread), and a copy for the other threads.
+bool g_cp_on[kCpColours] = {};
+unsigned g_cp_rgb[kCpColours] = {};
+uint16_t g_cp_sh[kCpColours][3] = {};
+uint16_t g_cp_dotc[kCpColours] = {};
+unsigned g_cp_gen = 0;   // bumped by every change of the set
+std::mutex g_cp_mu;
+bool g_cp_pub_on[kCpColours] = {};
+unsigned g_cp_pub_rgb[kCpColours] = {};
+uint16_t g_cp_pub_sh[kCpColours][3] = {};
+// The shades colour `c` (0-6) is drawn with now: custom, else the cartridge's
+// (teal: its style's).
+uint16_t cp_shade(unsigned c, unsigned i) {
+    if (c < (unsigned)kCpColours && g_cp_on[c]) return g_cp_sh[c][i];
+    return c == 6u ? teal_shade(i) : kStockShades[c < 6u ? c : 0u][i];
+}
+uint16_t teal_disp(unsigned i) { return cp_shade(6u, i); }
+uint16_t cp_stock_mid(unsigned c) { return c == 6u ? teal_shade(1) : kStockShades[c < 6u ? c : 0u][1]; }
 // Style 2's grey -> dark blue for a colour of another palette (a 3D model's):
 // a neutral grey, neither near white nor near black, takes the blue of the
 // sprite grey nearest it in lightness; anything else is unchanged.
@@ -10658,6 +11472,9 @@ CardTintState g_card_state;
 std::atomic<bool> g_card_active{false};
 uint16_t g_card_end_sh[3] = {0, 0, 0};   // emulation thread: the latch
 bool g_card_end_valid = false;
+bool g_card_score_screen = false;        // BR-0085: the result picture was loaded
+
+extern "C" void lb_card_score_screen_mark(void) { g_card_score_screen = true; }   // BR-0085: from the 0x020C63E8 hook
 
 void card_tint_refresh() {
     static bool was_on = false;
@@ -10709,7 +11526,12 @@ void card_tint_refresh() {
             }
         }
     }
-    if (!in_play && g_card_end_valid) {
+    // BR-0085: the Free Play result screen keeps the game state at 5 (in
+    // play), so !in_play missed it and the hero's picture stayed stock. The
+    // picture's own loader (score_top_override) says the screen is up; the
+    // mark lasts until the battle is left.
+    if (!battle) g_card_score_screen = false;
+    if ((!in_play || g_card_score_screen) && g_card_end_valid) {
         s.end = true;
         std::memcpy(s.end_sh, g_card_end_sh, sizeof s.end_sh);
     }
@@ -11154,9 +11976,11 @@ void model_records_watch() {
         const uint32_t e = bus_read_u32(arr + 4u * (uint32_t)i);
         if (!guest_ptr(e) || !bus_read_u8(e + 0x227u)) continue;
         const uint8_t cat = entity_category(e);
-        if (cat != 5u && cat != 6u) continue;
         const uint32_t bp = unit_blueprint(e);
         if (!bp) continue;
+        // docs/492: the draw cloak's units are drawn as it says.
+        const int drawn = cud_kind_of_bp(bp);
+        if (drawn == 0 || (drawn < 0 && cat != 5u && cat != 6u)) continue;
         const uint32_t idx = bus_read_u16(bp + 4u), team = bus_read_u8(e + 0xD5u);
         int rec = -1;
         for (uint32_t k = 0; k < 12u && rec < 0; ++k) {
@@ -11186,7 +12010,12 @@ void models_paint() {
     }
     const bool teal = g_teal_on;
     const bool shark = lb_creatures_live() && lb_setting_creature_tint();
-    if (!teal && !shark && !g_model_pal_any) return;
+    // docs/489: a custom colour on one of the stock six (teal's goes with teal's
+    // bank 5 above). Model banks by colour: Building_Draw3D's slot map {1,0,2,3,4,5->6}.
+    static const unsigned kCpModelBank[6] = {1, 0, 2, 3, 4, 6};
+    bool cp = false;
+    for (int c = 0; c < 6; ++c) cp = cp || g_cp_on[c];
+    if (!teal && !shark && !cp && !g_model_pal_any) return;
     uint32_t size = 0;
     uint8_t* e = texpal_flat(&size);
     if (!e) return;
@@ -11198,7 +12027,7 @@ void models_paint() {
         const uint32_t at = base * 16u;
         const bool loaded = bus_read_u32(m + 0x54u) != 0u && base != 0u && at + kModelBanks <= size;
         const bool is_shark = shark && bus_read_u32(m + 0x64u) == kSharkModelId;
-        const bool want = loaded && (teal || is_shark);
+        const bool want = loaded && (teal || is_shark || cp);
         if (p.at && (p.at != at || !want)) {
             // Moved, unloaded or no longer wanted: the stock banks back, if
             // what this wrote is still there.
@@ -11234,7 +12063,7 @@ void models_paint() {
         std::memcpy(b, p.was, kModelBanks);
         if (teal) {
             std::memcpy(b[kTealSlot], b[kTealSrcSlot], 0x20);
-            for (unsigned i = 0; i < 3; ++i) b[kTealSlot][kTealEntry + i] = teal_shade(i);
+            for (unsigned i = 0; i < 3; ++i) b[kTealSlot][kTealEntry + i] = teal_disp(i);   // docs/489: custom if set
             // BR-0082 (docs/485): a re-skinned custom model keeps team pixels at
             // other entries too, each holding the bank's own team shade; in
             // Grey's bank those are Grey's shades. Each such entry (one that
@@ -11244,11 +12073,32 @@ void models_paint() {
                 const uint16_t v = b[kTealSrcSlot][j];
                 if (v == b[1][j]) continue;
                 for (unsigned s = 0; s < 3; ++s)
-                    if (v == b[kTealSrcSlot][kTealEntry + s]) { b[kTealSlot][j] = teal_shade(s); break; }
+                    if (v == b[kTealSrcSlot][kTealEntry + s]) { b[kTealSlot][j] = teal_disp(s); break; }
             }
-            if (teal_style_now() == 2)   // docs/485: the greys dark blue too
+            if (teal_style_now() == 2 && !g_cp_on[6])   // docs/485: the greys dark blue too (not under a custom colour)
                 for (unsigned i = 1; i < 16; ++i)
                     if (i < kTealEntry || i > kTealEntry + 2) b[kTealSlot][i] = rdb_blue_of(b[kTealSlot][i]);
+        }
+        // docs/489: each custom colour's bank, entries 12-14 in its shades, and
+        // (BR-0082's rule) any other entry that holds one of that bank's own team
+        // shades and differs from the other stock team's bank there (Red's bank 1,
+        // or Blue's bank 0 for Red itself) takes the matching custom shade. Built
+        // from the stock banks (p.was), after teal took bank 6's stock copy.
+        if (cp) {
+            uint16_t was[7][16];
+            std::memcpy(was, p.was, kModelBanks);
+            for (unsigned c = 0; c < 6u; ++c) {
+                if (!g_cp_on[c]) continue;
+                const unsigned k = kCpModelBank[c], ref = k == 1u ? 0u : 1u;
+                for (unsigned i = 0; i < 3; ++i) b[k][kTealEntry + i] = g_cp_sh[c][i];
+                for (unsigned j = 1; j < 16; ++j) {
+                    if (j >= kTealEntry && j <= kTealEntry + 2) continue;
+                    const uint16_t v = was[k][j];
+                    if (v == was[ref][j]) continue;
+                    for (unsigned s = 0; s < 3; ++s)
+                        if (v == was[k][kTealEntry + s]) { b[k][j] = g_cp_sh[c][s]; break; }
+                }
+            }
         }
         if (is_shark)
             for (unsigned s = 0; s < 7u; ++s) {
@@ -11261,12 +12111,58 @@ void models_paint() {
         if (std::memcmp(e + at, p.wrote, kModelBanks) != 0) {
             std::memcpy(e + at, p.wrote, kModelBanks);
             changed = true;
+            if (cp || (teal && g_cp_on[6])) {   // docs/489: say which banks took a custom colour
+                static unsigned said = 0;
+                if (said < 48u) {
+                    ++said;
+                    std::string banks;
+                    for (unsigned c = 0; c < 6u; ++c)
+                        if (g_cp_on[c])
+                            banks += " bank " + std::to_string(kCpModelBank[c]) + " (" + kCpNames[c] + ")";
+                    if (teal && g_cp_on[6]) banks += " bank 5 (Teal)";
+                    std::fprintf(stderr, "[lb_custompal] model %u (id %u) palette %04X: entries 12-14 painted in%s\n",
+                                 k, bus_read_u32(m + 0x64u), at, banks.c_str());
+                    std::fflush(stderr);
+                }
+            }
         }
     }
     g_model_pal_any = any;
     if (changed) nds_vram_note_capture_write();
 }
 }  // namespace
+
+// docs/489: the custom colour's helpers for the other files (lb_overlay.h).
+extern "C" void lb_custompal_ramp(unsigned rgb, unsigned short out[3]) {
+    uint16_t s[3];
+    cp_ramp(rgb & 0xFFFFFFu, s);
+    for (int i = 0; i < 3; ++i) out[i] = s[i];
+}
+extern "C" double lb_custompal_delta(unsigned a, unsigned b) { return cp_delta(cp_q(a), cp_q(b)); }
+extern "C" unsigned lb_custompal_rgb_of(unsigned short c) { return cp_rgb24_of(c); }
+extern "C" unsigned lb_custompal_stock_mid(int colour) {
+    return colour >= 0 && colour <= 6 ? cp_rgb24_of(cp_stock_mid((unsigned)colour)) : 0u;
+}
+extern "C" int lb_custompal_separate(unsigned rgb, const unsigned* others, int n, unsigned* out) {
+    return cp_separate(rgb, others, n, out);
+}
+// The set in force, by stock colour (0xRRGGBB, or -1 stock); the count set.
+extern "C" int lb_custompal_resolved(int out[7]) {
+    std::lock_guard<std::mutex> lk(g_cp_mu);
+    int n = 0;
+    for (int c = 0; c < kCpColours; ++c) {
+        out[c] = g_cp_pub_on[c] ? (int)g_cp_pub_rgb[c] : -1;
+        n += g_cp_pub_on[c] ? 1 : 0;
+    }
+    return n;
+}
+// Shade i (0 light, 1 mid, 2 dark) colour `colour` is drawn with, when it has a
+// custom colour; -1 when it is drawn stock.
+extern "C" int lb_custompal_shade(int colour, int i) {
+    if (colour < 0 || colour >= kCpColours || i < 0 || i > 2) return -1;
+    std::lock_guard<std::mutex> lk(g_cp_mu);
+    return g_cp_pub_on[colour] ? (int)g_cp_pub_sh[colour][i] : -1;
+}
 
 // ---- docs/412: TEAL'S ART, FRAME REMAP AND PALETTE ---------------------------
 //
@@ -11497,6 +12393,10 @@ const NdsDispatchEntry kOverrideTable[] = {
        four divider round trips): with Native Game Logic, here (docs/479).
        Otherwise a pure tail call. */
     {kPosToCell, 1u, pos_to_cell_override, nullptr},       /* 0x020085A0 */
+    /* ARM. The animation set of a new entity (from Task_View_Update): a custom
+       unit drawn with a model, or with another unit's sheets, gets that kind's
+       set (docs/492). Otherwise a pure tail call. */
+    {kAnimFactory, 0u, anim_factory_override, nullptr},    /* 0x0200D504 */
     /* ARM. THE DECOMPILATION'S FIRST GRADED FUNCTION, not a patch. With
        LB_SHADOW unset this delegates to the cartridge and only counts; with
        LB_SHADOW=native it runs src/battles/registry.c instead. docs/333. */
@@ -11513,6 +12413,9 @@ const NdsDispatchEntry kOverrideTable[] = {
     {kSprSlotAlloc, 0u, spr_slot_alloc_override, nullptr}, /* 0x0202DD18 */
     {kSprPageWrite, 0u, spr_page_write_override, nullptr}, /* 0x0202E014 */
     {kFeCard, 0u, fe_card_override, nullptr},              /* 0x02030A70 */
+    /* ARM. The level's model records: a custom unit drawn with a model gets
+       one (docs/492). Otherwise a pure tail call. */
+    {kModelLoad, 0u, model_load_override, nullptr},        /* 0x02035C48 */
     /* ARM. The level load's sprite step: a Mounted (or Hero) creature loads
        as a Close Combat unit (docs/438). */
     {kCreatureSprLoad, 0u, creature_sprite_load_override, nullptr}, /* 0x02035F7C */
@@ -11522,6 +12425,11 @@ const NdsDispatchEntry kOverrideTable[] = {
     /* ARM. The level's sprite teardown: also frees the extension table's
        sheets (docs/479). Otherwise a pure tail call. */
     {kSprTeardown, 0u, spr_teardown_override, nullptr},    /* 0x0203638C */
+    /* ARM leaves. "Drawn as a billboard unit" / "drawn as a model": answered
+       for the custom units the draw cloak takes (docs/492). Otherwise pure
+       tail calls. */
+    {kDrawIsUnit, 0u, draw_is_unit_override, nullptr},     /* 0x02036CA0 */
+    {kDrawIsModel, 0u, draw_is_model_override, nullptr},   /* 0x02036CD0 */
     /* ARM. Runs immediately after the placement painter, from its only
        caller. Harvests the band the painter has just drawn, puts the native
        buffer back, and restores the camera -- all BEFORE the cartridge's own
@@ -11594,6 +12502,10 @@ const NdsDispatchEntry kOverrideTable[] = {
        drawn while its cell is fogged (BR-0063, docs/477); the result is the
        cartridge's own. Not during a replay. */
     {kUnitDrawTest, 0u, unit_draw_test_override, nullptr}, /* 0x0205FC1C */
+    /* ARM. Sim::AssistStructureEntityCommand::virtual_08: with Soldiers
+       Repair Buildings, a foot/ranged/mounted unit reads as a builder for
+       the call (docs/488); otherwise a pure tail call. */
+    {kAssistCheck, 0u, assist_check_override, nullptr},    /* 0x02060240 */
     /* GRADED, NOT PATCHED. docs/333. */
     {kListFind, 0u, list_find_shadow, nullptr},            /* 0x0206AC2C */
     /* ARM. Adds the attack boost to a ranged hit in front of the cartridge's
@@ -11601,10 +12513,20 @@ const NdsDispatchEntry kOverrideTable[] = {
        setting on; otherwise a pure tail call. Replaces the old override on
        func_0206E408, whose nested guest call was not re-entrant. docs/369. */
     {kApplyDamage, 0u, apply_damage_observer, nullptr},    /* 0x0206E970 */
+    /* ARM. Sim::ProduceUnitEntityCommand::virtual_09: with One Of Each Hero,
+       a hero whose twin is alive waits (its class's allowance reads 0 for
+       the call, docs/488); otherwise a pure tail call. */
+    {kProduceStep, 0u, produce_step_override, nullptr},    /* 0x02072080 */
+    /* ARM. Sim::RepairStructureEntityCommand::virtual_08: as the assist
+       check above (docs/488). */
+    {kRepairCheck, 0u, repair_check_override, nullptr},    /* 0x020728EC */
     /* ARM. Sim::ResearchUpgradeEntityCommand's step: another army's
        "upgrade complete" chime is skipped (setting, BR-0067, docs/477);
        otherwise a pure tail call. Reached only through its vtable. */
     {kResearchStep, 0u, research_step_override, nullptr},  /* 0x02073544 */
+    /* ARM, a leaf. A damage spell's startup frames: the Balance value for
+       the spell, else a pure tail call (docs/488). */
+    {kSpellStartup, 0u, spell_startup_override, nullptr},  /* 0x02076F14 */
     /* ARM. The EMP/ESP tick's stun step: victims whose blueprint is EMP or
        ESP immune are marked done first; otherwise a pure tail call. docs/463. */
     {kEmpApply, 0u, emp_victims_override, nullptr},        /* 0x02077510 */
@@ -11624,6 +12546,8 @@ const NdsDispatchEntry kOverrideTable[] = {
     {kTileGather, 0u, tile_gather_observer, nullptr},      /* 0x0207E9B4 */
     /* ARM. BR-0053: a mountains unit's order takes no area. */
     {kMovePickDest, 0u, move_dest_override, nullptr},      /* 0x0207F1B4 */
+    /* ARM. AssistStructureCommand's executor: as the assist check (docs/488). */
+    {kAssistCmdExec, 0u, assist_exec_override, nullptr},   /* 0x02084218 */
     /* ARM. A team's bricks: a Gold Brick's worth, else a pure tail call.
        docs/416. */
     {kTeamAddBricks, 0u, team_add_bricks_override, nullptr}, /* 0x020866E0 */
@@ -11637,6 +12561,10 @@ const NdsDispatchEntry kOverrideTable[] = {
     /* Thumb. An entity's own sound: a custom unit's WAV instead of its
        template's sequence (docs/448); otherwise a pure tail call. */
     {kEntitySound, 1u, entity_sound_override, nullptr},    /* 0x02089270 */
+    /* Thumb. SG-0112: the sound manager's effects and music volume setters;
+       the boot defaults take the remembered volumes. */
+    {kSetSfxVol, 1u, set_sfx_volume_override, nullptr},    /* 0x02089898 */
+    {kSetMusicVol, 1u, set_music_volume_override, nullptr}, /* 0x020898C4 */
     /* Thumb. BR-0069: the building the AI trains a unit in, by the player's
        rule where the two differ (never for a stock record), or a custom
        unit's trained_at (SG-0093, docs/476); otherwise a pure tail call.
@@ -11719,6 +12647,17 @@ const NdsDispatchEntry kOverrideTable[] = {
     {kMapListFill, 1u, map_list_fill_override, nullptr},   /* 0x020C48B0 */
     {kMapConfirm, 1u, map_confirm_override, nullptr},      /* 0x020C53E4 */
     {kMapPreview, 1u, map_preview_override, nullptr},      /* 0x020C5444 */
+    /* ARM. The end screen's picture name: a custom hero's index reads as its
+       template's for the call, and its own end picture's name is put in the
+       widget after it (docs/487); otherwise a pure tail call. */
+    {kEndPicture, 0u, end_picture_override, nullptr},      /* 0x020C63E8 */
+    /* Thumb. A unit icon's UIMgrData record: a custom unit with icons of its
+       own gets a lent record (docs/487); otherwise a pure tail call. */
+    {kIconRecord, 1u, icon_record_override, nullptr},      /* 0x020D85F4 */
+    /* Thumb. BR-0092: whether a factory/shipyard has anything to train; the
+       trained_at byte swap for the call (CallWrap), else a pure tail call.
+       docs/487. */
+    {kTrainAny, 1u, train_any_override, nullptr},          /* 0x020D9320 */
     /* Thumb. SG-0093: a building's train list; a custom transport/special's
        trained_at decides factory or shipyard for the call (CallWrap), else a
        pure tail call. docs/476. */
@@ -11737,6 +12676,10 @@ const NdsDispatchEntry kOverrideTable[] = {
        pending battle shortcut's button callback in front of it, as a tail
        call that returns here; otherwise a pure tail call. docs/383. */
     {kViewUpdate, 1u, view_update_override, nullptr},      /* 0x020DD708 */
+    /* Thumb. BR-0092: the build menu bar's items; the trained_at byte swap
+       for a factory's or shipyard's categories 5/6 (CallWrap with three
+       stack words), else a pure tail call. docs/487. */
+    {kBrickList, 1u, brick_list_override, nullptr},        /* 0x020DE1D0 */
     /* Thumb. The army screen's unit head: a custom unit draws its template's
        (docs/448); otherwise a pure tail call. */
     {kArmyHead, 1u, army_head_override, nullptr},          /* 0x020E06FC */
@@ -11826,6 +12769,8 @@ static_assert(kRosterBuild < kPassability && kPassability < kOccLayers && kOccLa
               kEnemyCycle < kMapListFill && kMapListFill < kMapConfirm &&
               kMapConfirm < kMapPreview && kMapPreview < kMarkerPlace &&
               kMapPreview < kTrainList && kTrainList < kSelRefresh && kTrainList < kMarkerPlace &&
+              kMapPreview < kEndPicture && kEndPicture < kIconRecord && kIconRecord < kTrainAny &&
+              kTrainAny < kTrainList && kViewUpdate < kBrickList && kBrickList < kArmyHead &&
               kWidgetSetPos < kArmyListable && kArmyListable < kFactionOfBp &&
               kFactionOfBp < kArmyTier &&
               kArmyTier < kPtrAppend && kPtrAppend < kSplitArray &&
@@ -11843,13 +12788,17 @@ static_assert(kRosterBuild < kPassability && kPassability < kOccLayers && kOccLa
               kGfxTransfer < kImageXfer && kImageXfer < kSetOwner &&
               kSetOwner < kSetHp && kSetHp < kApplyDamage &&
               kSetHp < kSpeedIconAdd && kSpeedIconAdd < kSpeedIconDel &&
-              kSpeedIconDel < kUnitDrawTest && kUnitDrawTest < kApplyDamage &&
-              kApplyDamage < kResearchStep && kResearchStep < kEmpApply &&
+              kSpeedIconDel < kUnitDrawTest && kUnitDrawTest < kAssistCheck &&
+              kAssistCheck < kListFind && kListFind < kApplyDamage &&
+              kApplyDamage < kProduceStep && kProduceStep < kRepairCheck &&
+              kRepairCheck < kResearchStep && kResearchStep < kSpellStartup &&
+              kSpellStartup < kEmpApply &&
               kEmpApply < kEmpCollect && kEmpCollect < kHealTick &&
               kHealTick < kHotWireTick &&
               kHotWireTick < kCastGround && kCastGround < kCastSpell &&
               kCastSpell < kTileGather &&
-              kTileGather < kMovePickDest && kMovePickDest < kTeamAddBricks && kTeamAddBricks < kAiMineScore && kAiMineScore < kSetMusicSide &&
+              kTileGather < kMovePickDest && kMovePickDest < kAssistCmdExec &&
+              kAssistCmdExec < kTeamAddBricks && kTeamAddBricks < kAiMineScore && kAiMineScore < kSetMusicSide &&
               kSetMusicSide < kEntitySound && kEntitySound < kAiTrainerKind &&
               kAiTrainerKind < kAiUpgradePick && kAiUpgradePick < kAiQueueBuild &&
               kSetMusicSide < kAiQueueBuild && kAiQueueBuild < kFogCircle && kFogCircle < kStartDeal && kStartDeal < kFillWindow && kFillWindow < kMapParse &&
@@ -11876,6 +12825,9 @@ static_assert(kRosterBuild < kPassability && kPassability < kOccLayers && kOccLa
               kSetOwner < kU16IsSet && kU16IsSet < kSetHp &&
               kSetHp < kUnitDrawTest && kUnitDrawTest < kListFind && kListFind < kApplyDamage &&
               kFeCard < kCreatureSprLoad && kCreatureSprLoad < kMapLoad &&
+              kPosToCell < kAnimFactory && kAnimFactory < kRegistryFind &&             // docs/492
+              kFeCard < kModelLoad && kModelLoad < kCreatureSprLoad &&
+              kSprTeardown < kDrawIsUnit && kDrawIsUnit < kDrawIsModel && kDrawIsModel < kFpPost &&
               kCommitBGs < kCreatureSprAnim && kCreatureSprAnim < kBg3Blank,
               "kOverrideTable must be sorted ascending by address: "
               "runtime_arm.cpp lookup_in() binary-searches it, and an "
@@ -12470,7 +13422,11 @@ int sprite_sets_wanted(void) {
                 const uint8_t cat = bus_read_u8(bp + 0x5Cu);
                 const unsigned idx = bus_read_u16(bp + 4u);
                 const bool creature = creatures && (idx == 169 || idx == 138 || idx == 153) && (cat == 4u || cat == 0u);
-                const bool moved = cat == 4u && custom_art_category(bp) >= 1;   // SG-0109: loads as its template
+                // SG-0109: a role-moved unit loads as its template; docs/492: a
+                // hero or special drawn with a builder's or ground unit's sheets
+                // loads that unit's three-sheet set.
+                const int art = (cat < 1u || cat > 3u) ? custom_art_category(bp) : -1;
+                const bool moved = art >= 1 && art <= 3;
                 if ((cat >= 1u && cat <= 3u) || creature || moved) ++sets;
             }
         }
@@ -12483,11 +13439,17 @@ int sprite_sets_wanted(void) {
 // template's category (2 or 3), as the creatures' see 2. -1: not such a unit.
 extern "C" int lb_cunits_art_category(int k);       /* lb_cunits.cpp */
 extern "C" int lb_cunits_of_battle_record(unsigned int rec);
+// docs/492: a custom unit drawn with a Mounted unit's sheet (art 4) is taken
+// by the cloak only while the mounted loader's three slots hold it; decided at
+// each level's sprite load (cu_draw_admit, below).
+bool g_cu_art4_ok[128] = {};
 int custom_art_category(uint32_t bp) {
     if (!bp) return -1;
     const int k = lb_cunits_of_battle_record(bp);
     const int art = k >= 0 ? lb_cunits_art_category(k) : -1;
-    return art >= 1 && art <= 3 && bus_read_u8(bp + 0x5Cu) != (uint8_t)art ? art : -1;
+    if (art < 1 || art > 4 || bus_read_u8(bp + 0x5Cu) == (uint8_t)art) return -1;
+    if (art == 4 && !(k < 128 && g_cu_art4_ok[k])) return -1;
+    return art;
 }
 // The blueprints of the Wolf, Robot and Monkey that are in category 4 now
 // (read as 2), then the custom units of SG-0109 (read as their art category).
@@ -12559,8 +13521,10 @@ bool cloak_enter(CatCloak& c, uint32_t target, void (*original)(void), bool per_
                 bps[n++] = bp;
             }
         }
-        // SG-0109: a custom unit moved to another ground slot draws as its template.
-        if (n == 0 && cat >= 2u && cat <= 4u && lb_cunits_count() > 0) {
+        // SG-0109: a custom unit moved to another ground slot draws as its
+        // template. docs/492: a hero (0) or a transport or special (5, 6)
+        // drawn with another unit's sheets draws in that unit's category.
+        if (n == 0 && (cat == 0u || (cat >= 2u && cat <= 6u)) && lb_cunits_count() > 0) {
             const int art = custom_art_category(bp);
             if (art >= 0) {
                 tos[n] = (uint8_t)art;
@@ -13364,8 +14328,323 @@ extern "C" void lb_test_drive(void) {
         }
     }
 }
+// ---- docs/492 (SG-0082): THE DRAW CLOAK -------------------------------------
+//
+// Whether a unit is drawn as a sprite or as a model is decided by its record's
+// category byte (+0x5C) alone, at five places:
+//  - the level's model step FUN_02035C48 (inside the sprite step 0x02035F7C):
+//    every roster unit whose category maps to 1 in the table at 0x0214290C
+//    (categories 5 and 6) gets one of the 12 model records at 0x02150BA0, keyed
+//    (record +0x04, team +0x14), with asset + ".nsbmd"/".nsbca" loaded;
+//  - the sprite loaders FUN_020353B4 / FUN_02035028 (table value 0; 4 only in
+//    the second): the docs/485 cloak already moves those;
+//  - the animation set FUN_0200D504 (from Task_View_Update, once per new
+//    entity): categories 5/6 get three AnimationInstance3D (vtable 0x02142AA0)
+//    whose frame ranges FUN_0200D188 -> FUN_0200CE5C looks up by the number at
+//    record +0x04; anything else three AnimationInstance2D (FUN_0200D1A0: the
+//    Mounted table for 4, one table for the rest);
+//  - FUN_02036CA0 ("a billboard unit": not 5, 6 or 0x13) and FUN_02036CD0 ("a
+//    model": 5 or 6), which View_DrawEntities (pass 1 Unit_BuildBillboard,
+//    pass 3 Building_Draw3D), Task_View_Update's model matrix and bounds steps
+//    (FUN_0203D3D8 -> FUN_0203CFC4, FUN_0203D488 -> FUN_0203D148) and the bar
+//    placement FUN_0203C264 ask;
+//  - Unit_BuildBillboard's frame lookup (the docs/485 per-entity cloak).
+// Everything else that reads the category -- the hero's spells, respawn, mana
+// bar, the AI, the army slots, build limits -- is the simulation and the HUD,
+// so the byte is never changed for long: a custom unit drawn with a model
+// reads 6 only inside FUN_02035C48 and FUN_0200D504 (hops, as cloak_enter),
+// and the two predicates are answered for it here. A hero or special drawn
+// with another unit's sheets reads that unit's category in the docs/485 load
+// and billboard cloaks and in FUN_0200D504, and the predicates call a special
+// so drawn a billboard unit. Nothing the simulation reads is written outside a
+// call, and every machine with the same custom units decides alike, so it is
+// the same online and in recordings. With no such unit every hook is a pure
+// tail call.
+//
+// Capacity, decided at each level's sprite load (cu_draw_admit): a unit drawn
+// with a model takes model records (one per army it is in); only while the 12
+// hold every roster model. One drawn with a Mounted sheet takes a slot of the
+// mounted loader (48 + n, three in all, docs/485); only while three hold every
+// army's mounted sheets. A unit left out is drawn its own way (its hero
+// sheets or its model, which the importer always writes too) and logged.
+constexpr int kModelRecords = 12;               // at 0x02150BA0 (FUN_0200D0E4)
+constexpr int kMountedSlots = 3;                 // 48..50 (FUN_02035028)
+extern "C" int lb_cunits_model_src(int k);       /* lb_cunits.cpp */
+extern "C" int lb_cunits_model_drawn(int k);
+extern "C" const char* lb_cunits_name(int k);
+extern "C" unsigned int lb_cunits_battle_record(int k);
+extern "C" int lb_cunits_count(void);
+// The units the cloak takes in this level: kind 1 a 2D record drawn with model
+// `model`; kind 0 a hero (0) or special (5/6) drawn as category `art`; kind 2 a
+// special on another stock model (its animation table only).
+struct CuDraw {
+    uint32_t bp = 0;
+    int kind = -1, art = -1, model = -1;
+};
+CuDraw g_cud[128];
+int g_cud_n = 0;
+const CuDraw* cud_of_bp(uint32_t bp) {
+    for (int i = 0; i < g_cud_n; ++i)
+        if (g_cud[i].bp == bp) return &g_cud[i];
+    return nullptr;
+}
+// 1 drawn as a model, 0 drawn as a billboard unit, -1 the cartridge decides.
+int cud_kind_of_bp(uint32_t bp) {
+    const CuDraw* d = g_cud_n > 0 && bp ? cud_of_bp(bp) : nullptr;
+    if (!d) return -1;
+    if (d->kind == 1) return 1;
+    if (d->kind == 0) {
+        const uint8_t cat = bus_read_u8(bp + 0x5Cu);
+        return cat == 5u || cat == 6u ? 0 : -1;
+    }
+    return -1;
+}
+// Every roster unit of the level's armies, as sprite_sets_wanted walks them.
+template <class F>
+void for_each_roster_bp(F&& f) {
+    const uint32_t world = bus_read_u32(0x0215540Cu);
+    const uint32_t teams = guest_ptr(world) ? bus_read_u32(world + 8u) : 0u;
+    const int32_t nt = guest_ptr(world) ? (int32_t)bus_read_u32(world + 0xCu) : 0;
+    for (int32_t t = 0; guest_ptr(teams) && t < nt && t < 8; ++t) {
+        const uint32_t team = bus_read_u32(teams + 4u * (uint32_t)t);
+        if (!guest_ptr(team)) continue;
+        const uint32_t rl = bus_read_u32(team + 0x70u);
+        const int32_t nr = (int32_t)bus_read_u32(team + 0x74u);
+        for (int32_t r = 0; guest_ptr(rl) && r < nr && r < 8; ++r) {
+            const uint32_t ro = bus_read_u32(rl + 4u * (uint32_t)r);
+            if (!guest_ptr(ro)) continue;
+            const uint32_t ids = bus_read_u32(ro + 0x28u), hs = bus_read_u32(ro + 8u);
+            if (!guest_ptr(ids) || !guest_ptr(hs)) continue;
+            for (uint32_t k = 0; k < 26u; ++k) {
+                if (bus_read_u16(ids + 0xCu + 2u * k) == 0xFFFFu) continue;
+                const uint32_t h = bus_read_u32(hs + 4u * k);
+                const uint32_t bp = guest_ptr(h) ? bus_read_u32(h + 8u) : 0u;
+                if (guest_ptr(bp)) f((int)t, bp);
+            }
+        }
+    }
+}
+// At each level's sprite load, before the docs/485 cloak reads it.
+void cu_draw_admit(void) {
+    g_cud_n = 0;
+    for (bool& b : g_cu_art4_ok) b = false;
+    const int nk = std::min(lb_cunits_count(), 128);
+    if (nk <= 0) return;
+    bool want = false;
+    for (int k = 0; k < nk && !want; ++k)
+        want = lb_cunits_model_src(k) >= 0 || lb_cunits_art_category(k) >= 1;
+    if (!want) return;
+    const bool creatures = g_blueprint_base && lb_creatures_live();
+    // What the level already asks of the mounted loader (per army, distinct
+    // sheets) and of the model records (per roster unit).
+    std::vector<std::pair<int, uint32_t>> mounted;   // (army, asset string)
+    int models = 0;
+    struct Want { int k; uint32_t bp; std::vector<int> armies; };
+    std::vector<Want> mwant, swant;   // drawn with a model / with a Mounted sheet
+    auto add_want = [](std::vector<Want>& v, int k, uint32_t bp, int t) {
+        for (Want& w : v)
+            if (w.k == k) { w.armies.push_back(t); return; }
+        v.push_back({k, bp, {t}});
+    };
+    for_each_roster_bp([&](int t, uint32_t bp) {
+        const uint8_t cat = bus_read_u8(bp + 0x5Cu);
+        const unsigned idx = bus_read_u16(bp + 4u);
+        const int k = lb_cunits_of_battle_record(bp);
+        int eff = cat;
+        if (creatures && (idx == 169 || idx == 138 || idx == 153) && (cat == 4u || cat == 0u)) eff = 2;
+        else if (k >= 0 && k < 128) {
+            const int art = lb_cunits_art_category(k);
+            if (lb_cunits_model_drawn(k)) add_want(mwant, k, bp, t);
+            else if (art == 4 && cat != 4u) { add_want(swant, k, bp, t); eff = -1; }
+            else if (art >= 1 && art <= 3 && cat != (uint8_t)art) eff = art;
+        }
+        if (eff == 4) {
+            const std::pair<int, uint32_t> m{t, bus_read_u32(bp + 0x24u)};
+            if (std::find(mounted.begin(), mounted.end(), m) == mounted.end()) mounted.push_back(m);
+        }
+        if (eff == 5 || eff == 6) ++models;
+    });
+    // Mounted sheets first: a special left out loads its model instead.
+    for (const Want& w : swant) {
+        int need = 0;
+        const uint32_t asset = bus_read_u32(w.bp + 0x24u);
+        for (int t : w.armies)
+            if (std::find(mounted.begin(), mounted.end(), std::make_pair(t, asset)) == mounted.end()) ++need;
+        const uint8_t cat = bus_read_u8(w.bp + 0x5Cu);
+        if ((int)mounted.size() + need <= kMountedSlots) {
+            for (int t : w.armies)
+                if (std::find(mounted.begin(), mounted.end(), std::make_pair(t, asset)) == mounted.end())
+                    mounted.push_back({t, asset});
+            g_cu_art4_ok[w.k] = true;
+        } else {
+            if (cat == 5u || cat == 6u) models += (int)w.armies.size();
+            std::fprintf(stderr, "[lb_cudraw] custom unit %d (%s): the mounted loader's %d slots are taken (%d in use); "
+                         "drawn its own way this level\n", w.k, lb_cunits_name(w.k), kMountedSlots, (int)mounted.size());
+        }
+    }
+    auto push = [](uint32_t bp, int kind, int art, int model) {
+        if (g_cud_n < 128) g_cud[g_cud_n++] = CuDraw{bp, kind, art, model};
+    };
+    int drawn_model = 0, drawn_sprite = 0;
+    for (const Want& w : mwant) {
+        if (models + (int)w.armies.size() <= kModelRecords) {
+            models += (int)w.armies.size();
+            push(w.bp, 1, -1, lb_cunits_model_src(w.k));
+            ++drawn_model;
+        } else {
+            std::fprintf(stderr, "[lb_cudraw] custom unit %d (%s): the %d model records are taken (%d in use); "
+                         "drawn with its sprites this level\n", w.k, lb_cunits_name(w.k), kModelRecords, models);
+        }
+    }
+    // The sprite-drawn heroes and specials (art 1..3 always, 4 when admitted),
+    // and the specials on another stock model (their animation table).
+    for (int k = 0; k < nk; ++k) {
+        const uint32_t bp = lb_cunits_battle_record(k);
+        if (!guest_ptr(bp)) continue;
+        const uint8_t cat = bus_read_u8(bp + 0x5Cu);
+        const int art = lb_cunits_art_category(k);
+        if ((cat == 0u || cat == 5u || cat == 6u) && art >= 1 && art <= 4 && (art != 4 || g_cu_art4_ok[k])) {
+            push(bp, 0, art, -1);
+            ++drawn_sprite;
+        } else if ((cat == 5u || cat == 6u) && !lb_cunits_model_drawn(k) && lb_cunits_model_src(k) >= 0) {
+            push(bp, 2, -1, lb_cunits_model_src(k));
+        }
+    }
+    std::fprintf(stderr, "[lb_cudraw] level load: %d custom unit(s) drawn with a model, %d with another unit's sprites; "
+                 "model records %d of %d, mounted sheets %d of %d\n", drawn_model, drawn_sprite, models, kModelRecords,
+                 (int)mounted.size(), kMountedSlots);
+    std::fflush(stderr);
+}
+
+// A call with some records' bytes changed for its duration (the docs/383 hop,
+// as cloak_enter): the cartridge's function runs with LR pointing back at its
+// own address, the override recognises the return by the stack pointer it
+// gave it, and puts the bytes back.
+struct HopCloak {
+    bool active = false, calling = false;
+    uint32_t sp_call = 0, sp = 0, lr = 0;
+    int n = 0;
+    uint32_t bp[128] = {};
+    int cat_to[128] = {}, idx_to[128] = {};   // -1: left alone
+    uint8_t cat_was[128] = {};
+    uint16_t idx_was[128] = {};
+};
+HopCloak g_hop_models, g_hop_anim;
+void hop_set(HopCloak& c, bool on) {
+    if (on) {
+        for (int i = 0; i < c.n; ++i) {
+            c.cat_was[i] = bus_read_u8(c.bp[i] + 0x5Cu);
+            c.idx_was[i] = bus_read_u16(c.bp[i] + 4u);
+            if (c.cat_to[i] >= 0) bus_write_u8(c.bp[i] + 0x5Cu, (uint8_t)c.cat_to[i]);
+            if (c.idx_to[i] >= 0) bus_write_u16(c.bp[i] + 4u, (uint16_t)c.idx_to[i]);
+        }
+    } else {
+        for (int i = c.n - 1; i >= 0; --i) {
+            if (c.cat_to[i] >= 0) bus_write_u8(c.bp[i] + 0x5Cu, c.cat_was[i]);
+            if (c.idx_to[i] >= 0) bus_write_u16(c.bp[i] + 4u, c.idx_was[i]);
+        }
+    }
+}
+// While a hop is live: the hop's own entry runs the cartridge's function, any
+// other entry (not at the hop's stack) runs it untouched, and the return puts
+// the bytes back and returns to the caller.
+void hop_continue(HopCloak& c, void (*original)(void)) {
+    if (g_cpu.R[13] != c.sp_call) {   // another entry: not ours
+        if (original) original();
+        return;
+    }
+    if (c.calling) {                  // the hop's own entry: run the original
+        c.calling = false;
+        if (original) original();
+        return;
+    }
+    hop_set(c, false);
+    g_cpu.R[14] = c.lr;
+    g_cpu.R[13] = c.sp;
+    c.active = false;
+    lb_override_return();
+}
+void hop_start(HopCloak& c, uint32_t target) {
+    c.lr = g_cpu.R[14];
+    c.sp = g_cpu.R[13];
+    c.sp_call = (g_cpu.R[13] - 8u) & ~7u;
+    hop_set(c, true);
+    g_cpu.R[13] = c.sp_call;
+    g_cpu.R[14] = target;   // ARM: the return lands back here
+    g_cpu.R[15] = target;
+    c.active = true;
+    c.calling = true;
+    runtime_dispatch_with_exchange(target);
+}
+
+// FUN_02035C48: the units drawn with a model read 6, so each gets a model
+// record and its model and animation load (asset + ".nsbmd"/".nsbca").
+void model_load_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kModelLoad);
+    HopCloak& c = g_hop_models;
+    if (c.active) { hop_continue(c, original); return; }
+    c.n = 0;
+    for (int i = 0; i < g_cud_n && c.n < 128; ++i)
+        if (g_cud[i].kind == 1) {
+            c.bp[c.n] = g_cud[i].bp;
+            c.cat_to[c.n] = 6;
+            c.idx_to[c.n] = -1;
+            ++c.n;
+        }
+    if (c.n == 0) { if (original) original(); return; }
+    hop_start(c, kModelLoad);
+}
+
+// FUN_0200D504(view, slot, entity): a unit drawn with a model reads 6 and the
+// model's stock number (its frame ranges); a hero or special drawn with other
+// sheets reads that category (the Mounted ranges for 4); a special on another
+// stock model reads that model's number.
+void anim_factory_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kAnimFactory);
+    HopCloak& c = g_hop_anim;
+    if (c.active) { hop_continue(c, original); return; }
+    const uint32_t e = g_cpu.R[2];
+    const CuDraw* d = g_cud_n > 0 && guest_ptr(e) ? cud_of_bp(unit_blueprint(e)) : nullptr;
+    if (!d) { if (original) original(); return; }
+    c.n = 1;
+    c.bp[0] = d->bp;
+    c.cat_to[0] = d->kind == 1 ? 6 : d->kind == 0 ? d->art : -1;
+    c.idx_to[0] = (d->kind == 1 || d->kind == 2) && d->model >= 0 ? d->model : -1;
+    hop_start(c, kAnimFactory);
+}
+
+// FUN_02036CA0 / FUN_02036CD0 (leaves, r0 the entity): answered here for the
+// units the cloak takes, else the cartridge's.
+void draw_is_unit_override(void) {
+    static void (*original)(void) = nullptr;
+    if (!original) original = lb_dispatch_original(0, kDrawIsUnit);
+    if (g_cud_n > 0 && guest_ptr(g_cpu.R[0])) {
+        const int kind = cud_kind_of_bp(unit_blueprint(g_cpu.R[0]));
+        if (kind >= 0) {
+            g_cpu.R[0] = kind == 0 ? 1u : 0u;
+            lb_override_return();
+            return;
+        }
+    }
+    if (original) original();
+}
+void draw_is_model_override(void) {
+    static void (*original)(void) = nullptr;
+    if (!original) original = lb_dispatch_original(0, kDrawIsModel);
+    if (g_cud_n > 0 && guest_ptr(g_cpu.R[0])) {
+        const int kind = cud_kind_of_bp(unit_blueprint(g_cpu.R[0]));
+        if (kind >= 0) {
+            g_cpu.R[0] = kind == 1 ? 1u : 0u;
+            lb_override_return();
+            return;
+        }
+    }
+    if (original) original();
+}
+
 void creature_sprite_load_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kCreatureSprLoad);
+    if (!g_cloak_load.active) cu_draw_admit();   // docs/492: before the cloak reads it
     cloak_enter(g_cloak_load, kCreatureSprLoad, original, false);
 }
 void creature_sprite_anim_override(void) {
@@ -15633,6 +16912,7 @@ extern "C" int lb_cadence_effective(void) {
         const char* v = std::getenv("LB_CADENCE");
         if (v && std::strcmp(v, "30") == 0) return 30;
         if (v && std::strcmp(v, "20") == 0) return 20;
+        if (v && std::strcmp(v, "21") == 0) return 21;
         return 0;
     }();
     if (env) return env;
@@ -15640,7 +16920,9 @@ extern "C" int lb_cadence_effective(void) {
     // docs/459: joined, the host's pace. Online the match steps only as fast
     // as its slowest console, so one pace for all is the host's.
     if (const int h = lb_rules_host_pace(); h > 0) return h;
-    return lb_setting_steady_cadence() ? 30 : 20;
+    // BR-0089: off is now 21, the cartridge's rule on a DS-paced clock (20,
+    // the port's raw clock, is kept for older replays and hosts).
+    return lb_setting_steady_cadence() ? 30 : 21;
 }
 
 static void apply_cadence(void) {
@@ -15656,6 +16938,7 @@ static void apply_cadence(void) {
                  now == 30 ? "steady 30 Hz: NitroMain's clock reads count "
                              "VBlanks (a pass waits again only if no VBlank "
                              "came during its task list)"
+                 : now == 21 ? "the cartridge's own 20 ms rule on a DS-paced clock (BR-0089)"
                            : "the cartridge's own 20 ms clock");
     std::fflush(stderr);
 }
@@ -19312,7 +20595,8 @@ static void apply_ai_tap_spells(void) {
     static int applied = 0;
     static unsigned gen = 0;
     if (gen != g_boot_gen) { gen = g_boot_gen; applied = 0; }
-    const int want = (lb_net_guest_state() <= 0 && lb_setting_ai_tap_spells()) ? 1 : 0;
+    // docs/488: a replay's (kind 31), else offline this machine's choice.
+    const int want = lb_ai_tap_spells_live();
     if (want && applied) {
         static const bool by_board = !(std::getenv("LB_SPELL_BOARD_WEIGHT") &&
                                        std::atoi(std::getenv("LB_SPELL_BOARD_WEIGHT")) == 0);
@@ -20133,15 +21417,20 @@ void teal_build_image() {
     // The sprite and BG tables: 6 colours x 3 shades, then teal's 3.
     for (int which = 0; which < 2; ++which) {
         const uint32_t src = which ? 0x02127DBCu : 0x02127F38u, dst = which ? 0x40u : 0x00u;
+        // docs/489: rows 0-5 as the tables hold them now, so with a custom
+        // colour's rows (apply_custompal writes them in place first); teal's own
+        // row is its custom shades when it has one.
         for (uint32_t i = 0; i < 18u; ++i) teal_put16(dst + 2u * i, (uint16_t)bus_read_u16(src + 2u * i));
-        for (uint32_t s = 0; s < 3u; ++s) teal_put16(dst + 36u + 2u * s, teal_shade(s));
+        for (uint32_t s = 0; s < 3u; ++s) teal_put16(dst + 36u + 2u * s, teal_disp(s));
     }
     // The minimap: three worlds, 6 colours then teal (a 14-byte stride).
     for (uint32_t w = 0; w < 3u; ++w) {
         for (uint32_t c = 0; c < 6u; ++c)
             teal_put16(0x80u + 14u * w + 2u * c, (uint16_t)bus_read_u16(0x02127A68u + 12u * w + 2u * c));
         // docs/485: style 2's dot is its light red (the Red team's is a pure red).
-        teal_put16(0x80u + 14u * w + 12u, teal_style_now() == 2 ? kTealShades[2][0] : kTealDot);
+        teal_put16(0x80u + 14u * w + 12u, g_cp_on[6]                ? g_cp_dotc[6]   // docs/489
+                                          : teal_style_now() == 2 ? kTealShades[2][0]
+                                                                  : kTealDot);
     }
     // The model slot map: the stock {1,0,2,3,4,5} with its 5 -> 6 folded in, then teal's bank 5.
     static const uint8_t kSlots[7] = {1, 0, 2, 3, 4, 6, 5};
@@ -20301,6 +21590,357 @@ static void teal_sprite_greys(bool want) {
     if (dirty) bus_write_u8(pal, 2u);
 }
 
+// ---- docs/489: THE CUSTOM TEAM COLOUR, APPLIED ---------------------------------
+//
+// Once a frame, before apply_teal (whose seven-colour block copies the tables):
+//  1. cp_resolve decides the set: stock colour -> 0xRRGGBB.
+//  2. The three colour tables are written IN PLACE, row by row, only over a row
+//     that holds the cartridge's words or what this last wrote (anything else,
+//     a mod's table, is left alone and said once):
+//       0x02127F38  the sprite team shades (6 x 3), read by View_SetupLevelBGs
+//                   (literal 0x02038D94) when a level is set up;
+//       0x02127DBC  the level-BG team shades (walls, bridges; 6 x 3), read by
+//                   FUN_02034D84 (literal 0x02034DE8) when a level is set up;
+//       0x02127A68  the minimap dots (3 worlds x 6), read by FUN_02025F50.
+//  3. In a battle, each team's two sprite banks (2t, 2t+1: entries 12-14 of the
+//     faction palette's colour data, the way teal_sprite_greys writes them) are
+//     brought to the set too, so a colour chosen, refused or changed after the
+//     level was set up shows at once. A bank is written only while it holds a
+//     triple this knows for that colour (stock, teal's, or a custom one).
+// The 3D models are models_paint's, teal's block apply_teal's (rebuilt when
+// g_cp_gen moves). Portraits, creatures and cards read the sprite banks.
+namespace {
+constexpr uint32_t kCpSpriteTab = 0x02127F38u, kCpBgTab = 0x02127DBCu, kCpMiniTab = 0x02127A68u;
+constexpr uint32_t kCpLobby = 0x0215B814u;   // lobby records, 3 x 0x2C; colour in +0x20 bits 2-4
+constexpr uint32_t kCpSelf = 0x02158AE0u;    // this machine's lobby slot (u16)
+unsigned g_cp_boot = ~0u;
+bool g_cp_wrote_any = false;                 // something of ours went into a table or bank
+uint16_t g_cp_tab_written[2][6][3];
+bool g_cp_tab_has[2][6];
+uint16_t g_cp_mini_written[3][6];
+bool g_cp_mini_has[3][6];
+uint16_t g_cp_painted[kCpColours][3];        // the last custom triple written into sprite banks
+bool g_cp_painted_has[kCpColours];
+int g_cp_host_latch[kCpColours];             // a host's set, kept through the battle
+bool g_cp_host_latch_ok = false;
+
+bool cp_in_battle() {
+    int x = 0, y = 0;
+    return lb_field_camera(&x, &y);
+}
+// The world's teams (0x0215540C: array +8, count +0xC), the first six.
+int cp_teams(uint32_t out[6]) {
+    const uint32_t world = bus_read_u32(0x0215540Cu);
+    if (!guest_ptr(world)) return 0;
+    const uint32_t arr = bus_read_u32(world + 8u);
+    const int32_t n = (int32_t)bus_read_u32(world + 0xCu);
+    if (!guest_ptr(arr) || n <= 0 || n > 8) return 0;
+    const int k = n < 6 ? (int)n : 6;
+    for (int t = 0; t < k; ++t) {
+        out[t] = bus_read_u32(arr + 4u * (uint32_t)t);
+        if (!guest_ptr(out[t])) out[t] = 0;
+    }
+    return k;
+}
+// The faction palette's colour data (as teal_sprite_greys finds it); 0 none.
+uint32_t cp_sprite_pal(uint32_t* data) {
+    const uint32_t mgr = bus_read_u32(0x02151DD8u);
+    const uint32_t sheet = guest_ptr(mgr) ? bus_read_u32(mgr + 4u) : 0u;
+    const uint32_t pal = guest_ptr(sheet) ? bus_read_u32(sheet + 0x54u) : 0u;
+    if (!guest_ptr(pal) || bus_read_u8(pal + 1u) != 0u) return 0;
+    const uint32_t res = bus_read_u32(pal + 0x34u);
+    *data = guest_ptr(res) ? bus_read_u32(res + 0xCu) : 0u;
+    return guest_ptr(*data) ? pal : 0u;
+}
+bool cp_eq(const uint16_t* a, const uint16_t* b) { return a[0] == b[0] && a[1] == b[1] && a[2] == b[2]; }
+// The colour a sprite bank's entries 12-14 show: stock, teal (any style), or a
+// custom triple of this set (or the last one painted); -1 not known.
+int cp_bank_colour(uint32_t data, uint32_t bank) {
+    uint16_t v[3];
+    for (uint32_t i = 0; i < 3u; ++i) v[i] = (uint16_t)bus_read_u16(data + (bank * 16u + 12u + i) * 2u);
+    for (int c = 0; c < kCpColours; ++c) {
+        if (g_cp_on[c] && cp_eq(v, g_cp_sh[c])) return c;
+        if (g_cp_painted_has[c] && cp_eq(v, g_cp_painted[c])) return c;
+    }
+    for (int c = 0; c < 6; ++c)
+        if (cp_eq(v, kStockShades[c])) return c;
+    for (const auto& t : kTealShades)
+        if (cp_eq(v, t)) return 6;
+    return -1;
+}
+// A team's colour in a battle: its sprite bank, else the match setup's
+// (+0xDC + 4 * player, the player at team +0x10).
+int cp_team_colour(uint32_t team, int t, uint32_t data) {
+    if (data) {
+        const int c = cp_bank_colour(data, 2u * (uint32_t)t);
+        if (c >= 0) return c;
+    }
+    const uint32_t setup = bus_read_u32(0x02154080u);
+    if (!team || !guest_ptr(setup)) return -1;
+    const uint32_t player = bus_read_u32(team + 0x10u);
+    if (player >= 8u) return -1;
+    const uint32_t c = bus_read_u32(setup + 0xDCu + 4u * player);
+    return c <= 6u ? (int)c : -1;
+}
+// Offline: this machine's stock colour, and (in a battle) the other teams'.
+int cp_local_colour(unsigned* others, int* n_others) {
+    *n_others = 0;
+    if (cp_in_battle()) {
+        uint32_t teams[6] = {};
+        const int nt = cp_teams(teams);
+        const uint32_t local = bus_read_u32(kCardSessionLocal);
+        if (nt && local < (uint32_t)nt) {
+            uint32_t data = 0;
+            cp_sprite_pal(&data);
+            const int mine = cp_team_colour(teams[local], (int)local, data);
+            if (mine >= 0) {
+                for (int t = 0; t < nt; ++t) {
+                    if (t == (int)local) continue;
+                    const int c = cp_team_colour(teams[t], t, data);
+                    if (c >= 0 && c != mine && *n_others < 8) others[(*n_others)++] = cp_rgb24_of(cp_stock_mid((unsigned)c));
+                }
+                return mine;
+            }
+        }
+    }
+    const uint32_t setup = bus_read_u32(0x02154080u);   // Free Play: the player is player 0
+    if (!guest_ptr(setup)) return -1;
+    const uint32_t c = bus_read_u32(setup + 0xDCu);
+    return c <= 5u || (c == 6u && lb_teal_live()) ? (int)c : -1;
+}
+// Says once per change how a colour was taken (as is, moved, refused).
+void cp_note_taken(const char* who, int colour, unsigned asked, unsigned got, int r) {
+    static unsigned last[8][3];
+    static bool have[8];
+    const int k = colour >= 0 && colour < 8 ? colour : 7;
+    if (have[k] && last[k][0] == asked && last[k][1] == got && last[k][2] == (unsigned)(r + 1)) return;
+    have[k] = true;
+    last[k][0] = asked; last[k][1] = got; last[k][2] = (unsigned)(r + 1);
+    if (r == 0) return;
+    std::fprintf(stderr, "[lb_custompal] %s %06X on %s: %s\n", who, asked, kCpNames[colour < 7 ? colour : 0],
+                 r > 0 ? "too close to another team's colour, moved" : "too close to another team's colour, refused (stock)");
+    if (r > 0) std::fprintf(stderr, "[lb_custompal]   moved to %06X\n", got);
+    std::fflush(stderr);
+}
+// Hosting: this machine's colour and its joiners' (their LBK1, lb_teams.cpp),
+// each on the colour its lobby record holds, kept apart from the others.
+void cp_resolve_host(int want[kCpColours]) {
+    if (!lb_setting_custom_colour_host()) {
+        g_cp_host_latch_ok = false;
+        return;
+    }
+    const bool battle = cp_in_battle();
+    if (battle && g_cp_host_latch_ok) {
+        for (int c = 0; c < kCpColours; ++c) want[c] = g_cp_host_latch[c];
+        return;
+    }
+    uint32_t self = bus_read_u16(kCpSelf);
+    if (self >= 3u) self = 0u;
+    int col[3];
+    unsigned cand[3] = {}, shown[3] = {};
+    bool has[3] = {};
+    for (uint32_t s = 0; s < 3u; ++s) {
+        const uint32_t rec = kCpLobby + 0x2Cu * s;
+        const uint8_t b0 = bus_read_u8(rec);
+        const bool present = s == self || (b0 >= 0x20u && b0 <= 0x7Eu);   // a name
+        int c = present ? (int)((bus_read_u8(rec + 0x20u) >> 2) & 7u) : -1;
+        if (c > 6 || (c == 6 && !lb_teal_live())) c = -1;
+        col[s] = c;
+        if (c < 0) continue;
+        shown[s] = cp_rgb24_of(cp_stock_mid((unsigned)c));
+        unsigned rgb = 0;
+        has[s] = s == self ? lb_setting_custom_colour(&rgb) != 0 : lb_custompal_joiner_colour((int)s, &rgb) == 1;
+        cand[s] = rgb & 0xFFFFFFu;
+    }
+    const uint32_t order[3] = {self, self == 0u ? 1u : 0u, self == 2u ? 1u : 2u};
+    for (uint32_t s : order) {
+        if (!has[s] || col[s] < 0 || want[col[s]] >= 0) continue;
+        unsigned others[3];
+        int n = 0;
+        for (uint32_t o = 0; o < 3u; ++o)
+            if (o != s && col[o] >= 0 && col[o] != col[s]) others[n++] = shown[o];
+        unsigned got = 0;
+        const int r = cp_separate(cand[s], others, n, &got);
+        cp_note_taken(s == self ? "host's colour" : "a joiner's colour", col[s], cand[s], got, r);
+        if (r >= 0) {
+            want[col[s]] = (int)got;
+            shown[s] = got;
+        }
+    }
+    if (!battle) {
+        for (int c = 0; c < kCpColours; ++c) g_cp_host_latch[c] = want[c];
+        g_cp_host_latch_ok = true;
+    }
+}
+void cp_resolve(int want[kCpColours]) {
+    for (int c = 0; c < kCpColours; ++c) want[c] = -1;
+    int v[kCpColours];
+    if (lb_demo_play_custompal(v) >= 0) {   // a replay: the recording's own
+        for (int c = 0; c < kCpColours; ++c) want[c] = v[c] >= 0 ? (v[c] & 0xFFFFFF) : -1;
+        return;
+    }
+    if (lobby_joined()) {   // joined: the host's 'K' page, whatever this machine's setting
+        if (lb_custompal_host_page(v) == 1)
+            for (int c = 0; c < kCpColours; ++c) want[c] = v[c] >= 0 ? (v[c] & 0xFFFFFF) : -1;
+        return;
+    }
+    if (lb_net_is_hosting_state()) {
+        cp_resolve_host(want);
+        return;
+    }
+    g_cp_host_latch_ok = false;
+    unsigned rgb = 0;
+    if (!lb_setting_custom_colour(&rgb)) return;
+    unsigned others[8];
+    int n = 0;
+    const int c = cp_local_colour(others, &n);
+    if (c < 0) return;
+    unsigned got = 0;
+    const int r = cp_separate(rgb & 0xFFFFFFu, others, n, &got);
+    cp_note_taken("this player's colour", c, rgb & 0xFFFFFFu, got, r);
+    if (r >= 0) want[c] = (int)got;
+}
+void cp_paint_tables() {
+    const uint32_t lit = bus_read_u32(0x02038D94u);
+    if (lit != kCpSpriteTab && lit != 0x023F9800u) return;   // the image is not in yet (or not this build)
+    static unsigned odd = 0;
+    for (int which = 0; which < 2; ++which) {
+        const uint32_t tab = which ? kCpBgTab : kCpSpriteTab;
+        for (int c = 0; c < 6; ++c) {
+            const uint16_t* want = g_cp_on[c] ? g_cp_sh[c] : kStockShades[c];
+            uint16_t cur[3];
+            for (uint32_t i = 0; i < 3u; ++i) cur[i] = (uint16_t)bus_read_u16(tab + 6u * (uint32_t)c + 2u * i);
+            if (cp_eq(cur, want)) continue;
+            const bool known = cp_eq(cur, kStockShades[c]) ||
+                               (g_cp_tab_has[which][c] && cp_eq(cur, g_cp_tab_written[which][c]));
+            if (!known) {
+                if (odd++ < 4u) {
+                    std::fprintf(stderr, "[lb_custompal] %s table %08X, %s: %04X %04X %04X is neither stock nor "
+                                 "ours (a mod, or the image not in yet): left alone\n",
+                                 which ? "walls" : "sprite", tab, kCpNames[c], cur[0], cur[1], cur[2]);
+                    std::fflush(stderr);
+                }
+                continue;
+            }
+            for (uint32_t i = 0; i < 3u; ++i) bus_write_u16(tab + 6u * (uint32_t)c + 2u * i, want[i]);
+            std::memcpy(g_cp_tab_written[which][c], want, sizeof g_cp_tab_written[which][c]);
+            g_cp_tab_has[which][c] = true;
+            g_cp_wrote_any = true;
+            std::fprintf(stderr, "[lb_custompal] %s table %08X: %s %s (%04X %04X %04X), from the next level setup\n",
+                         which ? "walls (level BG)" : "sprite", tab, kCpNames[c],
+                         g_cp_on[c] ? "painted" : "stock again", want[0], want[1], want[2]);
+            std::fflush(stderr);
+        }
+    }
+    for (int c = 0; c < 6; ++c) {
+        bool wrote = false;
+        for (uint32_t w = 0; w < 3u; ++w) {
+            const uint32_t at = kCpMiniTab + 12u * w + 2u * (uint32_t)c;
+            const uint16_t want = g_cp_on[c] ? g_cp_dotc[c] : kStockMini[w][c];
+            const uint16_t cur = (uint16_t)bus_read_u16(at);
+            if (cur == want) continue;
+            if (cur != kStockMini[w][c] && !(g_cp_mini_has[w][c] && cur == g_cp_mini_written[w][c])) continue;
+            bus_write_u16(at, want);
+            g_cp_mini_written[w][c] = want;
+            g_cp_mini_has[w][c] = true;
+            g_cp_wrote_any = true;
+            wrote = true;
+        }
+        if (wrote) {
+            std::fprintf(stderr, "[lb_custompal] minimap table %08X: %s dot %s (%04X)\n", kCpMiniTab, kCpNames[c],
+                         g_cp_on[c] ? "painted" : "stock again", g_cp_on[c] ? g_cp_dotc[c] : kStockMini[0][c]);
+            std::fflush(stderr);
+        }
+    }
+}
+void cp_paint_sprites() {
+    if (!cp_in_battle()) return;
+    uint32_t data = 0;
+    const uint32_t pal = cp_sprite_pal(&data);
+    if (!pal) return;
+    uint32_t teams[6] = {};
+    const int nt = cp_teams(teams);
+    bool dirty = false;
+    for (int t = 0; t < nt; ++t) {
+        bool wrote = false;
+        int shown = -1;
+        for (uint32_t bank = 2u * (uint32_t)t; bank < 2u * (uint32_t)t + 2u; ++bank) {
+            const int c = cp_bank_colour(data, bank);
+            if (c < 0) continue;
+            shown = c;
+            for (uint32_t i = 0; i < 3u; ++i) {
+                const uint32_t at = data + (bank * 16u + 12u + i) * 2u;
+                const uint16_t want = cp_shade((unsigned)c, i);
+                if (bus_read_u16(at) != want) {
+                    bus_write_u16(at, want);
+                    wrote = dirty = true;
+                }
+            }
+        }
+        if (shown >= 0 && g_cp_on[shown]) {
+            std::memcpy(g_cp_painted[shown], g_cp_sh[shown], sizeof g_cp_painted[shown]);
+            g_cp_painted_has[shown] = true;
+        }
+        if (wrote) {
+            g_cp_wrote_any = true;
+            std::fprintf(stderr, "[lb_custompal] sprites: team %d (%s) banks %d/%d entries 12-14 %s (%04X %04X %04X)\n",
+                         t, kCpNames[shown], 2 * t, 2 * t + 1, g_cp_on[shown] ? "painted" : "stock again",
+                         cp_shade((unsigned)shown, 0), cp_shade((unsigned)shown, 1), cp_shade((unsigned)shown, 2));
+            std::fflush(stderr);
+        }
+    }
+    if (dirty) bus_write_u8(pal, 2u);   // the game uploads the palette again
+}
+}  // namespace
+
+static void apply_custompal(void) {
+    if (g_cp_boot != g_boot_gen) {   // a reset reloads the image: the tables are stock again
+        g_cp_boot = g_boot_gen;
+        std::memset(g_cp_tab_has, 0, sizeof g_cp_tab_has);
+        std::memset(g_cp_mini_has, 0, sizeof g_cp_mini_has);
+        std::memset(g_cp_painted_has, 0, sizeof g_cp_painted_has);
+        g_cp_host_latch_ok = false;
+        g_cp_wrote_any = false;
+    }
+    int want[kCpColours];
+    cp_resolve(want);
+    bool changed = false;
+    for (int c = 0; c < kCpColours; ++c) {
+        const bool on = want[c] >= 0;
+        if (on == g_cp_on[c] && (!on || g_cp_rgb[c] == (unsigned)want[c])) continue;
+        changed = true;
+        if (g_cp_on[c]) {   // the shades going out may still be in a level's banks: known, to be taken back
+            std::memcpy(g_cp_painted[c], g_cp_sh[c], sizeof g_cp_painted[c]);
+            g_cp_painted_has[c] = true;
+        }
+        g_cp_on[c] = on;
+        g_cp_rgb[c] = on ? (unsigned)want[c] : 0u;
+        if (on) {
+            cp_ramp(g_cp_rgb[c], g_cp_sh[c]);
+            g_cp_dotc[c] = cp_dot(g_cp_rgb[c]);
+            std::fprintf(stderr, "[lb_custompal] %s is drawn as %06X: shades %04X %04X %04X, minimap dot %04X\n",
+                         kCpNames[c], g_cp_rgb[c], g_cp_sh[c][0], g_cp_sh[c][1], g_cp_sh[c][2], g_cp_dotc[c]);
+        } else {
+            std::fprintf(stderr, "[lb_custompal] %s is drawn stock again\n", kCpNames[c]);
+        }
+        std::fflush(stderr);
+    }
+    if (changed) {
+        ++g_cp_gen;
+        std::lock_guard<std::mutex> lk(g_cp_mu);
+        for (int c = 0; c < kCpColours; ++c) {
+            g_cp_pub_on[c] = g_cp_on[c];
+            g_cp_pub_rgb[c] = g_cp_rgb[c];
+            std::memcpy(g_cp_pub_sh[c], g_cp_sh[c], sizeof g_cp_pub_sh[c]);
+        }
+    }
+    bool any = false;
+    for (bool on : g_cp_on) any = any || on;
+    if (!any && !g_cp_wrote_any) return;   // off and never on: nothing is read or written
+    cp_paint_tables();
+    cp_paint_sprites();
+}
+
 static void apply_teal(void) {
     static unsigned gen = 0;   // a reset reloads the image: stock again
     if (gen != g_boot_gen) {
@@ -20320,13 +21960,19 @@ static void apply_teal(void) {
     if (g_teal_on) {
         if (teal_block_holds(g_teal_img)) {
             static int style = -1;   // the style the block was built with
+            static unsigned cp_gen = 0;   // docs/489: and the custom colours
             const int now = lb_setting_teal_style();
-            if (style != now) {
+            if (style != now || cp_gen != g_cp_gen) {
                 if (style >= 0) {
                     teal_build_image();
                     for (uint32_t i = 0; i < kTealSize; ++i) bus_write_u8(kTealBase + i, g_teal_img[i]);
+                    if (cp_gen != g_cp_gen) {
+                        std::fprintf(stderr, "[lb_custompal] teal block %08X rebuilt with the custom rows\n", kTealBase);
+                        std::fflush(stderr);
+                    }
                 }
                 style = now;
+                cp_gen = g_cp_gen;
             }
             teal_sprite_greys(now == 2);   // docs/485
             return;
@@ -22509,6 +24155,7 @@ extern "C" void lb_patches_on_vblank(void) {
     apply_ai_tap_spells();
     apply_two_player_maps();
     apply_gold_rush_target();   // SG-0036
+    apply_custompal();                // docs/489: before apply_teal, whose block copies the tables
     apply_teal();                     // docs/412
     apply_tall_maps();                // BR-0039, docs/460
     apply_text_count();               // BR-0046, docs/467
@@ -23063,8 +24710,22 @@ extern "C" const uint32_t* lb_top_postprocess(const uint32_t* px, int width) {
 extern "C" int lb_portrait_team_rgba(int bp, int colour, unsigned int px[576]) {
     if (!px || colour < 0 || colour > 6) return 0;
     uint16_t sh[3];
-    for (unsigned i = 0; i < 3; ++i)
-        sh[i] = colour == 6 ? teal_shade(i) : (uint16_t)bus_read_u16(0x02127F38u + 6u * (unsigned)colour + 2u * i);
+    // docs/489: a custom colour's shades (lb_custompal_shade: the set in force,
+    // safe off the emulation thread), else the table / teal's.
+    for (unsigned i = 0; i < 3; ++i) {
+        const int cs = lb_custompal_shade(colour, (int)i);
+        sh[i] = cs >= 0                       ? (uint16_t)cs
+                : colour == 6                 ? teal_shade(i)
+                                              : (uint16_t)bus_read_u16(0x02127F38u + 6u * (unsigned)colour + 2u * i);
+    }
+    if (lb_custompal_shade(colour, 1) >= 0) {
+        static int said = 0;
+        if (said++ < 4) {
+            std::fprintf(stderr, "[lb_custompal] match picture icon %d: %s in its custom shades\n", bp,
+                         kCpNames[colour]);
+            std::fflush(stderr);
+        }
+    }
     // The 5-bit channel as the 2D engine widens it (ds_host_rgb), for the way back.
     auto widen = [](uint32_t v5) { const uint32_t v6 = v5 << 1; return ((v6 << 2) | (v6 >> 4)) & 0xFFu; };
     auto narrow = [&](uint32_t v8) {

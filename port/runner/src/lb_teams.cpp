@@ -28,6 +28,7 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>     // docs/487: std::getenv (LB_CUNIT_ICONS)
 #include <cstring>
 #include <mutex>
 #include <random>
@@ -1055,9 +1056,11 @@ void lang_appended_fixup() {
 }
 
 extern "C" void lb_teams_donors_tick(void);   // docs/450, below
+extern "C" void lb_teams_battle_icons_tick(void);   // docs/487, below
 void cards_tick() {
     lang_appended_fixup();
     lb_teams_donors_tick();
+    lb_teams_battle_icons_tick();
     wolf_battle_tick();
     const uint32_t base = lb_patches_blueprint_base();
     if (base != g_cards_base) {   // a game reset reloaded the blueprints
@@ -1180,6 +1183,14 @@ int g_cslots_recv = 0;                     // docs/436; under g_rules_mu
 int g_gold_recv = 0;                       // SG-0036; under g_rules_mu
 unsigned g_ar_recv = 0;                    // SG-0035: the host's Action Replay hash; under g_rules_mu
 int g_pace_recv = 0;                       // the host's game pacing, 20 or 30 (0 none); under g_rules_mu
+unsigned g_rules2_recv = 0u;               // docs/488: the host's 'R' page (LB_RULE2_*, 0 none); under g_rules_mu
+// docs/489: the host's 'K' page: custom colours allowed, and the set it sends
+// (by stock colour, 0xRRGGBB or -1); under g_rules_mu.
+bool g_cpal_recv_allowed = false;
+int g_cpal_recv[7] = {-1, -1, -1, -1, -1, -1, -1};
+// docs/489: a host's joiners' colours, from their LBK1 (by lobby slot); under g_rules_mu.
+struct CpalJoiner { bool on = false; unsigned rgb = 0; std::chrono::steady_clock::time_point at{}; };
+CpalJoiner g_cpal_join[3];
 // docs/413: the host's mod maps as its rules list them (key, content hash,
 // name), and whether its rules carried the list at all (an older build's
 // do not).
@@ -1448,6 +1459,634 @@ extern "C" int lb_teams_head_rgba(int bp, unsigned int out[576]) {
         for (int x = 0; x < 24; ++x)
             out[y * 24 + x] = g_rgba[(size_t)(y0 + y) * kAtlasW + (x0 + x)];
     return 1;
+}
+
+// ---- docs/487: A CUSTOM UNIT'S OWN ICONS IN A BATTLE ---------------------------
+//
+// THE ICONS. Every small unit icon of the battle HUD is one 24x24 cell of
+// UI/MiniHeadsGame (4bpp, 48 x 30 tiles, a 16 x 10 grid of cells), copied by
+// the HUD from the game's resident copy of the sheet into the widget that
+// shows it (FUN_020329B4 / FUN_0202BD68: DC_FlushRange + VramQueue_Add from
+// the copy's pixels, [[[res+0x38]+4]+0x14], 48 tiles a row). Which cell, and
+// which of the 16 sub-palettes of UI/WorldViewTop_Back.NCLR, comes from a
+// record of the Game UIMgrData ([0x021581C0] + 8 + id * 0x1C: five frame
+// pointers, the resource at +0x18; a frame's rectangle at +0x14 x, +0x16 y,
+// its sub-palette at +0x0F). FUN_020D85F4(index, heads, upgrade) names the
+// record: the index after a remap (towers, shipyards, bridges), looked up in
+// the 166 keys at 0x0214E4E0, as 0x252 + position (heads != 0, "the battle
+// icon": group selection, a building's training queue, a transport's
+// passengers) or 0x302 + position (heads == 0, "the build icon": a building's
+// build menu, the red icon; sub-palette 7, frame 4's 14). Its 11 callers
+// pass the blueprint record's +0x04, which for a custom unit is its
+// template's number (docs/448), so a custom unit always drew its template's.
+//
+// THE FIX. lb_patches.cpp's override on FUN_020D85F4 finds, from the return
+// address, the unit record the call is for (kIconSites there). For a custom
+// unit with icons of its own it returns a record of ours instead of calling
+// the cartridge's function:
+//  * a DONOR RECORD: one of the set's records whose key no stock request has
+//    asked for in this battle (the two keyless positions 152 and 153 first,
+//    then heroes'), its frames pointed at
+//  * a DONOR CELL: a cell that only the two sets' records use (no other
+//    picture of the HUD), none of whose records a stock request has asked for
+//    in this battle; the unit's icon is written there in every resident copy
+//    of the sheet, in the sub-palette that fits it best (the battle icon) or
+//    in the build menu's 7 (and 14 for frame 4), as the stock build icons are.
+// Every stock request is followed (the cartridge's own remap and lookup,
+// re-done here), so a donor that a stock unit turns out to need is given back
+// at once, before the caller copies it: its frames and pixels are put back
+// from the snapshot and the ROM, and the custom unit takes another donor at
+// its next request. When the battle ends (or its UIMgrData goes), everything
+// still lent is put back where it is still ours. Picture data only: nothing
+// the simulation reads, so lockstep and replays are untouched. A unit whose
+// icons are still its template's (the export's files) takes no donor.
+// LB_CUNIT_ICONS=0 turns it off (the template's icons, as before).
+
+extern "C" int lb_cunits_icon(int k, int which, unsigned int out[576]);   // lb_cunits.cpp
+extern "C" unsigned long long lb_cunits_icons_sig(void);
+extern "C" int lb_teams_custom_icon_pick(int tmpl, int build, const unsigned int* build_px,
+                                         const unsigned int* hud_px, const unsigned int* head_px,
+                                         unsigned int out[576]);   // below
+extern "C" int lb_teams_build_icon_rgba(int bp, unsigned int out[576]);   // below
+
+namespace {
+
+constexpr uint32_t kIconHeadSet = 0x252u, kIconBuildSet = 0x302u;
+constexpr int kIconCellsX = 16, kIconCellsY = 10;
+constexpr uint32_t kIconSheetBytes = 48u * 30u * 32u;   // 46,080
+// The head sets' sub-palettes (the H records use 1-5, 7, 11, 12): the battle
+// icon is fitted to one of these.
+const int kIconHeadSubs[] = {1, 2, 3, 4, 5, 7, 11, 12};
+constexpr int kIconBuildSub = 7, kIconBuildSub4 = 14;
+
+std::mutex g_icon_mu;                 // the ROM data below (the UI thread's preview uses it too)
+std::vector<uint32_t> g_icon_pal;     // UI/WorldViewTop_Back.NCLR, 0xAABBGGRR
+std::vector<uint8_t> g_icon_ui;       // UI/Game/UIMgrData.bin, unwrapped
+std::vector<uint8_t> g_icon_sheet;    // UI/MiniHeadsGame.NCGR's pixels (46,080 bytes)
+
+bool icon_rom_locked() {
+    if (!g_icon_pal.empty() && !g_icon_ui.empty() && g_icon_sheet.size() == kIconSheetBytes) return true;
+    std::vector<uint8_t> nclr, ui, g;
+    if (!nitro_file("UI/WorldViewTop_Back.NCLR", &nclr) || !comp_unwrap(&nclr) ||
+        !nitro_file("UI/Game/UIMgrData.bin", &ui) || !comp_unwrap(&ui) || ui.size() < 8 ||
+        !nitro_file("UI/MiniHeadsGame.NCGR", &g) || !comp_unwrap(&g))
+        return false;
+    const long pl = section(nclr, "TTLP"), c = section(g, "RAHC");
+    if (pl < 0 || c < 0) return false;
+    const uint8_t* pb = nclr.data() + pl;
+    const uint32_t pdsz = rd32(pb + 16), pdoff = rd32(pb + 20);
+    const uint8_t* cb = g.data() + c;
+    const uint32_t doff = rd32(cb + 28);
+    if ((size_t)pl + 8u + pdoff + pdsz > nclr.size() || rd16(cb + 10) != 48u ||
+        (size_t)c + 8u + doff + kIconSheetBytes > g.size())
+        return false;
+    g_icon_pal.clear();
+    for (unsigned i = 0; i < pdsz / 2u; ++i) g_icon_pal.push_back(rgb555_to_rgba(rd16(pb + 8 + pdoff + 2u * i)));
+    g_icon_ui = std::move(ui);
+    g_icon_sheet.assign(g.begin() + c + 8 + doff, g.begin() + c + 8 + doff + kIconSheetBytes);
+    return true;
+}
+
+// The cartridge's remap in FUN_020D85F4 (0x020D85F6..0x020D86FA).
+int icon_key_remap(int i, int upgrade) {
+    if (i >= 0x10 && i <= 0x12) return upgrade ? 0x11 : 0x10;
+    if (i >= 0x24 && i <= 0x26) return upgrade ? 0x25 : 0x24;
+    if (i == 0x27 || i == 0x3B || i == 0x4F || i == 0x63 || i == 0x77) return 0x13;
+    if (i >= 0x38 && i <= 0x3A) return upgrade ? 0x39 : 0x38;
+    if (i >= 0x4C && i <= 0x4E) return upgrade ? 0x4D : 0x4C;
+    if (i >= 0x60 && i <= 0x62) return upgrade ? 0x61 : 0x60;
+    if (i >= 0x74 && i <= 0x76) return upgrade ? 0x75 : 0x74;
+    if (i >= 0x7A && i <= 0x7E) return 0x79;
+    return i;
+}
+// Its lookup: the key's position, or 0 (the cartridge returns the set's base
+// for a key it does not have). -1 while the key table is not in RAM.
+int icon_key_pos(int key) {
+    const uint32_t count = bus_read_u32(kHeadCount);
+    if (count == 0 || count > 551u || bus_read_u32(kHeadKeys + 4u) != 2u) return -1;
+    for (uint32_t k = 0; k < count; ++k)
+        if (bus_read_u32(kHeadKeys + 4u * k) == (uint32_t)key) return (int)k;
+    return 0;
+}
+
+// 24x24 RGBA to sub-palette `sub`'s nearest colours (alpha under half: clear,
+// entry 0): the cell's tiles in its 3x3 order, the result as RGBA, and the
+// summed error (encode_head's measure).
+long icon_encode(const unsigned int px[576], const std::vector<uint32_t>& pal, int sub, uint8_t tiles[288],
+                 unsigned int* rgba) {
+    long err = 0;
+    std::memset(tiles, 0, 288);
+    for (int y = 0; y < 24; ++y)
+        for (int x = 0; x < 24; ++x) {
+            const uint32_t c = px[y * 24 + x];
+            unsigned v = 0;
+            if ((c >> 24) >= 128u) {
+                long best = -1;
+                for (unsigned i = 1; i < 16; ++i) {
+                    const size_t at = (size_t)sub * 16u + i;
+                    if (at >= pal.size()) break;
+                    const uint32_t q = pal[at];
+                    const long dr = (long)(c & 0xFF) - (long)(q & 0xFF);
+                    const long dg = (long)((c >> 8) & 0xFF) - (long)((q >> 8) & 0xFF);
+                    const long db = (long)((c >> 16) & 0xFF) - (long)((q >> 16) & 0xFF);
+                    const long d = dr * dr * 3 + dg * dg * 4 + db * db * 2;
+                    if (best < 0 || d < best) { best = d; v = i; }
+                }
+                err += best < 0 ? 1000000 : best;
+            }
+            uint8_t& o = tiles[((y >> 3) * 3 + (x >> 3)) * 32 + (y & 7) * 4 + ((x & 7) >> 1)];
+            o = (uint8_t)(o | ((x & 1) ? (v << 4) : v));
+            if (rgba) rgba[y * 24 + x] = v && (size_t)sub * 16u + v < pal.size() ? pal[(size_t)sub * 16u + v] : 0u;
+        }
+    return err;
+}
+// The sub-palette a picture is drawn in: 7 for the build icon, else the head
+// sub-palette that fits it best.
+int icon_sub(const unsigned int px[576], const std::vector<uint32_t>& pal, bool build) {
+    if (build) return kIconBuildSub;
+    long best = -1;
+    int sub = kIconHeadSubs[0];
+    uint8_t t[288];
+    for (int sp : kIconHeadSubs) {
+        if ((size_t)(sp + 1) * 16u > pal.size()) continue;
+        const long e = icon_encode(px, pal, sp, t, nullptr);
+        if (best < 0 || e < best) { best = e; sub = sp; }
+    }
+    return sub;
+}
+// Two icons the same to the eye: the same clear pixels, the same colours.
+bool icon_same(const unsigned int* a, const unsigned int* b) {
+    for (int i = 0; i < 576; ++i) {
+        const bool ca = (a[i] >> 24) < 128u, cb = (b[i] >> 24) < 128u;
+        if (ca != cb || (!ca && (a[i] & 0xFFFFFFu) != (b[i] & 0xFFFFFFu))) return false;
+    }
+    return true;
+}
+
+// ---- the battle's donors ----
+struct IconAssign {
+    bool decided = false, none = true;
+    int rec = -1;                 // the donor record handed out, or -1
+    int cell = -1;                // the donor cell (cy * 16 + cx), or -1
+    int sub = 0;
+    uint8_t tiles[288] = {};
+};
+struct IconHijack { int rec = -1; uint32_t frame[2] = {0, 0}; uint16_t x[2] = {0, 0}, y[2] = {0, 0}; uint8_t sub[2] = {0, 0}; };
+struct BattleIcons {
+    uint32_t ui = 0;                          // [0x021581C0] this belongs to
+    unsigned long long sig = 0;               // lb_cunits_icons_sig()
+    uint32_t nrec = 0;
+    std::vector<uint32_t> keys;               // the key table, copied
+    std::vector<uint8_t> seen;                // per record: handed to a stock request this battle
+    std::vector<int> lent;                    // per record: the assignment it is lent to, -1
+    std::vector<std::vector<int>> refs;       // per cell: the records whose stock frames show it
+    std::vector<uint8_t> other;               // per cell: shown by something else, or kept out
+    std::vector<uint8_t> busy;                // per cell: a record of it went to a stock request
+    std::vector<int> cell_of;                 // per cell: the assignment written there, -1
+    std::vector<IconAssign> as;               // per custom unit k * 2 + set (0 heads, 1 build)
+    std::vector<IconHijack> hj;               // the stock frames of each lent record
+};
+BattleIcons g_bi;
+
+bool icons_wanted() {
+    static int env = -1;
+    if (env < 0) {
+        const char* v = std::getenv("LB_CUNIT_ICONS");
+        env = v && v[0] == '0' ? 0 : 1;
+    }
+    return env && lb_cunits_count() > 0;
+}
+uint32_t icon_rec_addr(int r) { return g_bi.ui + 8u + (uint32_t)r * 0x1Cu; }
+uint32_t icon_frame(int r, int f) {
+    const uint32_t fr = bus_read_u32(icon_rec_addr(r) + 4u * (uint32_t)f);
+    return guest_ptr(fr) ? fr : 0u;
+}
+// A frame's rectangle: the pointer at +0 when it was fixed up to one, else +0x14.
+uint32_t icon_rect(uint32_t fr) {
+    const uint32_t p = bus_read_u32(fr);
+    return guest_ptr(p) && p >= fr && p < fr + 0x40u ? p : fr + 0x14u;
+}
+int icon_set_of(int r) {
+    const int n = (int)g_bi.keys.size();
+    if (r >= (int)kIconHeadSet && r < (int)kIconHeadSet + n) return 0;
+    if (r >= (int)kIconBuildSet && r < (int)kIconBuildSet + n) return 1;
+    return -1;
+}
+uint32_t icon_key_of(int r) {
+    const int s = icon_set_of(r);
+    return s < 0 ? 0xFFFFFFFFu : g_bi.keys[(size_t)(r - (int)(s ? kIconBuildSet : kIconHeadSet))];
+}
+bool icon_hero_key(uint32_t key) {
+    if (key >= 182u) return false;
+    const uint32_t a = bp_addr((int)key);
+    return a && bus_read_u8(a + 0x5Cu) == 0u;
+}
+
+// The game's resident copies of the sheet now: the 2D manager's slot at +0xA4
+// and the HUD's sheet at [[0x02157F3C]+0x74]+0xC8 (the two sources the
+// callers copy from), each [[[res+0x38]+4]+0x14], 48 tiles a row, and its
+// first 128 bytes the ROM's (cells (0,0) and (1,0) are never donors).
+int icon_sheets(uint32_t out[2]) {
+    int n = 0;
+    const uint32_t m = bus_read_u32(0x02151DD8u);
+    const uint32_t s = bus_read_u32(0x02157F3Cu + 0x74u);
+    const uint32_t res[2] = {guest_ptr(m) ? bus_read_u32(m + 0xA4u) : 0u, guest_ptr(s) ? bus_read_u32(s + 0xC8u) : 0u};
+    for (uint32_t r : res) {
+        if (!guest_ptr(r)) continue;
+        const uint32_t o1 = bus_read_u32(r + 0x38u);
+        const uint32_t o2 = guest_ptr(o1) ? bus_read_u32(o1 + 4u) : 0u;
+        const uint32_t d = guest_ptr(o2) ? bus_read_u32(o2 + 0x14u) : 0u;
+        if (!guest_ptr(d) || !guest_ptr(d + kIconSheetBytes - 1u) || bus_read_u16(o2 + 2u) != 48u ||
+            bus_read_u16(o2) < 30u)
+            continue;
+        bool ok = true;
+        for (uint32_t b = 0; b < 128u && ok; b += 4) ok = bus_read_u32(d + b) == rd32(&g_icon_sheet[b]);
+        if (!ok) continue;
+        bool dup = false;
+        for (int i = 0; i < n; ++i) dup = dup || out[i] == d;
+        if (!dup) out[n++] = d;
+    }
+    return n;
+}
+uint32_t icon_cell_off(int cell, int t) {
+    const int cx = cell % kIconCellsX, cy = cell / kIconCellsX;
+    return (uint32_t)((cy * 3 + t / 3) * 48 + cx * 3 + t % 3) * 32u;
+}
+// Write a cell's 288 bytes (ours, or the ROM's to put it back) into every copy.
+void icon_cell_write(int cell, const uint8_t* tiles) {
+    uint32_t sh[2];
+    const int n = icon_sheets(sh);
+    for (int i = 0; i < n; ++i)
+        for (int t = 0; t < 9; ++t) {
+            const uint32_t off = icon_cell_off(cell, t);
+            for (uint32_t b = 0; b < 32u; b += 4) {
+                const uint32_t w = rd32(&tiles[t * 32 + b]);
+                if (bus_read_u32(sh[i] + off + b) != w) bus_write_u32(sh[i] + off + b, w);
+            }
+        }
+}
+void icon_cell_restore(int cell) {
+    uint8_t rom[288];
+    for (int t = 0; t < 9; ++t) std::memcpy(&rom[t * 32], &g_icon_sheet[icon_cell_off(cell, t)], 32);
+    icon_cell_write(cell, rom);
+}
+
+// A lent record back to its stock frames.
+void icon_unlend(int r, const char* why) {
+    if (r < 0 || r >= (int)g_bi.nrec || g_bi.lent[(size_t)r] < 0) return;
+    const int a = g_bi.lent[(size_t)r];
+    for (IconHijack& h : g_bi.hj) {
+        if (h.rec != r) continue;
+        for (int f = 0; f < 2; ++f) {
+            if (!h.frame[f]) continue;
+            const uint32_t rc = icon_rect(h.frame[f]);
+            bus_write_u16(rc, h.x[f]);
+            bus_write_u16(rc + 2u, h.y[f]);
+            bus_write_u8(h.frame[f] + 0x0Fu, h.sub[f]);
+        }
+        h.rec = -1;
+    }
+    g_bi.lent[(size_t)r] = -1;
+    if (a >= 0 && a < (int)g_bi.as.size()) g_bi.as[(size_t)a].rec = -1;
+    std::fprintf(stderr, "[lb_icons] record %03X given back (%s)\n", (unsigned)r, why);
+    std::fflush(stderr);
+}
+
+// Everything still lent back where it is still ours, and a fresh state.
+void icons_reset(bool restore) {
+    if (restore && g_bi.ui && bus_read_u32(kUiLoaded) == g_bi.ui) {
+        for (size_t c = 0; c < g_bi.cell_of.size(); ++c) {
+            const int a = g_bi.cell_of[c];
+            if (a < 0 || a >= (int)g_bi.as.size()) continue;
+            // Only where the cell still holds our picture (the sheet may be gone).
+            uint32_t sh[2];
+            const int n = icon_sheets(sh);
+            bool ours = n > 0;
+            for (int i = 0; i < n && ours; ++i)
+                ours = bus_read_u32(sh[i] + icon_cell_off((int)c, 0)) == rd32(&g_bi.as[(size_t)a].tiles[0]);
+            if (ours) icon_cell_restore((int)c);
+        }
+        for (uint32_t r = 0; r < g_bi.nrec; ++r)
+            if (g_bi.lent[r] >= 0) icon_unlend((int)r, "the battle is over");
+    }
+    g_bi = BattleIcons();
+}
+
+// The battle's UIMgrData and key table, and the snapshot of which cells the
+// two sets show. False when there is nothing to work with (yet).
+bool icons_sync() {
+    const uint32_t ui = bus_read_u32(kUiLoaded);
+    const unsigned long long sig = lb_cunits_icons_sig();
+    if (g_bi.ui && (ui != g_bi.ui || sig != g_bi.sig)) icons_reset(ui == g_bi.ui);
+    if (g_bi.ui) return true;
+    if (!guest_ptr(ui) || bus_read_u16(ui) < kIconBuildSet + 166u) return false;
+    {
+        std::lock_guard<std::mutex> lk(g_icon_mu);
+        if (!icon_rom_locked()) return false;
+    }
+    const uint32_t count = bus_read_u32(kHeadCount);
+    if (count == 0 || count > 166u || bus_read_u32(kHeadKeys + 4u) != 2u) return false;
+    {   // the resident sheet first: without one there is nothing to draw with
+        uint32_t sh[2];
+        if (!icon_sheets(sh)) {
+            static uint32_t said = 0;
+            if (said != ui) {
+                said = ui;
+                std::fprintf(stderr, "[lb_icons] the battle's icon sheet (UI/MiniHeadsGame) was not found: "
+                             "custom units keep their templates' icons for now\n");
+                std::fflush(stderr);
+            }
+            return false;
+        }
+    }
+    g_bi = BattleIcons();
+    g_bi.ui = ui;
+    g_bi.sig = sig;
+    g_bi.nrec = bus_read_u16(ui);
+    for (uint32_t k = 0; k < count; ++k) g_bi.keys.push_back(bus_read_u32(kHeadKeys + 4u * k));
+    g_bi.seen.assign(g_bi.nrec, 0);
+    g_bi.lent.assign(g_bi.nrec, -1);
+    const size_t ncell = (size_t)kIconCellsX * kIconCellsY;
+    g_bi.refs.assign(ncell, {});
+    g_bi.other.assign(ncell, 0);
+    g_bi.busy.assign(ncell, 0);
+    g_bi.cell_of.assign(ncell, -1);
+    // Kept out: (0,0) and (1,0) (the sheet's signature), and the creature cells
+    // (11,1) Shark/sack, (11,2) Wolf/lantern, (13,4) the Wolf's battle head (docs/454).
+    for (int c : {0, 1, 1 * 16 + 11, 2 * 16 + 11, 4 * 16 + 13}) g_bi.other[(size_t)c] = 1;
+    for (uint32_t r = 0; r < g_bi.nrec; ++r) {
+        const uint32_t ra = icon_rec_addr((int)r);
+        if (bus_read_u32(ra + 0x18u) != 0x2Cu) continue;
+        for (int f = 0; f < 5; ++f) {
+            const uint32_t fr = icon_frame((int)r, f);
+            if (!fr || bus_read_u8(fr + 0x0Cu) != 0u) continue;   // type 0: a rectangle of the sheet
+            const uint32_t rc = icon_rect(fr);
+            const unsigned x = bus_read_u16(rc), y = bus_read_u16(rc + 2u);
+            const unsigned w = bus_read_u16(rc + 4u), h = bus_read_u16(rc + 6u);
+            if (w == 0 || h == 0) continue;
+            const bool cell24 = w == 24u && h == 24u && x % 24u == 0 && y % 24u == 0;
+            for (unsigned cy = y / 24u; cy < (y + h + 23u) / 24u && cy < (unsigned)kIconCellsY; ++cy)
+                for (unsigned cx = x / 24u; cx < (x + w + 23u) / 24u && cx < (unsigned)kIconCellsX; ++cx) {
+                    const size_t c = (size_t)cy * kIconCellsX + cx;
+                    if (!cell24 || icon_set_of((int)r) < 0) g_bi.other[c] = 1;
+                    if (std::find(g_bi.refs[c].begin(), g_bi.refs[c].end(), (int)r) == g_bi.refs[c].end())
+                        g_bi.refs[c].push_back((int)r);
+                }
+        }
+    }
+    for (size_t c = 0; c < ncell; ++c)
+        if (g_bi.refs[c].empty()) g_bi.other[c] = 1;   // (13,4): no record; kept for the Wolf
+    std::fprintf(stderr, "[lb_icons] battle icons ready (UIMgrData %08X, %u records, %u keys)\n", (unsigned)ui,
+                 (unsigned)g_bi.nrec, (unsigned)count);
+    std::fflush(stderr);
+    return true;
+}
+
+// A stock request is about to get record r: it and its cells are the stock's
+// from now on, and anything of ours there goes back first.
+void icons_note_stock(int r) {
+    if (r < 0 || r >= (int)g_bi.nrec || g_bi.seen[(size_t)r]) return;
+    g_bi.seen[(size_t)r] = 1;
+    if (g_bi.lent[(size_t)r] >= 0) icon_unlend(r, "a stock unit asked for it");
+    for (size_t c = 0; c < g_bi.refs.size(); ++c) {
+        if (std::find(g_bi.refs[c].begin(), g_bi.refs[c].end(), r) == g_bi.refs[c].end()) continue;
+        g_bi.busy[c] = 1;
+        const int a = g_bi.cell_of[c];
+        if (a < 0) continue;
+        icon_cell_restore((int)c);
+        g_bi.cell_of[c] = -1;
+        g_bi.as[(size_t)a].cell = -1;
+        std::fprintf(stderr, "[lb_icons] cell (%d,%d) given back (a stock unit's icon)\n", (int)(c % 16), (int)(c / 16));
+        std::fflush(stderr);
+    }
+}
+
+// Custom unit k's picture for a set, decided once a battle.
+void icons_decide(int k, int set, IconAssign& a) {
+    a.decided = true;
+    a.none = true;
+    unsigned int hud[576], bld[576], head[576], px[576];
+    const bool hb = lb_cunits_icon(k, 0, hud) != 0, bb = lb_cunits_icon(k, 1, bld) != 0;
+    const bool db = lb_cunits_head(k, head) != 0;
+    const int tmpl = lb_cunits_template(k);
+    const int src = lb_teams_custom_icon_pick(tmpl, set, bb ? bld : nullptr, hb ? hud : nullptr, db ? head : nullptr, px);
+    if (src <= 0) return;
+    std::vector<uint32_t> pal;
+    {
+        std::lock_guard<std::mutex> lk(g_icon_mu);
+        if (!icon_rom_locked()) return;
+        pal = g_icon_pal;
+    }
+    a.sub = icon_sub(px, pal, set == 1);
+    icon_encode(px, pal, a.sub, a.tiles, nullptr);
+    a.none = false;
+    static const char* const kSrc[4] = {"", "build_icon.png", "hud_icon.png", "head.png"};
+    std::fprintf(stderr, "[lb_icons] custom unit %d (%s): its %s icon is portraits/%s, sub-palette %d\n", k + 1,
+                 lb_cunits_name(k), set ? "build" : "battle", kSrc[src], a.sub);
+    std::fflush(stderr);
+}
+
+// A donor record for assignment ai (set `set`): never asked for by a stock
+// request, not lent; the keyless positions first, then heroes', then the
+// rest, latest first. Never position 0 (the cartridge's answer for an unknown
+// key) or the Wolf's and the Shark's.
+int icons_pick_record(int set) {
+    const int n = (int)g_bi.keys.size();
+    const uint32_t base = set ? kIconBuildSet : kIconHeadSet;
+    int best = -1, best_rank = 99;
+    for (int pos = n - 1; pos >= 1; --pos) {
+        const int r = (int)base + pos;
+        if (r >= (int)g_bi.nrec || g_bi.seen[(size_t)r] || g_bi.lent[(size_t)r] >= 0) continue;
+        const uint32_t key = g_bi.keys[(size_t)pos];
+        if (key == 155u || key == 169u) continue;
+        const uint32_t fr = icon_frame(r, 0);
+        if (!fr || bus_read_u8(fr + 0x0Cu) != 0u) continue;
+        const int rank = key == 0xFFFFFFFFu ? 0 : icon_hero_key(key) ? 1 : 2;
+        if (rank < best_rank) { best_rank = rank; best = r; }
+    }
+    return best;
+}
+// A donor cell: shown only by the two sets' records, none of them asked for
+// by a stock request, not ours already. Fewest keys first, heroes' first.
+int icons_pick_cell() {
+    int best = -1, best_score = 1 << 30;
+    for (int c = (int)g_bi.refs.size() - 1; c >= 0; --c) {
+        if (g_bi.other[(size_t)c] || g_bi.busy[(size_t)c] || g_bi.cell_of[(size_t)c] >= 0) continue;
+        std::vector<uint32_t> keys;
+        bool heroes = true, seen = false;
+        for (int r : g_bi.refs[(size_t)c]) {
+            seen = seen || g_bi.seen[(size_t)r];
+            const uint32_t k = icon_key_of(r);
+            if (std::find(keys.begin(), keys.end(), k) == keys.end()) keys.push_back(k);
+            heroes = heroes && (k == 0xFFFFFFFFu || icon_hero_key(k));
+        }
+        if (seen) continue;
+        const int score = (int)keys.size() * 10 + (heroes ? 0 : 5);
+        if (score < best_score) { best_score = score; best = c; }
+    }
+    return best;
+}
+
+}  // namespace
+
+// docs/487: the record FUN_020D85F4's override (lb_patches.cpp) should return
+// for a call about custom unit k (-1: a stock unit or unknown) with the call's
+// own index, heads and upgrade arguments; -1 to let the cartridge answer.
+// Emulation thread.
+extern "C" int lb_teams_battle_icon(int k, int index, int heads, int upgrade) {
+    if (!icons_wanted() || !battle_present() || !icons_sync()) return -1;
+    const int set = heads ? 0 : 1;
+    const int pos = icon_key_pos(icon_key_remap(index, upgrade));
+    const int stock_rec = pos < 0 ? -1 : (int)(heads ? kIconHeadSet : kIconBuildSet) + pos;
+    if (k < 0 || k >= lb_cunits_count()) {
+        icons_note_stock(stock_rec);
+        return -1;
+    }
+    const size_t ai = (size_t)k * 2u + (size_t)set;
+    if (g_bi.as.size() <= ai) g_bi.as.resize(ai + 1);
+    if (!g_bi.as[ai].decided) icons_decide(k, set, g_bi.as[ai]);
+    IconAssign& a = g_bi.as[ai];
+    if (a.none) {   // the template's own icon is drawn: a stock use of it
+        icons_note_stock(stock_rec);
+        return -1;
+    }
+    if (a.cell < 0) {
+        a.cell = icons_pick_cell();
+        if (a.cell < 0) {
+            icons_note_stock(stock_rec);
+            return -1;
+        }
+        g_bi.cell_of[(size_t)a.cell] = (int)ai;
+    }
+    // The picture in place in every copy (again if the sheet was reloaded).
+    icon_cell_write(a.cell, a.tiles);
+    if (a.rec < 0) {
+        const int r = icons_pick_record(set);
+        if (r < 0) {
+            icons_note_stock(stock_rec);
+            return -1;
+        }
+        IconHijack h;
+        h.rec = r;
+        for (int f = 0; f < 2; ++f) {
+            const uint32_t fr = icon_frame(r, f == 0 ? 0 : 4);
+            if (!fr || bus_read_u8(fr + 0x0Cu) != 0u) continue;
+            const uint32_t rc = icon_rect(fr);
+            h.frame[f] = fr;
+            h.x[f] = (uint16_t)bus_read_u16(rc);
+            h.y[f] = (uint16_t)bus_read_u16(rc + 2u);
+            h.sub[f] = (uint8_t)bus_read_u8(fr + 0x0Fu);
+        }
+        g_bi.hj.push_back(h);
+        g_bi.lent[(size_t)r] = (int)ai;
+        a.rec = r;
+        std::fprintf(stderr, "[lb_icons] custom unit %d's %s icon: record %03X, cell (%d,%d)\n", k + 1,
+                     set ? "build" : "battle", (unsigned)r, a.cell % 16, a.cell / 16);
+        std::fflush(stderr);
+    }
+    // The donor record's frames on the cell, in the picture's sub-palette
+    // (frame 4 of a build record: 14, the stock build icons' second state).
+    for (const IconHijack& h : g_bi.hj) {
+        if (h.rec != a.rec) continue;
+        for (int f = 0; f < 2; ++f) {
+            if (!h.frame[f]) continue;
+            const uint32_t rc = icon_rect(h.frame[f]);
+            bus_write_u16(rc, (uint16_t)((a.cell % kIconCellsX) * 24));
+            bus_write_u16(rc + 2u, (uint16_t)((a.cell / kIconCellsX) * 24));
+            bus_write_u8(h.frame[f] + 0x0Fu, (uint8_t)(set == 1 && f == 1 ? kIconBuildSub4 : a.sub));
+        }
+    }
+    return a.rec;
+}
+
+// docs/487: whether custom unit k is drawn with its own battle icon in this
+// battle now (a donor record lent to it), for the portrait recolour.
+extern "C" int lb_teams_battle_icon_own(int k) {
+    const size_t ai = (size_t)k * 2u;
+    return k >= 0 && g_bi.ui && ai < g_bi.as.size() && g_bi.as[ai].decided && !g_bi.as[ai].none &&
+                   g_bi.as[ai].rec >= 0 ? 1 : 0;
+}
+
+// docs/487: once a frame (cards_tick): when the battle is over, or its
+// UIMgrData is gone, or the custom units changed, lend nothing any more.
+extern "C" void lb_teams_battle_icons_tick(void) {
+    if (!g_bi.ui) return;
+    if (!battle_present() || bus_read_u32(kUiLoaded) != g_bi.ui || lb_cunits_icons_sig() != g_bi.sig)
+        icons_reset(bus_read_u32(kUiLoaded) == g_bi.ui);
+}
+
+// docs/487: the build menu's icon of a stock blueprint (the 0x302 record of
+// its key, after the cartridge's remap), as RGBA; for the export and the
+// Unit Lab's preview. 0 when it cannot be read yet.
+extern "C" int lb_teams_build_icon_rgba(int bp, unsigned int out[576]) {
+    {
+        const int k = lb_cunits_of_any(bp);
+        if (k >= 0) bp = lb_cunits_template(k);
+    }
+    if (bp < 0 || bp >= 182 || !out) return 0;
+    const int pos = icon_key_pos(icon_key_remap(bp, 0));
+    if (pos < 0) return 0;
+    std::lock_guard<std::mutex> lk(g_icon_mu);
+    if (!icon_rom_locked()) return 0;
+    const std::vector<uint8_t>& ui = g_icon_ui;
+    const unsigned rec = kIconBuildSet + (unsigned)pos;
+    if (rec >= rd16(ui.data()) || 8u + (rec + 1u) * 0x1Cu > ui.size()) return 0;
+    const uint32_t frame = rd32(ui.data() + 8u + rec * 0x1Cu);
+    if (frame == 0 || frame + 0x1Cu > ui.size() || ui[frame + 0x0Cu] != 0) return 0;
+    const unsigned sx = rd16(ui.data() + frame + 0x14u), sy = rd16(ui.data() + frame + 0x16u);
+    const unsigned sub = ui[frame + 0x0Fu];
+    if (sx + 24u > 384u || sy + 24u > 240u) return 0;
+    for (unsigned y = 0; y < 24u; ++y)
+        for (unsigned x = 0; x < 24u; ++x) {
+            const unsigned px = sx + x, py = sy + y;
+            const uint8_t byte = g_icon_sheet[((py >> 3) * 48u + (px >> 3)) * 32u + (py & 7u) * 4u + ((px & 7u) >> 1)];
+            const unsigned v = (px & 1u) ? (byte >> 4) : (byte & 15u);
+            const size_t at = (size_t)sub * 16u + v;
+            out[y * 24u + x] = v && at < g_icon_pal.size() ? g_icon_pal[at] : 0u;
+        }
+    return 1;
+}
+
+// docs/487: a 24x24 picture as the battle draws a custom unit's icon (build 0:
+// the battle icon, in the head sub-palette that fits it best; 1: the build
+// menu's, in sub-palette 7), for the Unit Lab's preview. 0 when the ROM's
+// palette cannot be read.
+extern "C" int lb_teams_icon_as_battle(const unsigned int in[576], int build, unsigned int out[576]) {
+    if (!in || !out) return 0;
+    std::vector<uint32_t> pal;
+    {
+        std::lock_guard<std::mutex> lk(g_icon_mu);
+        if (!icon_rom_locked()) return 0;
+        pal = g_icon_pal;
+    }
+    uint8_t t[288];
+    icon_encode(in, pal, icon_sub(in, pal, build != 0), t, out);
+    return 1;
+}
+
+// docs/487: which of a custom unit's pictures is its icon `build` (0 the
+// battle icon, 1 the build menu's): build_icon.png (build menu only), then
+// hud_icon.png, then head.png, each only when it is not the starting unit's
+// own (an untouched export). Pointers are 24x24 RGBA or null for no file.
+// Returns 1, 2 or 3 for the file taken (out holds it), 0 for none: the
+// template's icon stays.
+extern "C" int lb_teams_custom_icon_pick(int tmpl, int build, const unsigned int* build_px,
+                                         const unsigned int* hud_px, const unsigned int* head_px,
+                                         unsigned int out[576]) {
+    unsigned int t[576];
+    if (build && build_px && !(lb_teams_build_icon_rgba(tmpl, t) && icon_same(build_px, t))) {
+        std::memcpy(out, build_px, sizeof t);
+        return 1;
+    }
+    if (hud_px && !(lb_teams_hud_icon_rgba(tmpl, t) && icon_same(hud_px, t))) {
+        std::memcpy(out, hud_px, sizeof t);
+        return 2;
+    }
+    if (head_px && !(lb_teams_head_rgba(tmpl, t) && icon_same(head_px, t))) {
+        std::memcpy(out, head_px, sizeof t);
+        return 3;
+    }
+    return 0;
 }
 
 // docs/428: this machine's own ban bits (the host's rules, on the host).
@@ -2571,6 +3210,44 @@ extern "C" int lb_rules_outgoing(unsigned char* buf, int cap) {
                                 buf[n++] = 'P';
                                 buf[n++] = 1;
                                 buf[n++] = (unsigned char)lb_cadence_effective();
+                                // docs/488: then the 'R' page: 'R', a version
+                                // (1) and the second rule flags (u32,
+                                // LB_RULE2_*), since the flags byte of
+                                // docs/406 is full. Found by position, after
+                                // 'P'; a host without it plays them all off.
+                                if (n + 6 <= cap) {
+                                    const unsigned r2 = (unsigned)lb_rules2_local_flags();
+                                    buf[n++] = 'R';
+                                    buf[n++] = 1;
+                                    for (int b = 0; b < 4; ++b) buf[n++] = (unsigned char)(r2 >> (8 * b));
+                                    // docs/489: then the 'K' page: 'K', a version
+                                    // (1), flags (bit 0: custom team colours
+                                    // allowed), a count and, for each, the
+                                    // stock colour it replaces and the colour
+                                    // (R, G, B): the set this host resolved
+                                    // (its own and its joiners', kept apart),
+                                    // which every joiner draws. Found by
+                                    // position, after 'R'; a host without it
+                                    // allows none.
+                                    int set[7];
+                                    lb_custompal_resolved(set);
+                                    const bool allow = lb_setting_custom_colour_host() != 0;
+                                    int cnt = 0;
+                                    for (int c = 0; c < 7; ++c) cnt += allow && set[c] >= 0 ? 1 : 0;
+                                    if (n + 4 + 4 * cnt <= cap) {
+                                        buf[n++] = 'K';
+                                        buf[n++] = 1;
+                                        buf[n++] = allow ? 1 : 0;
+                                        buf[n++] = (unsigned char)cnt;
+                                        for (int c = 0; c < 7 && allow; ++c) {
+                                            if (set[c] < 0) continue;
+                                            buf[n++] = (unsigned char)c;
+                                            buf[n++] = (unsigned char)((set[c] >> 16) & 0xFF);
+                                            buf[n++] = (unsigned char)((set[c] >> 8) & 0xFF);
+                                            buf[n++] = (unsigned char)(set[c] & 0xFF);
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -2617,6 +3294,10 @@ extern "C" void lb_rules_on_leave(void) {
     g_gold_recv = 0;
     g_ar_recv = 0;
     g_pace_recv = 0;
+    g_rules2_recv = 0u;   // docs/488
+    g_cpal_recv_allowed = false;   // docs/489
+    for (int& c : g_cpal_recv) c = -1;
+    for (CpalJoiner& j : g_cpal_join) j = CpalJoiner{};
     g_maps_recv.clear();
     g_maps_recv_has = false;
     g_bal_done = false;
@@ -2699,6 +3380,102 @@ extern "C" int lb_rules_host_pace(void) {
     if (!net_joined(lb_net_guest_state())) return -1;
     std::lock_guard<std::mutex> lk(g_rules_mu);
     return g_bans_recv_ok ? g_pace_recv : 0;
+}
+
+// docs/488: -1 when this machine decides (not joined), else the host's second
+// rule flags ('R' page; 0 for a host that sends none). Not gated on freshness,
+// like the flags of docs/406.
+extern "C" int lb_rules_host_flags2(void) {
+    if (!net_joined(lb_net_guest_state())) return -1;
+    std::lock_guard<std::mutex> lk(g_rules_mu);
+    return g_bans_recv_ok ? (int)(g_rules2_recv & 0x7FFFFFFFu) : 0;
+}
+
+// ---- docs/489: custom team colours online ----------------------------------
+//
+// A joiner tells the host its colour inside the CHAT datagram type (LBCH), as
+// its own message: "LBK1", a version (1), its lobby slot (0x02158AE0), flags
+// (bit 0: its custom colour is on) and R, G, B; once a second while joined.
+// Every build before this one drops anything that is not "LBC1" there, so an
+// older host ignores it; a host never passes it on (only LBC1 is relayed). The
+// host keeps the latest per slot and, with its "allow" rule on, resolves the
+// set (lb_patches.cpp, cp_resolve_host: each colour on the stock colour its
+// lobby record holds, kept apart from the others) and sends it as the 'K'
+// page; every joiner draws exactly that set.
+
+// Joined: 1 and the host's set when it allows custom colours, 0 when it does
+// not (or sent no 'K' page); -1 when not joined. Not gated on freshness, like
+// the flags.
+extern "C" int lb_custompal_host_page(int out[7]) {
+    for (int c = 0; c < 7; ++c) out[c] = -1;
+    if (!net_joined(lb_net_guest_state())) return -1;
+    std::lock_guard<std::mutex> lk(g_rules_mu);
+    if (!g_bans_recv_ok || !g_cpal_recv_allowed) return 0;
+    for (int c = 0; c < 7; ++c) out[c] = g_cpal_recv[c];
+    return 1;
+}
+
+// Hosting: 1 and the colour of the joiner in lobby slot `slot`, when its last
+// LBK1 (within 5 s) said its custom colour is on.
+extern "C" int lb_custompal_joiner_colour(int slot, unsigned* rgb) {
+    if (slot < 0 || slot >= 3 || !net_hosting(lb_net_guest_state())) return 0;
+    std::lock_guard<std::mutex> lk(g_rules_mu);
+    const CpalJoiner& j = g_cpal_join[slot];
+    if (!j.on || std::chrono::steady_clock::now() - j.at > std::chrono::seconds(5)) return 0;
+    if (rgb) *rgb = j.rgb;
+    return 1;
+}
+
+// A joiner's LBK1, from the chat datagram's drain (lb_chat_outgoing): at most
+// one a second, only while joined. Sent with the colour off too, so a host
+// stops showing it.
+extern "C" int lb_custompal_outgoing(unsigned char* buf, int cap) {
+    if (!buf || cap < 10 || !net_joined(lb_net_guest_state())) return 0;
+    static std::chrono::steady_clock::time_point last{};
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last < std::chrono::seconds(1)) return 0;
+    last = now;
+    unsigned rgb = 0;
+    const int on = lb_setting_custom_colour(&rgb);
+    const unsigned slot = bus_read_u16(0x02158AE0u);
+    if (slot >= 3u) return 0;
+    std::memcpy(buf, "LBK1", 4);
+    buf[4] = 1;
+    buf[5] = (unsigned char)slot;
+    buf[6] = on ? 1 : 0;
+    buf[7] = (unsigned char)((rgb >> 16) & 0xFF);
+    buf[8] = (unsigned char)((rgb >> 8) & 0xFF);
+    buf[9] = (unsigned char)(rgb & 0xFF);
+    static int said_on = -1;
+    static unsigned said_rgb = 0;
+    if (said_on != on || said_rgb != rgb) {
+        said_on = on;
+        said_rgb = rgb;
+        std::fprintf(stderr, "[lb_custompal] LBK1 to the host: slot %u, custom colour %s %06X\n", slot,
+                     on ? "on" : "off", rgb);
+        std::fflush(stderr);
+    }
+    return 10;
+}
+
+// A received LBK1 (lb_chat_incoming hands it here): kept only while hosting.
+extern "C" void lb_custompal_incoming(const unsigned char* buf, int len, unsigned int sender) {
+    if (!buf || len < 10 || std::memcmp(buf, "LBK1", 4) != 0 || buf[4] != 1) return;
+    if (!net_hosting(lb_net_guest_state())) return;
+    const int slot = buf[5];
+    if (slot >= 3) return;
+    const bool on = (buf[6] & 1) != 0;
+    const unsigned rgb = ((unsigned)buf[7] << 16) | ((unsigned)buf[8] << 8) | buf[9];
+    std::lock_guard<std::mutex> lk(g_rules_mu);
+    CpalJoiner& j = g_cpal_join[slot];
+    if (j.on != on || j.rgb != rgb || j.at == std::chrono::steady_clock::time_point{}) {
+        std::fprintf(stderr, "[lb_custompal] LBK1 from instance %u: slot %d, custom colour %s %06X\n", sender, slot,
+                     on ? "on" : "off", rgb);
+        std::fflush(stderr);
+    }
+    j.on = on;
+    j.rgb = rgb;
+    j.at = std::chrono::steady_clock::now();
 }
 
 extern "C" int lb_rules_host_gold_target(void) {   // SG-0036
@@ -2910,15 +3687,61 @@ extern "C" void lb_rules_incoming(const unsigned char* buf, int len,
         // older host, whose joiners keep their own.
         auto read_pace = [&](int p_at) {
             int pace = 0;
-            if (p_at >= 0 && p_at + 3 <= len && buf[p_at] == 'P' && buf[p_at + 1] == 1 &&
-                (buf[p_at + 2] == 20 || buf[p_at + 2] == 30))
+            const bool has_p = p_at >= 0 && p_at + 3 <= len && buf[p_at] == 'P' && buf[p_at + 1] == 1;
+            if (has_p && (buf[p_at + 2] == 20 || buf[p_at + 2] == 21 || buf[p_at + 2] == 30))
                 pace = buf[p_at + 2];
             if (pace != g_pace_recv) {
                 std::fprintf(stderr, "[lb_teams] the host's game pacing: %s\n",
-                             pace == 30 ? "steady 30 Hz" : pace == 20 ? "the cartridge's clock" : "none sent");
+                             pace == 30 ? "steady 30 Hz" : pace == 21 ? "the cartridge's, DS-paced" : pace == 20 ? "the cartridge's clock" : "none sent");
                 std::fflush(stderr);
             }
             g_pace_recv = pace;
+            // docs/488: the 'R' page after it, the second rule flags. None
+            // from an older host: every one of them off (stock).
+            unsigned r2 = 0u;
+            const int r_at = has_p ? p_at + 3 : -1;
+            if (r_at >= 0 && r_at + 6 <= len && buf[r_at] == 'R' && buf[r_at + 1] == 1)
+                r2 = (unsigned)buf[r_at + 2] | ((unsigned)buf[r_at + 3] << 8) |
+                     ((unsigned)buf[r_at + 4] << 16) | ((unsigned)buf[r_at + 5] << 24);
+            if (!g_bans_recv_ok || r2 != g_rules2_recv) {
+                std::fprintf(stderr, "[lb_teams] the host's second rule flags from instance %u: "
+                             "%08X (soldiers repair %s, one of each hero %s)\n", sender, r2,
+                             (r2 & LB_RULE2_ANY_REPAIR) ? "on" : "off",
+                             (r2 & LB_RULE2_UNIQUE_HEROES) ? "on" : "off");
+                std::fflush(stderr);
+            }
+            g_rules2_recv = r2;
+            // docs/489: the 'K' page after it, the custom team colours. None
+            // from an older host: none allowed, everyone stock.
+            const bool has_r = r_at >= 0 && r_at + 6 <= len && buf[r_at] == 'R' && buf[r_at + 1] == 1;
+            const int k_at = has_r ? r_at + 6 : -1;
+            bool allow = false;
+            int set[7] = {-1, -1, -1, -1, -1, -1, -1};
+            if (k_at >= 0 && k_at + 4 <= len && buf[k_at] == 'K' && buf[k_at + 1] == 1) {
+                const int cnt = buf[k_at + 3];
+                if (cnt <= 7 && k_at + 4 + 4 * cnt <= len) {
+                    allow = (buf[k_at + 2] & 1) != 0;
+                    for (int i = 0; i < cnt && allow; ++i) {
+                        const unsigned char* e = buf + k_at + 4 + 4 * i;
+                        if (e[0] < 7) set[e[0]] = (int)(((unsigned)e[1] << 16) | ((unsigned)e[2] << 8) | e[3]);
+                    }
+                }
+            }
+            if (allow != g_cpal_recv_allowed || std::memcmp(set, g_cpal_recv, sizeof set) != 0) {
+                std::string what;
+                static const char* const kNames[7] = {"Red", "Blue", "Green", "Yellow", "Purple", "Grey", "Teal"};
+                for (int c = 0; c < 7; ++c)
+                    if (set[c] >= 0) {
+                        char one[40];
+                        std::snprintf(one, sizeof one, " %s=%06X", kNames[c], (unsigned)set[c]);
+                        what += one;
+                    }
+                std::fprintf(stderr, "[lb_custompal] the host's K page from instance %u: custom colours %s%s\n",
+                             sender, allow ? "allowed" : "not allowed", what.c_str());
+                std::fflush(stderr);
+            }
+            g_cpal_recv_allowed = allow;
+            std::memcpy(g_cpal_recv, set, sizeof set);
         };
         if (u_at >= 0 && u_at + 11 <= len && buf[u_at] == 'U' && buf[u_at + 1] == 2) {
             // Version 2: one page of the set. The set is handed on only when

@@ -7606,6 +7606,12 @@ def apply(runner_dir, imgui_dir):
     replace(front,
             "        if (turbo_pressed != turbo_active) {\n"
             "            turbo_active = turbo_pressed;",
+            "        /* BR-0088: a Tab release the overlay consumed (menu open) or\n"
+            "           that went to another window never reached the handler\n"
+            "           above, and the game stayed fast-forwarded. The key's real\n"
+            "           state ends it. */\n"
+            "        if (turbo_pressed && !SDL_GetKeyboardState(nullptr)[SDL_SCANCODE_TAB])\n"
+            "            turbo_pressed = false;\n"
             "        const bool lb_turbo_want =\n"
             "            turbo_pressed || lb_boot_skip_wanted();  /* SG-0016 */\n"
             "        if (lb_turbo_want != turbo_active) {\n"
@@ -7794,6 +7800,8 @@ def apply(runner_dir, imgui_dir):
           "src/lb_filedlg.cpp",
           # xdelta patches of the ROM, export and import (docs/474).
           "src/lb_xdelta.cpp",
+          # Content packs (.lbpack), export and import (docs/490).
+          "src/lb_pack.cpp",
           "src/lb_prof.cpp",
           # The event pump on its own fiber (docs/385), for <windows.h>.
           "src/lb_winloop.cpp",

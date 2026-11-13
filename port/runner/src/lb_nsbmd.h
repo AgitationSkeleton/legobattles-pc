@@ -11,6 +11,8 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
+#include <vector>
 
 // bmd/n: a whole uncompressed .nsbmd file. bank: the team colour, the model
 // palette's 16-colour bank (docs/412: 0 Blue, 1 Red, 2 Green, 3 Yellow,
@@ -28,3 +30,18 @@ bool lb_nsbmd_render(const uint8_t* bmd, size_t n, int bank, float yaw_radians, 
 // (light, mid, dark). Bank 5 is built from bank 6 with entries 12-14 replaced.
 bool lb_nsbmd_render_teal(const uint8_t* bmd, size_t n, const uint16_t shades[3], float yaw_radians,
                           float pitch_radians, int w, int h, uint32_t* out_abgr);
+
+// docs/492 (SG-0083): the model's rest pose as a Wavefront OBJ (triangles in
+// model space, one vt per corner in 0..1 over its material's texture, v up),
+// for editing in a 3D program. False when the file does not parse.
+bool lb_nsbmd_export_obj(const uint8_t* bmd, size_t n, std::string* obj);
+
+// docs/492 (SG-0083): a new mesh for a model. The OBJ's triangles (faces are
+// fanned; v, vt and vn are read, the rest ignored), in the exported model
+// space, become the display list of the first shape the model draws, bound to
+// that shape's matrix (so it moves with that part of the animation, rigidly);
+// every other shape draws nothing. The texture, palette, nodes, materials and
+// animation stay the model's. The bounding box and counts are recomputed.
+// `note` says what was done, or why not (the model is then unchanged). Limits:
+// 1..400 triangles, one material, positions within the GX range after scaling.
+bool lb_nsbmd_import_obj(std::vector<uint8_t>* bmd, const std::string& obj, std::string* note);

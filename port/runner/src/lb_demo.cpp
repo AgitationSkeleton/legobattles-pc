@@ -259,6 +259,10 @@ int g_rec_yards = 0, g_demo_yards = 0;     // kind 25, SG-0078: AI shipyard site
 int g_rec_natq = 0, g_demo_natq = 0;     // kind 27, docs/479: Native Game Logic (0 the cartridge timing)
 int g_rec_startpos = 0, g_demo_startpos = 0;   // kind 28, SG-0081: Free Play start position (0 the game's deal)
 int g_rec_fcpu = 0, g_demo_fcpu = 0;     // kind 29, docs/484: Faster CPU, the clock's share per cycle in 1/256 (0 the DS's)
+int g_rec_rules2 = 0, g_demo_rules2 = 0;   // kind 30, docs/488: the second rule flags (LB_RULE2_*, 0 stock)
+// kind 31, docs/488 (SG-0113): AI Uses Targeted Spells. A recording before
+// `aitap=1` never carried it, so its replay keeps this machine's (-1).
+int g_rec_aitap = 0, g_demo_aitap = -1;
 int g_rec_aix = 0, g_demo_aix = 0;         // kind 26, docs/472: AI mask (1 finish upgrades, 2 keep bridges, 4 stuck bridges, 8 transports on request (docs/478); 0 stock)
 // BR-0011: kinds 14 and 15, the attack boost and the healing fix, from
 // `sets=4`; a recording before it leaves them to this machine (-1).
@@ -271,6 +275,21 @@ int g_rec_heal = 0, g_demo_heal = -1;
 // picks; a replay of one sizes its field the same, whatever its window.
 // Recordings without them keep the window's own.
 int g_rec_fw = 0, g_rec_fh = 0, g_demo_fw = 0, g_demo_fh = 0;
+// docs/489: THE CUSTOM TEAM COLOURS a session drew (display only), so a replay
+// shows the same colours. The header says `cpal=1`; the set travels as lines
+// `cpal FRAME COLOUR RRGGBB` (or `-` for stock again), one per change, from
+// frame 0. They are not in the header itself because the header is written at
+// launch, before the settings file is read and long before a host's colours
+// arrive. A line that starts with a word is skipped by every older build (its
+// event scan wants a frame number first), so older builds replay these
+// recordings as before, in stock colours. Without `cpal=1` a replay draws this
+// machine's own custom colour, as before there were recordings of it.
+struct CpalEvent { uint32_t frame; int colour, rgb; };
+std::vector<CpalEvent> g_cpal_events;
+size_t g_cpal_at = 0;
+bool g_demo_has_cpal = false;
+int g_demo_cpal[7] = {-1, -1, -1, -1, -1, -1, -1};   // playback: the set at this point
+int g_rec_cpal[7] = {-1, -1, -1, -1, -1, -1, -1};    // recording: the set as last written
 // docs/384: the opponent armies a recording fielded, in order, and the next
 // one a replay takes.
 std::vector<std::array<unsigned char, 20>> g_armies;
@@ -336,9 +355,15 @@ bool load(const char* path) {
     g_demo_startpos = 0;          // and the game's own deal of the starts (SG-0081)
     g_demo_fcpu = 0;              // and the DS's own clock (docs/484)
     g_demo_aix = 0;               // and the stock tower, bridge-retire and bridge-need rules (docs/472)
+    g_demo_rules2 = 0;            // and none of the second rule flags (docs/488)
+    g_demo_aitap = -1;            // and this machine's AI spell choice, unless aitap=1 (docs/488)
     g_demo_atk = g_demo_heal = -1;   // BR-0011: and this machine's
     g_demo_fw = g_demo_fh = 0;    // docs/409: and the window's own field
     g_demo_has_rtc = false;       // and the clock the replaying run has
+    g_demo_has_cpal = false;      // docs/489: and this machine's custom colour
+    for (int& c : g_demo_cpal) c = -1;
+    g_cpal_events.clear();
+    g_cpal_at = 0;
     g_armies.clear();
     g_army_at = 0;
     g_army_last_frame = 0;
@@ -348,7 +373,7 @@ bool load(const char* path) {
             if (std::strncmp(line, "lbdemo", 6) == 0) {
                 if (const char* c = std::strstr(line, "cadence=")) {
                     const int v = std::atoi(c + 8);
-                    if (v == 20 || v == 30) g_demo_cadence = v;
+                    if (v == 20 || v == 21 || v == 30) g_demo_cadence = v;
                 }
                 if (const char* h = std::strstr(line, "hudhit="))
                     g_demo_hudhit = std::atoi(h + 7) == 1 ? 1 : 0;
@@ -399,6 +424,11 @@ bool load(const char* path) {
                         g_demo_has_rtc = true;
                     }
                 }
+                // docs/488: kind 31 is recorded from frame 0 on, starting from Off.
+                if (const char* at = std::strstr(line, "aitap="))
+                    if (std::atoi(at + 6) == 1) g_demo_aitap = 0;
+                if (const char* cp = std::strstr(line, "cpal="))   // docs/489
+                    g_demo_has_cpal = std::atoi(cp + 5) == 1;
                 if (const char* s2 = std::strstr(line, "sets="))   // docs/392
                     if (std::atoi(s2 + 5) >= 2) {
                         g_demo_oppdef = 1;
@@ -412,6 +442,18 @@ bool load(const char* path) {
         }
         unsigned f = 0;
         char kind = 0;
+        if (std::strncmp(line, "cpal ", 5) == 0) {   // docs/489: a custom colour, kept apart
+            unsigned cf = 0;
+            int colour = -1;
+            char v[16] = "";
+            if (std::sscanf(line + 5, "%u %d %15s", &cf, &colour, v) == 3 && colour >= 0 && colour < 7) {
+                char* end = nullptr;
+                const unsigned long x = std::strtoul(v, &end, 16);
+                const int rgb = (v[0] == '-' || !end || *end != '\0') ? -1 : (int)(x & 0xFFFFFFul);
+                g_cpal_events.push_back(CpalEvent{cf, colour, rgb});
+            }
+            continue;
+        }
         {   // docs/384: an opponent army, kept apart from the timed events
             unsigned af = 0;
             int v[10];
@@ -438,6 +480,7 @@ bool load(const char* path) {
         }
     }
     std::fclose(fh);
+    if (!g_demo_has_cpal) g_cpal_events.clear();   // docs/489: only from a recording that says so
     return !g_events.empty();
 }
 
@@ -485,9 +528,12 @@ void rec_balance_diff(bool initial) {
     const unsigned gen = lb_balance_custom_generation();
     if (!initial && gen == g_rec_bal_gen) return;   // nothing changed
     g_rec_bal_gen = gen;
-    const int kinds[2] = {LB_BAL_UNITS, LB_BAL_ATTACKS};
-    const int recs = lb_balance_record_count(LB_BAL_UNITS) +
-                     lb_balance_record_count(LB_BAL_ATTACKS);
+    // docs/488: the globals (the Gold Brick, docs/416, which this left out
+    // until now) and the spell table too. Records are numbered on from the
+    // units: 0..181, 182..208, 209, 210..244.
+    const int kinds[4] = {LB_BAL_UNITS, LB_BAL_ATTACKS, LB_BAL_GLOBALS, LB_BAL_SPELLTAB};
+    const int recs = lb_balance_record_first(LB_BAL_SPELLTAB) +
+                     lb_balance_record_count(LB_BAL_SPELLTAB);
     // docs/408: attacks have 17 fields. docs/482: units now have 36, and at
     // 32 the loop below silently skipped unit fields 32+ (docs/481's Speed
     // icon and Transport, and docs/482's two building bonuses): they were
@@ -663,6 +709,12 @@ extern "C" int lb_demo_play_faster_cpu(void) {   // docs/484: the clock, 0 the D
 extern "C" int lb_demo_play_start_position(void) {   // SG-0081
     return (g_mode == Mode::Play || g_replay_done) ? g_demo_startpos : -1;
 }
+extern "C" int lb_demo_play_rules2(void) {   // docs/488
+    return (g_mode == Mode::Play || g_replay_done) ? g_demo_rules2 : -1;
+}
+extern "C" int lb_demo_play_ai_tap_spells(void) {   // docs/488 (SG-0113)
+    return (g_mode == Mode::Play || g_replay_done) ? g_demo_aitap : -1;
+}
 extern "C" int lb_demo_play_ai_extra(void) {   // docs/472
     return (g_mode == Mode::Play || g_replay_done) ? g_demo_aix : -1;
 }
@@ -738,8 +790,11 @@ extern "C" void lb_demo_start_record(const char* path) {
     g_rec_natq = 0;               // docs/479
     g_rec_startpos = 0;           // SG-0081
     g_rec_fcpu = 0;               // docs/484
+    g_rec_rules2 = 0;             // docs/488
+    g_rec_aitap = 0;              // docs/488: aitap=1, from Off
     g_rec_atk = g_rec_heal = 0;
     g_rec_fw = g_rec_fh = 0;      // docs/409: the first frame writes the size
+    for (int& c : g_rec_cpal) c = -1;   // docs/489: the first frame writes the set in force
     // docs/396: a session on the PC's clock records the guest clock as it
     // stands now, so a replay runs on the same date (the 12/25 unlock).
     char rtc[24] = "";
@@ -752,7 +807,7 @@ extern "C" void lb_demo_start_record(const char* path) {
     std::fprintf(g_rec, "lbdemo 1 cadence=%d hudhit=%d camedge=%d camgrid=1 snd=%d "
                  "depth=%d exty=1 hudmemo=1 fp2d=1 fpline=1 quick=1 enemy8=%d cage=%d "
                  "ownhero=%d oppname=2 tileset=%d palette=%d pickseed=%u "
-                 "music=%d sets=4 balc=1%s\n",
+                 "music=%d sets=4 balc=1 aitap=1 cpal=1%s\n",
                  g_rec_cadence, lb_hud_hit_live() ? 1 : 0,
                  lb_camera_edge_live() ? 1 : 0,
                  lb_snd_cull_live() ? 1 : 0,
@@ -823,6 +878,14 @@ extern "C" void lb_demo_stop(void) {
         g_rec = nullptr;
     }
     g_mode = Mode::Idle;
+}
+
+// docs/489: a replay's custom colours (1 and the set; kept after it finishes,
+// like its settings), or -1: not replaying a recording that carries them.
+extern "C" int lb_demo_play_custompal(int out[7]) {
+    if ((g_mode != Mode::Play && !g_replay_done) || !g_demo_has_cpal) return -1;
+    for (int c = 0; c < 7; ++c) out[c] = g_demo_cpal[c];
+    return 1;
 }
 
 extern "C" int lb_demo_state(void) {
@@ -924,7 +987,7 @@ extern "C" void lb_demo_tick(void) {
             emit(e);
         }
         // docs/388: and the settings a replay takes from the recording.
-        const int now[30] = {lb_setting_force_tileset(),
+        const int now[32] = {lb_setting_force_tileset(),
                             lb_setting_level_palette(),
                             lb_setting_music_mode(),
                             lb_cage_fix_live() ? 1 : 0,
@@ -953,8 +1016,10 @@ extern "C" void lb_demo_tick(void) {
                             lb_ai_extra_live(),                     // docs/472
                             lb_native_logic_live(),                 // docs/479
                             lb_start_position_live(),               // SG-0081
-                            lb_faster_cpu_clock_live()};            // docs/484
-        int* const was[30] = {&g_rec_tileset, &g_rec_palette, &g_rec_music,
+                            lb_faster_cpu_clock_live(),             // docs/484
+                            lb_rules2_live(),                       // docs/488, kind 30
+                            lb_ai_tap_spells_live()};               // docs/488, kind 31
+        int* const was[32] = {&g_rec_tileset, &g_rec_palette, &g_rec_music,
                               &g_rec_cage, &g_rec_ownhero, &g_rec_oppdef,
                               &g_rec_hwtransport, &g_rec_hwmode, &g_rec_emp,
                               &g_rec_cheats, &g_rec_aicheats, &g_rec_aihero,
@@ -962,8 +1027,8 @@ extern "C" void lb_demo_tick(void) {
                               &g_rec_cslot, &g_rec_aiopp, &g_rec_gold,
                               &g_rec_tabs, &g_rec_hwneut, &g_rec_stun, &g_rec_mines, &g_rec_cross,
                               &g_rec_bridges, &g_rec_yards, &g_rec_aix, &g_rec_natq,
-                              &g_rec_startpos, &g_rec_fcpu};
-        for (int k = 0; k < 30; ++k) {
+                              &g_rec_startpos, &g_rec_fcpu, &g_rec_rules2, &g_rec_aitap};
+        for (int k = 0; k < 32; ++k) {
             if (now[k] == *was[k]) continue;
             *was[k] = now[k];
             const Event e{g_frame, 's', k, now[k], 0, 0};
@@ -971,9 +1036,29 @@ extern "C" void lb_demo_tick(void) {
             emit(e);
         }
         rec_balance_diff(false);   // docs/404
+        // docs/489: the custom team colours drawn, a `cpal` line per change.
+        if (g_rec) {
+            int set[7];
+            lb_custompal_resolved(set);
+            for (int c = 0; c < 7; ++c) {
+                if (set[c] == g_rec_cpal[c]) continue;
+                g_rec_cpal[c] = set[c];
+                if (set[c] >= 0) std::fprintf(g_rec, "cpal %u %d %06X\n", g_frame, c, (unsigned)set[c]);
+                else std::fprintf(g_rec, "cpal %u %d -\n", g_frame, c);
+                std::fflush(g_rec);
+            }
+        }
         return;
     }
     if (g_mode != Mode::Play) return;
+    // docs/489: the recording's custom colours up to this frame.
+    while (g_cpal_at < g_cpal_events.size() && g_cpal_events[g_cpal_at].frame <= g_frame) {
+        const CpalEvent& e = g_cpal_events[g_cpal_at++];
+        g_demo_cpal[e.colour] = e.rgb;
+        std::fprintf(stderr, "[lb_custompal] replay frame %u: %d drawn %s%06X\n", g_frame, e.colour,
+                     e.rgb >= 0 ? "as " : "stock", e.rgb >= 0 ? (unsigned)e.rgb : 0u);
+        std::fflush(stderr);
+    }
 
     g_injecting = true;
     while (g_play_at < g_events.size() &&
@@ -999,7 +1084,7 @@ extern "C" void lb_demo_tick(void) {
             // old clear, so they replay exactly as before.
             if (!e.a && !g_demo_exty) lb_touch_clear_extended();
         } else if (e.kind == 'c') {
-            if (e.a == 20 || e.a == 30) g_demo_cadence = e.a;
+            if (e.a == 20 || e.a == 21 || e.a == 30) g_demo_cadence = e.a;
         } else if (e.kind == 'q') {
             lb_quick_replay(e.a);   /* docs/383: a battle shortcut, this frame */
         } else if (e.kind == 's') {   /* docs/388: a setting, this frame */
@@ -1032,6 +1117,8 @@ extern "C" void lb_demo_tick(void) {
             else if (e.a == 28) g_demo_startpos = (e.b >= 0 && e.b <= 8) ? e.b : 0;   // SG-0081
             else if (e.a == 29) g_demo_fcpu = (e.b == 1 || (e.b >= 64 && e.b < 256)) ? e.b : 0;   // docs/484: 1 the governor
             else if (e.a == 26) g_demo_aix = e.b & 15;           // docs/472; bit 3 docs/478
+            else if (e.a == 30) g_demo_rules2 = e.b & (LB_RULE2_ANY_REPAIR | LB_RULE2_UNIQUE_HEROES);   // docs/488
+            else if (e.a == 31) g_demo_aitap = e.b ? 1 : 0;      // docs/488 (SG-0113)
             else if (e.a == 17) g_demo_aiopp = (e.b & 0x7FFC) | ((e.b & 3) > 1 ? 1 : (e.b & 3));   // at most one extra (docs/414)   // docs/414
         } else if (e.kind == 'b') {   /* docs/404: a Balance tab value */
             lb_balance_custom_play_set(e.a, e.b, e.c);
