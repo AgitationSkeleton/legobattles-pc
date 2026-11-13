@@ -211,6 +211,7 @@ int g_demo_exty = 0;       // playback: the header's exty= (docs/383)
 int g_demo_hudmemo = 0;    // playback: the header's hudmemo= (docs/383)
 int g_demo_fp2d = 0;       // playback: the header's fp2d= (docs/383)
 int g_demo_fpline = 0;     // playback: the header's fpline= (docs/392)
+int g_demo_fpsite = 0;     // playback: the header's fpsite= (BR-0084)
 int g_demo_enemy8 = 0;     // playback: the header's enemy8= (docs/384)
 int g_demo_cage = 0;       // playback: the header's cage= (docs/385)
 int g_demo_ownhero = 0;    // playback: the header's ownhero= (docs/385)
@@ -326,6 +327,7 @@ bool load(const char* path) {
     g_demo_hudmemo = 0;           // and the old HUD-hit rules
     g_demo_fp2d = 0;              // and the one-axis footprint harvest
     g_demo_fpline = 0;            // and a line's site at the ghost's 0,0
+    g_demo_fpsite = 0;            // and the ghost record's stale origin (BR-0084)
     g_demo_enemy8 = 0;            // and the six-way opponent selector
     g_demo_cage = 0;              // and the stock cage choice
     g_demo_ownhero = 0;           // and the stock hero HUD pick
@@ -393,6 +395,8 @@ bool load(const char* path) {
                     g_demo_fp2d = std::atoi(p + 5) == 1 ? 1 : 0;
                 if (const char* f = std::strstr(line, "fpline="))
                     g_demo_fpline = std::atoi(f + 7) == 1 ? 1 : 0;
+                if (const char* f = std::strstr(line, "fpsite="))
+                    g_demo_fpsite = std::atoi(f + 7) == 1 ? 1 : 0;
                 if (const char* q = std::strstr(line, "enemy8="))
                     g_demo_enemy8 = std::atoi(q + 7) == 1 ? 1 : 0;
                 if (const char* g = std::strstr(line, "cage="))
@@ -805,7 +809,7 @@ extern "C" void lb_demo_start_record(const char* path) {
                       r[0], r[1], r[2], r[3], r[4], r[5], r[6]);
     }
     std::fprintf(g_rec, "lbdemo 1 cadence=%d hudhit=%d camedge=%d camgrid=1 snd=%d "
-                 "depth=%d exty=1 hudmemo=1 fp2d=1 fpline=1 quick=1 enemy8=%d cage=%d "
+                 "depth=%d exty=1 hudmemo=1 fp2d=1 fpline=1 fpsite=1 quick=1 enemy8=%d cage=%d "
                  "ownhero=%d oppname=2 tileset=%d palette=%d pickseed=%u "
                  "music=%d sets=4 balc=1 aitap=1 cpal=1%s\n",
                  g_rec_cadence, lb_hud_hit_live() ? 1 : 0,
@@ -923,6 +927,11 @@ extern "C" int lb_demo_play_fp2d(void) {      /* docs/383 */
 }
 extern "C" int lb_demo_play_fpline(void) {    /* docs/392 */
     return g_mode == Mode::Play ? g_demo_fpline : -1;
+}
+// BR-0084: 1 or -1 (live): the painter's record is the site and the margin
+// fits it; 0: a recording made before, the ghost record and two metatiles.
+extern "C" int lb_demo_play_fpsite(void) {
+    return g_mode == Mode::Play ? g_demo_fpsite : -1;
 }
 
 // Live touch, on its way to the guest. Returns 0 to DROP the call.

@@ -5100,6 +5100,7 @@ extern "C" int lb_fp_line_placement(void) {
 
 extern "C" int lb_demo_play_fp2d(void);     /* src/lb_demo.cpp */
 extern "C" int lb_demo_play_fpline(void);   /* docs/392 */
+extern "C" int lb_demo_play_fpsite(void);   /* BR-0084 */
 extern "C" int lb_fp_band_shift2(int* sx, int* sy) {
     if (!g_geom_valid || !fp_bands_enabled()) return 0;
     const uint32_t view = bus_read_u32(kViewPtr);
@@ -5110,7 +5111,21 @@ extern "C" int lb_fp_band_shift2(int* sx, int* sy) {
     int ox = static_cast<int>(bus_read_u8(0x02157958u + 0x0Cu));
     int oy = static_cast<int>(bus_read_u8(0x02157958u + 0x0Du));
     // A replay of a recording made before docs/392 keeps the ghost's 0,0.
-    if (lb_demo_play_fpline() != 0 && lb_fp_line_placement()) {
+    //
+    // BR-0084: LIVE, ALWAYS THE PAINTER'S OWN RECORD. The ghost record at
+    // 0x02157958 is written by FUN_020AA910 when a building ghost starts
+    // (origin +0x0C/+0x0D, kind +3), but the functions that end or cancel a
+    // placement (FUN_020AA99C, FUN_020AA9CC, FUN_020AAC20) clear only bytes 0
+    // and 2. After any building in a match, a bridge drag therefore failed
+    // lb_fp_line_placement's "0,0, kind 0" test and the shift was taken from
+    // the OLD building's site: the harvest window sat over that spot and the
+    // bridge's cells in the widened view were never painted. view+0x6C is
+    // what func_020370B4 actually paints (origin +0x20/+0x21, size +4/+5, the
+    // same record func_02036FBC reads for g_fp_site_w/h), for a building ghost
+    // and a bridge alike. Replays keep the rule they were recorded with.
+    const int fpl = lb_demo_play_fpline();
+    const bool site_rule = lb_demo_play_fpsite() != 0;   // live, or recorded with it
+    if (site_rule || (fpl != 0 && lb_fp_line_placement())) {
         ox = static_cast<int>(bus_read_u8(view + 0x6Cu + 0x20u));
         oy = static_cast<int>(bus_read_u8(view + 0x6Cu + 0x21u));
     }
@@ -5142,8 +5157,17 @@ extern "C" int lb_fp_band_shift2(int* sx, int* sy) {
         return 0;
     // Two metatiles in from the window's left and top: room for the widest
     // building (and the checkmark beside it) on every side.
-    const int wx = fp_floor_div(px0 - 2 * kFpMeta, kFpMeta) * kFpMeta;
-    const int wy = fp_floor_div(py0 - 2 * kFpMetaY, kFpMetaY) * kFpMetaY;
+    // BR-0084: but never so far in that the site runs off the window's far
+    // side: a 9-long horizontal bridge site is 216 px, and 48 + 216 = 264
+    // left its last 8 px unpainted. The margin shrinks to what fits (live
+    // only; a replay keeps two).
+    int mx = 2, my = 2;
+    if (site_rule) {
+        mx = std::max(0, std::min(2, (256 - g_fp_site_w * kFpMeta) / kFpMeta));
+        my = std::max(0, std::min(2, (kFpPaintRows * 8 - g_fp_site_h * kFpMetaY) / kFpMetaY));
+    }
+    const int wx = fp_floor_div(px0 - mx * kFpMeta, kFpMeta) * kFpMeta;
+    const int wy = fp_floor_div(py0 - my * kFpMetaY, kFpMetaY) * kFpMetaY;
     if (sx) *sx = wx;
     if (sy) *sy = wy;
     return (wx != 0 || wy != 0) ? 1 : 0;
