@@ -1147,14 +1147,39 @@ extern "C" void lb_net_announce(const char* server, int port, const char* name,
         b += ",\"lan_address\":" + json_str(local_ipv4().c_str()) +
              ",\"lan_port\":" + std::to_string(game_port) + "}";
         std::string error;
-        const std::string reply =
+        std::string reply =
             http_request(s, port, "POST", "/announce", b, &error);
         // docs/419: Both -- the same lobby on the second server, its own code
         // and token, beaten, polled and removed alongside the first.
         std::string c2, t2;
-        if (!xh.empty() && !(xh == s && xp == port) && !reply.empty()) {
+        std::string s_used = s;
+        int port_used = port;
+        const bool both = !xh.empty() && !(xh == s && xp == port);
+        if (both && field(reply, 0, "code").empty()) {
+            // The first server is down (or refused): the lobby goes on the
+            // second one alone, as its only listing and announced as usual
+            // there -- it is the one post the channel gets.
             std::string e2;
             const std::string r2 = http_request(xh, xp, "POST", "/announce", b, &e2);
+            if (!field(r2, 0, "code").empty()) {
+                std::fprintf(stderr, "[lb_net] %s gave no listing (%s): hosting on %s alone\n",
+                             s.c_str(), error.empty() ? field(reply, 0, "error").c_str() : error.c_str(),
+                             xh.c_str());
+                reply = r2;
+                error.clear();
+                s_used = xh;
+                port_used = xp;
+            }
+        } else if (both) {
+            std::string e2;
+            // The first server already announces this lobby in the Discord
+            // channel; the second lists it quietly (no posts), so a host on
+            // Both is not announced twice. A host on the second server alone,
+            // or on Both while the first is down (above), is announced there.
+            std::string bq = b;
+            bq.pop_back();
+            bq += ",\"quiet\":true}";
+            const std::string r2 = http_request(xh, xp, "POST", "/announce", bq, &e2);
             c2 = field(r2, 0, "code");
             t2 = field(r2, 0, "token");
             if (c2.empty())
@@ -1179,8 +1204,8 @@ extern "C" void lb_net_announce(const char* server, int port, const char* name,
             } else {
                 g_host_code = code;
                 g_host_token = token;
-                g_host_server = s;
-                g_host_port = port;
+                g_host_server = s_used;   // the second server when the first was down
+                g_host_port = port_used;
                 g_hosting = true;
                 g_host_state = "open";
                 g_host_map.clear();

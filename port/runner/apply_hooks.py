@@ -7770,6 +7770,63 @@ def apply(runner_dir, imgui_dir):
             "                }")
     done.append("frontend.cpp: zoom-out stops at the whole map (no black margin)")
 
+    # docs/493: THE LEGO BATTLES MENU STYLE needs three small hooks inside
+    # ImGui (lb_skin.cpp). The shared ImGui at IMGUI is never edited: its three
+    # sources that hold the hooked functions are copied into the tree, patched
+    # there, and the build compiles the copies (headers still come from IMGUI).
+    # Every hook is NULL until the style is switched on, and then RenderFrame /
+    # TabItemBackground behave exactly as stock whenever ours declines.
+    import shutil
+    lbimg = os.path.join(runner_dir, "src", "lb_imgui")
+    os.makedirs(lbimg, exist_ok=True)
+    for fn in ("imgui.cpp", "imgui_draw.cpp", "imgui_widgets.cpp"):
+        shutil.copyfile(os.path.join(imgui_dir, fn), os.path.join(lbimg, fn))
+    replace(os.path.join(lbimg, "imgui.cpp"),
+            "void ImGui::RenderFrame(ImVec2 p_min, ImVec2 p_max, ImU32 fill_col, bool borders, float rounding)\n"
+            "{\n"
+            "    ImGuiContext& g = *GImGui;\n"
+            "    ImGuiWindow* window = g.CurrentWindow;\n",
+            "/* legobattles-decomp: docs/493, the menu style's hooks (lb_skin.cpp). */\n"
+            "bool (*GImLbFrameHook)(ImDrawList*, const ImVec2&, const ImVec2&, ImU32, float) = NULL;\n"
+            "bool (*GImLbTabHook)(ImDrawList*, const ImVec2&, const ImVec2&, int, ImU32) = NULL;\n"
+            "ImU32 GImLbTextShadowCol = 0;\n"
+            "void ImGui::RenderFrame(ImVec2 p_min, ImVec2 p_max, ImU32 fill_col, bool borders, float rounding)\n"
+            "{\n"
+            "    ImGuiContext& g = *GImGui;\n"
+            "    ImGuiWindow* window = g.CurrentWindow;\n"
+            "    if (GImLbFrameHook && GImLbFrameHook(window->DrawList, p_min, p_max, fill_col, rounding))\n"
+            "        return;   /* legobattles-decomp: docs/493 */\n")
+    replace(os.path.join(lbimg, "imgui_widgets.cpp"),
+            "void ImGui::TabItemBackground(ImDrawList* draw_list, const ImRect& bb, ImGuiTabItemFlags flags, ImU32 col)\n"
+            "{\n",
+            "extern bool (*GImLbTabHook)(ImDrawList*, const ImVec2&, const ImVec2&, int, ImU32);   /* docs/493 */\n"
+            "void ImGui::TabItemBackground(ImDrawList* draw_list, const ImRect& bb, ImGuiTabItemFlags flags, ImU32 col)\n"
+            "{\n"
+            "    if (GImLbTabHook && GImLbTabHook(draw_list, bb.Min,\n"
+            "                                     ImVec2(bb.Max.x, bb.Max.y - GImGui->Style.TabBarBorderSize),\n"
+            "                                     (int)flags, col))\n"
+            "        return;   /* legobattles-decomp: docs/493 */\n")
+    replace(os.path.join(lbimg, "imgui_draw.cpp"),
+            "void ImFont::RenderText(ImDrawList* draw_list, float size, const ImVec2& pos, ImU32 col, const ImVec4& clip_rect, const char* text_begin, const char* text_end, float wrap_width, ImDrawTextFlags flags)\n"
+            "{\n"
+            "begin:\n",
+            "extern ImU32 GImLbTextShadowCol;   /* legobattles-decomp: docs/493 */\n"
+            "void ImFont::RenderText(ImDrawList* draw_list, float size, const ImVec2& pos, ImU32 col, const ImVec4& clip_rect, const char* text_begin, const char* text_end, float wrap_width, ImDrawTextFlags flags)\n"
+            "{\n"
+            "    /* docs/493: the game's one-pixel dark shadow under text, a whole\n"
+            "       pixel of the font's own size, at the text's alpha. */\n"
+            "    static bool lb_in_shadow = false;\n"
+            "    if (GImLbTextShadowCol && !lb_in_shadow && (col & IM_COL32_A_MASK)) {\n"
+            "        const float lb_off = ImMax(1.0f, ImFloor(size / 13.0f));\n"
+            "        const ImU32 lb_sc = (GImLbTextShadowCol & ~IM_COL32_A_MASK) | (col & IM_COL32_A_MASK);\n"
+            "        lb_in_shadow = true;\n"
+            "        RenderText(draw_list, size, ImVec2(pos.x + lb_off, pos.y + lb_off), lb_sc, clip_rect,\n"
+            "                   text_begin, text_end, wrap_width, flags);\n"
+            "        lb_in_shadow = false;\n"
+            "    }\n"
+            "begin:\n")
+    done.append("imgui (tree copies): the menu style's frame, tab and text-shadow hooks (docs/493)")
+
     # 5. Build wiring.
     imgui = imgui_dir.replace("\\", "/")
     edit(cmake, "add_executable(nds_runner",
@@ -7846,10 +7903,13 @@ def apply(runner_dir, imgui_dir):
           "src/lb_setup.cpp",
           # The executable's icon (lbapp.png), resource 1.
           "src/lb_app.rc",
-          "%s/imgui.cpp" % imgui,
-          "%s/imgui_draw.cpp" % imgui,
+          # docs/493: the three hooked sources are the tree's patched copies.
+          "src/lb_imgui/imgui.cpp",
+          "src/lb_imgui/imgui_draw.cpp",
           "%s/imgui_tables.cpp" % imgui,
-          "%s/imgui_widgets.cpp" % imgui,
+          "src/lb_imgui/imgui_widgets.cpp",
+          # docs/493: the LEGO Battles menu style.
+          "src/lb_skin.cpp",
           "%s/backends/imgui_impl_sdl2.cpp" % imgui,
           "%s/backends/imgui_impl_sdlrenderer2.cpp" % imgui],
          indent="    ")

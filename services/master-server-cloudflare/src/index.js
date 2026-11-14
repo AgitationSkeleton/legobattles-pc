@@ -223,7 +223,11 @@ export class Directory extends DurableObject {
     }
   }
 
-  log(text) {
+  // A lobby announced with `quiet` -- a host on Both lists the same lobby on
+  // a second server, which then stays out of the Discord channel the first
+  // one already posts to -- is listed and served as usual but never logged.
+  log(text, l) {
+    if (l && l.quiet) return;
     discord(this.env, this.ctx, text);
   }
 
@@ -268,9 +272,9 @@ export class Directory extends DurableObject {
       changed = true;
       if (l.state === 'playing') {
         this.log(`⏹️ **${plain(l.host_name)}**'s match ended (the host stopped reporting) ` +
-                 `after ${lasted(now - (l.started || l.created))}.`);
+                 `after ${lasted(now - (l.started || l.created))}.`, l);
       } else {
-        this.log(`💤 **${plain(l.host_name)}**'s lobby \`${code}\` expired (the host stopped responding).`);
+        this.log(`💤 **${plain(l.host_name)}**'s lobby \`${code}\` expired (the host stopped responding).`, l);
       }
     }
     return changed;
@@ -469,6 +473,7 @@ export class Directory extends DurableObject {
       return json(400, { ok: false, error: 'not a PNG of an accepted size' });
     l.image_posted = true;
     await this.save();
+    if (l.quiet) return json(200, { ok: true, quiet: true });   // the other server posts it
     const map = l.map_name || cleanName(body.map_name, '');
     discordImage(this.env, this.ctx,
                  `🗺️ **${plain(l.host_name)}**'s match` + (map ? ` on **${plain(map)}**` : '') + '.',
@@ -502,13 +507,14 @@ export class Directory extends DurableObject {
       // SG-0018: the players who keep out of the score tables.
       no_scores: body.no_scores ? [cleanName(body.host_name, 'Player')] : [],
       host_owner: await ownerOf(body.player_key),   // docs/443; never in a view
+      quiet: body.quiet === true || body.quiet === 1,   // the second server of a host on Both
     };
     this.lobbies.set(code, l);
     await this.save();
     const settings = settingsText(l.options);
     this.log(`🎮 **${plain(l.host_name)}** is hosting a LEGO Battles lobby \`${code}\`` +
              ` (up to ${maxp} players${l.version ? ', build ' + plain(l.version) : ''})` +
-             (settings ? '\n' + settings : ''));
+             (settings ? '\n' + settings : ''), l);
     return json(200, { ok: true, code, token, ttl: TTL_MS / 1000 });
   }
 
@@ -526,7 +532,7 @@ export class Directory extends DurableObject {
       l.started = now;
       const who = this.roster(l).map((p) => '**' + plain(p.name) + '**').join(', ');
       this.log(`▶️ **${plain(l.host_name)}**'s lobby \`${l.code}\` started a match` +
-               (l.map_name ? ` on **${plain(l.map_name)}**` : '') + `: ${who}.`);
+               (l.map_name ? ` on **${plain(l.map_name)}**` : '') + `: ${who}.`, l);
     }
     if (state === 'open' && l.state !== 'open') {   // back to the lobby
       l.state = 'open';
@@ -557,10 +563,10 @@ export class Directory extends DurableObject {
     if (l.state === 'playing' || reason === 'end') {
       this.log(`⏹️ **${plain(l.host_name)}**'s match` +
                (l.map_name ? ` on **${plain(l.map_name)}**` : '') +
-               ` ended after ${lasted(now - (l.started || l.created))}.` + result);
+               ` ended after ${lasted(now - (l.started || l.created))}.` + result, l);
     } else {
       this.log(`❌ **${plain(l.host_name)}** disbanded the lobby \`${code}\`` +
-               ` after ${lasted(now - l.created)}.`);
+               ` after ${lasted(now - l.created)}.`, l);
     }
     return json(200, { ok: true });
   }
@@ -580,7 +586,7 @@ export class Directory extends DurableObject {
       l.members.push({ name, joined: now, owner });
       await this.save();
       this.log(`➕ **${plain(name)}** joined **${plain(l.host_name)}**'s lobby \`${l.code}\`` +
-               ` (${this.players(l)}/${l.max_players}).`);
+               ` (${this.players(l)}/${l.max_players}).`, l);
     }
     return json(200, { ok: true });
   }
@@ -621,7 +627,7 @@ export class Directory extends DurableObject {
       l.members.splice(at, 1);
       await this.save();
       this.log(`➖ **${plain(name)}** left **${plain(l.host_name)}**'s ` +
-               (l.state === 'playing' ? 'match' : `lobby \`${l.code}\``) + '.');
+               (l.state === 'playing' ? 'match' : `lobby \`${l.code}\``) + '.', l);
     }
     return json(200, { ok: true });
   }

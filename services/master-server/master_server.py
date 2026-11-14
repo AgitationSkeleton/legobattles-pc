@@ -457,6 +457,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400, {"ok": False, "error": "png is not base64"})
         if len(png) < 64 or len(png) > MAX_IMAGE_BYTES or png[:8] != b"\x89PNG\r\n\x1a\n":
             return self._send(400, {"ok": False, "error": "not a PNG of an accepted size"})
+        if m and m.get("quiet"):
+            return self._send(200, {"ok": True, "quiet": True})   # the other server posts it
         with srv.lock:
             if m:
                 m["image"] = True
@@ -470,6 +472,8 @@ class Handler(BaseHTTPRequestHandler):
         """The Discord line for a lobby its host removed: the match's end (with
         who won and lost, as the host reports them) or the lobby disbanded."""
         now = time.time()
+        if m.get("quiet"):
+            return
 
         def names(v):
             v = v if isinstance(v, list) else []
@@ -594,9 +598,13 @@ class Handler(BaseHTTPRequestHandler):
         with srv.lock:   # the Discord lines' record, in memory only
             srv.meta[code] = {"host": fields["host_name"], "created": now, "state": "open",
                               "started": 0.0, "map": fields["map_name"],
-                              "max": maxp, "members": [], "image": False}
+                              "max": maxp, "members": [], "image": False,
+                              # A host on Both lists the same lobby on a second server
+                              # quietly: the first one already posts it to the channel.
+                              "quiet": bool(body.get("quiet"))}
         settings = settings_text(fields["options"])
-        srv.discord("\U0001F3AE **%s** is hosting a LEGO Battles lobby `%s` (up to %d players%s)%s"
+        if not srv.meta[code]["quiet"]:
+          srv.discord("\U0001F3AE **%s** is hosting a LEGO Battles lobby `%s` (up to %d players%s)%s"
                     % (plain(fields["host_name"]), code, maxp,
                        ", build " + plain(fields["version"]) if fields["version"] else "",
                        "\n" + settings if settings else ""))
@@ -647,6 +655,8 @@ class Handler(BaseHTTPRequestHandler):
             if state == "open" and m["state"] != "open":
                 m["state"] = "open"
                 m["image"] = False   # the next match gets its own picture
+            if m.get("quiet"):
+                line = None
         if line:
             srv.discord(line)
 
@@ -673,6 +683,8 @@ class Handler(BaseHTTPRequestHandler):
                     line = ("\u2796 **%s** left **%s**'s %s."
                             % (plain(name), plain(m["host"]),
                                "match" if m["state"] == "playing" else "lobby `%s`" % code))
+                if m.get("quiet"):
+                    line = None
         if line:
             srv.discord(line)
         return self._send(200, {"ok": True})

@@ -63,6 +63,7 @@ cp -p "$W/port/runner/src/lb_xdelta.cpp" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_xdelta.h" "$TREE/runner/src/"
 # Content packs (.lbpack): units, maps, balance, a settings preset (docs/490).
 cp -p "$W/port/runner/src/lb_pack.cpp" "$TREE/runner/src/"
+cp -p "$W/port/runner/src/lb_skin.cpp" "$TREE/runner/src/"   # docs/493
 cp -p "$W/port/runner/src/lb_pack.h" "$TREE/runner/src/"
 # The LB_SAMPLE profiler (docs/349). Its own TU for the same <windows.h> reason.
 cp -p "$W/port/runner/src/lb_prof.cpp" "$TREE/runner/src/"

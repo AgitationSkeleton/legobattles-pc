@@ -109,6 +109,12 @@ extern "C" int lb_top_buttons(int* out, int max);   /* lb_patches.cpp, SG-0006 *
 extern "C" int lb_top_minimap(void);                /* lb_patches.cpp */
 extern "C" int lb_top_occupants(void);              /* lb_patches.cpp */
 extern "C" int lb_rules_host_pace(void);           /* lb_teams.cpp, docs/459 */
+// docs/493: the LEGO Battles menu style (lb_skin.cpp).
+int g_skin_live = 0;   // 1 while the style is applied (set by the style rebuild)
+extern "C" int lb_skin_prepare(SDL_Renderer* r);
+extern "C" ImFont* lb_skin_font(void);
+extern "C" void lb_skin_style(ImGuiStyle* st);
+extern "C" void lb_skin_hooks(int on);
 
 namespace {
 
@@ -479,6 +485,7 @@ bool card_tint = false;
     int  notify_volume = 60;       // percent
     int  cunit_volume = 100;       // BR-0047: custom unit sounds, percent of the normalised level
     bool remember_volumes = true;  // SG-0112: the game's music/effects volumes, kept between launches
+    int  menu_style = 1;           // docs/493: 0 the port's, 1 LEGO Battles (cut from the cartridge); the default since 0.4.20
     int  music_volume = -1;        // SG-0112: last applied, 0..127 (-1 none yet)
     int  sfx_volume = -1;
     bool own_research_sound = true;   // BR-0067: research chimes only for this player's own army
@@ -941,6 +948,7 @@ static std::string settings_text() {
     std::snprintf(buf, sizeof buf, "  \"remember_volumes\": %s,\n",
                   g_set.remember_volumes ? "true" : "false"); o += buf;   // SG-0112
     std::snprintf(buf, sizeof buf, "  \"music_volume\": %d,\n", g_set.music_volume); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"menu_style\": %d,\n", g_set.menu_style); o += buf;   // docs/493
     std::snprintf(buf, sizeof buf, "  \"sfx_volume\": %d,\n", g_set.sfx_volume); o += buf;
     std::snprintf(buf, sizeof buf, "  \"own_research_sound\": %s,\n",
                   g_set.own_research_sound ? "true" : "false"); o += buf;   // BR-0067
@@ -1248,6 +1256,8 @@ extern "C" void lb_settings_load(void) {
     json_get_int(s, "notify_volume", &g_set.notify_volume);
     json_get_bool(s, "remember_volumes", &g_set.remember_volumes);   // SG-0112
     json_get_int(s, "music_volume", &g_set.music_volume);
+    json_get_int(s, "menu_style", &g_set.menu_style);   // docs/493
+    if (g_set.menu_style < 0 || g_set.menu_style > 1) g_set.menu_style = 1;
     json_get_int(s, "sfx_volume", &g_set.sfx_volume);
     if (g_set.music_volume > 127) g_set.music_volume = 127;
     if (g_set.sfx_volume > 127) g_set.sfx_volume = 127;
@@ -1771,6 +1781,16 @@ void tab_display() {
     // in lb_overlay_draw -- and it has no consumer outside this file BY
     // DEFINITION, because there is nothing outside this file for it to reach.
     if (ImGui::IsItemDeactivatedAfterEdit()) g_ui_scale_dirty = true;
+    // docs/493: the game's own look for these panels, cut from the cartridge.
+    {
+        const char* styles[] = {"Port", "LEGO Battles"};
+        slider_width();
+        if (ImGui::Combo("Menu style", &g_set.menu_style, styles, 2)) g_ui_scale_dirty = true;
+        help("LEGO Battles: the game's font, brick buttons and colours, taken\n"
+             "from your cartridge. Pixel art stays sharp at whole sizes, so\n"
+             "the UI scale is rounded to 1x, 2x or 3x in this style.\n"
+             "Only you see it.");
+    }
 
     ImGui::Spacing();
     slider_width();
@@ -10665,6 +10685,16 @@ bool g_quit_ask = false, g_reset_ask = false;
 
 // A header or sidebar entry: a full-width button, coloured when selected.
 bool menu_entry(const char* label, bool selected, float width) {
+    // docs/493: in the LEGO Battles style the entry is a brick, light when
+    // selected and dark otherwise (the style's own button colours, which the
+    // skin draws as the game's bars).
+    if (g_skin_live) {
+        if (!selected)
+            ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+        const bool hit = ImGui::Button(label, ImVec2(width, 0));
+        if (!selected) ImGui::PopStyleColor();
+        return hit;
+    }
     const ImVec4 sel(0.16f, 0.42f, 0.86f, 1.0f);
     ImGui::PushStyleColor(ImGuiCol_Button, selected ? sel : ImVec4(0, 0, 0, 0));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered,
@@ -10753,8 +10783,17 @@ void draw_panels() {
         if (text > 0.0f && text * head_scale + fixed > size.x)
             head_scale = std::max(0.8f, (size.x - fixed) / text);
     }
+    // docs/493: the LEGO Battles style's font is drawn at whole multiples of
+    // its 13-px cell, so the header's scale is one too (the largest that fits).
+    if (g_skin_live) {
+        const float k = std::max(1.0f, std::round(ImGui::GetStyle().FramePadding.y / 2.0f));
+        head_scale = std::max(1.0f, std::floor(head_scale * k + 0.001f)) / k;
+    }
     ImGui::SetWindowFontScale(head_scale);
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f, 6.0f));
+    // The style's own padding in the LEGO Battles style: its buttons are the
+    // game's 17-px bars, and a taller frame only stretches them.
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                        g_skin_live ? ImGui::GetStyle().FramePadding : ImVec2(10.0f, 6.0f));
     for (int h = 0; h < (int)hs.size(); ++h) {
         if (h) ImGui::SameLine();
         const float w = ImGui::CalcTextSize(hs[h].label).x + 20.0f;
@@ -10788,16 +10827,19 @@ void draw_panels() {
     // The rule under the header.
     {
         const ImVec2 p = ImGui::GetCursorScreenPos();
-        dl->AddRectFilled(p, ImVec2(p.x + size.x - st.WindowPadding.x * 2, p.y + 4.0f),
-                          IM_COL32(255, 255, 255, 255), 2.0f);
-        ImGui::Dummy(ImVec2(0, 4.0f + st.ItemSpacing.y));
+        // docs/493: the game's border blue, thinner, in the LEGO Battles style.
+        const float th = g_skin_live ? 2.0f : 4.0f;
+        dl->AddRectFilled(p, ImVec2(p.x + size.x - st.WindowPadding.x * 2, p.y + th),
+                          g_skin_live ? IM_COL32(41, 74, 180, 255) : IM_COL32(255, 255, 255, 255), th * 0.5f);
+        ImGui::Dummy(ImVec2(0, th + st.ItemSpacing.y));
     }
 
     // Sidebar, rule, section.
     const float sideW = size.x > 1600.0f ? size.x * 0.15f : 200.0f;
     const float bodyH = ImGui::GetContentRegionAvail().y;
     ImGui::BeginChild("lb_menu_side", ImVec2(sideW, bodyH));
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f, 6.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding,
+                        g_skin_live ? ImGui::GetStyle().FramePadding : ImVec2(10.0f, 6.0f));   // docs/493
     for (int s = 0; s < (int)head.sections.size(); ++s)
         if (menu_entry(head.sections[s].label, s == sec, -1.0f)) sec = s;
     ImGui::PopStyleVar();
@@ -10806,9 +10848,10 @@ void draw_panels() {
     ImGui::SameLine();
     {
         const ImVec2 p = ImGui::GetCursorScreenPos();
-        dl->AddRectFilled(p, ImVec2(p.x + 4.0f, p.y + bodyH), IM_COL32(255, 255, 255, 255),
-                          2.0f);
-        ImGui::Dummy(ImVec2(4.0f, bodyH));
+        const float th = g_skin_live ? 2.0f : 4.0f;   // docs/493
+        dl->AddRectFilled(p, ImVec2(p.x + th, p.y + bodyH),
+                          g_skin_live ? IM_COL32(41, 74, 180, 255) : IM_COL32(255, 255, 255, 255), th * 0.5f);
+        ImGui::Dummy(ImVec2(th, bodyH));
     }
     ImGui::SameLine();
     ImGui::BeginChild("lb_menu_body", ImVec2(0, bodyH));
@@ -11142,15 +11185,54 @@ extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
     // a panel authored at 1x is unreadable once the window is scaled up. The
     // style is rebuilt from a pristine copy each time rather than multiplied
     // repeatedly, which would compound rounding on every change.
+    // docs/493: the LEGO Battles menu style needs the cartridge, which is not
+    // there for the first frames; until it is, the port's style stands and the
+    // attempt is repeated once a second. LB_MENU_STYLE=0|1 forces it.
+    int& skin_live = g_skin_live;
+    {
+        static const int env = [] {
+            const char* v = std::getenv("LB_MENU_STYLE");
+            return v ? (v[0] == '1' ? 1 : 0) : -1;
+        }();
+        const int want = env >= 0 ? env : g_set.menu_style;
+        static unsigned retry = 0;
+        if (want != skin_live && (want == 0 || ++retry % 60u == 1u)) g_ui_scale_dirty = true;
+    }
     if (g_ui_scale_dirty) {
         g_ui_scale_dirty = false;
         static ImGuiStyle base_style;
         static bool base_saved = false;
         if (!base_saved) { base_style = ImGui::GetStyle(); base_saved = true; }
-        ImGuiStyle scaled = base_style;
-        scaled.ScaleAllSizes(g_ui_scale);
-        ImGui::GetStyle() = scaled;
-        ImGui::GetIO().FontGlobalScale = g_ui_scale;
+        static const int env = [] {
+            const char* v = std::getenv("LB_MENU_STYLE");
+            return v ? (v[0] == '1' ? 1 : 0) : -1;
+        }();
+        const int want = env >= 0 ? env : g_set.menu_style;
+        ImFont* skin_font = nullptr;
+        if (want == 1 && lb_skin_prepare(renderer)) skin_font = lb_skin_font();
+        if (skin_font) {
+            // Whole sizes only: the art and the 13-px font are drawn k x k.
+            int k = (int)std::lround(g_ui_scale);
+            k = k < 1 ? 1 : (k > 3 ? 3 : k);
+            ImGuiStyle st;
+            lb_skin_style(&st);
+            st.ScaleAllSizes((float)k);
+            ImGui::GetStyle() = st;
+            ImGui::GetIO().FontGlobalScale = (float)k;
+            ImGui::GetIO().FontDefault = skin_font;
+            lb_skin_hooks(1);
+            if (skin_live != 1)
+                std::fprintf(stderr, "[lb_skin] menu style: LEGO Battles at %dx\n", k);
+            skin_live = 1;
+        } else {
+            ImGuiStyle scaled = base_style;
+            scaled.ScaleAllSizes(g_ui_scale);
+            ImGui::GetStyle() = scaled;
+            ImGui::GetIO().FontGlobalScale = g_ui_scale;
+            ImGui::GetIO().FontDefault = nullptr;
+            lb_skin_hooks(0);
+            skin_live = 0;
+        }
     }
 
     ImGui_ImplSDLRenderer2_NewFrame();

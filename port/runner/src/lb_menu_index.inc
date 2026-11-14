@@ -18,6 +18,7 @@
 {"Settings", "Display", "Larger Sprite Pool", "The DS has room for 33 unit sprite sheets. With three armies, creatures or custom units a match can need more, and the game then drew the units that did not fit with another unit's sprites. On, every sheet gets a slot of its own. Off, as on"},
 {"Settings", "Display", "3D resolution", "Draws the 3D models (ships, siege, specials) at a higher resolution so they stay sharp in a large window. 2x is free; higher costs speed. Needs Enhanced mode. Only you see it."},
 {"Settings", "Display", "UI scale", "Size of this panel."},
+{"Settings", "Display", "Menu style", "LEGO Battles: the game's font, brick buttons and colours, taken from your cartridge. Pixel art stays sharp at whole sizes, so the UI scale is rounded to 1x, 2x or 3x in this style. Only you see it."},
 {"Settings", "Display", "Magnification", "How big each game pixel is drawn. A bigger window shows more of the map. Limits: 1024x512 game pixels max, 256x192 min."},
 {"Settings", "Display", "Mouse Wheel Zooms", "Turning the mouse wheel over the battlefield changes Magnification."},
 {"Settings", "Display", "HUD scale", "Size of the on-screen game buttons."},
