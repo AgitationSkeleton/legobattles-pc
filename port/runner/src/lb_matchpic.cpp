@@ -858,6 +858,29 @@ extern "C" void lb_matchpic_note_player(int player, const unsigned char rec[20])
     std::fflush(stderr);
 }
 
+// SG-0115 (docs/495): the online computer player's column, noted by the seat
+// (lb_patches.cpp) at the multiplayer start: player = its player id, which is
+// also its team (the result lines read team k as player k). Named "Computer",
+// in its colour; `bp` its faction's nine units (0xFFFF unknown: a dark square).
+extern "C" void lb_matchpic_note_computer(int player, int faction, int colour_idx,
+                                          const unsigned short bp[9]) {
+    if (player < 0 || player >= kMaxPlayers) return;
+    Player& p = g_players[player];
+    p = Player();
+    p.have = true;
+    p.name = "Computer";
+    p.colour = colour_idx >= 0 && colour_idx <= 6 ? team_colour_rgba((unsigned)colour_idx) : 0u;
+    p.colour_idx = colour_idx >= 0 && colour_idx <= 6 ? colour_idx : -1;
+    std::string ids;
+    for (int k = 0; k < 9; ++k) {
+        p.bp[k] = bp && bp[k] != 0xFFFFu ? (int)bp[k] : -1;
+        ids += (k ? " " : "") + std::to_string(p.bp[k]);
+    }
+    std::fprintf(stderr, "[lb_matchpic] player %d Computer (faction 0x%02X): %s\n", player,
+                 (unsigned)faction, ids.c_str());
+    std::fflush(stderr);
+}
+
 // ---- SG-0019: who won ------------------------------------------------------------
 // The game keeps every team in a pool (pointer at 0x0215540C -> object with the
 // team pointers' array at +8 and the count at +0xC). A team's state is the word
@@ -941,10 +964,14 @@ extern "C" int lb_matchpic_result(char* winners, int wcap, char* losers, int lca
     if (!watched) return 0;
     fake_result_if_asked();
     std::string w, l;
+    // SG-0115: with an online computer player on a side, alliances exist
+    // online, and an allied win (state 4) is a win.
+    int cid = -1, ch = -1, ca = -1, cc = -1, side = 0;
+    const bool allies = lb_cpu_online_seated(&cid, &ch, &ca, &cc, &side) && side != LB_CPUO_SIDE_FFA;
     for (int k = 0; k < kMaxPlayers; ++k) {
         if (!g_players[k].have || g_team_state[k] == 0) continue;
-        std::string& dst = g_team_state[k] == 2 ? w : l;
-        if (g_team_state[k] == 4) continue;   // allied win in a game with no online flag
+        std::string& dst = (g_team_state[k] == 2 || (allies && g_team_state[k] == 4)) ? w : l;
+        if (g_team_state[k] == 4 && !allies) continue;   // allied win in a game with no online flag
         dst += g_players[k].name + "\n";
     }
     std::snprintf(winners, (size_t)wcap, "%s", w.c_str());
@@ -968,6 +995,13 @@ extern "C" int lb_matchpic_score_json(char* out, int cap) {
     const unsigned cheats = (unsigned)lb_cheat_mask_live();
     if (cheats || lb_ar_active()) {   // SG-0035: Action Replay codes count as cheating
         std::fprintf(stderr, "[lb_scores] cheats were on: the match is not reported\n");
+        std::fflush(stderr);
+        return 0;
+    }
+    // SG-0115 (docs/495): a match with a computer player is not a players'
+    // match for the score tables.
+    if (lb_cpu_online_seated(nullptr, nullptr, nullptr, nullptr, nullptr)) {
+        std::fprintf(stderr, "[lb_scores] a computer player was in the match: it is not reported\n");
         std::fflush(stderr);
         return 0;
     }

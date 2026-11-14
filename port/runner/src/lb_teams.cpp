@@ -1188,6 +1188,9 @@ unsigned g_rules2_recv = 0u;               // docs/488: the host's 'R' page (LB_
 // (by stock colour, 0xRRGGBB or -1); under g_rules_mu.
 bool g_cpal_recv_allowed = false;
 int g_cpal_recv[7] = {-1, -1, -1, -1, -1, -1, -1};
+// SG-0115 (docs/495): the host's 'O' page, the computer player (packed as
+// lb_setting_cpu_online_packed; 0 none); under g_rules_mu.
+int g_cpuo_recv = 0;
 // docs/489: a host's joiners' colours, from their LBK1 (by lobby slot); under g_rules_mu.
 struct CpalJoiner { bool on = false; unsigned rgb = 0; std::chrono::steady_clock::time_point at{}; };
 CpalJoiner g_cpal_join[3];
@@ -2847,6 +2850,82 @@ static void repair_custom_picks() {
     }
 }
 
+// BR-0097: THE SAVED ARMY FITTED TO THE HOST'S RULES, IN THE LOBBY. While
+// joined, the army screen offers what the host does (creatures on or off, and
+// each creature in the host's slot: lb_creatures_live, lb_creature_slot read
+// the host's rules), but the army saved earlier, under this machine's own
+// settings, was never checked against them: a Wolf saved in Close Combat met
+// a host that fields it as Mounted only at the match start. Now, once the
+// host's rules are in, a creature pick the host does not offer in its slot
+// becomes King's unit for that slot at once, with a notice, so the army
+// screen and the match field the same army. The picks it replaced come back
+// when the lobby is left (if the record still holds what this wrote), so the
+// player's own army is not lost to one host's rules. A banned unit is named
+// in a notice; the match start still decides on it (lb_teams_enforce_bans).
+static uint16_t g_fit_was[LB_TEAM_SLOTS], g_fit_put[LB_TEAM_SLOTS];
+static unsigned g_fit_mask = 0;   // the slots this changed
+static std::string g_fit_said;    // the last notice, so each is said once
+static void lobby_fit_army() {
+    const int net = lb_net_guest_state();
+    const uint32_t army = bus_read_u32(kArmySlot);
+    const bool screen_open = guest_ptr(army) && bus_read_u32(army + 0x1Cu) != 0u;
+    if (!net_joined(net)) {
+        if (g_fit_mask && !screen_open && !battle_present()) {
+            for (int s = 0; s < LB_TEAM_SLOTS; ++s) {
+                if (!(g_fit_mask & (1u << s))) continue;
+                const uint32_t at = kArmyRecord + kSlots[s].rec_off;
+                if (bus_read_u16(at) == g_fit_put[s]) bus_write_u16(at, g_fit_was[s]);
+            }
+            std::fprintf(stderr, "[lb_teams] BR-0097: left the lobby; the army's own picks are back\n");
+            std::fflush(stderr);
+            g_fit_mask = 0;
+        }
+        g_fit_said.clear();
+        return;
+    }
+    if (screen_open || battle_present()) return;
+    uint8_t bits[kBanBytes];
+    {
+        std::lock_guard<std::mutex> lk(g_rules_mu);
+        if (!rules_fresh()) return;   // the host's rules are not in yet
+        std::memcpy(bits, g_bans_recv, sizeof bits);
+    }
+    std::string moved, banned;
+    for (int s = 0; s < LB_TEAM_SLOTS; ++s) {
+        const uint32_t at = kArmyRecord + kSlots[s].rec_off;
+        const int pick = (int)bus_read_u16(at);
+        if (king_default(pick)) continue;
+        const bool creature = pick == 169 || pick == 138 || pick == 155 || pick == 153;
+        int in = -1;
+        if (creature && !(find_cand(pick, &in) && in == s)) {
+            if (!(g_fit_mask & (1u << s))) g_fit_was[s] = (uint16_t)pick;
+            g_fit_put[s] = kKingDefault[s];
+            g_fit_mask |= 1u << s;
+            bus_write_u16(at, kKingDefault[s]);
+            if (!moved.empty()) moved += ", ";
+            moved += std::string(lb_teams_unit_name(pick)) + " (" + kSlots[s].fallback + ")";
+            continue;
+        }
+        if (ban_bit(bits, pick) || lb_maps_unit_banned_here(pick)) {
+            if (!banned.empty()) banned += ", ";
+            banned += lb_teams_unit_name(pick);
+        }
+    }
+    std::string msg;
+    if (!moved.empty())
+        msg = "This host fields creatures differently: King's unit replaces " + moved +
+              " in your army for this lobby.";
+    if (!banned.empty())
+        msg += (msg.empty() ? "" : " ") + std::string("Your army has ") + banned +
+               ", banned by this host: change it, or you play King's army.";
+    if (!msg.empty() && msg != g_fit_said) {
+        g_fit_said = msg;
+        std::fprintf(stderr, "[lb_teams] BR-0097: %s\n", msg.c_str());
+        std::fflush(stderr);
+        lb_overlay_notice(msg.c_str());
+    }
+}
+
 extern "C" void lb_teams_portrait_tick(void) {
     army_scroll_tick();   // docs/450
     cards_tick();   // docs/430: every frame; it does nothing while the option is off
@@ -2854,6 +2933,7 @@ extern "C" void lb_teams_portrait_tick(void) {
     if (++tick < 15) return;
     tick = 0;
     repair_custom_picks();   // BR-0066
+    lobby_fit_army();        // BR-0097
     const uint32_t base = bus_read_u32(kUiTablePtr);
     if (!guest_ptr(base) || bus_read_u16(base) <= 0x4Bu) {
         g_portrait_records = false;
@@ -3246,6 +3326,31 @@ extern "C" int lb_rules_outgoing(unsigned char* buf, int cap) {
                                             buf[n++] = (unsigned char)((set[c] >> 8) & 0xFF);
                                             buf[n++] = (unsigned char)(set[c] & 0xFF);
                                         }
+                                        // SG-0115 (docs/495): then the 'O' page:
+                                        // 'O', a version (1), flags (bit 0 on),
+                                        // the army (0..5), the colour (0
+                                        // automatic, else 1 + the index) and
+                                        // the side (LB_CPUO_SIDE_*). Found by
+                                        // position, after 'K'; a host without
+                                        // it seats no computer player.
+                                        if (n + 6 <= cap) {
+                                            const int cpu = lb_setting_cpu_online_packed();
+                                            buf[n++] = 'O';
+                                            buf[n++] = 1;
+                                            buf[n++] = (unsigned char)(cpu & 1);
+                                            buf[n++] = (unsigned char)((cpu >> 1) & 7);
+                                            buf[n++] = (unsigned char)((cpu >> 4) & 7);
+                                            buf[n++] = (unsigned char)((cpu >> 7) & 3);
+                                            static int said = -1;
+                                            if (said != cpu) {
+                                                said = cpu;
+                                                std::fprintf(stderr, "[lb_cpuonline] rule sent: computer player %s "
+                                                             "(army %d, colour %d, side %d; packed %d)\n",
+                                                             (cpu & 1) ? "ON" : "off", (cpu >> 1) & 7,
+                                                             (cpu >> 4) & 7, (cpu >> 7) & 3, cpu);
+                                                std::fflush(stderr);
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -3295,6 +3400,7 @@ extern "C" void lb_rules_on_leave(void) {
     g_ar_recv = 0;
     g_pace_recv = 0;
     g_rules2_recv = 0u;   // docs/488
+    g_cpuo_recv = 0;      // SG-0115
     g_cpal_recv_allowed = false;   // docs/489
     for (int& c : g_cpal_recv) c = -1;
     for (CpalJoiner& j : g_cpal_join) j = CpalJoiner{};
@@ -3389,6 +3495,15 @@ extern "C" int lb_rules_host_flags2(void) {
     if (!net_joined(lb_net_guest_state())) return -1;
     std::lock_guard<std::mutex> lk(g_rules_mu);
     return g_bans_recv_ok ? (int)(g_rules2_recv & 0x7FFFFFFFu) : 0;
+}
+
+// SG-0115 (docs/495): -1 when this machine decides (not joined), else the
+// host's computer player ('O' page; 0 for a host that sends none or has it
+// off). Not gated on freshness, like the flags of docs/406.
+extern "C" int lb_rules_host_cpu_online(void) {
+    if (!net_joined(lb_net_guest_state())) return -1;
+    std::lock_guard<std::mutex> lk(g_rules_mu);
+    return g_bans_recv_ok ? g_cpuo_recv : 0;
 }
 
 // ---- docs/489: custom team colours online ----------------------------------
@@ -3705,9 +3820,10 @@ extern "C" void lb_rules_incoming(const unsigned char* buf, int len,
                      ((unsigned)buf[r_at + 4] << 16) | ((unsigned)buf[r_at + 5] << 24);
             if (!g_bans_recv_ok || r2 != g_rules2_recv) {
                 std::fprintf(stderr, "[lb_teams] the host's second rule flags from instance %u: "
-                             "%08X (soldiers repair %s, one of each hero %s)\n", sender, r2,
-                             (r2 & LB_RULE2_ANY_REPAIR) ? "on" : "off",
-                             (r2 & LB_RULE2_UNIQUE_HEROES) ? "on" : "off");
+                             "%08X (soldiers repair %s, one of each hero %s, smarter unit movement %s)\n",
+                             sender, r2, (r2 & LB_RULE2_ANY_REPAIR) ? "on" : "off",
+                             (r2 & LB_RULE2_UNIQUE_HEROES) ? "on" : "off",
+                             (r2 & LB_RULE2_SMART_MOVE) ? "on" : "off");
                 std::fflush(stderr);
             }
             g_rules2_recv = r2;
@@ -3742,6 +3858,23 @@ extern "C" void lb_rules_incoming(const unsigned char* buf, int len,
             }
             g_cpal_recv_allowed = allow;
             std::memcpy(g_cpal_recv, set, sizeof set);
+            // SG-0115 (docs/495): the 'O' page after it, the computer
+            // player. None from an older host: no computer player.
+            const bool has_k = k_at >= 0 && k_at + 4 <= len && buf[k_at] == 'K' && buf[k_at + 1] == 1 &&
+                               buf[k_at + 3] <= 7 && k_at + 4 + 4 * buf[k_at + 3] <= len;
+            const int o_at = has_k ? k_at + 4 + 4 * buf[k_at + 3] : -1;
+            int cpu = 0;
+            if (o_at >= 0 && o_at + 6 <= len && buf[o_at] == 'O' && buf[o_at + 1] == 1 &&
+                (buf[o_at + 2] & 1) && buf[o_at + 3] <= 5 && buf[o_at + 4] <= 7 && buf[o_at + 5] <= 3)
+                cpu = 1 | (buf[o_at + 3] << 1) | (buf[o_at + 4] << 4) | (buf[o_at + 5] << 7);
+            if (!g_bans_recv_ok || cpu != g_cpuo_recv) {
+                std::fprintf(stderr, "[lb_cpuonline] rule received from instance %u: computer player %s "
+                             "(army %d, colour %d, side %d; packed %d)%s\n", sender,
+                             (cpu & 1) ? "ON" : "off", (cpu >> 1) & 7, (cpu >> 4) & 7, (cpu >> 7) & 3,
+                             cpu, o_at >= 0 && o_at + 6 <= len && buf[o_at] == 'O' ? "" : " (no 'O' page)");
+                std::fflush(stderr);
+            }
+            g_cpuo_recv = cpu;
         };
         if (u_at >= 0 && u_at + 11 <= len && buf[u_at] == 'U' && buf[u_at + 1] == 2) {
             // Version 2: one page of the set. The set is handed on only when
@@ -3840,7 +3973,9 @@ extern "C" void lb_rules_incoming(const unsigned char* buf, int len,
 // the whole army becomes Free Play's default King army -- "they are then
 // changed to King once the game starts". Every machine makes this decision
 // from the HOST's list (its own on the host, the received one on a client),
-// so every machine builds the same rosters. Returns 1 when it replaced.
+// so every machine builds the same rosters. Returns 1 when it replaced the
+// army, 2 for a Random team (tourney), 3 when only creature slots changed
+// (BR-0097: a creature the host fields in another slot, or not at all).
 extern "C" int lb_teams_enforce_bans(unsigned char rec[20], char* why, int cap,
                                      int player) {
     // Test aid: LB_TEST_PLAYER_HERO=<blueprint> makes every player bring that
@@ -3902,16 +4037,35 @@ extern "C" int lb_teams_enforce_bans(unsigned char rec[20], char* why, int cap,
         return 2;
     }
     std::string names;
+    bool whole = false;          // a real ban: the whole army becomes King's
+    unsigned creature_slots = 0; // BR-0097: slots with a creature the host does not field there
     for (int s = 0; s < LB_TEAM_SLOTS; ++s) {
         const int bp = rec[kSlots[s].rec_off] | (rec[kSlots[s].rec_off + 1] << 8);
         // docs/410: a creature counts as banned unless the host allows them.
         // docs/436: or sits in a slot other than the host's choice for it.
         const bool creature = (bp == 169 || bp == 138 || bp == 155 || bp == 153) &&
                               (!lb_creatures_live() || lb_creature_slot(bp) != s);
-        if (!king_default(bp) &&
-            (ban_bit(bits, bp) || creature || lb_maps_unit_banned_here(bp))) {
+        if (king_default(bp)) continue;
+        // Which rule refused it, so a player (and a log) can tell a ban from
+        // a creature the host does not allow, or allows in another slot.
+        const char* rule = ban_bit(bits, bp) ? "banned by the host"
+                         : creature ? (!lb_creatures_live() ? "creatures are off for this match"
+                                                            : "the host fields it in another slot")
+                         : lb_maps_unit_banned_here(bp) ? "banned on this map" : nullptr;
+        if (rule) {
             if (!names.empty()) names += ", ";
             names += lb_teams_unit_name(bp);
+            names += " (";
+            names += kSlots[s].fallback;
+            names += ": ";
+            names += rule;
+            names += ")";
+            // BR-0097: a creature is not a ban. A player whose saved army has
+            // the Wolf in Close Combat, joining a host that fields it as
+            // Mounted (or has creatures off), lost the WHOLE army to King's
+            // in every match. Only that slot changes now, to King's unit for it.
+            if (creature && !ban_bit(bits, bp) && !lb_maps_unit_banned_here(bp)) creature_slots |= 1u << s;
+            else whole = true;
         }
     }
     if (names.empty()) {
@@ -3921,6 +4075,15 @@ extern "C" int lb_teams_enforce_bans(unsigned char rec[20], char* why, int cap,
             std::fflush(stderr);
         }
         return 0;
+    }
+    if (!whole) {
+        for (int s = 0; s < LB_TEAM_SLOTS; ++s) {
+            if (!(creature_slots & (1u << s))) continue;
+            rec[kSlots[s].rec_off] = (unsigned char)(kKingDefault[s] & 0xFF);
+            rec[kSlots[s].rec_off + 1] = (unsigned char)(kKingDefault[s] >> 8);
+        }
+        if (why && cap > 0) std::snprintf(why, (size_t)cap, "%s", names.c_str());
+        return 3;
     }
     for (int s = 0; s < LB_TEAM_SLOTS; ++s) {
         rec[kSlots[s].rec_off] = (unsigned char)(kKingDefault[s] & 0xFF);

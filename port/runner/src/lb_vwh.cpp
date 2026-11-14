@@ -938,6 +938,14 @@ extern "C" void vwh_child_connect_override(void) {       // WH_ChildConnect(mode
                           ((uint32_t)id[4] << 16) | ((uint32_t)id[5] << 24);
     {
         std::lock_guard<std::mutex> lk(g_mu);
+        // A NEW ORIGIN FOR EVERY JOIN. It was made once per process, so a
+        // joiner that reset (a host's custom units or map loading) and joined
+        // again came back under its old origin: a host that had not yet timed
+        // the old link out took it for that member and answered with the old
+        // starting dataset, and the link stalled ("Your connection has been
+        // lost"). The host knows members only by origin, so a fresh one is a
+        // fresh member.
+        g_origin = 0;
         fresh_session();
         g_s->on = true;
         g_s->host_id = host;

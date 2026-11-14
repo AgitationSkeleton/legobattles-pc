@@ -17,6 +17,7 @@
 //   model/model.obj             a new mesh for the model (docs/492, lb_nsbmd.cpp)
 //   "model": N                  a 2D unit drawn with stock 3D unit N's model (docs/492)
 //   "sprites_from": N           a hero or special drawn with stock 2D unit N's sheets (docs/492)
+//   "attack_anim": "breath"     a unit on a dragon's model breathes its fire when it attacks (docs/496)
 //
 // Anything missing is the template's. PNGs are read as the export writes them
 // (indexed on the faction palette, used as they are) or as truecolour (each
@@ -139,6 +140,10 @@ struct Entity {
     // "sprites_from": the stock 2D unit whose sheets and layout a hero or a
     // special is drawn with (art_cat is that unit's category), or -1.
     int sprites_from = -1;
+    // docs/496 (SG-0122): "attack_anim": "breath" on a unit drawn with a
+    // dragon's model (King's Dragon 8, Wizard's Dragon 28): it breathes the
+    // dragons' fire when it attacks (the draw cloak's breath hop, lb_patches.cpp).
+    bool breath = false;
 };
 size_t g_array_off = 0;    // the larger blueprint array, in the file
 constexpr size_t kColBase = 4 + 182 * 0x7C + 27 * 0x74;   // collectable 209 (docs/11)
@@ -712,6 +717,8 @@ bool encode_end_picture(std::vector<uint8_t>* ncbr, std::vector<uint8_t>* nclr, 
 // A copy of the template's .nsbmd with its one TEX0 texture and palette taken
 // from a picture of the same size (every stock model: format 4, 32x32, a
 // palette of 9 banks of 16 colours). False when it does not fit.
+// BR-0095: what the last call did with the team shades, for Last build.
+std::string g_model_tex_note;
 bool encode_model_texture(std::vector<uint8_t>* m, const Img& im) {
     std::vector<uint8_t>& d = *m;
     if (d.size() < 0x14 || std::memcmp(d.data(), "BMD0", 4) != 0) return false;
@@ -760,8 +767,6 @@ bool encode_model_texture(std::vector<uint8_t>* m, const Img& im) {
     const size_t nbank = banked ? room / 16 : 1;
     std::vector<uint16_t> st(room);
     for (size_t i = 0; i < room; ++i) st[i] = (uint16_t)get16(d, pal_at + i * 2);
-    std::vector<uint32_t> pal = make_palette(im.rgba, ncol);
-    if (!clear0) pal.erase(pal.begin());   // colour 0 is a colour when not clear
     // A recolour bank keeps at least half of bank 0; an entry is plain when
     // every recolour bank keeps it.
     std::vector<bool> plain(ncol, true);
@@ -772,21 +777,62 @@ bool encode_model_texture(std::vector<uint8_t>* m, const Img& im) {
         for (size_t j = 0; j < ncol; ++j)
             if (st[k * ncol + j] != st[j]) plain[j] = false;
     }
-    for (size_t i = 0; i < ncol; ++i) {
-        if (i >= pal.size() || (clear0 && i == 0)) continue;   // unused, or clear: stock stays
-        const uint16_t c = to555(pal[i]);
-        size_t role = ncol;
-        for (size_t j = 0; j < ncol && role == ncol; ++j)
-            if (st[j] == c) role = j;
+    // BR-0095 (docs/496): THE TEAM ENTRIES STAY WHERE THEY ARE. Before, the
+    // picture's colours took entries 0..15 in order of use, team shades among
+    // them, each in every bank as its role's colour there. A picture of 13 or
+    // more colours so put ordinary colours on entries 12-14 of every bank and
+    // the team shades on other entries. The stock team colours still showed
+    // (each bank had its own shade at the moved entry), but the port's
+    // repaints did not: models_paint takes a palette only while bank 5's
+    // entries 12-14 are the stock white ramp, and paints entries 12-14 (and
+    // other entries that hold the bank's own 12-14 shades). Neither held, so
+    // a custom texture kept its stock team colour under a custom colour, teal
+    // and the Red-Dark Blue style.
+    // Now a picture colour equal to a recoloured (non-plain) entry's bank-0
+    // shade IS that entry: it is not written, so every bank keeps its stock
+    // value there, entries 12-14 keep the team ramp and bank 5 its white. The
+    // other colours, most used first, take the plain entries; one with no
+    // entry left is drawn as the nearest plain colour placed.
+    g_model_tex_note.clear();
+    const std::vector<uint32_t> all = make_palette(im.rgba, (size_t)1 << 16);   // [0] clear, then every colour
+    std::vector<uint32_t> slot(ncol, 0u);
+    std::vector<bool> used(ncol, false);
+    std::vector<size_t> role_of(ncol, ncol);
+    std::map<uint16_t, int> exact;   // a picture colour (BGR555) -> its entry
+    size_t next = clear0 ? 1 : 0;
+    int team_cols = 0, over = 0;
+    for (size_t q = 1; q < all.size(); ++q) {
+        const uint16_t c = to555(all[q]);
+        size_t same = ncol;
+        for (size_t j = clear0 ? 1 : 0; j < ncol && same == ncol; ++j)
+            if (st[j] == c) same = j;
+        if (same < ncol && !plain[same]) {   // a team shade: its own entry, stock in every bank
+            if (!used[same]) { used[same] = true; slot[same] = ds_rgba(st[same]); ++team_cols; }
+            exact[c] = (int)same;
+            continue;
+        }
+        while (next < ncol && (used[next] || !plain[next])) ++next;
+        if (next >= ncol) { ++over; continue; }
+        const size_t i = next;
+        used[i] = true;
+        slot[i] = all[q];
+        exact[c] = (int)i;
+        size_t role = same;
         if (role == ncol) {
             int bd = 1 << 30;
             for (size_t j = clear0 ? 1 : 0; j < ncol; ++j) {
                 if (!plain[j]) continue;
-                const int dd = dist(pal[i], ds_rgba(st[j]));
+                const int dd = dist(all[q], ds_rgba(st[j]));
                 if (dd < bd) { bd = dd; role = j; }
             }
         }
         if (role == ncol) role = i;   // no plain entry: the picture's colour in every bank
+        role_of[i] = role;
+    }
+    for (size_t i = 0; i < ncol; ++i) {
+        if (!used[i] || !plain[i]) continue;   // unused, clear or a team entry: stock stays
+        const uint16_t c = to555(slot[i]);
+        const size_t role = role_of[i];
         for (size_t k = 0; k < nbank; ++k) {
             const uint16_t sub = st[k * ncol + role];
             const uint16_t v = sub == st[role] ? c : sub;
@@ -794,18 +840,26 @@ bool encode_model_texture(std::vector<uint8_t>* m, const Img& im) {
             d[pal_at + (k * ncol + i) * 2 + 1] = (uint8_t)(v >> 8);
         }
     }
+    if (team_cols > 0 || over > 0)
+        g_model_tex_note = std::to_string(team_cols) + " team shade(s) kept on the team entries" +
+                           (over > 0 ? ", " + std::to_string(over) + " colour(s) past the palette drawn as the nearest" : "");
     const int per = 8 / bits;                       // texels a byte
     const int mask = (1 << bits) - 1;
     for (int i = 0; i < w * h; ++i) {
-        int v;
-        if (clear0) v = nearest(im.rgba[(size_t)i], pal);
-        else {
-            int best = 0, bd = 1 << 30;
-            for (size_t k = 0; k < pal.size(); ++k) {
-                const int dd = dist(im.rgba[(size_t)i], pal[k]);
-                if (dd < bd) { bd = dd; best = (int)k; }
+        const uint32_t px = im.rgba[(size_t)i];
+        int v = 0;
+        if (!clear0 || (px >> 24) >= 128) {
+            const auto it = (px >> 24) >= 128 ? exact.find(to555(px)) : exact.end();
+            if (it != exact.end()) v = it->second;
+            else {   // past the palette (or, not clear, a clear pixel): the nearest plain colour placed
+                int bd = 1 << 30;
+                for (int pass = 0; pass < 2 && bd == (1 << 30); ++pass)
+                    for (size_t k = clear0 ? 1 : 0; k < ncol; ++k) {
+                        if (!used[k] || (pass == 0 && !plain[k])) continue;
+                        const int dd = dist(px, slot[k]);
+                        if (dd < bd) { bd = dd; v = (int)k; }
+                    }
             }
-            v = best;
         }
         // Texel i: byte i / per, at bit (i % per) * bits, low texel first.
         uint8_t& dst = d[img + (size_t)(i / per)];
@@ -881,12 +935,17 @@ const Field kFields[] = {
     // template's own), else a mask: 1 ground, 2 air, 4 bridge. Padding +0x53
     // (0xA1 in all 182 stock records); written only when nonzero.
     {"collision_layer", 0x53, 1, 7},
+    // docs/494 (SG-0119): repairs and helps build (1), foot/ranged/mounted
+    // units only. Padding +0x4F (0xA1 in all 182 stock records); written
+    // only when nonzero.
+    {"can_repair", 0x4F, 1, 1},
 };
 // The "auto" fields: 0 leaves the template's padding byte (0xA2) in place, so
 // a unit left on Automatic has a record byte-identical to before.
 bool auto_when_zero(int off) {
     return off == 0x5B || off == 0x5A || off == 0x0A || off == 0x0B || off == 0x57 ||
-           off == 0x53;   // docs/488
+           off == 0x53 ||   // docs/488
+           off == 0x4F;     // docs/494
 }
 bool name_ok(const std::string& n) {
     if (n.empty() || n.size() > 24) return false;
@@ -910,9 +969,17 @@ std::vector<std::string> enabled_folders() {
     std::vector<std::string> v;
     std::vector<uint8_t> b;
     std::error_code ec;
-    const bool lobby = slurp(units_dir() / "lobby.txt", &b, 64u << 10);
-    if (lobby) fs::remove(units_dir() / "lobby.txt", ec);
-    else if (!slurp(units_dir() / "enabled.txt", &b, 64u << 10)) return v;
+    // BR-0096/0097: an EMPTY lobby.txt is a host with no custom units, so this
+    // machine builds none. slurp() refuses an empty file, and that used to
+    // fall back to enabled.txt: the joiner rebuilt with its own units again,
+    // still did not match the host, and reset again on every rules page.
+    const bool lobby = fs::exists(units_dir() / "lobby.txt", ec);
+    if (lobby) {
+        slurp(units_dir() / "lobby.txt", &b, 64u << 10);   // empty: no units
+        fs::remove(units_dir() / "lobby.txt", ec);
+    } else if (!slurp(units_dir() / "enabled.txt", &b, 64u << 10)) {
+        return v;
+    }
     std::string s(b.begin(), b.end()), line;
     for (size_t i = 0; i <= s.size(); ++i) {
         if (i == s.size() || s[i] == '\n' || s[i] == '\r') {
@@ -1142,6 +1209,28 @@ bool load_unit(const std::string& folder, const std::string& tag, const std::vec
                              folder.c_str(), i);
             }
         }
+    // docs/496 (SG-0122): "attack_anim": "breath". The dragons' fire is
+    // FUN_0205152C's, which the attack steps call for every attacker and
+    // which only answers blueprint numbers 8 and 28. A unit drawn with one of
+    // those two models (a 2D unit's "model", or a special's "asset") may ask
+    // for it; the stock dragons and units made from them have it already.
+    {
+        const std::string aa = jstr(j, "attack_anim");
+        if (aa == "breath") {
+            const bool dragon_tmpl = e->tmpl == 8 || e->tmpl == 28;
+            if (dragon_tmpl)
+                g_report += folder + ": \"attack_anim\" \"breath\": made from a dragon, it breathes fire already\n";
+            else if (e->model_src == 8 || e->model_src == 28) {
+                e->breath = true;
+                g_report += folder + ": breathes the dragons' fire when it attacks\n";
+                std::fprintf(stderr, "[lb_cunits] %s: breathes the dragons' fire when it attacks (model of stock unit %d)\n",
+                             folder.c_str(), e->model_src);
+            } else
+                g_report += folder + ": \"attack_anim\" \"breath\" is for a unit drawn with the King's or Wizard's "
+                            "Dragon's model; ignored\n";
+        } else if (!aa.empty())
+            g_report += folder + ": \"attack_anim\" \"" + aa + "\" is not known (\"breath\" is); ignored\n";
+    }
     // Sprites: one layout's sheets (`lcat`'s, from the stock base `tbase`),
     // each overlaid with the folder's sheet, then its frames. `main` false: a
     // fallback set (docs/492: a hero drawn with another unit's sprites also
@@ -1243,8 +1332,14 @@ bool load_unit(const std::string& folder, const std::string& tag, const std::vec
         std::vector<uint8_t> mdl, anim, mine;
         if (!read(masset + ".nsbmd", &mdl)) { *why = "the model " + masset + " is unreadable"; return false; }
         Img im;
-        if (slurp(dir / "model" / "texture.png", &mine) && read_png(mine, &im) && !encode_model_texture(&mdl, im))
-            std::fprintf(stderr, "[lb_cunits] %s: model/texture.png could not be applied: it must be exactly the template's texture size (the exported texture.png's size; 32x32 for every stock model); ignored\n", folder.c_str());
+        if (slurp(dir / "model" / "texture.png", &mine) && read_png(mine, &im)) {
+            if (!encode_model_texture(&mdl, im))
+                std::fprintf(stderr, "[lb_cunits] %s: model/texture.png could not be applied: it must be exactly the template's texture size (the exported texture.png's size; 32x32 for every stock model); ignored\n", folder.c_str());
+            else if (!g_model_tex_note.empty()) {   // BR-0095 (docs/496)
+                g_report += folder + ": model/texture.png: " + g_model_tex_note + "\n";
+                std::fprintf(stderr, "[lb_cunits] %s: model/texture.png: %s\n", folder.c_str(), g_model_tex_note.c_str());
+            }
+        }
         std::vector<uint8_t> objb;
         if (slurp(dir / "model" / "model.obj", &objb, kMaxObjBytes)) {
             std::string note;
@@ -1686,6 +1781,18 @@ extern "C" int lb_cunits_model_drawn(int k) {
 }
 extern "C" int lb_cunits_sprites_from(int k) {
     return g_built && k >= 0 && k < (int)g_ents.size() ? g_ents[(size_t)k].sprites_from : -1;
+}
+// docs/496 (SG-0122): whether custom unit k breathes the dragons' fire when it
+// attacks ("attack_anim": "breath"), and whether any built unit does (the
+// breath hop's stock gate).
+extern "C" int lb_cunits_breath(int k) {
+    return g_built && k >= 0 && k < (int)g_ents.size() && g_ents[(size_t)k].breath ? 1 : 0;
+}
+extern "C" int lb_cunits_breath_any(void) {
+    if (!g_built) return 0;
+    for (const Entity& e : g_ents)
+        if (e.breath) return 1;
+    return 0;
 }
 extern "C" const char* lb_cunits_name(int k) {
     return g_built && k >= 0 && k < (int)g_ents.size() ? g_ents[(size_t)k].display.c_str() : "";
@@ -2228,6 +2335,8 @@ extern "C" int lb_cunits_entity_sound(uint32_t mgr, uint32_t ent, int index) {
 extern "C" void lb_maptx_want_unit(unsigned long long hash);   // lb_maptx.cpp
 extern "C" int lb_maptx_idle(void);
 extern "C" int lb_mods_request_rebuild(void);                  // lb_mods.cpp
+extern "C" int lb_rejoin_arm(const char* why);                 // lb_patches.cpp
+extern "C" void lb_rejoin_disarm(void);
 extern "C" void lb_overlay_notice(const char* text);            // lb_overlay.cpp
 
 namespace {
@@ -2560,9 +2669,13 @@ extern "C" void lb_cunits_lobby_set(const unsigned long long* hashes, int n) {
     g_lobby_rebuilt = true;
     std::fprintf(stderr, "[lb_cunits] the host's %zu custom unit(s) are here; rebuilding with them\n", want.size());
     std::fflush(stderr);
-    lb_overlay_notice(lb_mods_request_rebuild()
-                          ? "The host's custom units are loading: the game resets. Join the lobby again."
-                          : "Restart the game to load the host's custom units, then join again.");
+    // The rejoin is armed before the reset is asked for, so it cannot miss it.
+    const bool back = lb_rejoin_arm("the host's custom units") != 0;
+    const bool reset = lb_mods_request_rebuild() != 0;
+    if (!reset) lb_rejoin_disarm();
+    lb_overlay_notice(!reset ? "Restart the game to load the host's custom units, then join again."
+                      : back ? "The host's custom units are loading: the game resets, then joins the lobby again."
+                             : "The host's custom units are loading: the game resets. Join the lobby again.");
 }
 
 // Leaving a lobby.

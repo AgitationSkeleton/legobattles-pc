@@ -2374,6 +2374,20 @@ extern "C" int lb_net_http_get(const char* host, int port, const char* path, cha
 // SG-0029: the server a joiner's lobby is listed on (the one its Join screen
 // chose), "" when not known; and whether the master-server fallback is the
 // one in use (docs/442). For the lobby screen's label.
+// The lobby this machine is joined to (its room code, and the server that
+// listed it, with that server's port or 0 for the configured one), for the
+// automatic rejoin after a content reload. 0 when not in a lobby.
+extern "C" int lb_net_peer_lobby(char* srv, int scap, int* port, char* code, int ccap) {
+    const int s = g_guest_state.load();
+    if (!(s == 5 || s == 7 || s == 12)) return 0;
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (g_peer_code.empty()) return 0;
+    if (srv && scap > 0) std::snprintf(srv, (size_t)scap, "%s", g_peer_server.c_str());
+    if (port) *port = g_peer_sport;
+    if (code && ccap > 0) std::snprintf(code, (size_t)ccap, "%s", g_peer_code.c_str());
+    return 1;
+}
+
 extern "C" int lb_net_peer_server(char* out, int cap) {
     if (!out || cap <= 0) return 0;
     std::string s;

@@ -315,6 +315,13 @@ const BalField kUnitFields[] = {
     // mask FUN_0200159C would compute: 1 ground, 2 air, 4 bridge
     // (lb_patches.cpp occ_layers_override).
     {"Collision layer", 0x53, 1, 0, 7},
+    // docs/494 (SG-0119): repairs and helps build, APPENDED (37). +0x4F is
+    // the pad of entry 9 of the +0x2C array (0xA1 in all 182 stock records;
+    // no bundled pack writes it, checked over every run in
+    // lb_balance_data.h). 1 is on; 0 (or the stock 0xA1, folded) is off.
+    // Read by lb_patches.cpp repairs_by_rule_or_trait, for foot, ranged and
+    // mounted units only.
+    {"Repairs", 0x4F, 1, 0, 1},
 };
 constexpr int kPortField0 = 26;   // the first of them (lb_overlay.h LB_BAL_PORT_FIELD0)
 // docs/408: +0x70/+0x72 are NOT a copy of +0x6C/+0x6E. The hit (FUN_0206E408,

@@ -28,7 +28,8 @@
 
 #include "lb_overlay.h"
 #include "gpu3d.h"
-#include "vram.h"        // docs/437: the texture-palette bank the creature tint writes
+#include "gpu2d.h"       // the rejoin's lobby-row test reads the lower screen
+#include "vram.h"       // docs/437: the texture-palette bank the creature tint writes
 #include "lb_field.h"
 #include "lb_fxvtables.h"
 #include "lb_shadow.h"
@@ -1223,6 +1224,21 @@ struct CastReq { int caster = -1, spell = 0, kind = 2, target = -1, x = 0, y = 0
 std::atomic<int> g_cast_pending{0};
 CastReq g_cast;
 
+// `move X Y SLOT [SLOT ...]` (docs/497, SG-0123): one MoveEntitiesCommand
+// (tag 0x17) for up to 16 pool slots to the tile X,Y, made the way the UI's
+// move issuer FUN_020A8F28 makes it: FUN_02005884(player slot, an
+// ArrayEntityRef of handles, a tile position, the issuer's own mode word
+// 0x0214BAFC), then the submit. The array's copy (FUN_020EC6B4 ->
+// FUN_020EC770) reads only the source's +4 data, +8 count and +0x10 growth.
+// Test aid only: it is a real lockstep command, so online each instance
+// issues only its own units' orders.
+constexpr uint32_t kMakeMoveCmd = 0x02005884u;    // arm
+constexpr uint32_t kMoveModeWord = 0x0214BAFCu;   // FUN_020A8F28's literal
+constexpr uint32_t kArrayEntityRefVtable = 0x0214F8ACu;
+struct MoveReq { int x = 0, y = 0, n = 0; int slot[16] = {}; };
+std::atomic<int> g_move_pending{0};
+MoveReq g_move;
+
 static bool spawn_ram(uint32_t p) { return p >= 0x02000000u && p < 0x02400000u; }
 
 static void spawn_dispatch(uint32_t fn) {
@@ -1245,6 +1261,9 @@ static void spawn_say(const char* what) {
     if (!std::strcmp(g_spc.what, "cast"))
         std::fprintf(stderr, "[lb_cast_aid] spell %d by slot %d (kind %d, target %d / %d,%d): %s\n", g_cast.spell,
                      g_cast.caster, g_cast.kind, g_cast.target, g_cast.x, g_cast.y, what);
+    else if (!std::strcmp(g_spc.what, "move"))
+        std::fprintf(stderr, "[lb_path] move aid: %d unit(s) from slot %d to %d,%d: %s\n", g_move.n,
+                     g_move.n > 0 ? g_move.slot[0] : -1, g_move.x, g_move.y, what);
     else
         std::fprintf(stderr, "[lb_spawn] blueprint %d x%d for owner %d at %d,%d: %s\n", g_spawn.bp,
                      g_spawn.n, g_spawn.owner, g_spawn.x, g_spawn.y, what);
@@ -1323,6 +1342,54 @@ static int cast_begin() {
     return 1;
 }
 
+// A queued group move (docs/497): 1 = the chain started (return), 0 = nothing
+// to do. The scratch sits between sp_call and the caller's sp (0x60 bytes):
+// the array object at +0x00 (0x18), the tile position at +0x18 (8) and the
+// handles at +0x24 (2 each, at most 16, to +0x44). The factory copies the
+// handles into its own heap array, so nothing here outlives the construct.
+static int move_begin() {
+    g_move_pending.store(0);
+    g_spc.what = "move";
+    const MoveReq& q = g_move;
+    if (q.n <= 0 || q.n > 16) { spawn_say("no units"); return 0; }
+    const uint32_t first = spawn_live_entity(q.slot[0]);
+    if (!first) { spawn_say("no such unit"); return 0; }
+    const uint32_t slot = spawn_player_slot(bus_read_u8(first + 0xE4u));
+    if (slot == ~0u) { spawn_say("no such player"); return 0; }
+    if (spawn_not_local(slot)) { spawn_say("not the local player's (online, only your own units)"); return 0; }
+    uint32_t live[16] = {};
+    int n = 0;
+    for (int i = 0; i < q.n; ++i)
+        if (const uint32_t e = spawn_live_entity(q.slot[i])) {
+            if (bus_read_u8(e + 0xE4u) != bus_read_u8(first + 0xE4u)) continue;   // one owner per order
+            live[n++] = ((uint32_t)bus_read_u8(e + 0xDDu) << 8) | ((uint32_t)q.slot[i] & 0xFFu);
+        }
+    spawn_save_regs();
+    const uint32_t arr = g_spc.sp_call, pos = g_spc.sp_call + 0x18u, hs = g_spc.sp_call + 0x24u;
+    for (int i = 0; i < n; ++i) {
+        bus_write_u8(hs + 2u * (uint32_t)i, (uint8_t)(live[i] & 0xFFu));
+        bus_write_u8(hs + 2u * (uint32_t)i + 1u, (uint8_t)(live[i] >> 8));
+    }
+    bus_write_u32(arr + 0x00u, kArrayEntityRefVtable);
+    bus_write_u32(arr + 0x04u, hs);
+    bus_write_u32(arr + 0x08u, (uint32_t)n);
+    bus_write_u32(arr + 0x0Cu, (uint32_t)n * 2u);
+    bus_write_u32(arr + 0x10u, 0x10u);
+    bus_write_u32(arr + 0x14u, 0u);   // not the owner of its data: never freed
+    bus_write_u32(pos, kTilePosVtable);
+    bus_write_u8(pos + 4u, (uint8_t)q.x);
+    bus_write_u8(pos + 5u, (uint8_t)q.y);
+    bus_write_u8(pos + 6u, 0u);
+    bus_write_u8(pos + 7u, 0u);
+    g_cpu.R[0] = slot;
+    g_cpu.R[1] = arr;
+    g_cpu.R[2] = pos;
+    g_cpu.R[3] = kMoveModeWord;
+    g_spc.step = 2;
+    spawn_dispatch(kMakeMoveCmd);
+    return 1;
+}
+
 // 1 = this entry was the chain's (handled; return), 0 = run the update as usual.
 static int spawn_step(void (*original)(void), bool other_busy) {
     if (g_spc.step) {
@@ -1339,6 +1406,7 @@ static int spawn_step(void (*original)(void), bool other_busy) {
     }
     if (other_busy) return 0;
     if (g_cast_pending.load()) return cast_begin();
+    if (g_move_pending.load()) return move_begin();
     if (!g_spawn_pending.load()) return 0;
     g_spawn_pending.store(0);
     g_spc.what = "spawn";
@@ -6498,6 +6566,9 @@ extern "C" int lb_any_unit_repairs_live(void) {
 extern "C" int lb_unique_heroes_live(void) {
     return (lb_rules2_live() & LB_RULE2_UNIQUE_HEROES) ? 1 : 0;
 }
+extern "C" int lb_smart_move_live(void) {   // docs/497 (SG-0123)
+    return (lb_rules2_live() & LB_RULE2_SMART_MOVE) ? 1 : 0;
+}
 
 // SG-0113 (docs/488): "AI Uses Targeted Spells" patches the AI's spell
 // chooser (apply_ai_tap_spells), which changes the simulation, yet no
@@ -6556,17 +6627,36 @@ void spell_startup_override(void) {
 // read as builders for each call: the category cloak of docs/438, the byte
 // put back when the call returns. The stylus already orders every selected
 // unit when the selection holds a builder (FUN_020A90C4 takes the whole
-// selection, FUN_020E2A04), so select a builder with them.
+// selection, FUN_020E2A04); docs/494 (stylus_match_override) offers the job
+// to a selection without one, and adds a per-unit trait ("Repairs", +0x4F).
 constexpr uint32_t kAssistCmdExec = 0x02084218u;   // arm
 constexpr uint32_t kAssistCheck   = 0x02060240u;   // arm, vtable
 constexpr uint32_t kRepairCheck   = 0x020728ECu;   // arm, vtable
 CallWrap g_wrap_assist_exec, g_wrap_assist_check, g_wrap_repair_check;
 
-static void repair_cloak_add(CallWrap& w, uint32_t e) {
+// SG-0119 (docs/494): the per-unit trait. Balance Traits "Repairs", unit.json
+// "can_repair": padding byte +0x4F of the unit record (the pad of entry 9 of
+// the +0x2C array; 0xA1 in all 182 stock records, written by no bundled
+// pack). Exactly 1 is on; the stock 0xA1 and 0 are off. The record is the
+// Balance set's (or the custom unit's), so every machine and every replay
+// reads the same byte.
+constexpr uint32_t kRepairTraitOff = 0x4Fu;
+// Whether a unit of this record repairs and helps build: the global rule for
+// foot, ranged and mounted units, or the record's own trait. Heroes and
+// builders (0, 1) already do; ships, vehicles and specials (5, 6) never
+// (their models have no work animation, docs/488).
+static bool repairs_by_rule_or_trait(uint32_t rec, bool rule) {
+    if (!rec) return false;
+    const uint8_t cat = bus_read_u8(rec + 0x5Cu);
+    if (cat < 2u || cat > 4u) return false;
+    return rule || bus_read_u8(rec + kRepairTraitOff) == 1u;
+}
+
+static void repair_cloak_add(CallWrap& w, uint32_t e, bool rule) {
     const uint32_t rec = guest_ptr(e) ? unit_blueprint(e) : 0u;
     if (!rec || w.n >= kWrapBytes) return;
+    if (!repairs_by_rule_or_trait(rec, rule)) return;
     const uint8_t cat = bus_read_u8(rec + 0x5Cu);
-    if (cat < 2u || cat > 4u) return;
     for (int i = 0; i < w.n; ++i)
         if (w.rec[i] == rec) return;
     w.rec[w.n] = rec;
@@ -6585,15 +6675,16 @@ static void repair_cloak(CallWrap& w, uint32_t target, bool cmd, const char* wha
         return;
     }
     w.n = 0;
-    if (lb_any_unit_repairs_live()) {
-        if (!cmd) {
-            repair_cloak_add(w, g_cpu.R[1]);
-        } else if (guest_ptr(g_cpu.R[1])) {
-            const uint32_t hs = bus_read_u32(g_cpu.R[1] + 0x18u);
-            const int32_t cnt = (int32_t)bus_read_u32(g_cpu.R[1] + 0x1Cu);
-            for (int32_t i = 0; guest_ptr(hs) && i < cnt && i < 64; ++i)
-                repair_cloak_add(w, unit_resolve(hs + 2u * (uint32_t)i));
-        }
+    // SG-0119 (docs/494): the global rule, or a unit's own "Repairs" trait.
+    // With neither on anywhere this is the pure tail call it was.
+    const bool rule = lb_any_unit_repairs_live() != 0;
+    if (!cmd) {
+        repair_cloak_add(w, g_cpu.R[1], rule);
+    } else if (guest_ptr(g_cpu.R[1])) {
+        const uint32_t hs = bus_read_u32(g_cpu.R[1] + 0x18u);
+        const int32_t cnt = (int32_t)bus_read_u32(g_cpu.R[1] + 0x1Cu);
+        for (int32_t i = 0; guest_ptr(hs) && i < cnt && i < 64; ++i)
+            repair_cloak_add(w, unit_resolve(hs + 2u * (uint32_t)i), rule);
     }
     if (!w.n) {
         if (original) original();
@@ -6603,7 +6694,8 @@ static void repair_cloak(CallWrap& w, uint32_t target, bool cmd, const char* wha
     const unsigned n = ++said;
     if ((n & (n - 1u)) == 0u)
         std::fprintf(stderr, "[lb_repair] %s: %d non-builder unit type(s) read as builders "
-                     "(Soldiers Repair Buildings; %u so far)\n", what, w.n, n);
+                     "(%s; %u so far)\n", what, w.n,
+                     rule ? "Soldiers Repair Buildings" : "their Repairs trait", n);
     for (int i = 0; i < w.n; ++i) bus_write_u8(w.rec[i] + 0x5Cu, 1u);
     wrap_start(w, target);
 }
@@ -6615,6 +6707,68 @@ void assist_check_override(void) {
 }
 void repair_check_override(void) {
     repair_cloak(g_wrap_repair_check, kRepairCheck, false, "repair start");
+}
+
+// SG-0119 (docs/494): THE STYLUS OFFERS REPAIR TO A SELECTION WITHOUT A BUILDER.
+//
+// A tap is classified into a tag set (four u32 words, tags 0..0x66; the
+// setter FUN_020A9F80) and FUN_020AA0A4(r0 the view, r1 the tag words) walks
+// the stylus rules at [0x021576C0]+0x10, taking the first whose mask is a
+// subset of the tags (FUN_020AA004). The rules are built by FUN_020AA034
+// (job, tag..., 0x67); the plain-tap Repair / Help-build rules (job 0x15,
+// FUN_020A90C4) are
+//     {0x00, 0x54 | 0x55, 0x31, 0x2A, 0x42 | 0x43 | 0x44}
+// (0x020AA506..0x020AA57E). 0x42/0x43/0x44 are the tapped own building's
+// state (FUN_020A9B7C with r2 = 0: damaged, unfinished, ...). 0x54 and 0x55
+// are FUN_020A9B7C's selected-unit tags (r2 != 0) for a unit of kind 0 (hero)
+// and kind 1 (builder) -- the only selection tags those rules accept, which is
+// why a selection with no hero or builder is never offered the job (docs/488
+// thought it was the key mask at 0x02153724: that halfword is the held
+// buttons, A..Y -> tags 0x0E..0x13).
+//
+// Here, before the walk: when the tags name such a building (0x42/0x43/0x44)
+// and hold neither 0x54 nor 0x55, and the selection (0x02157FC4: +0x64 the
+// handles, +0x68 the count -- what FUN_020E2A04, the job's own collector,
+// reads) holds a living own unit that repairs by the rule or its trait, tag
+// 0x55 is added, so the tap reads as it does when a builder is in the
+// selection, and the job orders every selected own unit (FUN_020A90C4). The
+// harvest rule (job 0x0D, {00 55 4A 65 4F 40}) needs the resource tag 0x40,
+// which a building tap does not carry. Otherwise a pure tail call. The tags
+// are a stack local of the event, gone when it is handled.
+constexpr uint32_t kStylusMatch = 0x020AA0A4u;   // thumb
+constexpr uint32_t kStylusSelection = 0x02157FC4u;
+void stylus_match_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kStylusMatch);
+    const uint32_t tags = g_cpu.R[1];   // a stack local: DTCM, not main RAM
+    if (check_in_ram(tags) && check_in_ram(tags + 15u)) {
+        // Tags 0x40..0x5F are the third word.
+        const uint32_t w2 = bus_read_u32(tags + 8u);
+        const bool building = (w2 & ((1u << (0x42 - 64)) | (1u << (0x43 - 64)) | (1u << (0x44 - 64)))) != 0u;
+        const bool has_kind = (w2 & ((1u << (0x54 - 64)) | (1u << (0x55 - 64)))) != 0u;
+        if (building && !has_kind) {
+            const bool rule = lb_any_unit_repairs_live() != 0;
+            const uint32_t handles = bus_read_u32(kStylusSelection + 0x64u);
+            const int32_t n = (int32_t)bus_read_u32(kStylusSelection + 0x68u);
+            const uint32_t local = bus_read_u32(0x02156A24u + 100u);   // session: the local player
+            uint32_t found = 0;
+            for (int32_t i = 0; guest_ptr(handles) && i < n && i < 64 && !found; ++i) {
+                const uint32_t e = unit_resolve(handles + 2u * (uint32_t)i);
+                if (!e || !bus_read_u8(e + 0x227u) || bus_read_u8(e + 0xE4u) != local) continue;
+                if (repairs_by_rule_or_trait(unit_blueprint(e), rule)) found = e;
+            }
+            if (found) {
+                bus_write_u32(tags + 8u, w2 | (1u << (0x55 - 64)));
+                static unsigned said = 0;
+                const unsigned c = ++said;
+                if ((c & (c - 1u)) == 0u)
+                    std::fprintf(stderr, "[lb_repair] stylus: a selection with no builder taps an own "
+                                 "building -> the Repair/Help-build job is offered (record %08X, %s; "
+                                 "%u so far)\n", (unsigned)unit_blueprint(found),
+                                 rule ? "Soldiers Repair Buildings" : "its Repairs trait", c);
+            }
+        }
+    }
+    if (original) original();
 }
 
 // SG-0107 (docs/488): ONE OF EACH HERO.
@@ -7652,6 +7806,149 @@ void cell_check_override(void) {
     if (original) original();
 }
 
+// ---- SG-0123 (docs/497): SMARTER UNIT MOVEMENT -------------------------------
+//
+// HOW A GROUP MOVE RUNS (read). A move order is one MoveEntitiesCommand (tag
+// 0x17, 0x38 bytes): an ArrayEntityRef of handles at +0x14 (data +0x18,
+// count +0x1C), ONE tile position at +0x2C (vtable, x +0x30, y +0x31, two
+// pad bytes) and a mode at +0x34. Its executor FUN_020848AC hands every unit
+// in the list the SAME position: per handle it calls a factory with
+// r1 = cmd+0x2C (mode 0 and default FUN_0206AE10, by movement class; mode 1
+// FUN_0206AF60; mode 2 FUN_0206AF94), and each move command copies x,y out
+// of it with FUN_020F2BD4 (two ldrb, nothing else).
+//
+// Each unit then heads for that one cell. The cell is free when the order is
+// given, so the destination check (FUN_02065DB4 -> FUN_0205C034) accepts it
+// for every unit; the first to arrive takes it and the rest end in a scrum
+// round it, waiting, sidestepping and queueing A* for a cell that will never
+// be theirs. That, not the path search, is most of "units are not aware of
+// each other": the A* cost (FUN_02082BE4) already charges 3 for a cell held
+// by a moving unit and 150 for one held by a standing unit (200 = blocked).
+//
+// THE RULE. With "Smarter Unit Movement" (LB_RULE2_SMART_MOVE), a command of
+// two or more movers gives mover k (k counts the live movers before it in the
+// command's own list) the k-th free-standing slot of a block centred on the
+// tapped cell: ring by ring (Chebyshev), orthogonal before diagonal, at a
+// pitch of the group's widest footprint (record +0x1D's table, FUN_02001170).
+// A slot is used only if it is on the map and in the tapped cell's plane C
+// area (map+0x2EC); otherwise the next one is tried. The slot is written into
+// the command's own pad bytes (+0x32/+0x33, never serialized: FUN_02004BF4
+// writes +4/+5 only) and the factory gets r1 = cmd+0x2E, so it reads them as
+// x,y. Mover 0 keeps the tapped cell. Everything after that -- the
+// destination check, its snap to a nearby free cell, the plotters -- is the
+// cartridge's own, so a slot on a tree or a building is handled exactly like
+// a tap there.
+//
+// LOCKSTEP. Inputs are the command (identical on every machine), the entity
+// pool and the map, read at the same step everywhere; no host state, clocks,
+// floats or containers. Per call, stateless. A host rule ('R' page bit 0x04),
+// recorded in replays (demo kind 30). Off, or a one-unit order: a pure tail
+// call.
+constexpr uint32_t kMoveFactory = 0x0206AE10u;       // arm, mode 0 / default
+constexpr uint32_t kMoveFactoryM1 = 0x0206AF60u;     // arm, mode 1
+constexpr uint32_t kMoveFactoryM2 = 0x0206AF94u;     // arm, mode 2
+constexpr uint32_t kMoveLoopRet0 = 0x02084914u;      // FUN_020848AC's bl sites
+constexpr uint32_t kMoveLoopRet1 = 0x02084924u;
+constexpr uint32_t kMoveLoopRet2 = 0x02084934u;
+constexpr uint32_t kMoveLoopRetD = 0x02084944u;
+constexpr int kSmartRings = 6;                        // 13 x 13 slots at most
+struct SmartSlot { int8_t dx, dy; };
+static SmartSlot g_smart_slots[(2 * kSmartRings + 1) * (2 * kSmartRings + 1)];
+static int g_smart_nslots = 0;
+static void smart_slots_build() {
+    if (g_smart_nslots) return;
+    int n = 0;
+    for (int r = 0; r <= kSmartRings; ++r) {
+        // Within ring r, by |dx|+|dy|, then dy, then dx: a total order.
+        for (int man = r; man <= 2 * r; ++man)
+            for (int dy = -r; dy <= r; ++dy)
+                for (int dx = -r; dx <= r; ++dx) {
+                    const int adx = dx < 0 ? -dx : dx, ady = dy < 0 ? -dy : dy;
+                    if ((adx > ady ? adx : ady) != r || adx + ady != man) continue;
+                    g_smart_slots[n].dx = (int8_t)dx;
+                    g_smart_slots[n].dy = (int8_t)dy;
+                    ++n;
+                }
+    }
+    g_smart_nslots = n;
+}
+extern "C" int lb_smart_move_live(void);
+// Does the factory for this mode give the entity a command? (FUN_0206AE10's
+// table: movement class record +0x15 of 1..6 or 8; modes 1/2 always do.)
+static bool smart_mover(uint32_t e, bool by_class) {
+    if (!e) return false;
+    if (!by_class) return true;
+    const uint32_t holder = bus_read_u32(e + 0xE0u);
+    const uint32_t rec = guest_ptr(holder) ? bus_read_u32(holder + 4u) : 0u;
+    if (!guest_ptr(rec)) return false;
+    const uint8_t mc = bus_read_u8(rec + 0x15u);
+    return mc >= 1u && mc <= 8u && mc != 7u;
+}
+static int smart_pitch(uint32_t e) {   // the widest side of the footprint (FUN_02001170)
+    static const uint8_t kSide[11] = {1, 2, 3, 3, 6, 9, 3, 6, 9, 4, 4};
+    const uint32_t holder = bus_read_u32(e + 0xE0u);
+    const uint32_t rec = guest_ptr(holder) ? bus_read_u32(holder + 4u) : 0u;
+    const uint8_t idx = guest_ptr(rec) ? bus_read_u8(rec + 0x1Du) : 1u;
+    return idx >= 1u && idx <= 11u ? kSide[idx - 1u] : 1;
+}
+static void smart_move_factory(uint32_t addr) {
+    void (*original)(void) = lb_dispatch_original(0, addr);
+    const uint32_t lr = g_cpu.R[14];
+    const uint32_t cmd = g_cpu.R[10];   // FUN_020848AC keeps the command in r10, the index in r7
+    if ((lr == kMoveLoopRet0 || lr == kMoveLoopRet1 || lr == kMoveLoopRet2 || lr == kMoveLoopRetD) &&
+        guest_ptr(cmd) && g_cpu.R[1] == cmd + 0x2Cu && lb_smart_move_live()) {
+        const uint32_t list = bus_read_u32(cmd + 0x18u);
+        const int32_t count = (int32_t)bus_read_u32(cmd + 0x1Cu);
+        const int32_t idx = (int32_t)g_cpu.R[7];
+        const uint32_t map = bus_read_u32(0x02156CB0u);
+        const bool by_class = lr == kMoveLoopRet0 || lr == kMoveLoopRetD;
+        if (guest_ptr(list) && count >= 2 && count <= 256 && idx >= 0 && idx < count && guest_ptr(map) &&
+            entity_of_handle(bus_read_u16(list + 2u * (uint32_t)idx)) == g_cpu.R[0]) {
+            int k = -1, movers = 0, pitch = 1;
+            for (int32_t j = 0; j < count; ++j) {
+                const uint32_t e = entity_of_handle(bus_read_u16(list + 2u * (uint32_t)j));
+                if (!smart_mover(e, by_class)) continue;
+                if (j == idx) k = movers;
+                ++movers;
+                const int p = smart_pitch(e);
+                if (p > pitch) pitch = p;
+            }
+            if (pitch > 3) pitch = 3;   // a 2x6 transport would spread the block too far
+            const int w = bus_read_u8(map + 0x14u), h = bus_read_u8(map + 0x15u);
+            const uint32_t plane = bus_read_u32(map + 0x2ECu);
+            const int tx = bus_read_u8(cmd + 0x30u), ty = bus_read_u8(cmd + 0x31u);
+            if (k > 0 && movers >= 2 && guest_ptr(plane) && tx < w && ty < h) {
+                smart_slots_build();
+                const uint8_t area = bus_read_u8(plane + (uint32_t)tx + (uint32_t)w * (uint32_t)ty);
+                int seen = 0, sx = -1, sy = -1;
+                for (int s = 0; s < g_smart_nslots; ++s) {
+                    const int x = tx + g_smart_slots[s].dx * pitch, y = ty + g_smart_slots[s].dy * pitch;
+                    if (x < 0 || y < 0 || x >= w || y >= h) continue;
+                    if (bus_read_u8(plane + (uint32_t)x + (uint32_t)w * (uint32_t)y) != area) continue;
+                    if (seen++ == k) { sx = x; sy = y; break; }
+                }
+                if (sx >= 0) {
+                    bus_write_u8(cmd + 0x32u, (uint8_t)sx);
+                    bus_write_u8(cmd + 0x33u, (uint8_t)sy);
+                    g_cpu.R[1] = cmd + 0x2Eu;   // the factory reads +4/+5: the pad bytes
+                }
+                static unsigned said = 0;
+                if (said < 64u || k == 1) {
+                    if (said < 64u) ++said;
+                    std::fprintf(stderr, "[lb_path] group move to %d,%d: mover %d of %d (pitch %d) -> %s%d,%d\n",
+                                 tx, ty, k, movers, pitch, sx >= 0 ? "" : "no slot, stock ", sx >= 0 ? sx : tx,
+                                 sx >= 0 ? sy : ty);
+                    std::fflush(stderr);
+                }
+            }
+        }
+    }
+    if (original) original();
+}
+void smart_move_factory_override(void) { smart_move_factory(kMoveFactory); }
+void smart_move_factory_m1_override(void) { smart_move_factory(kMoveFactoryM1); }
+void smart_move_factory_m2_override(void) { smart_move_factory(kMoveFactoryM2); }
+
 void emp_victims_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kEmpApply);
     const uint32_t spell = g_cpu.R[0];
@@ -7768,6 +8065,13 @@ constexpr uint32_t kSetupName = 0x02045858u;        // thumb: setup.name[i] = st
 constexpr uint32_t kMissionV06 = 0x02045BC8u;       // thumb: MultiplayerMissionBase::v06
 extern "C" void ai_opp_setname_override(void);   // defined with apply_ai_spectate
 extern "C" void ai_opp_v06_override(void);
+// SG-0115 (docs/495): the online computer player (defined with ai_opp_tick).
+constexpr uint32_t kCpuoSetLocal = 0x0204586Cu;     // thumb: FUN_0204586C (setup, local id)
+constexpr uint32_t kCpuoTurnRelease = 0x0208331Cu;  // arm: thunk_FUN_0208331C's target
+constexpr uint32_t kCpuoAiEvent = 0x0208AF38u;      // thumb: the AI module's event handler
+extern "C" void cpuo_set_local_override(void);
+extern "C" void cpuo_turn_override(void);
+extern "C" void cpuo_ai_event_override(void);
 
 void enemy_cycle_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kEnemyCycle);
@@ -8081,8 +8385,42 @@ void roster_build_override(void) {
     } else if (lr == kRosterFromMatch && rec != 0u) {
         unsigned char r[20];
         for (uint32_t i = 0; i < 20u; ++i) r[i] = (unsigned char)bus_read_u8(rec + i);
-        char why[192];
+        char why[512];
         const int player_no = (int)bus_read_u8(g_cpu.R[0] + 0x30u) - 0x84;
+        if (player_no == 0) {
+            // Each slot's team colour as the match is built (a player reported
+            // a Yellow pick shown as Teal online): the setup's u32s at +0xDC,
+            // the lobby records' bits, whether Teal is live, and the custom set.
+            const uint32_t setup = bus_read_u32(0x02154080u);
+            char line[256];
+            int at = std::snprintf(line, sizeof line, "[lb_colours] match start: setup");
+            for (uint32_t s = 0; s < 4u && guest_ptr(setup); ++s)
+                at += std::snprintf(line + at, sizeof line - (size_t)at, " %u",
+                                    bus_read_u32(setup + 0xDCu + 4u * s));
+            at += std::snprintf(line + at, sizeof line - (size_t)at, "; lobby");
+            for (uint32_t s = 0; s < 3u; ++s)
+                at += std::snprintf(line + at, sizeof line - (size_t)at, " %u",
+                                    (bus_read_u8(0x0215B814u + 0x2Cu * s + 0x20u) >> 2) & 7u);
+            std::snprintf(line + at, sizeof line - (size_t)at, "; teal %s; net %d; self %u\n",
+                          lb_teal_live() ? "live" : "off", lb_net_guest_state(),
+                          (unsigned)bus_read_u16(0x02158AE0u));
+            std::fputs(line, stderr);
+            int cp[7];
+            if (lb_custompal_host_page(cp) == 1) {
+                std::fprintf(stderr, "[lb_colours] the host's custom colours:");
+                for (int c = 0; c < 7; ++c)
+                    if (cp[c] >= 0) std::fprintf(stderr, " colour %d=%06X", c, (unsigned)cp[c]);
+                std::fprintf(stderr, "\n");
+            }
+            std::fflush(stderr);
+        }
+        // Every player's record as it reaches the builder: the picks, the
+        // flag at +0x12 (clear = the game rebuilds King's default army
+        // itself, FUN_020B83D4) and the builder faction at +0x13.
+        std::fprintf(stderr, "[lb_bans] player %d army record:", player_no);
+        for (uint32_t i = 0; i < 18u; i += 2u)
+            std::fprintf(stderr, " %u", (unsigned)(r[i] | (r[i + 1u] << 8)));
+        std::fprintf(stderr, " | flag %u faction %02X\n", (unsigned)r[0x12], (unsigned)r[0x13]);
         const int swap = lb_teams_enforce_bans(r, why, (int)sizeof why, player_no);
         const bool banned_swap = swap != 0;
         // docs/428: what this player fields, for the match picture (after the
@@ -8093,9 +8431,29 @@ void roster_build_override(void) {
             if (swap == 2)
                 std::fprintf(stderr, "[lb_bans] player %d fields a Random team "
                              "(tourney), %s\n", player_no, why);
-            else
+            else if (swap == 3) {   // BR-0097: a creature's slot only
+                std::fprintf(stderr, "[lb_bans] player %d: King's unit in place of %s\n",
+                             player_no, why);
+                char text[640];
+                if (lb_net_guest_state() > 0 && (int)bus_read_u32(0x02156A88u) == player_no)
+                    std::snprintf(text, sizeof text, "King's unit replaces %s in your army this match.", why);
+                else
+                    std::snprintf(text, sizeof text, "Player %d: King's unit replaces %s this match.",
+                                  player_no + 1, why);
+                lb_overlay_notice(text);
+            } else {
                 std::fprintf(stderr, "[lb_bans] player %d switched to King at the "
-                             "start: banned %s\n", player_no, why);
+                             "start: %s\n", player_no, why);
+                // Say it on screen too: a King army with no bans set looked
+                // like a bug. 0x02156A88 is the local player's owner id.
+                char text[640];
+                if (lb_net_guest_state() > 0 && (int)bus_read_u32(0x02156A88u) == player_no)
+                    std::snprintf(text, sizeof text, "Your army plays as King this match: %s.", why);
+                else
+                    std::snprintf(text, sizeof text, "Player %d plays as King this match: %s.",
+                                  player_no + 1, why);
+                lb_overlay_notice(text);
+            }
             std::fflush(stderr);
         }
     }
@@ -8228,8 +8586,11 @@ static bool g_profile_save_pending = false;
 static KeyCall g_save_call;
 
 extern "C" void lb_request_profile_rename(const char* name);
+extern "C" void lb_rejoin_note_screen(uint32_t screen);   /* below */
 void main_menu_update_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kMainMenuUpdate);
+    if (guest_ptr(g_cpu.R[0]) && bus_read_u32(g_cpu.R[0]) == kMainMenuVtable)
+        lb_rejoin_note_screen(g_cpu.R[0]);
     // TEST AID: LB_TEST_RENAME=<name> asks for the rename once, the first
     // time the main menu is up, as the menu's button does.
     static bool test_renamed = false;
@@ -8352,11 +8713,325 @@ extern "C" int lb_boot_skip_wanted(void) {
     return (g_kb_vblanks - g_skip_from) < 6000u ? 1 : 0;
 }
 
+// ---- REJOIN AFTER A CONTENT RELOAD ------------------------------------------
+//
+// A joiner that receives the host's custom units or a mod map loads them by
+// resetting the game (they are built into the cartridge image at boot). Before
+// this the player was dropped on the title screen and had to walk back to the
+// lobby by hand. Now the reset is ARMED with the lobby (room code and server,
+// lb_net_peer_lobby) and, once the new boot is up, the menus are walked the
+// way a player does, one screen at a time and keyed on which screen is up
+// (its vtable), never on timing alone:
+//   StartScreen      tap to start
+//   ProfileSelect    the profile slot the player last used, then Use
+//   MainMenu         Multiplayer (select, then enter)
+//   MultiplayerMenu  Join (select, then enter)
+//   JoinWifiGame     the room code is looked up again; when the host's row is
+//                    listed (orange text at the list's top left, the test
+//                    tools/lb_mp.py uses), the row is selected and confirmed
+//   ClientLobby      done
+// Taps go through the touch panel (nds_set_touch), as a player's would, so
+// nothing the game does is skipped. It gives up (and says so) when a screen
+// does not move on, or after 150 s. The setting "Rejoin after loading the
+// host's content" turns it off.
+// (nds_gpu2d_framebuffer / nds_gpu2d_want_native: gpu2d.h, included at the top,
+// because this point is inside an unnamed namespace.)
+extern "C" int lb_net_peer_lobby(char* srv, int scap, int* port, char* code, int ccap);
+extern "C" int lb_setting_auto_rejoin(void);         /* lb_overlay.cpp */
+extern unsigned g_boot_gen;                          /* below: bumped by every reset */
+namespace {
+constexpr uint32_t kVtStart = 0x0214DDF4u, kVtProfile = 0x0214D314u, kVtMain = 0x0214D00Cu,
+                   kVtMulti = 0x0214D138u, kVtJoin = 0x0214CB3Cu, kVtClientLobby = 0x0214C454u;
+// The walk's screens in order: a later one is further along.
+constexpr uint32_t kWalk[6] = {kVtStart, kVtProfile, kVtMain, kVtMulti, kVtJoin, kVtClientLobby};
+struct Rejoin {
+    bool armed = false;          // a reset is coming (or came) and the lobby is known
+    unsigned gen = 0;            // g_boot_gen when armed: active once it changes
+    char srv[128] = {}, code[32] = {};
+    int port = 0;
+    uint32_t screen = 0;         // the vtable of the screen last updated
+    unsigned screen_at = 0;      // the vblank it became current
+    unsigned vbl = 0;            // vblanks since the reset
+    unsigned last_tap = 0;       // vblank of the last tap's press
+    int taps = 0;                // taps on this screen
+    bool looked_up = false;      // JoinWifiGame: the room code asked again
+    bool seen_join = false;      // this walk reached JoinWifiGame
+    unsigned seen_mask = 0;      // walk screens updated since the last vblank (kWalk bits)
+    unsigned mask_hist[8] = {};  // ... over the last 8 vblanks
+    uint32_t profile_obj = 0;    // the ProfileSelect object, while it updates
+    int row_step = 0;            // JoinWifiGame: 0 none, 1 selected
+    // the tap in progress
+    int tx = 0, ty = 0, press_left = 0;
+};
+Rejoin g_rj;
+int g_rj_profile_slot = -1;      // the ProfileSelect slot last focused (0..2)
+
+uint32_t rj_list(uint32_t screen) {
+    const uint32_t l = bus_read_u32(screen + 0x1Cu);
+    return guest_ptr(l) ? l : 0u;
+}
+// The focused widget's record id (FUN_020E137C), 0 when none.
+uint32_t rj_focused_id(uint32_t screen) {
+    const uint32_t l = rj_list(screen);
+    if (!l) return 0u;
+    const uint32_t i = bus_read_u8(l + 1u), n = bus_read_u8(l + 2u);
+    if (i >= n) return 0u;
+    const uint32_t w = bus_read_u32(l + 0xCu + 4u * i);
+    const uint32_t rec = guest_ptr(w) ? bus_read_u32(w + 4u) : 0u;
+    return guest_ptr(rec) ? bus_read_u16(rec + 2u) : 0u;
+}
+// The centre of the widget whose record id is `id` (rect s16 y0,x0,y1,x1 at
+// the record's +4, docs/371). False when it is not on this screen.
+bool rj_widget_centre(uint32_t screen, uint32_t id, int* x, int* y) {
+    const uint32_t l = rj_list(screen);
+    if (!l) return false;
+    const uint32_t n = bus_read_u8(l + 2u);
+    for (uint32_t i = 0; i < n && i < 64u; ++i) {
+        const uint32_t w = bus_read_u32(l + 0xCu + 4u * i);
+        const uint32_t rec = guest_ptr(w) ? bus_read_u32(w + 4u) : 0u;
+        if (!guest_ptr(rec) || bus_read_u16(rec + 2u) != id) continue;
+        const int y0 = (int16_t)bus_read_u16(rec + 4u), x0 = (int16_t)bus_read_u16(rec + 6u);
+        const int y1 = (int16_t)bus_read_u16(rec + 8u), x1 = (int16_t)bus_read_u16(rec + 0xAu);
+        const int cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+        if (cx < 0 || cx > 255 || cy < 0 || cy > 191) return false;
+        *x = cx;
+        *y = cy;
+        return true;
+    }
+    return false;
+}
+// The Join screen lists a host: orange text in the list's top left.
+bool rj_row_listed() {
+    nds_gpu2d_want_native();
+    const uint32_t* fb = nds_gpu2d_framebuffer(1);
+    if (!fb) return false;
+    int hits = 0;
+    for (int y = 38; y < 58; ++y)
+        for (int x = 55; x < 215; ++x) {
+            const uint32_t px = fb[y * 256 + x];
+            const int r = (px >> 16) & 0xFF, g = (px >> 8) & 0xFF, b = px & 0xFF;
+            if (r > 170 && g > 90 && g < 200 && b < 90) ++hits;
+        }
+    return hits >= 12;
+}
+void rj_tap(int x, int y) {
+    g_rj.tx = x;
+    g_rj.ty = y;
+    g_rj.press_left = 5;
+    g_rj.last_tap = g_rj.vbl;
+    ++g_rj.taps;
+    std::fprintf(stderr, "[lb_rejoin] tap %d,%d on screen %08X (tap %d there)\n", x, y,
+                 g_rj.screen, g_rj.taps);
+    std::fflush(stderr);
+}
+void rj_stop(const char* why, bool ok) {
+    std::fprintf(stderr, "[lb_rejoin] %s: %s\n", ok ? "done" : "gave up", why);
+    std::fflush(stderr);
+    if (g_rj.press_left > 0) nds_set_touch((uint16_t)g_rj.tx, (uint16_t)g_rj.ty, false);
+    g_rj = Rejoin{};
+    lb_overlay_notice(ok ? "Back in the lobby with the host's content loaded."
+                         : "Could not rejoin the lobby by itself: join it again from the "
+                           "Multiplayer menu.");
+}
+
+// Called from the screen updates: which screen is up. ProfileSelect's focus is
+// remembered at any time, so the rejoin picks the slot the player used.
+void rj_note_screen(uint32_t screen) {
+    if (!guest_ptr(screen)) return;
+    const uint32_t vt = bus_read_u32(screen);
+    if (vt < 0x02140000u || vt >= 0x02150000u) return;   // not a screen object (a callback's return)
+    if (vt == kVtProfile) {
+        const uint32_t id = rj_focused_id(screen);
+        if (id >= 0x238u && id <= 0x23Au) g_rj_profile_slot = (int)(id - 0x238u);
+    }
+    if (!g_rj.armed || g_rj.gen == g_boot_gen) return;
+    // Several screens update each frame (the walk's screen and the frame or
+    // backdrop screens stacked with it), so only the walk's own are collected,
+    // and the tick takes the one furthest along.
+    for (int i = 0; i < 6; ++i)
+        if (vt == kWalk[i]) {
+            g_rj.seen_mask |= 1u << i;
+            if (vt == kVtProfile) g_rj.profile_obj = screen;
+        }
+}
+
+// Per VBlank: the tap in progress, and the walk.
+void rj_tick() {
+    if (!g_rj.armed) return;
+    if (g_rj.gen == g_boot_gen) return;   // the reset has not happened yet
+    ++g_rj.vbl;
+    // The screen up: the furthest along of those updated in the last 8 vblanks
+    // (the game updates its screens at 30 Hz).
+    g_rj.mask_hist[g_rj.vbl & 7u] = g_rj.seen_mask;
+    g_rj.seen_mask = 0;
+    {
+        unsigned m = 0;
+        for (unsigned h : g_rj.mask_hist) m |= h;
+        uint32_t vt = 0;
+        for (int i = 5; i >= 0 && !vt; --i)
+            if (m & (1u << i)) vt = kWalk[i];
+        if (vt && vt != g_rj.screen) {
+            std::fprintf(stderr, "[lb_rejoin] screen %08X after %u vblanks\n", vt, g_rj.vbl);
+            std::fflush(stderr);
+            g_rj.screen = vt;
+            g_rj.screen_at = g_rj.vbl;
+            g_rj.taps = 0;
+            g_rj.row_step = 0;
+        }
+    }
+    if (g_rj.press_left > 0) {
+        nds_set_touch((uint16_t)g_rj.tx, (uint16_t)g_rj.ty, --g_rj.press_left > 0);
+        return;
+    }
+    if (!lb_setting_auto_rejoin()) { rj_stop("turned off", false); return; }
+    // The net state still reads the old lobby for a moment after the reset,
+    // so it counts only once this walk has been on the Join screen.
+    const int net = lb_net_guest_state();
+    if (g_rj.screen == kVtJoin) g_rj.seen_join = true;
+    if (g_rj.screen == kVtClientLobby || (g_rj.seen_join && (net == 5 || net == 12))) {
+        rj_stop("the lobby is joined", true);
+        return;
+    }
+    if (g_rj.vbl > 150u * 60u) { rj_stop("150 s passed", false); return; }
+    const unsigned on = g_rj.vbl - g_rj.screen_at, since = g_rj.vbl - g_rj.last_tap;
+    if (on < 60u || since < 120u) return;   // let the screen settle; one tap per 2 s
+    switch (g_rj.screen) {
+    case kVtStart:
+        if (g_rj.taps < 8) rj_tap(128, 96);
+        else rj_stop("the title screen did not move on", false);
+        break;
+    case kVtProfile: {
+        // The slot the player last used (selected first), then Use.
+        if (g_rj.taps >= 10) { rj_stop("the profile screen did not move on", false); break; }
+        const uint32_t scr = g_rj.profile_obj;
+        const uint32_t want = 0x238u + (uint32_t)(g_rj_profile_slot >= 0 ? g_rj_profile_slot : 0);
+        int x = 0, y = 0;
+        if (guest_ptr(scr) && bus_read_u32(scr) == kVtProfile && rj_focused_id(scr) != want &&
+            g_rj.taps < 4 && rj_widget_centre(scr, want, &x, &y))
+            rj_tap(x, y);
+        else
+            rj_tap(205, 169);   // Use
+        break;
+    }
+    case kVtMain:
+        if (g_rj.taps < 6) rj_tap(171, 52);   // Multiplayer: select, then enter
+        else rj_stop("the main menu did not move on", false);
+        break;
+    case kVtMulti:
+        if (g_rj.taps < 6) rj_tap(173, 84);   // Join: select, then enter
+        else rj_stop("the Multiplayer menu did not move on", false);
+        break;
+    case kVtJoin:
+        if (!g_rj.looked_up) {
+            g_rj.looked_up = true;
+            // The peer the first join set usually survives the reset; asking
+            // the server again covers a host whose address moved.
+            if (g_rj.srv[0]) {
+                lb_net_join_by_code(g_rj.srv, g_rj.port, g_rj.code);
+                std::fprintf(stderr, "[lb_rejoin] looking up room %s again\n", g_rj.code);
+                std::fflush(stderr);
+            }
+        }
+        if (on > 45u * 60u) { rj_stop("the host's game was not listed", false); break; }
+        if (!rj_row_listed()) { g_rj.row_step = 0; break; }
+        // Select, then confirm 1.2 s later, both on the row's text.
+        if (g_rj.row_step == 0 || since >= 72u) {
+            rj_tap(75, 47);
+            g_rj.row_step = g_rj.row_step == 0 ? 1 : 0;
+        }
+        break;
+    default:
+        if (g_rj.screen && on > 30u * 60u) rj_stop("an unexpected screen stayed up", false);
+        break;
+    }
+}
+}  // namespace
+
+// Arm the rejoin before a content reload's reset (lb_cunits.cpp, lb_maptx.cpp).
+// 1 when it will run (the setting is on and this machine is in a lobby).
+extern "C" int lb_rejoin_arm(const char* why) {
+    if (!lb_setting_auto_rejoin()) return 0;
+    Rejoin r;
+    if (!lb_net_peer_lobby(r.srv, (int)sizeof r.srv, &r.port, r.code, (int)sizeof r.code)) {
+        // No room code (a lobby found on the Join screen, or a LAN peer): the
+        // peer the bridge holds survives the reset, so the walk still works,
+        // without the lookup.
+        const int s = lb_net_guest_state();
+        if (!(s == 5 || s == 7 || s == 12)) {
+            std::fprintf(stderr, "[lb_rejoin] not armed (%s): not in a lobby\n", why);
+            std::fflush(stderr);
+            return 0;
+        }
+        r = Rejoin{};
+    }
+    // Often called off the emulation thread (the rules or a map transfer):
+    // filled first, armed last, and the tick waits for the reset either way.
+    r.gen = g_boot_gen;
+    g_rj = r;
+    std::atomic_thread_fence(std::memory_order_release);
+    g_rj.armed = true;
+    std::fprintf(stderr, "[lb_rejoin] armed (%s): room %s on %s:%d, profile slot %d\n", why, r.code,
+                 r.srv[0] ? r.srv : "(the configured server)", r.port, g_rj_profile_slot);
+    std::fflush(stderr);
+    return 1;
+}
+extern "C" void lb_rejoin_disarm(void) { g_rj.armed = false; }
+extern "C" void lb_rejoin_note_screen(uint32_t screen) { rj_note_screen(screen); }
+extern "C" void lb_request_game_reset(void);   /* lb_overlay.cpp */
+extern "C" void lb_rejoin_tick(void) {
+    // TEST AID: LB_TEST_REJOIN=1 plays a content reload once: 5 s after this
+    // machine first sits in a joined lobby, the rejoin is armed and the game
+    // reset, as a host's units or map arriving would.
+    static const bool test = std::getenv("LB_TEST_REJOIN") != nullptr;
+    static int test_state = 0;   // 0 waiting, n vblanks in the lobby, -1 done
+    if (test && test_state >= 0) {
+        const int s = lb_net_guest_state();
+        test_state = (s == 5 || s == 7 || s == 12) ? test_state + 1 : 0;
+        if (test_state > 300) {
+            test_state = -1;
+            std::fprintf(stderr, "[lb_rejoin] test: a content reload now\n");
+            std::fflush(stderr);
+            if (lb_rejoin_arm("test")) lb_request_game_reset();
+        }
+    }
+    rj_tick();
+}
+
+// SG-0125: AREA HEAL IN THE YELLOW BRICK. Spell 3 (Area Heal: button 1, cast
+// on a place like Area Speed Boost, a one-off heal; docs/441) is complete in
+// the spell table, but the brick's filler skips it: FUN_020DC004 at 020DC156
+// `cmp r0,#3 ; beq skip` (Thumb 0x2803). A hero gets it only from Balance >
+// Heroes, which is the choice; while any hero holds it the compare reads
+// `cmp r0,#0xFF` (no spell id) so it is listed, and it goes back otherwise, so
+// a stock run never sees the code changed. Checked once a second.
+extern "C" void lb_area_heal_tick(void) {
+    static unsigned n = 0;
+    if (++n % 60u) return;
+    constexpr uint32_t kSkip = 0x020DC156u;
+    const uint16_t cur = bus_read_u16(kSkip);
+    if (cur != 0x2803u && cur != 0x28FFu) return;   // not this build's code
+    bool any = false;
+    const int recs = lb_balance_record_count(LB_BAL_UNITS);
+    for (int r = 0; r < recs && !any; ++r) {
+        if (lb_balance_record_category(r) != 0) continue;   // heroes
+        for (int s = 0; s < LB_BAL_SPELLS && !any; ++s)
+            any = lb_balance_value(r, LB_BAL_SPELL_FIELD0 + s) == 3;
+    }
+    const uint16_t want = any ? 0x28FFu : 0x2803u;
+    if (cur != want) {
+        bus_write_u16(kSkip, want);
+        std::fprintf(stderr, "[lb_spells] Area Heal %s the yellow brick (SG-0125)\n",
+                     any ? "listed in" : "hidden from");
+        std::fflush(stderr);
+    }
+}
+
 extern "C" void lb_teal_screen_fix(uint32_t screen);   /* below, docs/412 */
 void screen_update_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kScreenUpdate);
     ++g_kb_vblanks;   // (counts updates; only the difference matters)
     lb_teal_screen_fix(g_cpu.R[0]);   // docs/412: teal's frames, after the screen's own
+    lb_rejoin_note_screen(g_cpu.R[0]);   // the rejoin after a content reload
     if (!g_title_seen && guest_ptr(g_cpu.R[0]) && bus_read_u32(g_cpu.R[0]) == 0x0214DDF4u) {
         g_title_seen = true;
         if (lb_setting_skip_intro() && !g_skip_logged) {
@@ -9875,6 +10550,10 @@ constexpr uint32_t kModelLoad = 0x02035C48u;     // arm: the level's model recor
 constexpr uint32_t kDrawIsUnit = 0x02036CA0u;    // arm leaf: drawn as a billboard unit
 constexpr uint32_t kDrawIsModel = 0x02036CD0u;   // arm leaf: drawn as a model
 void anim_factory_override(void);
+// docs/496 (SG-0122): the dragons' fire breath, FUN_0205152C(action, entity,
+// start), which the melee and ranged attack steps call for every attacker.
+constexpr uint32_t kDragonBreath = 0x0205152Cu;   // arm
+void dragon_breath_override(void);
 void model_load_override(void);
 void draw_is_unit_override(void);
 void draw_is_model_override(void);
@@ -11424,7 +12103,7 @@ struct ModelPal {
     uint8_t was[kModelBanks];        // the stock banks
     uint8_t wrote[kModelBanks];      // what this port last put there
 };
-ModelPal g_model_pal[12];
+ModelPal g_model_pal[24];   // BR-0081: 12 records and the extension's 12
 bool g_model_pal_any = false;
 // Per frame: teal's bank 5 (while teal is on) and the Shark's body entries
 // (while the creature tint is on) in each loaded model, built from its stock
@@ -11949,7 +12628,153 @@ void card_tint_apply(uint32_t* scr, int width, int ox) {
 }
 }  // namespace
 extern unsigned g_boot_gen;   // below: bumped by every reset
+extern "C" int lb_setting_big_sprite_pool(void);   // lb_overlay.cpp
 namespace {
+// ---- BR-0081: TWELVE MORE MODEL RECORDS ------------------------------------
+//
+// A level gives every (blueprint, team) of a category 5/6 roster unit one of
+// the 12 model records at 0x02150BA0 (0x6C bytes: +0x54 the model, +0x58 its
+// animations, +0x5C, +0x60 free, +0x62 the palette base, +0x64/+0x68 the key).
+// Three armies with a transport and three specials each take all 12, so a
+// thirteenth key -- a hotwired special now on another team, a custom unit, an
+// extra seat -- found no record: the load wrote record "-1" (0x6C bytes BEFORE
+// the array) and the draw took record 0's model or none (BR-0081: specials
+// invisible in a 3-army match; measured "12 of 12 records in use").
+//
+// Only four functions touch the array, every caller goes through them:
+//   FUN_0200D0E4 the first free index (-1 when 12 are taken)
+//   FUN_0200D114 the record of (blueprint, team), else record 0
+//   FUN_0200D15C index -> address
+//   FUN_0200D1C0 the level's reset: frees each record's resources, marks it
+//                free and puts the key's sentinels back
+// With "Larger Sprite Pool" on, the first three are answered here over 24
+// records: the cartridge's 12 where they are, and 12 more at 0x023F9010, in the
+// unclaimed head of docs/412's zero run (claimed only while zero, constructed
+// as the boot's constructor FUN_0200D248 does). The reset runs the cartridge's
+// own body twice, the second time with its array literal (0x0200D244, read at
+// run time) pointed at the extension, so the extension's models are freed by
+// the cartridge's own code. Display only: the records hold what is drawn.
+constexpr uint32_t kModelAlloc = 0x0200D0E4u;   // arm
+constexpr uint32_t kModelFind = 0x0200D114u;    // arm
+constexpr uint32_t kModelAt = 0x0200D15Cu;      // arm
+constexpr uint32_t kModelReset = 0x0200D1C0u;   // arm
+constexpr uint32_t kModelResetLit = 0x0200D244u;   // FUN_0200D1C0's array literal
+constexpr uint32_t kModelSentinelLit = 0x0200D240u;
+constexpr uint32_t kModelExt = 0x023F9010u;     // to 0x023F9520, below the teal block (0x023F9800)
+constexpr int kModelBase = 12, kModelExtN = 12;
+unsigned g_mext_gen = ~0u;   // never a boot generation: the first call claims the extension
+bool g_mext_ok = false, g_mext_owned = false;
+CallWrap g_wrap_mreset;
+
+uint32_t model_rec(int k) {
+    return k < kModelBase ? 0x02150BA0u + 0x6Cu * (uint32_t)k
+                          : kModelExt + 0x6Cu * (uint32_t)(k - kModelBase);
+}
+// The extension, claimed and constructed once per boot (re-constructed after a
+// reset only when this port wrote it before).
+bool mext_ready() {
+    if (g_mext_gen == g_boot_gen) return g_mext_ok;
+    g_mext_gen = g_boot_gen;
+    g_mext_ok = false;
+    bool zero = true;
+    for (uint32_t a = kModelExt; a < kModelExt + 0x6Cu * kModelExtN && zero; a += 4u)
+        zero = bus_read_u32(a) == 0u;
+    if (!zero && !g_mext_owned) {
+        std::fprintf(stderr, "[lb_models] 0x%08X is in use: the cartridge's 12 model records only\n", kModelExt);
+        return false;
+    }
+    const uint32_t s1 = bus_read_u32(kModelSentinelLit);
+    for (int k = kModelBase; k < kModelBase + kModelExtN; ++k) {
+        const uint32_t m = model_rec(k);
+        for (uint32_t o = 0; o < 0x6Cu; o += 4u) bus_write_u32(m + o, 0u);
+        bus_write_u8(m + 0x60u, 1u);          // free
+        bus_write_u32(m + 0x64u, s1);         // the reset's own sentinels
+        bus_write_u32(m + 0x68u, s1 - 0x228u);
+    }
+    g_mext_owned = true;
+    g_mext_ok = true;
+    std::fprintf(stderr, "[lb_models] %d more model records at 0x%08X (BR-0081)\n", kModelExtN, kModelExt);
+    return true;
+}
+// How many records a lookup scans, and how many a level may take.
+int model_rec_count() { return mext_ready() ? kModelBase + kModelExtN : kModelBase; }
+int model_rec_alloc_limit() { return lb_setting_big_sprite_pool() ? model_rec_count() : kModelBase; }
+
+void model_alloc_override(void) {
+    int r = -1;
+    for (int k = 0; k < model_rec_alloc_limit() && r < 0; ++k)
+        if (bus_read_u8(model_rec(k) + 0x60u) != 0u) r = k;
+    if (r >= kModelBase) {
+        static int said = 0;
+        if (said++ < 4)
+            std::fprintf(stderr, "[lb_models] model record %d (an extension one) given out\n", r);
+    }
+    g_cpu.R[0] = (uint32_t)r;
+    lb_override_return();
+}
+void model_find_override(void) {
+    const uint32_t bp = g_cpu.R[0], team = g_cpu.R[1];
+    uint32_t out = 0u, same_bp = 0u;
+    for (int k = 0; k < model_rec_count(); ++k) {
+        const uint32_t m = model_rec(k);
+        if (bus_read_u32(m + 0x64u) != bp) continue;
+        if (bus_read_u32(m + 0x68u) == team) { out = m; break; }   // the cartridge's own match
+        if (!same_bp && bus_read_u32(m + 0x54u) != 0u) same_bp = m;
+    }
+    // BR-0049/0081: records are handed out at the level's load, keyed by the
+    // ROSTER's (blueprint, team). A special hotwired to another team keys
+    // (blueprint, new team), which no record has, and the cartridge then drew
+    // it with record 0 -- another unit's model and animation file. Its stun
+    // (EMP) and other animations index that file by its own model's numbers.
+    // The same blueprint's record of another team is its own model and
+    // animations, in that team's colours; record 0 stays the last resort.
+    if (!out) {
+        out = same_bp ? same_bp : model_rec(0);
+        if (same_bp) {
+            static int said = 0;
+            if (said++ < 8)
+                std::fprintf(stderr, "[lb_models] blueprint %u of team %u has no record of its own (hotwired?): "
+                             "drawn with its model of team %u\n", bp, team, bus_read_u32(same_bp + 0x68u));
+        }
+    }
+    g_cpu.R[0] = out;
+    lb_override_return();
+}
+void model_at_override(void) {
+    const int k = (int)g_cpu.R[0];
+    // -1 (no free record) keeps the cartridge's arithmetic, 0x6C before the
+    // array, exactly as it was.
+    g_cpu.R[0] = (k >= 0 && k < model_rec_count()) ? model_rec(k) : 0x02150BA0u + 0x6Cu * (uint32_t)k;
+    lb_override_return();
+}
+void model_reset_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kModelReset);
+    CallWrap& w = g_wrap_mreset;
+    const int st = wrap_state(w, original);
+    if (st == 1) return;
+    if (st == 2) {
+        if (w.a == 1u) {   // the cartridge's 12 are done: now the extension's
+            w.a = 2u;
+            bus_write_u32(kModelResetLit, kModelExt);
+            w.calling = true;
+            g_cpu.R[13] = w.sp_call;
+            g_cpu.R[14] = kModelReset;
+            g_cpu.R[15] = kModelReset;
+            runtime_dispatch_with_exchange(kModelReset);
+            return;
+        }
+        if (w.a == 2u) bus_write_u32(kModelResetLit, 0x02150BA0u);
+        wrap_finish(w);
+        return;
+    }
+    if (!mext_ready()) {   // no extension: the cartridge's body, unchanged
+        if (original) original();
+        return;
+    }
+    w.a = 1u;
+    wrap_start(w, kModelReset);
+}
+
 // DIAGNOSTIC (BR-0081, docs/485): A 3D UNIT WITH NO MODEL RECORD. Building_Draw3D
 // (reached only by direct calls, so it cannot be hooked) draws a Transport or
 // Siege unit from the record FUN_0200D114 finds by (blueprint number at
@@ -11971,7 +12796,8 @@ void model_records_watch() {
     const uint32_t arr = bus_read_u32(pool + 8u);
     const int32_t cnt = (int32_t)bus_read_u32(pool + 0xCu);
     int used = 0;
-    for (uint32_t k = 0; k < 12u; ++k) used += bus_read_u8(kTealModels + kTealModelStride * k + 0x60u) == 0u;
+    const int nrec = model_rec_count();   // BR-0081: with the extension, 24
+    for (int k = 0; k < nrec; ++k) used += bus_read_u8(model_rec(k) + 0x60u) == 0u;
     for (int32_t i = 0; guest_ptr(arr) && i < cnt && i < 4096; ++i) {
         const uint32_t e = bus_read_u32(arr + 4u * (uint32_t)i);
         if (!guest_ptr(e) || !bus_read_u8(e + 0x227u)) continue;
@@ -11983,19 +12809,19 @@ void model_records_watch() {
         if (drawn == 0 || (drawn < 0 && cat != 5u && cat != 6u)) continue;
         const uint32_t idx = bus_read_u16(bp + 4u), team = bus_read_u8(e + 0xD5u);
         int rec = -1;
-        for (uint32_t k = 0; k < 12u && rec < 0; ++k) {
-            const uint32_t m = kTealModels + kTealModelStride * k;
+        for (int k = 0; k < nrec && rec < 0; ++k) {
+            const uint32_t m = model_rec(k);
             if (bus_read_u32(m + 0x64u) == idx && bus_read_u32(m + 0x68u) == team) rec = (int)k;
         }
-        const bool ok = rec >= 0 && bus_read_u32(kTealModels + kTealModelStride * (uint32_t)rec + 0x54u) != 0u;
+        const bool ok = rec >= 0 && bus_read_u32(model_rec(rec) + 0x54u) != 0u;
         if (ok) continue;
         const uint32_t key = (idx << 8) | team;
         if (std::find(said.begin(), said.end(), key) != said.end() || said.size() >= 64u) continue;
         said.push_back(key);
         std::fprintf(stderr, "[lb_models] BR-0081: unit %08X (blueprint %u, team %u, owner %u, category %u) has %s; "
-                     "the draw takes record 0's model. %d of 12 records in use\n", e, idx, team,
+                     "the draw takes record 0's model. %d of %d records in use\n", e, idx, team,
                      (unsigned)bus_read_u8(e + 0xE4u), (unsigned)cat,
-                     rec < 0 ? "no model record" : "a record with no model loaded", used);
+                     rec < 0 ? "no model record" : "a record with no model loaded", used, nrec);
         std::fflush(stderr);
     }
 }
@@ -12020,9 +12846,9 @@ void models_paint() {
     uint8_t* e = texpal_flat(&size);
     if (!e) return;
     bool changed = false, any = false;
-    for (uint32_t k = 0; k < 12u; ++k) {
+    for (int k = 0; k < model_rec_count(); ++k) {   // BR-0081: the extension too
         ModelPal& p = g_model_pal[k];
-        const uint32_t m = kTealModels + kTealModelStride * k;
+        const uint32_t m = model_rec(k);
         const uint32_t base = bus_read_u16(m + 0x62u);
         const uint32_t at = base * 16u;
         const bool loaded = bus_read_u32(m + 0x54u) != 0u && base != 0u && at + kModelBanks <= size;
@@ -12048,7 +12874,23 @@ void models_paint() {
             if (!white) continue;  // not ours to take back
         }
         if (!p.at) {
-            if (!white) continue;  // not the layout this expects: leave it
+            if (!white) {          // not the layout this expects: leave it
+                // BR-0095 (docs/496): say so, once per model and palette. A
+                // custom texture encoded before the BR-0095 fix put picture
+                // colours on bank 5's entries 12-14 (lb_cunits.cpp
+                // encode_model_texture); the cartridge build re-encodes it.
+                static std::vector<uint32_t> said_odd;
+                const uint32_t key = (bus_read_u32(m + 0x64u) << 16) ^ at;
+                if (said_odd.size() < 32u && std::find(said_odd.begin(), said_odd.end(), key) == said_odd.end()) {
+                    said_odd.push_back(key);
+                    std::fprintf(stderr, "[lb_models] model %d (id %u) palette %04X: bank 5 entries 12-14 are %04X %04X %04X, "
+                                 "not the stock white ramp; teal and custom colours leave it stock\n", k,
+                                 bus_read_u32(m + 0x64u), at, bank5[kTealEntry], bank5[kTealEntry + 1],
+                                 bank5[kTealEntry + 2]);
+                    std::fflush(stderr);
+                }
+                continue;
+            }
             std::memcpy(p.was, e + at, kModelBanks);
             p.at = at;
             static int said = 0;
@@ -12396,6 +13238,11 @@ const NdsDispatchEntry kOverrideTable[] = {
     /* ARM. The animation set of a new entity (from Task_View_Update): a custom
        unit drawn with a model, or with another unit's sheets, gets that kind's
        set (docs/492). Otherwise a pure tail call. */
+    /* ARM. BR-0081: the model records, 12 more beside the cartridge's 12. */
+    {kModelAlloc, 0u, model_alloc_override, nullptr},     /* 0x0200D0E4 */
+    {kModelFind, 0u, model_find_override, nullptr},       /* 0x0200D114 */
+    {kModelAt, 0u, model_at_override, nullptr},           /* 0x0200D15C */
+    {kModelReset, 0u, model_reset_override, nullptr},     /* 0x0200D1C0 */
     {kAnimFactory, 0u, anim_factory_override, nullptr},    /* 0x0200D504 */
     /* ARM. THE DECOMPILATION'S FIRST GRADED FUNCTION, not a patch. With
        LB_SHADOW unset this delegates to the cartridge and only counts; with
@@ -12468,6 +13315,10 @@ const NdsDispatchEntry kOverrideTable[] = {
        name only: seats the extra computer opponents (docs/414). Otherwise a
        pure tail call. */
     {kSetupName, 1u, ai_opp_setname_override, nullptr},     /* 0x02045858 */
+    /* Thumb. SG-0115: the multiplayer start's local-id call (lr 0x020F54AC)
+       gets the online computer player's seat in front of it; otherwise a
+       pure tail call. docs/495. */
+    {kCpuoSetLocal, 1u, cpuo_set_local_override, nullptr}, /* 0x0204586C */
     /* Thumb. MultiplayerMissionBase::v06: allies the computers when asked
        (docs/414); otherwise a pure tail call. */
     {kMissionV06, 1u, ai_opp_v06_override, nullptr},        /* 0x02045BC8 */
@@ -12479,6 +13330,10 @@ const NdsDispatchEntry kOverrideTable[] = {
        the Custom and Random portraits (docs/390). Otherwise a pure tail
        call. */
     {kImageXfer, 0u, image_xfer_override, nullptr},        /* 0x0204E1D0 */
+    /* ARM. The dragons' fire breath: a custom unit on a dragon's model with
+       "attack_anim": "breath" reads blueprint number 8 inside it (docs/496).
+       Otherwise a pure tail call. */
+    {kDragonBreath, 0u, dragon_breath_override, nullptr},  /* 0x0205152C */
     {kSetOwner, 0u, set_owner_override, nullptr},          /* 0x020598C4 */
     /* ARM. "Is this unit in state N": with Stunned Heroes Can Cast, a hero
        asked about state 0xB by the HUD or the AI hero answers no (docs/453).
@@ -12508,6 +13363,13 @@ const NdsDispatchEntry kOverrideTable[] = {
     {kAssistCheck, 0u, assist_check_override, nullptr},    /* 0x02060240 */
     /* GRADED, NOT PATCHED. docs/333. */
     {kListFind, 0u, list_find_shadow, nullptr},            /* 0x0206AC2C */
+    /* ARM. The move-command factories FUN_020848AC (MoveEntitiesCommand's
+       executor) calls once per unit: with Smarter Unit Movement, a group
+       order's second and later movers get their own slot round the tapped
+       cell (docs/497, SG-0123); otherwise a pure tail call. */
+    {kMoveFactory, 0u, smart_move_factory_override, nullptr},       /* 0x0206AE10 */
+    {kMoveFactoryM1, 0u, smart_move_factory_m1_override, nullptr},  /* 0x0206AF60 */
+    {kMoveFactoryM2, 0u, smart_move_factory_m2_override, nullptr},  /* 0x0206AF94 */
     /* ARM. Adds the attack boost to a ranged hit in front of the cartridge's
        applier, only on the ranged path (lr 0x0206E44C) and only with the
        setting on; otherwise a pure tail call. Replaces the old override on
@@ -12546,6 +13408,10 @@ const NdsDispatchEntry kOverrideTable[] = {
     {kTileGather, 0u, tile_gather_observer, nullptr},      /* 0x0207E9B4 */
     /* ARM. BR-0053: a mountains unit's order takes no area. */
     {kMovePickDest, 0u, move_dest_override, nullptr},      /* 0x0207F1B4 */
+    /* ARM. SG-0115: a simulation turn released; while an online computer
+       player is seated its script and commands go in front of it; otherwise
+       a pure tail call. docs/495. */
+    {kCpuoTurnRelease, 0u, cpuo_turn_override, nullptr},   /* 0x0208331C */
     /* ARM. AssistStructureCommand's executor: as the assist check (docs/488). */
     {kAssistCmdExec, 0u, assist_exec_override, nullptr},   /* 0x02084218 */
     /* ARM. A team's bricks: a Gold Brick's worth, else a pure tail call.
@@ -12565,6 +13431,11 @@ const NdsDispatchEntry kOverrideTable[] = {
        the boot defaults take the remembered volumes. */
     {kSetSfxVol, 1u, set_sfx_volume_override, nullptr},    /* 0x02089898 */
     {kSetMusicVol, 1u, set_music_volume_override, nullptr}, /* 0x020898C4 */
+    /* Thumb. SG-0115: the AI module's event handler; stage 4 of an online
+       CreateGameEvent builds the computer player's AI in front of it;
+       otherwise a pure tail call. (Not FUN_0208AF58: SG-0002's patch.)
+       docs/495. */
+    {kCpuoAiEvent, 1u, cpuo_ai_event_override, nullptr},   /* 0x0208AF38 */
     /* Thumb. BR-0069: the building the AI trains a unit in, by the player's
        rule where the two differ (never for a stock record), or a custom
        unit's trained_at (SG-0093, docs/476); otherwise a pure tail call.
@@ -12604,6 +13475,11 @@ const NdsDispatchEntry kOverrideTable[] = {
     {kMoveIssue, 1u, move_issue_observer, nullptr},        /* 0x020A8F28 */
     /* Thumb. A Hotwire "always" unit gets the Hotwire tag (SG-0073, docs/470). */
     {kHotwireTags, 1u, hotwire_tags_override, nullptr},    /* 0x020A9B7C */
+    /* Thumb. The stylus rule walk: a building tap by a selection that holds
+       a unit repairing by Soldiers Repair Buildings or its own Repairs trait,
+       and no hero or builder, gets the builder tag 0x55 (SG-0119, docs/494).
+       Otherwise a pure tail call. */
+    {kStylusMatch, 1u, stylus_match_override, nullptr},   /* 0x020AA0A4 */
     /* Observer only, and only speaks with LB_CLICKDISPATCH=1. Item #4. */
     {kClickDispatch, 1u, click_dispatch_observer, nullptr}, /* 0x020AA8D4 */
     /* Sign-extends the drag rect's three register arguments before the guest
@@ -12784,6 +13660,7 @@ static_assert(kRosterBuild < kPassability && kPassability < kOccLayers && kOccLa
               kMarquee < kFpCell && kFpCell < kStringFromId &&
               kStringFromId < kMissionKey && kMissionKey < kSetupName &&
               kSetupName < kMissionV06 && kMissionV06 < kRegisterMissions &&
+              kSetupName < kCpuoSetLocal && kCpuoSetLocal < kMissionV06 &&
               kRegisterMissions < kGfxTransfer &&
               kGfxTransfer < kImageXfer && kImageXfer < kSetOwner &&
               kSetOwner < kSetHp && kSetHp < kApplyDamage &&
@@ -12798,6 +13675,8 @@ static_assert(kRosterBuild < kPassability && kPassability < kOccLayers && kOccLa
               kHotWireTick < kCastGround && kCastGround < kCastSpell &&
               kCastSpell < kTileGather &&
               kTileGather < kMovePickDest && kMovePickDest < kAssistCmdExec &&
+              kMovePickDest < kCpuoTurnRelease && kCpuoTurnRelease < kAssistCmdExec &&
+              kSetMusicVol < kCpuoAiEvent && kCpuoAiEvent < kAiTrainerKind &&
               kAssistCmdExec < kTeamAddBricks && kTeamAddBricks < kAiMineScore && kAiMineScore < kSetMusicSide &&
               kSetMusicSide < kEntitySound && kEntitySound < kAiTrainerKind &&
               kAiTrainerKind < kAiUpgradePick && kAiUpgradePick < kAiQueueBuild &&
@@ -12820,6 +13699,7 @@ static_assert(kRosterBuild < kPassability && kPassability < kOccLayers && kOccLa
               kWmConnectedAids < kWmLinkLevel && kWmLinkLevel < kWmSetGameInfo &&
               kWmSetGameInfo < kWmSetEntry && kWmSetEntry < kFAdd &&
               kFAdd < kFMul && kFMul < kFSub && kFSub < kDivMod &&
+              kImageXfer < kDragonBreath && kDragonBreath < kSetOwner &&                // docs/496
               kSetOwner < kEntityState && kEntityState < kMeleeMatchup &&
               kMeleeMatchup < kU16IsSet &&
               kSetOwner < kU16IsSet && kU16IsSet < kSetHp &&
@@ -14288,6 +15168,21 @@ extern "C" void lb_test_drive(void) {
             g_cast.y = y2;
             g_cast_pending.store(1);
         }
+    } else if (!std::strcmp(w, "move")) {   // move X Y SLOT [SLOT ...] (tiles, pool slots; docs/497)
+        MoveReq q;
+        int used = 0;
+        if (std::sscanf(cmd.c_str(), "move %d %d%n", &q.x, &q.y, &used) == 2) {
+            const char* p = cmd.c_str() + used;
+            int s = 0, m = 0;
+            while (q.n < 16 && std::sscanf(p, "%d%n", &s, &m) == 1) {
+                q.slot[q.n++] = s;
+                p += m;
+            }
+            if (q.n > 0) {
+                g_move = q;
+                g_move_pending.store(1);
+            }
+        }
     } else if (!std::strcmp(w, "frozenwatch")) {
         if (std::sscanf(cmd.c_str(), "frozenwatch %d", &a) == 1 && a > 0) {
             watch_left = (unsigned)a;
@@ -14367,7 +15262,8 @@ extern "C" void lb_test_drive(void) {
 // mounted loader (48 + n, three in all, docs/485); only while three hold every
 // army's mounted sheets. A unit left out is drawn its own way (its hero
 // sheets or its model, which the importer always writes too) and logged.
-constexpr int kModelRecords = 12;               // at 0x02150BA0 (FUN_0200D0E4)
+// BR-0081: 12 at 0x02150BA0, 24 with the extension (model_rec_alloc_limit).
+int model_records_now() { return model_rec_alloc_limit(); }
 constexpr int kMountedSlots = 3;                 // 48..50 (FUN_02035028)
 extern "C" int lb_cunits_model_src(int k);       /* lb_cunits.cpp */
 extern "C" int lb_cunits_model_drawn(int k);
@@ -14383,6 +15279,7 @@ struct CuDraw {
 };
 CuDraw g_cud[128];
 int g_cud_n = 0;
+unsigned g_cud_level = 0;   // docs/496: counts level loads (the breath ids are per level)
 const CuDraw* cud_of_bp(uint32_t bp) {
     for (int i = 0; i < g_cud_n; ++i)
         if (g_cud[i].bp == bp) return &g_cud[i];
@@ -14427,6 +15324,7 @@ void for_each_roster_bp(F&& f) {
 // At each level's sprite load, before the docs/485 cloak reads it.
 void cu_draw_admit(void) {
     g_cud_n = 0;
+    ++g_cud_level;
     for (bool& b : g_cu_art4_ok) b = false;
     const int nk = std::min(lb_cunits_count(), 128);
     if (nk <= 0) return;
@@ -14487,13 +15385,13 @@ void cu_draw_admit(void) {
     };
     int drawn_model = 0, drawn_sprite = 0;
     for (const Want& w : mwant) {
-        if (models + (int)w.armies.size() <= kModelRecords) {
+        if (models + (int)w.armies.size() <= model_records_now()) {
             models += (int)w.armies.size();
             push(w.bp, 1, -1, lb_cunits_model_src(w.k));
             ++drawn_model;
         } else {
             std::fprintf(stderr, "[lb_cudraw] custom unit %d (%s): the %d model records are taken (%d in use); "
-                         "drawn with its sprites this level\n", w.k, lb_cunits_name(w.k), kModelRecords, models);
+                         "drawn with its sprites this level\n", w.k, lb_cunits_name(w.k), model_records_now(), models);
         }
     }
     // The sprite-drawn heroes and specials (art 1..3 always, 4 when admitted),
@@ -14511,7 +15409,7 @@ void cu_draw_admit(void) {
         }
     }
     std::fprintf(stderr, "[lb_cudraw] level load: %d custom unit(s) drawn with a model, %d with another unit's sprites; "
-                 "model records %d of %d, mounted sheets %d of %d\n", drawn_model, drawn_sprite, models, kModelRecords,
+                 "model records %d of %d, mounted sheets %d of %d\n", drawn_model, drawn_sprite, models, model_records_now(),
                  (int)mounted.size(), kMountedSlots);
     std::fflush(stderr);
 }
@@ -14640,6 +15538,82 @@ void draw_is_model_override(void) {
         }
     }
     if (original) original();
+}
+
+// docs/496 (SG-0122): THE DRAGONS' FIRE BREATH FOR A CUSTOM UNIT ON A DRAGON'S
+// MODEL. FUN_0205152C(action r0, entity r1, start r2) is called by both attack
+// steps (FUN_0205079C melee, FUN_02050F3C ranged) for every attacker, right
+// after they play animation 2. It returns at once unless the attacker's
+// blueprint number ([[e+0xE0]+4]+0x04) is 8 (King's Dragon) or 0x1C (Wizard's
+// Dragon); for those it keeps one DragonFireBall particle system (table index
+// 0x18, with 0x22 beside it) at the mouth -- FUN_02051B2C's offset for the
+// facing -- its id in entity +0x144: a new one when `start` and the old one is
+// gone, else the old one moved. The model's own animation 2 is the dragons'
+// frames 50-88 already (the draw cloak gives a model-drawn unit its model's
+// frame ranges), so the flame is the only part missing.
+// For a custom unit with "attack_anim": "breath" (lb_cunits_breath) the call
+// runs as a hop: its record's +0x04 reads 8 for the call, and +0x144 holds the
+// unit's own breath id (kept here, per entity) instead of what the entity had
+// there, which a hero's spells and a mine use for their effect ids. Both are
+// put back on the return. Every machine with the same units makes the same
+// calls (the decision is the unit's bundle), and the particle systems are
+// drawn only. With no such unit a pure tail call.
+extern "C" int lb_cunits_breath(int k);       /* lb_cunits.cpp */
+extern "C" int lb_cunits_breath_any(void);
+HopCloak g_hop_breath;
+uint32_t g_breath_e = 0, g_breath_saved = 0;
+struct BreathId { uint32_t e, id; };
+std::vector<BreathId> g_breath_ids;
+unsigned g_breath_gen = ~0u, g_breath_level = ~0u;
+void dragon_breath_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kDragonBreath);
+    HopCloak& c = g_hop_breath;
+    if (c.active) {
+        if (g_cpu.R[13] == c.sp_call && !c.calling) {
+            // The return: the unit's breath id to the table, the entity's own
+            // +0x144 back (hop_continue puts +0x04 back).
+            const uint32_t id = bus_read_u32(g_breath_e + 0x144u);
+            bool found = false;
+            for (BreathId& b : g_breath_ids)
+                if (b.e == g_breath_e) { b.id = id; found = true; break; }
+            if (!found) g_breath_ids.push_back({g_breath_e, id});
+            bus_write_u32(g_breath_e + 0x144u, g_breath_saved);
+        }
+        hop_continue(c, original);
+        return;
+    }
+    // Per level and per boot: a new level's entities start with no breath, the
+    // same on every machine whatever it played before.
+    if (g_breath_gen != g_boot_gen || g_breath_level != g_cud_level) {
+        g_breath_gen = g_boot_gen;
+        g_breath_level = g_cud_level;
+        g_breath_ids.clear();
+    }
+    if (!lb_cunits_breath_any()) { if (original) original(); return; }
+    const uint32_t e = g_cpu.R[1];
+    const uint32_t a = guest_ptr(e) ? bus_read_u32(e + 0xE0u) : 0u;
+    const uint32_t rec = guest_ptr(a) ? bus_read_u32(a + 4u) : 0u;
+    const int k = guest_ptr(rec) ? lb_cunits_of_battle_record(rec) : -1;
+    if (k < 0 || !lb_cunits_breath(k)) { if (original) original(); return; }
+    uint32_t id = 0xFFFFFFFFu;   // none yet: FUN_0202953C finds no system with id -1
+    for (const BreathId& b : g_breath_ids)
+        if (b.e == e) { id = b.id; break; }
+    if (g_breath_ids.size() > 512u) g_breath_ids.erase(g_breath_ids.begin(), g_breath_ids.begin() + 256);
+    static int said = 0;
+    if (said < 4 && g_cpu.R[2] != 0u && id == 0xFFFFFFFFu) {
+        ++said;
+        std::fprintf(stderr, "[lb_cudraw] custom unit %d (%s), entity %08X: dragon fire breath on its attack\n", k,
+                     lb_cunits_name(k), e);
+        std::fflush(stderr);
+    }
+    g_breath_e = e;
+    g_breath_saved = bus_read_u32(e + 0x144u);
+    bus_write_u32(e + 0x144u, id);
+    c.n = 1;
+    c.bp[0] = rec;
+    c.cat_to[0] = -1;
+    c.idx_to[0] = 8;
+    hop_start(c, kDragonBreath);
 }
 
 void creature_sprite_load_override(void) {
@@ -17755,7 +18729,11 @@ static void apply_cheats(void) {
     const int n = lb_setting_cheat_count();
     for (int i = 0; i < n && i < 32; ++i) {
         // SG-0002: spectating a computer-vs-computer battle shows the map
-        const int8_t want = (int8_t)((lb_setting_cheat(i) ||
+        // BR-0094: with "The Cheats Help: The AI only", Reveal Map (0) and
+        // Show Enemies (15) are not applied: the computer plays without fog,
+        // so they could only ever help this player.
+        const bool ai_only_view = lb_net_guest_state() <= 0 && lb_setting_ai_cheats() == 2 && (i == 0 || i == 15);
+        const int8_t want = (int8_t)(((lb_setting_cheat(i) && !ai_only_view) ||
                                       (i == 0 && lb_ai_spectate_active())) ? 1 : 0);
         if (want) {
             if (bus_read_u8(flags + (uint32_t)i) != 1u) {
@@ -21205,6 +22183,34 @@ int aiopp_packed() {
     return played >= 0 ? played : lb_ai_opp_live();
 }
 
+// The map's start count: the setup's (+0x158), or fewer when the map file
+// places fewer (the game's own count is not reliable: The Pond says 4 and
+// places 3, and a base-less team stalls the load). `tag` names the log.
+int aiopp_real_starts(uint32_t setup, const char* tag) {
+    int starts = bus_read_u8(setup + 0x158u);
+    char nm[64] = "";
+    const uint32_t sptr = bus_read_u32(setup + 0x1Cu + 8u);
+    for (int i = 0; guest_ptr(sptr) && i < 40; ++i) {
+        nm[i] = (char)bus_read_u8(sptr + (uint32_t)i);
+        if (!nm[i]) break;
+        nm[i + 1] = 0;
+    }
+    std::string path = nm;
+    if (path.find("Maps/") != 0) path = "Maps/" + path;
+    if (path.find(".map") == std::string::npos) path += ".map";
+    int real = -1;
+    const int sz = nm[0] ? lb_rom_read(path.c_str(), nullptr, 0) : 0;
+    if (sz > 0) {
+        std::vector<unsigned char> buf((size_t)sz);
+        if (lb_rom_read(path.c_str(), buf.data(), sz) == sz)
+            real = lb_mods_map_starts(buf.data(), buf.size());
+    }
+    std::fprintf(stderr, "[%s] map file '%s': %d real start(s) (the game says %d)\n",
+                 tag, path.c_str(), real, starts);
+    if (real >= 0 && real < starts) starts = real;
+    return starts;
+}
+
 // The setup's seats and the chain of guest calls the strings and armies need.
 void aiopp_prepare_setup() {
     g_aic.qn = 0;
@@ -21227,30 +22233,7 @@ void aiopp_prepare_setup() {
         std::fprintf(stderr, "[lb_aiopp] setup %08X, vtable %08X, v06 %08X\n", setup,
                      vt, guest_ptr(vt) ? bus_read_u32(vt + 24u) : 0u);
     }
-    int starts = bus_read_u8(setup + 0x158u);
-    {   // The map's real start count, from its file (the game's own count is
-        // not: The Pond says 4 and places 3, and a base-less team stalls the load).
-        char nm[64] = "";
-        const uint32_t sptr = bus_read_u32(setup + 0x1Cu + 8u);
-        for (int i = 0; guest_ptr(sptr) && i < 40; ++i) {
-            nm[i] = (char)bus_read_u8(sptr + (uint32_t)i);
-            if (!nm[i]) break;
-            nm[i + 1] = 0;
-        }
-        std::string path = nm;
-        if (path.find("Maps/") != 0) path = "Maps/" + path;
-        if (path.find(".map") == std::string::npos) path += ".map";
-        int real = -1;
-        const int sz = nm[0] ? lb_rom_read(path.c_str(), nullptr, 0) : 0;
-        if (sz > 0) {
-            std::vector<unsigned char> buf((size_t)sz);
-            if (lb_rom_read(path.c_str(), buf.data(), sz) == sz)
-                real = lb_mods_map_starts(buf.data(), buf.size());
-        }
-        std::fprintf(stderr, "[lb_aiopp] map file '%s': %d real start(s) (the game says %d)\n",
-                     path.c_str(), real, starts);
-        if (real >= 0 && real < starts) starts = real;
-    }
+    const int starts = aiopp_real_starts(setup, "lb_aiopp");
     std::fprintf(stderr, "[lb_aiopp] Free Play Start: %d extra computer "
                  "opponent(s) asked, the map has %d starts\n", extra, starts);
     if (starts - 2 < extra) extra = starts - 2;
@@ -22432,6 +23415,549 @@ void ai_opp_tick(void) {
     }
 }
 }  // namespace
+
+// ---- SG-0115 (docs/495): ONE COMPUTER PLAYER IN AN ONLINE MATCH -------------
+//
+// The cartridge builds a computer player (stage 4 of the CreateGameEvent,
+// FUN_0208AF58) for every player id >= 1 only when the setup's online byte
+// (setup+8, event+0x1C) is 0, and the multiplayer start (FUN_020F5168 case 2)
+// sets it to 1. Online, each machine also sends only its own player's command
+// outbox (FUN_020F59B8 drains outbox[session+100] into the dataset), where the
+// offline net task (FUN_020F4B00 case 0) drains all four. So three things are
+// done here, on EVERY machine, at points the lockstep makes identical:
+//
+//  1. THE SEAT. FUN_020F5168 case 2 fills one setup slot per lobby player
+//     (FUN_02045728 / FUN_02045858 / colour / FUN_02045670), then calls
+//     FUN_0204586C(setup, local id) at 0x020F54A8 (lr 0x020F54AC). In front of
+//     that call the next free slot gets the computer, as aiopp_prepare_setup
+//     seats Free Play's extra: player id (+0x40+4i, the lowest id no player
+//     has), a stock faction (+0x2C+4i, 0x7C + army), slot byte (+0x3C+i) and
+//     colour (+0xDC+4i), and the name "Computer" by the game's String assign
+//     (FUN_020F1C88), a guest call returning into the override (docs/383).
+//     The setup is then copied into the event (FUN_0200ADC0) and stages 2-3
+//     build its team and start, as for any player.
+//  2. THE COMPUTER PLAYER. FUN_0208AF38 (Thumb) hands the CreateGameEvent
+//     (type 0xD) to FUN_0208AF58. At stage 4 (event+0x104), with the online
+//     byte set, the override first builds the seat's AI as the stage's own
+//     loop would: FUN_0208AED4(id) -> AI, FUN_0208A9C4(AI), FUN_0208B05C(AI);
+//     then FUN_0208AF38 runs and the stage, still online, builds no other.
+//     (FUN_0208AF58 itself carries SG-0002's byte patch, so it is not
+//     overridden: an override would undo the patch.)
+//  3. EVERY TURN. thunk_FUN_0208331C releases one simulation turn after the
+//     net task has handed every station's block to FUN_020F5168; at the
+//     release (FUN_0208331C, ARM) the computer's outbox is drained and its
+//     commands queued exactly as the offline net task does it for every
+//     player: FUN_020EDEB0(buf, 0x80, 1), FUN_020EB95C(handle, buf, 0x80),
+//     FUN_02082F38(handle, buf), ArrayU8 destructor. The AI only runs inside
+//     turns, so every machine drains the same commands before the same turn.
+//     The release also carries the computer's script, which MultiplayerMission
+//     Base v06/v07 skip online: at the first release after the seat, its
+//     alliances (FUN_02085CC8 both ways, LB_CPUO_SIDE_*) and the v06 stores
+//     (target, start tile, personality 0x46/0x1E); at simulation tick 3000
+//     (100 s, v07's 5 s + 95 s) the mix change (0x12/0x3C); a fallen target is
+//     replaced; and every 600 ticks a [lb_cpuonline] census line, which two
+//     machines of one match must print identically. The tick is the game's
+//     own ([[0x021553D4+4]]+0x8B4), never this machine's clock.
+//
+// The rule is the host's ('O' page, lb_teams.cpp), recorded as demo kind 32.
+// Three teams at most (docs/414): a lobby of three players gets none.
+namespace {
+constexpr uint32_t kMpSetLocalFromStart = 0x020F54ACu; // its lr in FUN_020F5168 case 2
+constexpr uint32_t kAiCreate = 0x0208AED4u;            // thumb: (player id) -> AI
+constexpr uint32_t kAiBind = 0x0208A9C4u;              // thumb: (AI)
+constexpr uint32_t kAiRegister = 0x0208B05Cu;          // thumb: (AI)
+constexpr uint32_t kArrayU8Init = 0x020EDEB0u;         // arm: (ArrayU8*, capacity, flag)
+constexpr uint32_t kOutboxDrain = 0x020EB95Cu;         // thumb: (player, ArrayU8*, max)
+constexpr uint32_t kCommandsIn = 0x02082F38u;          // arm: (player, ArrayU8*)
+constexpr uint32_t kArrayU8Free = 0x020EDFF8u;         // arm: ArrayU8::virtual_00
+constexpr uint32_t kGameObjPtr = 0x021553D4u + 4u;     // [ ] -> game; +0x8B4 the sim tick
+constexpr uint32_t kCpuoArgGot = 0xFFFFFFF1u;          // "the chain's first result"
+
+struct CpuoCall { uint32_t fn, a[4]; };   // fn with its mode bit (1 Thumb)
+struct CpuoChain {
+    bool active = false;
+    uint32_t self = 0;                    // the overridden function, with its mode bit
+    uint32_t r[4] = {0, 0, 0, 0}, r12 = 0, lr = 0, sp = 0, sp_call = 0;
+    CpuoCall q[16];
+    int qn = 0, qi = 0;
+    uint32_t got = 0;                     // r0 after the first call
+};
+CpuoChain g_cpuo_setup, g_cpuo_make, g_cpuo_turn;
+
+void cpuo_begin(CpuoChain& c, uint32_t self, uint32_t reserve) {
+    c.active = true;
+    c.self = self;
+    c.qi = 0;
+    c.got = 0;
+    for (int i = 0; i < 4; ++i) c.r[i] = g_cpu.R[i];
+    c.r12 = g_cpu.R[12];
+    c.lr = g_cpu.R[14];
+    c.sp = g_cpu.R[13];
+    c.sp_call = (c.sp - reserve - 0x40u) & ~7u;
+}
+void cpuo_issue(CpuoChain& c) {
+    const CpuoCall& k = c.q[c.qi++];
+    for (int i = 0; i < 4; ++i) g_cpu.R[i] = k.a[i] == kCpuoArgGot ? c.got : k.a[i];
+    g_cpu.R[13] = c.sp_call;
+    g_cpu.R[14] = c.self;                 // the return lands back in the override
+    g_cpu.R[15] = k.fn & ~1u;
+    runtime_dispatch_with_exchange(k.fn);
+}
+void cpuo_finish(CpuoChain& c, void (*original)(void)) {
+    c.active = false;
+    for (int i = 0; i < 4; ++i) g_cpu.R[i] = c.r[i];
+    g_cpu.R[12] = c.r12;
+    g_cpu.R[14] = c.lr;
+    g_cpu.R[13] = c.sp;
+    if (original) original();
+}
+
+struct CpuoSeat {
+    unsigned gen = 0;
+    bool pending = false;     // the setup holds the seat; its AI is not built yet
+    bool seated = false;      // its AI exists
+    bool made = false;        // this (or the last) match had it, until the next start
+    bool scripted = false, mixed = false;
+    int rule = 0, slot = -1, id = -1, handle = -1, army = 0, colour = 0, side = 0;
+    int humans = 0, hid[3] = {-1, -1, -1};
+    uint32_t ai = 0;
+    int target = -1;
+    uint32_t next_census = 600u, turns = 0;
+};
+CpuoSeat g_cpuo;
+
+const char* const kCpuoArmy[6] = {"King", "Wizard", "Pirate", "Imperial", "Earth", "Alien"};
+const char* const kCpuoSide[4] = {"free for all", "allied with player 1",
+                                  "allied with player 2", "the players allied against it"};
+
+void cpuo_gen() {
+    if (g_cpuo.gen == g_boot_gen) return;
+    g_cpuo = CpuoSeat{};
+    g_cpuo.gen = g_boot_gen;
+    g_cpuo_setup.active = g_cpuo_make.active = g_cpuo_turn.active = false;
+}
+
+// The computer's AI while it is in the game's list (by pointer and id), else 0.
+uint32_t cpuo_listed(int id, uint32_t want) {
+    const uint32_t ais = bus_read_u32(0x0215697Cu);
+    if (!guest_ptr(ais)) return 0u;
+    const uint32_t ad = bus_read_u32(ais + 4u);
+    const int an = (int)bus_read_u32(ais + 8u);
+    for (int i = 0; guest_ptr(ad) && i < an && i < 8; ++i) {
+        const uint32_t a = bus_read_u32(ad + 4u * (uint32_t)i);
+        if (guest_ptr(a) && (int)bus_read_u32(a) == id && (!want || a == want)) return a;
+    }
+    return 0u;
+}
+
+// Is human `h` (a handle) an enemy of the computer under the side rule?
+bool cpuo_hostile(int h) {
+    switch (g_cpuo.side) {
+    case LB_CPUO_SIDE_WITH_P1: return h != g_cpuo.hid[0];
+    case LB_CPUO_SIDE_WITH_P2: return h != g_cpuo.hid[1];
+    default: return true;
+    }
+}
+
+bool cpuo_alive(int h) {
+    const uint32_t t = h >= 0 ? aiopp_team((uint32_t)h) : 0u;
+    return t && bus_read_u32(t + 0x9Cu) == 0u;
+}
+
+// The nearest living hostile player's base by start tile (Manhattan), the
+// lower id on a tie; -1 when none. Everything read is simulation state.
+int cpuo_pick(uint32_t map) {
+    uint8_t mx, my;
+    aiopp_start_tile(map, (uint8_t)g_cpuo.handle, &mx, &my);
+    int best = -1, bestd = 1 << 20;
+    for (int k = 0; k < g_cpuo.humans; ++k) {
+        const int h = g_cpuo.hid[k];
+        if (h < 0 || !cpuo_hostile(h) || !cpuo_alive(h)) continue;
+        uint8_t x, y;
+        aiopp_start_tile(map, (uint8_t)h, &x, &y);
+        const int d = std::abs((int)x - (int)mx) + std::abs((int)y - (int)my);
+        if (d < bestd) { bestd = d; best = h; }
+    }
+    return best;
+}
+
+// The seat, in front of FUN_0204586C at the multiplayer start (r0 = setup).
+void cpuo_prepare_setup(uint32_t setup, CpuoChain& c) {
+    c.qn = 0;
+    cpuo_gen();
+    g_cpuo.pending = g_cpuo.seated = g_cpuo.scripted = g_cpuo.mixed = g_cpuo.made = false;
+    g_cpuo.ai = 0;
+    g_cpuo.target = -1;
+    g_cpuo.next_census = 600u;
+    g_cpuo.turns = 0;
+    const int rule = lb_cpu_online_live();
+    if (!(rule & 1) || !guest_ptr(setup)) return;
+    int humans = 0;
+    bool used[4] = {false, false, false, false};
+    int hid[4] = {-1, -1, -1, -1};
+    for (uint32_t i = 0; i < 4u; ++i) {
+        const int32_t id = (int32_t)bus_read_u32(setup + 0x40u + 4u * i);
+        if (id < 0 || id > 3) continue;
+        used[id] = true;
+        if (humans < 4) hid[humans] = id;
+        ++humans;
+    }
+    std::fprintf(stderr, "[lb_cpuonline] multiplayer start: rule %d (army %d, colour %d, side %d), "
+                 "%d player(s) in the setup\n", rule, (rule >> 1) & 7, (rule >> 4) & 7, (rule >> 7) & 3,
+                 humans);
+    if (humans >= 3 || humans < 1) {
+        std::fprintf(stderr, "[lb_cpuonline] no computer player: %d players (three armies at "
+                     "most, docs/414)\n", humans);
+        std::fflush(stderr);
+        return;
+    }
+    const uint32_t idx = (uint32_t)humans;
+    if ((int32_t)bus_read_u32(setup + 0x40u + 4u * idx) != -1) {
+        std::fprintf(stderr, "[lb_cpuonline] no computer player: setup slot %u is not empty\n", idx);
+        std::fflush(stderr);
+        return;
+    }
+    const int starts = aiopp_real_starts(setup, "lb_cpuonline");
+    if (starts < humans + 1) {
+        std::fprintf(stderr, "[lb_cpuonline] no computer player: the map has %d start(s)\n", starts);
+        std::fflush(stderr);
+        return;
+    }
+    int id = 0;
+    while (id < 4 && used[id]) ++id;
+    const int army = std::min((rule >> 1) & 7, 5);
+    const int want_c = (rule >> 4) & 7;
+    int side = (rule >> 7) & 3;
+    if (humans < 2 && side != LB_CPUO_SIDE_FFA) {
+        std::fprintf(stderr, "[lb_cpuonline] one player: the side is free for all (an alliance "
+                     "would leave no enemy)\n");
+        side = LB_CPUO_SIDE_FFA;
+    }
+    bool cused[8] = {false, false, false, false, false, false, false, false};
+    for (uint32_t i = 0; i < (uint32_t)humans; ++i) {
+        const uint32_t cc = bus_read_u32(setup + 0xDCu + 4u * i);
+        if (cc < 8u) cused[cc] = true;
+    }
+    int colour = -1;
+    if (want_c > 0 && !cused[want_c - 1]) colour = want_c - 1;
+    for (int k = 0; k < 6 && colour < 0; ++k)
+        if (!cused[k]) colour = k;
+    if (colour < 0) colour = 5;
+    const uint32_t fid = 0x7Cu + (uint32_t)army;
+    bus_write_u32(setup + 0x40u + 4u * idx, (uint32_t)id);
+    bus_write_u32(setup + 0x2Cu + 4u * idx, fid);
+    bus_write_u8(setup + 0x3Cu + idx, (uint8_t)idx);
+    bus_write_u32(setup + 0xDCu + 4u * idx, (uint32_t)colour);
+    // The name: "Computer", below the live frame, assigned by the game's own
+    // String assign (the chain's frames start below it).
+    const uint32_t text = (g_cpu.R[13] - 0x20u) & ~3u;
+    static const char kName[] = "Computer";
+    for (uint32_t i = 0; i < sizeof kName; ++i) bus_write_u8(text + i, (uint8_t)kName[i]);
+    c.q[c.qn++] = {kStringAssign, {setup + 0xACu + 0xCu * idx, text, 0, 0}};
+    g_cpuo.pending = true;
+    g_cpuo.rule = rule;
+    g_cpuo.slot = (int)idx;
+    g_cpuo.id = id;
+    g_cpuo.army = army;
+    g_cpuo.colour = colour;
+    g_cpuo.side = side;
+    g_cpuo.humans = humans;
+    for (int k = 0; k < 3; ++k) g_cpuo.hid[k] = k < humans ? hid[k] : -1;
+    std::fprintf(stderr, "[lb_cpuonline] seat prepared on this machine: slot %u, player id %d, "
+                 "army %s (faction 0x%02X), colour %d, %s; players' ids %d %d, map starts %d\n",
+                 idx, id, kCpuoArmy[army], fid, colour, kCpuoSide[side], hid[0], hid[1], starts);
+    // The match picture's column (the host posts it): the faction's roster,
+    // the units after its buildings (FUN_02000E78's layout at +0x38, 26 u16,
+    // 0xFFFF the filler).
+    {
+        unsigned short bp[9];
+        for (unsigned short& b : bp) b = 0xFFFFu;
+        const uint32_t fo = aiopp_faction_obj(fid);
+        if (fo) {
+            uint16_t ro[26];
+            int n = 0;
+            for (uint32_t i = 0; i < 26u; ++i) {
+                const uint16_t v = bus_read_u16(fo + 0x38u + 2u * i);
+                if (v != 0xFFFFu) ro[n++] = v;
+            }
+            if (n >= 9)
+                for (int k = 0; k < 9; ++k) bp[k] = ro[n - 9 + k];
+        }
+        lb_matchpic_note_computer(id, (int)fid, colour, bp);
+    }
+    std::fflush(stderr);
+}
+
+// Once per turn release while the computer is seated: its script, then the
+// queue of its outbox drain (and, the first time, its alliances).
+bool cpuo_turn_prepare(CpuoChain& c) {
+    c.qn = 0;
+    if (g_cpuo.gen != g_boot_gen || !g_cpuo.seated) return false;
+    if (lb_net_guest_state() <= 0) {   // left the session: nothing more to do
+        g_cpuo.seated = false;
+        return false;
+    }
+    const uint32_t a = cpuo_listed(g_cpuo.id, g_cpuo.ai);
+    if (!a) {
+        g_cpuo.seated = false;
+        std::fprintf(stderr, "[lb_cpuonline] the computer player is gone (the match ended) after "
+                     "%u turn releases\n", g_cpuo.turns);
+        std::fflush(stderr);
+        return false;
+    }
+    ++g_cpuo.turns;
+    const uint32_t s44 = bus_read_u32(a + 0x44u), s4c = bus_read_u32(a + 0x4Cu),
+                   s50 = bus_read_u32(a + 0x50u);
+    const uint32_t game = bus_read_u32(kGameObjPtr);
+    const uint32_t tick = guest_ptr(game) ? bus_read_u32(game + 0x8B4u) : 0u;
+    const uint32_t map = bus_read_u32(0x02156CB0u);
+    const bool subs = guest_ptr(s44) && guest_ptr(s4c) && guest_ptr(s50);
+    const uint32_t buf = (g_cpu.R[13] - 0x20u) & ~7u;   // an ArrayU8 (0x18 bytes)
+    if (!g_cpuo.scripted && subs) {
+        g_cpuo.scripted = true;
+        // The alliances, both ways, by the teams' own handle bytes (+0x14).
+        int pairs[3][2];
+        int np = 0;
+        const int h0 = g_cpuo.hid[0], h1 = g_cpuo.hid[1];
+        if (g_cpuo.side == LB_CPUO_SIDE_WITH_P1) { pairs[np][0] = g_cpuo.handle; pairs[np++][1] = h0; }
+        if (g_cpuo.side == LB_CPUO_SIDE_WITH_P2) { pairs[np][0] = g_cpuo.handle; pairs[np++][1] = h1; }
+        if (g_cpuo.side == LB_CPUO_SIDE_VS_ALL) { pairs[np][0] = h0; pairs[np++][1] = h1; }
+        for (int p = 0; p < np; ++p) {
+            const uint32_t tx = pairs[p][0] >= 0 ? aiopp_team((uint32_t)pairs[p][0]) : 0u;
+            const uint32_t ty = pairs[p][1] >= 0 ? aiopp_team((uint32_t)pairs[p][1]) : 0u;
+            if (!tx || !ty || (int)bus_read_u8(tx + 0x14u) != pairs[p][0] ||
+                (int)bus_read_u8(ty + 0x14u) != pairs[p][1]) {
+                std::fprintf(stderr, "[lb_cpuonline] alliance of teams %d and %d skipped: a team is "
+                             "missing or its handle differs\n", pairs[p][0], pairs[p][1]);
+                continue;
+            }
+            c.q[c.qn++] = {kAddAlly, {tx, ty + 0x14u, 0, 0}};
+            c.q[c.qn++] = {kAddAlly, {ty, tx + 0x14u, 0, 0}};
+            std::fprintf(stderr, "[lb_cpuonline] teams %d and %d allied\n", pairs[p][0], pairs[p][1]);
+        }
+        // v06's stores, aimed at the nearest hostile player's base.
+        const int t = cpuo_pick(map);
+        if (t >= 0) {
+            uint8_t tx, ty;
+            aiopp_start_tile(map, (uint8_t)t, &tx, &ty);
+            aiopp_aim(a, (uint8_t)t, tx, ty);
+            g_cpuo.target = t;
+            std::fprintf(stderr, "[lb_cpuonline] computer player id %d (team %d) aimed at team %d, "
+                         "start tile (%u,%u), tick %u\n", g_cpuo.id, g_cpuo.handle, t, tx, ty, tick);
+        }
+        bus_write_u8(s4c + 0x3Bu, 1);
+        bus_write_u8(a + 0x32u, 1);
+        bus_write_u8(s50 + 0x15u, 1);
+        bus_write_u8(a + 0x33u, 1);
+        bus_write_u8(s50 + 0x14u, 1);
+        bus_write_u8(s4c + 0x3Eu, 1);
+        bus_write_u8(s4c + 0x3Au, 1);
+        bus_write_u8(s50 + 0x17u, 1);
+        bus_write_u8(a + 0x5Cu, 0x46);
+        bus_write_u8(a + 0x5Du, 0x1E);
+        bus_write_u32(s50 + 0x38u, 0x1Eu);
+        bus_write_u32(s4c + 0x24u, 5u);
+        bus_write_u8(s4c + 0x3Du, 1);
+        std::fflush(stderr);
+    } else if (subs) {
+        if (!g_cpuo.mixed && tick >= 3000u) {   // v07: 5 s + 95 s
+            g_cpuo.mixed = true;
+            bus_write_u8(a + 0x5Cu, 0x12);
+            bus_write_u8(a + 0x5Du, 0x3C);
+            bus_write_u32(s50 + 0x38u, 0x3Cu);
+            std::fprintf(stderr, "[lb_cpuonline] attack mix switched at tick %u\n", tick);
+            std::fflush(stderr);
+        }
+        if (g_cpuo.target >= 0 && !cpuo_alive(g_cpuo.target)) {
+            const int t = cpuo_pick(map);
+            if (t >= 0 && t != g_cpuo.target) {
+                uint8_t tx, ty;
+                aiopp_start_tile(map, (uint8_t)t, &tx, &ty);
+                aiopp_aim(a, (uint8_t)t, tx, ty);
+                std::fprintf(stderr, "[lb_cpuonline] its target team %d fell; now team %d, tick %u\n",
+                             g_cpuo.target, t, tick);
+                std::fflush(stderr);
+            }
+            g_cpuo.target = t;
+        }
+    }
+    // The census, every 600 simulation ticks (20 s): what every owner has
+    // standing, and its bricks. Two machines of one match print the same.
+    if (tick >= g_cpuo.next_census) {
+        g_cpuo.next_census = (tick / 600u + 1u) * 600u;
+        int n[8] = {0}, b[8] = {0};
+        const uint32_t pool = bus_read_u32(kEntityPoolPtr);
+        const uint32_t arr = guest_ptr(pool) ? bus_read_u32(pool + 8u) : 0u;
+        const int32_t cnt = guest_ptr(pool) ? (int32_t)bus_read_u32(pool + 0xCu) : 0;
+        for (int32_t i = 0; guest_ptr(arr) && i < cnt && i < 4096; ++i) {
+            const uint32_t e = bus_read_u32(arr + (uint32_t)i * 4u);
+            if (!guest_ptr(e) || bus_read_u8(e + 0x227u) == 0u) continue;
+            const unsigned o = bus_read_u8(e + 0xE4u);
+            if (o >= 8u) continue;
+            ++n[o];
+            if (entity_category(e) == 1u) ++b[o];
+        }
+        std::fprintf(stderr, "[lb_cpuonline] %us in (tick %u):", tick / 30u, tick);
+        for (int h = 0; h < 4; ++h) {
+            const uint32_t t = aiopp_team((uint32_t)h);
+            if (!t) continue;
+            std::fprintf(stderr, " team %d%s: %d things (%d builders) %u bricks%s;", h,
+                         h == g_cpuo.handle ? " (computer)" : "", n[h], b[h],
+                         bus_read_u32(t + 0x90u), bus_read_u32(t + 0x9Cu) ? " DEFEATED" : "");
+        }
+        std::fprintf(stderr, " computer mix %02X target %d\n", bus_read_u8(a + 0x5Cu), g_cpuo.target);
+        std::fflush(stderr);
+    }
+    // Its commands, as the offline net task takes every player's.
+    static const bool nodrain = std::getenv("LB_CPU_ONLINE_NODRAIN") != nullptr;   // test aid
+    if (!nodrain && c.qn + 4 <= 16) {
+        const uint32_t h = (uint32_t)g_cpuo.handle;
+        c.q[c.qn++] = {kArrayU8Init, {buf, 0x80u, 1u, 0u}};
+        c.q[c.qn++] = {kOutboxDrain | 1u, {h, buf, 0x80u, 0u}};
+        c.q[c.qn++] = {kCommandsIn, {h, buf, 0u, 0u}};
+        c.q[c.qn++] = {kArrayU8Free, {buf, 0u, 0u, 0u}};
+    }
+    return c.qn > 0;
+}
+}  // namespace
+
+extern "C" int lb_cpu_online_live(void) {
+    const int played = lb_demo_play_cpu_online();
+    if (played >= 0) return played;
+    const int host = lb_rules_host_cpu_online();   // joined: the host's
+    if (host >= 0) return host;
+    return lb_net_is_hosting_state() ? lb_setting_cpu_online_packed() : 0;
+}
+
+// The players in the lobby's records (0x0215B814 + 0x2C*k, present when bit 0
+// of +0x21 is set; FUN_020F47D0 counts them the same way).
+extern "C" int lb_cpu_online_lobby_humans(void) {
+    if (lb_net_guest_state() <= 0) return 0;
+    int n = 0;
+    for (uint32_t k = 0; k < 3u; ++k)
+        if (bus_read_u8(0x0215B814u + 0x2Cu * k + 0x21u) & 1u) ++n;
+    return n;
+}
+
+// The seat of the match being played, or of the last one until the next
+// multiplayer start (the result lines are sent after the match has closed).
+extern "C" int lb_cpu_online_seated(int* id, int* handle, int* army, int* colour, int* side) {
+    if (g_cpuo.gen != g_boot_gen || !g_cpuo.made) return 0;
+    if (id) *id = g_cpuo.id;
+    if (handle) *handle = g_cpuo.handle;
+    if (army) *army = g_cpuo.army;
+    if (colour) *colour = g_cpuo.colour;
+    if (side) *side = g_cpuo.side;
+    return 1;
+}
+
+// FUN_0204586C (Thumb): the setup's local id. The multiplayer start's call
+// (lr 0x020F54AC) gets the computer's seat in front of it.
+extern "C" void cpuo_set_local_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kCpuoSetLocal);
+    CpuoChain& c = g_cpuo_setup;
+    if (c.active) {
+        if (g_cpu.R[13] != c.sp_call) { if (original) original(); return; }   // not ours
+        if (c.qi < c.qn) { cpuo_issue(c); return; }
+        cpuo_finish(c, original);
+        return;
+    }
+    if ((g_cpu.R[14] & ~1u) == kMpSetLocalFromStart) {
+        cpuo_prepare_setup(g_cpu.R[0], c);
+        if (c.qn > 0) {
+            cpuo_begin(c, kCpuoSetLocal | 1u, 0x20u);
+            cpuo_issue(c);
+            return;
+        }
+    }
+    if (original) original();
+}
+
+// FUN_0208AF38 (Thumb): the AI module's event handler. Stage 4 of an online
+// CreateGameEvent builds the seat's computer player in front of it.
+extern "C" void cpuo_ai_event_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kCpuoAiEvent);
+    CpuoChain& c = g_cpuo_make;
+    if (c.active) {
+        if (g_cpu.R[13] != c.sp_call) { if (original) original(); return; }   // not ours
+        if (c.qi == 1) {
+            c.got = g_cpu.R[0];
+            if (!guest_ptr(c.got)) {
+                g_cpuo.pending = false;
+                std::fprintf(stderr, "[lb_cpuonline] FUN_0208AED4(%d) built no computer player\n", g_cpuo.id);
+                std::fflush(stderr);
+                cpuo_finish(c, original);
+                return;
+            }
+        }
+        if (c.qi < c.qn) { cpuo_issue(c); return; }
+        g_cpuo.pending = false;
+        g_cpuo.ai = c.got;
+        g_cpuo.handle = bus_read_u8(c.got + 0x36u);
+        g_cpuo.seated = true;
+        g_cpuo.made = true;
+        const uint32_t ais = bus_read_u32(0x0215697Cu);
+        std::fprintf(stderr, "[lb_cpuonline] seat created on this machine: slot %d, player id %d, "
+                     "team %d, army %s, colour %d, %s; AI %08X, %d in the list\n", g_cpuo.slot,
+                     g_cpuo.id, g_cpuo.handle, kCpuoArmy[g_cpuo.army], g_cpuo.colour,
+                     kCpuoSide[g_cpuo.side], c.got, guest_ptr(ais) ? (int)bus_read_u32(ais + 8u) : -1);
+        if (g_cpuo.handle != g_cpuo.id)
+            std::fprintf(stderr, "[lb_cpuonline] NOTE: team handle %d differs from player id %d; "
+                         "the outbox is drained by handle\n", g_cpuo.handle, g_cpuo.id);
+        std::fflush(stderr);
+        cpuo_finish(c, original);
+        return;
+    }
+    cpuo_gen();
+    const uint32_t ev = g_cpu.R[1];
+    if (g_cpuo.pending && guest_ptr(ev) && bus_read_u32(ev + 0xCu) == 0xDu &&
+        bus_read_u32(ev + 0x104u) == 4u) {
+        const uint32_t mode = bus_read_u32(ev + 0x20u);
+        const uint32_t online = bus_read_u8(ev + 0x1Cu);
+        const int32_t evid = (int32_t)bus_read_u32(ev + 0x54u + 4u * (uint32_t)g_cpuo.slot);
+        if (mode != 1u || online == 0u) {
+            g_cpuo.pending = false;
+            std::fprintf(stderr, "[lb_cpuonline] stage 4: not an online setup (mode %u, online %u); "
+                         "the game builds the computers\n", mode, online);
+        } else if (evid != g_cpuo.id) {
+            g_cpuo.pending = false;
+            std::fprintf(stderr, "[lb_cpuonline] stage 4: slot %d holds id %d, not %d; no computer "
+                         "player\n", g_cpuo.slot, evid, g_cpuo.id);
+        } else if (cpuo_listed(g_cpuo.id, 0u)) {
+            g_cpuo.pending = false;
+            std::fprintf(stderr, "[lb_cpuonline] stage 4: id %d already has a computer player\n", g_cpuo.id);
+        } else {
+            c.qn = 0;
+            c.q[c.qn++] = {kAiCreate | 1u, {(uint32_t)g_cpuo.id, 0, 0, 0}};
+            c.q[c.qn++] = {kAiBind | 1u, {kCpuoArgGot, 0, 0, 0}};
+            c.q[c.qn++] = {kAiRegister | 1u, {kCpuoArgGot, 0, 0, 0}};
+            cpuo_begin(c, kCpuoAiEvent | 1u, 0u);
+            cpuo_issue(c);
+            return;
+        }
+        std::fflush(stderr);
+    }
+    if (original) original();
+}
+
+// FUN_0208331C (ARM): one simulation turn released. The computer's script and
+// commands go in front of it.
+extern "C" void cpuo_turn_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kCpuoTurnRelease);
+    CpuoChain& c = g_cpuo_turn;
+    if (c.active) {
+        if (g_cpu.R[13] != c.sp_call) { if (original) original(); return; }   // not ours
+        if (c.qi < c.qn) { cpuo_issue(c); return; }
+        cpuo_finish(c, original);
+        return;
+    }
+    if (g_cpuo.seated && cpuo_turn_prepare(c)) {
+        cpuo_begin(c, kCpuoTurnRelease, 0x20u);
+        cpuo_issue(c);
+        return;
+    }
+    if (original) original();
+}
 
 // TEST AID (docs/414): LB_TEST_KILLTEAM=<team>:<seconds>[,<team>:<seconds>...]
 // destroys every standing entity of a team once the battle has run that many
@@ -24063,6 +25589,8 @@ static void lb_stackwatch(void) {
 extern "C" void runtime_set_deep_trace(uint32_t on);
 extern "C" void lb_patches_on_vblank(void) {
     lb_stackwatch();   // docs/484 diagnostic
+    lb_rejoin_tick();  // the rejoin after a content reload
+    lb_area_heal_tick();   // SG-0125
     {   // docs/484 diagnostic: LB_DEEPTRACE_AT=<vblank> arms the runtime's event ring
         static const long at = [] { const char* v = std::getenv("LB_DEEPTRACE_AT"); return v ? std::atol(v) : -1L; }();
         static long vbl = 0;

@@ -376,6 +376,9 @@ enum { LB_BAL_PORT_FIELD0 = 26, LB_BAL_PORT_FIELDS = 10 };
 // the record's padding +0x53: 0 automatic (the record's +0x1A/+0x1B/+0x1C),
 // else a mask of 1 ground, 2 air, 4 bridge (occ_layers_override).
 enum { LB_BAL_LAYER_FIELD = 36 };
+// docs/494 (SG-0119): unit field 37, "Repairs" in the record's padding +0x4F:
+// 1 a foot, ranged or mounted unit repairs and helps build, else off.
+enum { LB_BAL_REPAIR_FIELD = 37 };
 enum { LB_BAL_BONUS_ZERO = 80, LB_BAL_BONUS_MAX = 160 };
 // docs/426: a blueprint diffed against the player's own; fills msg; returns the
 // number of values set, or -1 on failure.
@@ -881,14 +884,17 @@ int          lb_ai_tap_spells_live(void);
    docs/406 is full). Set means ON, so an older host (no page) plays stock. */
 #define LB_RULE2_ANY_REPAIR     0x01   /* SG-0111: foot/ranged/mounted units repair and assist */
 #define LB_RULE2_UNIQUE_HEROES  0x02   /* SG-0107: one of each hero at a time */
+#define LB_RULE2_SMART_MOVE     0x04   /* SG-0123 (docs/497): group moves spread over slots */
 int          lb_setting_any_unit_repairs(void);   /* this machine's choice */
 int          lb_setting_unique_heroes(void);
+int          lb_setting_smart_move(void);
 int          lb_rules2_local_flags(void);         /* this machine's (lb_overlay) */
 int          lb_rules_host_flags2(void);          /* the host's; -1 unless joined */
 int          lb_demo_play_rules2(void);           /* a replay's (kind 30), else -1 */
 int          lb_rules2_live(void);                /* replay, host, else this machine's */
 int          lb_any_unit_repairs_live(void);
 int          lb_unique_heroes_live(void);
+int          lb_smart_move_live(void);
 int          lb_setting_ai_spectate(void);   /* SG-0002 */
 /* docs/414: extra computer opponents in Free Play, packed (kind 17). */
 int          lb_setting_ai_opp_packed(void);
@@ -914,6 +920,25 @@ int          lb_setting_ai_cross_fire(void);   /* SG-0051 */
 int          lb_demo_play_ai_cross(void);
 int          lb_ai_cross_live(void);
 int          lb_ai_opp_live(void);           /* lb_patches.cpp: 0 online */
+/* SG-0115 (docs/495): one computer player in an online match. A HOST RULE,
+   packed: bit 0 on, bits 1-3 the army (0..5 King, Wizard, Pirate, Imperial,
+   Earth, Alien), bits 4-6 the colour (0 automatic, else 1 + the colour index,
+   0 red .. 6 teal), bits 7-8 the side (LB_CPUO_SIDE_*). 0 = off. */
+#define LB_CPUO_SIDE_FFA      0   /* free for all */
+#define LB_CPUO_SIDE_WITH_P1  1   /* allied with player 1 (the host) */
+#define LB_CPUO_SIDE_WITH_P2  2   /* allied with player 2 */
+#define LB_CPUO_SIDE_VS_ALL   3   /* the players allied against it */
+int          lb_setting_cpu_online_packed(void);   /* lb_overlay.cpp: this machine's (host) choice */
+int          lb_rules_host_cpu_online(void);       /* lb_teams.cpp: the host's 'O' page; -1 unless joined */
+int          lb_demo_play_cpu_online(void);        /* lb_demo.cpp: a replay's (kind 32), else -1 */
+int          lb_cpu_online_live(void);             /* lb_patches.cpp: replay, host's, else this machine's */
+int          lb_cpu_online_lobby_humans(void);     /* lb_patches.cpp: players in the lobby records */
+/* lb_patches.cpp: the seat the current (or last) online match made, for the
+   overlay and the match results: 1 and its player id, handle, army, colour
+   and side, else 0. */
+int          lb_cpu_online_seated(int* id, int* handle, int* army, int* colour, int* side);
+void         lb_matchpic_note_computer(int player, int faction, int colour_idx,
+                                       const unsigned short bp[9]);   /* lb_matchpic.cpp */
 /* SG-0036: the Gold Rush target in bricks, 0 for the game's own 10,000: this
    machine's setting, a replay's (kind 18), the host's while joined ('G' page,
    -1 when not joined), and the one in force. lb_gold_rush_view fills the

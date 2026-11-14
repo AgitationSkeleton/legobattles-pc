@@ -115,6 +115,9 @@ extern "C" int lb_skin_prepare(SDL_Renderer* r);
 extern "C" ImFont* lb_skin_font(void);
 extern "C" void lb_skin_style(ImGuiStyle* st);
 extern "C" void lb_skin_hooks(int on);
+// SG-0118: the Unit Lab's sharing name (lb_unitlab.cpp), kept in settings.json.
+extern "C" const char* lb_unitlab_author(void);
+extern "C" void lb_unitlab_set_author(const char* s);
 
 namespace {
 
@@ -329,6 +332,9 @@ struct Settings {
     // docs/488 (SG-0107): a team may have one of each hero at a time, however
     // high the hero limit (produce_step_override). Online, the host's.
     bool unique_heroes = false;
+    // docs/497 (SG-0123): a group move order spreads its units over slots
+    // round the tapped cell (smart_move_factory). Online, the host's ('R').
+    bool smart_move = false;
     // docs/469: Prevent Phantom Ties. On (default): online, every machine
     // plays the host's cheats (BR-0011). Off: each its own, as on a DS --
     // where two machines' Super Magic / Far Reaching differ, ESP and EMP
@@ -394,6 +400,12 @@ bool card_tint = false;
     // SG-0104 (docs/480): stock units the Randomizer opponent never fields,
     // "bp,bp,..." like banned_units. Free Play only; empty = vanilla.
     char random_army_bans[512] = "";
+    // SG-0120 (docs/494): custom units the Randomizer never fields, by their
+    // mods/units folder name ("folder,folder,..."), which stays the unit's
+    // when the set is rebuilt in another order (its blueprint 551+n+k does
+    // not). Kept apart from the list above so an older build, which reads
+    // every entry there as a number, never sees a name.
+    char random_army_bans_custom[2048] = "";
     // SG-0099 (docs/482): LEGO Store prices of your own, "unit:price,..." by
     // stock unit index (its minifig card's price, +0x68). Empty: the
     // cartridge's prices. Front end only: it changes what the store asks
@@ -464,6 +476,13 @@ bool card_tint = false;
     // SG-0033: the team Computer Player 3 fields when its army is Custom: a
     // Team Builder preset by name, or "" for the Enemy Team (as before).
     char ai_opp_team[48] = "";
+    // SG-0115 (docs/495): one computer player in an online match, a host
+    // rule: on, its army (0..5 a faction), colour (0 automatic, else 1 + the
+    // colour index, 0 red .. 6 teal) and side (LB_CPUO_SIDE_*). Off by default.
+    bool cpu_online = false;
+    int  cpu_online_army = 1;
+    int  cpu_online_colour = 0;
+    int  cpu_online_side = 0;
     // SG-0036: the Gold Rush target in bricks (0 = the game's 10,000), and
     // the panel of every army's bricks in a Gold Rush match.
     int  gold_rush_target = 0;
@@ -485,6 +504,7 @@ bool card_tint = false;
     int  notify_volume = 60;       // percent
     int  cunit_volume = 100;       // BR-0047: custom unit sounds, percent of the normalised level
     bool remember_volumes = true;  // SG-0112: the game's music/effects volumes, kept between launches
+    char unit_author[25] = "";   // SG-0118: the name shared custom units carry
     int  menu_style = 1;           // docs/493: 0 the port's, 1 LEGO Battles (cut from the cartridge); the default since 0.4.20
     int  music_volume = -1;        // SG-0112: last applied, 0..127 (-1 none yet)
     int  sfx_volume = -1;
@@ -554,6 +574,7 @@ bool card_tint = false;
     bool auto_update = false;      // docs/435: and install it by itself
     // docs/420: a lobby's mod map this machine lacks is fetched from the archive.
     bool fetch_maps = true;
+    bool auto_rejoin = true;    // the lobby joined again after the reset that loads a host's content
     bool fast_link = true;      // docs/423: the host-level WH
     int  master_port = 80;
     char player_name[32] = "Player";
@@ -838,6 +859,8 @@ static std::string settings_text() {
                   g_set.any_unit_repairs ? "true" : "false"); o += buf;   // docs/488
     std::snprintf(buf, sizeof buf, "  \"unique_heroes\": %s,\n",
                   g_set.unique_heroes ? "true" : "false"); o += buf;   // docs/488
+    std::snprintf(buf, sizeof buf, "  \"smart_move\": %s,\n",
+                  g_set.smart_move ? "true" : "false"); o += buf;   // docs/497
     std::snprintf(buf, sizeof buf, "  \"phantom_guard\": %s,\n",
                   g_set.phantom_guard ? "true" : "false"); o += buf;   // docs/469
     std::snprintf(buf, sizeof buf, "  \"ai_hero_rebuild\": %s,\n",
@@ -889,6 +912,7 @@ static std::string settings_text() {
     std::snprintf(buf, sizeof buf, "  \"start_position\": %d,\n",
                   g_set.start_position); o += buf;                                 // SG-0081
     json_put_str(o, "random_army_bans", g_set.random_army_bans, true);             // SG-0104
+    json_put_str(o, "random_army_bans_custom", g_set.random_army_bans_custom, true);   // SG-0120
     json_put_str(o, "store_prices", g_set.store_prices, true);                     // SG-0099
     std::snprintf(buf, sizeof buf, "  \"attack_boost_ranged\": %d,\n",
                   g_set.attack_boost_ranged); o += buf;
@@ -927,6 +951,14 @@ static std::string settings_text() {
                   g_set.ai_opp_colour[0], g_set.ai_opp_colour[1]); o += buf;
     std::snprintf(buf, sizeof buf, "  \"ai_opp_teams\": %s,\n",
                   g_set.ai_opp_teams ? "true" : "false"); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"cpu_online\": %s,\n",
+                  g_set.cpu_online ? "true" : "false"); o += buf;    // SG-0115
+    std::snprintf(buf, sizeof buf, "  \"cpu_online_army\": %d,\n",
+                  g_set.cpu_online_army); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"cpu_online_colour\": %d,\n",
+                  g_set.cpu_online_colour); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"cpu_online_side\": %d,\n",
+                  g_set.cpu_online_side); o += buf;
     std::snprintf(buf, sizeof buf, "  \"unlock_units\": %s,\n",
                   g_set.unlock_units ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"unlock_extras\": %s,\n",
@@ -1006,6 +1038,7 @@ static std::string settings_text() {
     std::snprintf(buf, sizeof buf, "  \"upnp\": %s,\n",
                   g_set.upnp ? "true" : "false"); o += buf;
     json_put_str(o, "master_host", g_set.master_host, true);
+    json_put_str(o, "unit_author", g_set.unit_author, true);   // SG-0118
     std::snprintf(buf, sizeof buf, "  \"master_both\": %s,\n",
                   g_set.master_both ? "true" : "false"); o += buf;   // docs/419
     std::snprintf(buf, sizeof buf, "  \"master_choice\": %s,\n",
@@ -1033,6 +1066,8 @@ static std::string settings_text() {
                   g_set.auto_update ? "true" : "false"); o += buf;   // docs/435
     std::snprintf(buf, sizeof buf, "  \"fetch_maps\": %s,\n",
                   g_set.fetch_maps ? "true" : "false"); o += buf;   // docs/420
+    std::snprintf(buf, sizeof buf, "  \"auto_rejoin\": %s,\n",
+                  g_set.auto_rejoin ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"fast_link\": %s,\n",
                   g_set.fast_link ? "true" : "false"); o += buf;    // docs/423
     std::snprintf(buf, sizeof buf, "  \"master_port\": %d,\n",
@@ -1185,6 +1220,7 @@ extern "C" void lb_settings_load(void) {
     json_get_bool(s, "stun_cast", &g_set.stun_cast);             // docs/453
     json_get_bool(s, "any_unit_repairs", &g_set.any_unit_repairs);   // docs/488
     json_get_bool(s, "unique_heroes", &g_set.unique_heroes);         // docs/488
+    json_get_bool(s, "smart_move", &g_set.smart_move);               // docs/497
     json_get_bool(s, "phantom_guard", &g_set.phantom_guard);     // docs/469
     json_get_bool(s, "ai_hero_rebuild", &g_set.ai_hero_rebuild);
     json_get_bool(s, "ai_more_mines", &g_set.ai_more_mines);   // SG-0032
@@ -1219,6 +1255,8 @@ extern "C" void lb_settings_load(void) {
     json_get_int(s, "start_position", &g_set.start_position);             // SG-0081
     if (g_set.start_position < 0 || g_set.start_position > 4) g_set.start_position = 0;
     json_get_str(s, "random_army_bans", g_set.random_army_bans, sizeof g_set.random_army_bans);   // SG-0104
+    json_get_str(s, "random_army_bans_custom", g_set.random_army_bans_custom,
+                 sizeof g_set.random_army_bans_custom);                                            // SG-0120
     json_get_str(s, "store_prices", g_set.store_prices, sizeof g_set.store_prices);   // SG-0099
     json_get_int(s, "attack_boost_ranged", &g_set.attack_boost_ranged);
     if (g_set.attack_boost_ranged == 1) g_set.attack_boost_ranged = 2;   // BR-0019: the old "On"
@@ -1246,6 +1284,13 @@ extern "C" void lb_settings_load(void) {
     if (g_set.ai_opponents < 1) g_set.ai_opponents = 1;
     if (g_set.ai_opponents > 2) g_set.ai_opponents = 2;
     for (int& a : g_set.ai_opp_army) if (a < 0 || a > 7) a = 2;
+    json_get_bool(s, "cpu_online", &g_set.cpu_online);          // SG-0115
+    json_get_int(s, "cpu_online_army", &g_set.cpu_online_army);
+    json_get_int(s, "cpu_online_colour", &g_set.cpu_online_colour);
+    json_get_int(s, "cpu_online_side", &g_set.cpu_online_side);
+    if (g_set.cpu_online_army < 0 || g_set.cpu_online_army > 5) g_set.cpu_online_army = 1;
+    if (g_set.cpu_online_colour < 0 || g_set.cpu_online_colour > 7) g_set.cpu_online_colour = 0;
+    if (g_set.cpu_online_side < 0 || g_set.cpu_online_side > 3) g_set.cpu_online_side = 0;
     json_get_bool(s, "unlock_units", &g_set.unlock_units);
     json_get_bool(s, "unlock_extras", &g_set.unlock_extras);
     json_get_bool(s, "unlock_maps", &g_set.unlock_maps);           // docs/407
@@ -1291,6 +1336,8 @@ extern "C" void lb_settings_load(void) {
     json_get_bool(s, "lobby_server_label", &g_set.lobby_server_label);
     json_get_bool(s, "mod_maps", &g_set.mod_maps);
     json_get_str(s, "master_host", g_set.master_host, sizeof g_set.master_host);
+    json_get_str(s, "unit_author", g_set.unit_author, sizeof g_set.unit_author);   // SG-0118
+    lb_unitlab_set_author(g_set.unit_author);
     json_get_bool(s, "master_both", &g_set.master_both);     // docs/419
     json_get_bool(s, "master_choice", &g_set.master_choice); // docs/424
     json_get_bool(s, "master_https", &g_set.master_https);   // docs/419
@@ -1305,6 +1352,7 @@ extern "C" void lb_settings_load(void) {
     json_get_bool(s, "update_check", &g_set.update_check);
     json_get_bool(s, "auto_update", &g_set.auto_update);   // docs/435
     json_get_bool(s, "fetch_maps", &g_set.fetch_maps);       // docs/420
+    json_get_bool(s, "auto_rejoin", &g_set.auto_rejoin);
     json_get_bool(s, "fast_link", &g_set.fast_link);         // docs/423
     json_get_int(s, "master_port", &g_set.master_port);
     // docs/394: a file that still holds the OLD default (the local Python
@@ -1746,7 +1794,9 @@ void tab_display() {
     help("The DS has room for 33 unit sprite sheets. With three armies, creatures\n"
          "or custom units a match can need more, and the game then drew the units\n"
          "that did not fit with another unit's sprites. On, every sheet gets a slot\n"
-         "of its own. Off, as on the DS: the armies share the sheets they have in\n"
+         "of its own, and 3D units (transports, specials) get 24 model slots\n"
+         "instead of 12, so none is drawn invisible in a three-army match.\n"
+         "Off, as on the DS: the armies share the sheets they have in\n"
          "common. Takes effect at the next battle. Only you see it.");
     badge(WIRED);
 
@@ -2374,14 +2424,27 @@ void tab_balance_spells() {
     // orders, read as a builder for foot, ranged and mounted units.
     ImGui::Checkbox("Soldiers Repair Buildings", &g_set.any_unit_repairs);
     help("Foot, ranged and mounted units can repair your damaged buildings\n"
-         "and help build new ones, as builders do. Select them together\n"
-         "with a builder and tap the building: the game gives the order to\n"
-         "the whole selection. Off: only heroes and builders, as in the game.\n"
-         "Online, the host's setting applies.");
+         "and help build new ones, as builders do. Select them and tap the\n"
+         "building: the game gives the order to the whole selection. Off:\n"
+         "only heroes, builders and units whose Repairs trait is ticked\n"
+         "(Balance > Traits, per unit). Online, the host's setting applies.");
     badge(WIRED);
     if (lb_rules_host_flags2() >= 0)
         ImGui::TextDisabled("In this lobby, the host's: %s",
                             lb_any_unit_repairs_live() ? "On" : "Off");
+    ImGui::Spacing();
+
+    // docs/497 (SG-0123): a group order's units each get their own cell.
+    ImGui::Checkbox("Smarter Unit Movement", &g_set.smart_move);
+    help("A move order for several units gives each one its own spot in a\n"
+         "block round the place you tapped, so they spread out instead of\n"
+         "all heading for the same tile and crowding round it. Off: every\n"
+         "unit is sent to the tapped tile, as in the game. Applies to the\n"
+         "computer's orders too. Online, the host's setting applies.");
+    badge(WIRED);
+    if (lb_rules_host_flags2() >= 0)
+        ImGui::TextDisabled("In this lobby, the host's: %s",
+                            lb_smart_move_live() ? "On" : "Off");
     ImGui::Spacing();
 
     {
@@ -3434,7 +3497,8 @@ void tab_cheats() {
     }
     help("Who gets the gameplay cheats ticked above. \"The AI only\" makes\n"
          "the game harder. Super Magic and Long Range Magic always help\n"
-         "everyone; reveal cheats are always yours. Not online.");
+         "everyone. With \"The AI only\", Reveal Map and Show Enemies are\n"
+         "not applied (the computer plays without fog). Not online.");
     badge(WIRED);
 
     ImGui::Separator();
@@ -3795,6 +3859,10 @@ void tab_multiplayer() {
         ImGui::Checkbox("Fetch a host's mod map I don't have", &g_set.fetch_maps);
         help("Downloads a host's mod map you're missing from the community\n"
              "archive into mods/maps/_archive. Restart the game to use it.");
+        ImGui::Checkbox("Rejoin after loading the host's content", &g_set.auto_rejoin);
+        help("When a host's custom units or maps arrive, the game resets to\n"
+             "load them. On, it then walks back to the same lobby and joins it\n"
+             "by itself. Off, you join again by hand.");
         ImGui::Checkbox("Fast online link", &g_set.fast_link);
         help("Keeps online matches at full speed. Every player needs the same\n"
              "setting. Applies the next time you host or join.\n"
@@ -4555,15 +4623,38 @@ void draw_store_prices() {
     }
 }
 
+extern "C" int lb_cunits_of_battle(int bp);       /* lb_cunits.cpp */
+extern "C" const char* lb_cunits_folder(int k);   /* lb_cunits.cpp */
+
+// SG-0120 (docs/494): a comma list of folder names, split.
+static std::vector<std::string> split_folders(const char* s) {
+    std::vector<std::string> v;
+    std::string cur;
+    for (const char* p = s; ; ++p) {
+        if (!*p || *p == ',') {
+            if (!cur.empty() && std::find(v.begin(), v.end(), cur) == v.end()) v.push_back(cur);
+            cur.clear();
+            if (!*p) break;
+        } else {
+            cur += *p;
+        }
+    }
+    return v;
+}
+
 // SG-0104 (docs/480): the units the Randomizer opponent never fields, as a
-// grid of heads like Ban Units; a click toggles one. Stock units and the
-// creatures only (a custom unit's id moves when the set changes, BR-0066).
+// grid of heads like Ban Units; a click toggles one. SG-0120 (docs/494): the
+// enabled custom units are listed in their slots too, stored by folder name
+// (random_army_bans_custom), since their blueprint moves when the set changes
+// (BR-0066).
 void draw_random_army_bans() {
     if (!ImGui::CollapsingHeader("Never in Random Armies")) return;
     help("Units the Randomizer opponent never fields (Free Play, and Computer\n"
          "Player 3 on Randomizer). Click a unit to keep it out; click again\n"
          "to allow it. If every unit of a slot is kept out, that slot draws\n"
-         "from all of them. Your own team and online games are not affected.");
+         "from all of them. Custom units are listed with the others and kept\n"
+         "by their folder, so a choice stays with the unit when units are\n"
+         "added or removed. Your own team and online games are not affected.");
     badge(WIRED);
     std::vector<int> list;
     for (const char* p = g_set.random_army_bans; *p;) {
@@ -4572,6 +4663,8 @@ void draw_random_army_bans() {
         while (*p && *p != ',') ++p;
         if (*p) ++p;
     }
+    std::vector<std::string> clist = split_folders(g_set.random_army_bans_custom);
+    bool cchanged = false;
     const float size = 24.0f * g_ui_scale;
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(1.0f, 1.0f));
     const float pitch = size + 2.0f + ImGui::GetStyle().ItemSpacing.x;
@@ -4584,7 +4677,26 @@ void draw_random_army_bans() {
         int shown = 0;
         for (int k = 0; k < n; ++k) {
             const int bp = lb_teams_slot_unit(slot, k);
-            if (bp < 0 || bp >= 192) continue;
+            if (bp < 0) continue;
+            if (bp >= 192) {   // SG-0120: a custom unit, by its folder
+                const int ck = lb_cunits_of_battle(bp);
+                const char* folder = ck >= 0 ? lb_cunits_folder(ck) : "";
+                if (!folder || !*folder) continue;
+                if (shown++ % per_row) ImGui::SameLine();
+                auto it = std::find(clist.begin(), clist.end(), std::string(folder));
+                const bool out = it != clist.end();
+                char id[16];
+                std::snprintf(id, sizeof id, "##rab%d", bp);
+                if (unit_button(id, bp, size, out, out ? 10.0f / 31.0f : 1.0f, false)) {
+                    if (out) clist.erase(it);
+                    else clist.push_back(folder);
+                    cchanged = true;
+                }
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("%s (custom unit, folder %s)%s", lb_teams_unit_name(bp), folder,
+                                      out ? "\nNever in random armies" : "");
+                continue;
+            }
             if (shown++ % per_row) ImGui::SameLine();
             auto it = std::find(list.begin(), list.end(), bp);
             const bool out = it != list.end();
@@ -4603,10 +4715,23 @@ void draw_random_army_bans() {
     ImGui::PopStyleVar();
     if (ImGui::Button("Allow all##rab")) {
         list.clear();
+        clist.clear();
         changed = true;
+        cchanged = true;
     }
     ImGui::SameLine();
-    ImGui::TextDisabled("%d unit(s) kept out.", (int)list.size());
+    ImGui::TextDisabled("%d unit(s) kept out.", (int)(list.size() + clist.size()));
+    if (cchanged) {
+        // A folder whose unit is not enabled now keeps its entry, so turning
+        // the unit back on keeps it out again.
+        std::string o;
+        for (const std::string& f : clist) {
+            if (o.size() + f.size() + 1 >= sizeof g_set.random_army_bans_custom) break;
+            if (!o.empty()) o += ',';
+            o += f;
+        }
+        std::snprintf(g_set.random_army_bans_custom, sizeof g_set.random_army_bans_custom, "%s", o.c_str());
+    }
     if (changed) {
         std::sort(list.begin(), list.end());
         std::string o;
@@ -4820,6 +4945,64 @@ void tab_team_builder() {
         ImGui::EndDisabled();
         ImGui::EndDisabled();
     }
+    // SG-0115 (docs/495): one computer player in an online match. A host
+    // rule: the host's choice is sent to every joiner, who sees it here
+    // read-only. Three teams at most (docs/414), so a lobby of three players
+    // has no room for it.
+    if (std::getenv("LB_CPU_ONLINE")) {   // HELD BACK: a test aid until the computer gets its army
+    ImGui::Separator();
+    {
+        static const char* const kArmies[] = {"King", "Wizard", "Pirate", "Imperial",
+                                              "Earth", "Alien"};
+        static const char* const kColours[] = {"Automatic", "Red", "Blue", "Green",
+                                               "Yellow", "Purple", "Grey", "Teal"};
+        static const char* const kSides[] = {"Free for all", "With player 1 (the host)",
+                                             "With player 2", "Against both players"};
+        const int n_colours = lb_teal_live() ? 8 : 7;
+        if (g_set.cpu_online_colour >= n_colours) g_set.cpu_online_colour = 0;
+        const int host = lb_rules_host_cpu_online();   // -1 unless joined
+        ImGui::Text("Computer Player (online)");
+        ImGui::BeginDisabled(host >= 0);
+        ImGui::Checkbox("Add computer player##cpuo", &g_set.cpu_online);
+        help("Hosting an online lobby: adds one computer player to the match,\n"
+             "with its own base. Every player's game seats the same computer,\n"
+             "so the match stays in step. Two players at most: three armies\n"
+             "is the most a match can hold. Applies when the match starts.");
+        badge(WIRED);
+        ImGui::BeginDisabled(!g_set.cpu_online);
+        ImGui::SetNextItemWidth(180.0f * g_ui_scale);
+        ImGui::Combo("Army##cpuo", &g_set.cpu_online_army, kArmies, IM_ARRAYSIZE(kArmies));
+        ImGui::SetNextItemWidth(180.0f * g_ui_scale);
+        ImGui::Combo("Colour##cpuo", &g_set.cpu_online_colour, kColours, n_colours);
+        help("If the colour is taken, or Automatic, it gets the first free one.");
+        ImGui::SetNextItemWidth(180.0f * g_ui_scale);
+        ImGui::Combo("Side##cpuo", &g_set.cpu_online_side, kSides, IM_ARRAYSIZE(kSides));
+        help("Free for all: everyone fights everyone. With a player: that player\n"
+             "and the computer are allies. Against both: the two players are\n"
+             "allies against the computer.");
+        ImGui::EndDisabled();
+        ImGui::EndDisabled();
+        if (host >= 0) {
+            if (host & 1) {
+                const int a = (host >> 1) & 7, c = (host >> 4) & 7, s = (host >> 7) & 3;
+                ImGui::TextDisabled("In this lobby, the host's: On, %s, %s, %s",
+                                    a < 6 ? kArmies[a] : "?", c < 8 ? kColours[c] : "?", kSides[s]);
+            } else {
+                ImGui::TextDisabled("In this lobby, the host's: Off");
+            }
+        }
+        const int humans = lb_cpu_online_lobby_humans();
+        const int want = host >= 0 ? (host & 1) : (lb_net_is_hosting() ? (lb_setting_cpu_online_packed() & 1) : 0);
+        if (want && humans >= 3)
+            ImGui::TextColored(ImVec4(1.0f, 0.6f, 0.3f, 1.0f),
+                               "Three players are in this lobby: no computer player\n"
+                               "will be added (three armies at most).");
+        int id = -1, h = -1, a = -1, c = -1, s = -1;
+        if (lb_cpu_online_seated(&id, &h, &a, &c, &s))
+            ImGui::TextDisabled("Seated in the last match: computer player id %d (team %d), %s", id, h,
+                                a >= 0 && a < 6 ? kArmies[a] : "?");
+    }
+    }   // LB_CPU_ONLINE (held back)
     draw_random_army_bans();   // SG-0104
     ImGui::Separator();
 
@@ -8366,7 +8549,7 @@ void tab_balance_traits() {
             "Hitbox", "Uninteract.", "Speed: none", "Projectile", "AI priority",
             "Defogged", "Mountains", "Hotwire imm.", "EMP imm.", "ESP imm.",
             "Build effect", "Trained at", "Speed icon", "Transport",
-            "Melee vs bldg", "Shot vs bldg", "Collision layer"};
+            "Melee vs bldg", "Shot vs bldg", "Collision layer", "Repairs"};
         static const char* const kTips[] = {
             "Can walk on land.",
             "Can enter water. Ticking Land or Water also sets the next three "
@@ -8422,11 +8605,18 @@ void tab_balance_traits() {
             "vehicles and buildings. Air: flyers. Bridge: bridges and gates. "
             "Units on different layers pass through each other. Automatic: "
             "the unit's own (from Bld collision and Land<->water). Where it "
-            "can walk is still Land, Water and Trees."};
+            "can walk is still Land, Water and Trees.",
+            // docs/494 (SG-0119).
+            "Repairs damaged buildings and helps build unfinished ones, like a "
+            "builder. Tap the building with it selected; no builder is needed "
+            "in the selection. Foot, ranged and mounted units only (ships, "
+            "vehicles and specials have no work animation). Heroes and builders "
+            "always can. Balance > Spells > Soldiers Repair Buildings turns it "
+            "on for every foot, ranged and mounted unit at once."};
         static const char* const kTrainedNames[3] = {"Automatic", "Special Factory", "Shipyard"};
         static const char* const kIconNames[3] = {"Automatic", "Legs", "Wheels"};
         static const char* const kBoardNames[3] = {"Automatic", "Can board", "Cannot board"};
-        const int nc = 23;
+        const int nc = 24;
         if (ImGui::BeginTable("baltraits", 2 + nc,
                               ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                                   ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY |
@@ -8596,6 +8786,33 @@ void tab_balance_traits() {
                     }
                     ImGui::PopID();
                 }
+                // docs/494 (SG-0119): Repairs, categories 2..4 only.
+                ImGui::TableNextColumn();
+                if (cat >= 2 && cat <= 4) {
+                    const int field = LB_BAL_REPAIR_FIELD;
+                    const int live = lb_balance_value(rec, field);
+                    const int custom = lb_balance_custom_get(rec, field);
+                    ImGui::PushID("repairs");
+                    ImGui::PushID(rec);
+                    bool on = live == 1;
+                    if (custom >= 0)
+                        ImGui::PushStyleColor(ImGuiCol_CheckMark, ImVec4(1.0f, 0.82f, 0.25f, 1.0f));
+                    ImGui::BeginDisabled(locked || live < 0);
+                    if (ImGui::Checkbox("##rep", &on)) bal_set(rec, field, on ? 1 : 0);
+                    ImGui::EndDisabled();
+                    if (custom >= 0) {
+                        ImGui::PopStyleColor();
+                        if (ImGui::IsItemHovered())
+                            ImGui::SetTooltip("Yours. Original: %s. Right-click to restore.",
+                                              lb_balance_base(rec, field) == 1 ? "on" : "off");
+                        if (!locked && ImGui::IsItemClicked(ImGuiMouseButton_Right))
+                            bal_set(rec, field, -1);
+                    }
+                    ImGui::PopID();
+                    ImGui::PopID();
+                } else {
+                    ImGui::TextDisabled(cat == 0 || cat == 1 ? "always" : "-");
+                }
             }
             ImGui::EndTable();
         }
@@ -8729,7 +8946,8 @@ void tab_balance_attacks() {
 // an empty slot (0) shows nothing. The names are the game's own
 // (lb_teams_spell_name); these English ones stand in before its text loads.
 // Id 3 (Area Heal) is skipped by the yellow brick's filler (FUN_020DC004's
-// `cmp r0,#3`), and 0x21/0x22 are impact payloads, so none is offered.
+// `cmp r0,#3`) unless a hero holds it (SG-0125); 0x21/0x22 are impact
+// payloads and are not offered.
 const char* lb_spell_name(int id) {
     if (id == 0) return "(empty)";
     if (const char* s = lb_teams_spell_name(id)) return s;
@@ -8744,8 +8962,10 @@ const char* lb_spell_name(int id) {
         "Cluster Bomb", "Hot Wire"};
     return id > 0 && id <= 0x20 ? kEn[id] : "?";
 }
+// SG-0125: Area Heal (3) is offered too; the brick lists it while a hero
+// holds it (lb_patches.cpp, lb_area_heal_tick).
 bool lb_spell_offered(int id) {
-    return id == 0 || (id >= 1 && id <= 0x20 && id != 3);
+    return id == 0 || (id >= 1 && id <= 0x20);
 }
 
 void tab_balance_heroes() {
@@ -9815,7 +10035,7 @@ extern "C" int lb_pick_pack_file(char* buf, int cap, int saving);   /* lb_filedl
 // else personal.
 const char* const kPackKeysRules[] = {
     "hotwire_mode", "hotwire_neutrals", "hotwire_transport", "emp_transports", "many_mines", "stun_cast",
-    "any_unit_repairs", "unique_heroes", "phantom_guard", "transport_release", "attack_boost_ranged",
+    "any_unit_repairs", "unique_heroes", "smart_move", "phantom_guard", "transport_release", "attack_boost_ranged",
     "fix_hotwired_healing", "own_hero_spells", "same_builders_from", "start_position", "gold_rush_target",
     nullptr};
 const char* const kPackKeysAi[] = {
@@ -9825,7 +10045,7 @@ const char* const kPackKeysAi[] = {
 const char* const kPackKeysCaps[] = {"cap", "cheat", nullptr};
 const char* const kPackKeysBans[] = {
     "banned_units", "banned_maps", "unit_map_bans", "ban_preset", "ban_preset_maps", "random_maps",
-    "tourney_team", "random_army_bans", nullptr};
+    "tourney_team", "random_army_bans", "random_army_bans_custom", nullptr};
 const char* const kPackKeysCreatures[] = {"creatures", "creature_slots", "creature_unlock_with", nullptr};
 const char* const kPackKeysStore[] = {"store_prices", "free_play_win_studs", nullptr};
 
@@ -10959,6 +11179,7 @@ extern "C" void lb_overlay_notice(const char* text) {
     lb_sfx_notify();   // docs/427
 }
 
+extern "C" int lb_setting_auto_rejoin(void) { return g_set.auto_rejoin ? 1 : 0; }
 extern "C" int lb_setting_notify_sound(void) { return g_set.notify_sound; }
 extern "C" int lb_setting_notify_volume(void) { return g_set.notify_volume; }
 // SG-0112: the game's music (0) and effects (1) volume, 0..127; -1 none or off.
@@ -11054,6 +11275,10 @@ extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
         static int tick = 0;
         if (g_ready && ++tick >= 120) {
             tick = 0;
+            // SG-0118: the Unit Lab's sharing name lives in lb_unitlab.cpp;
+            // a copy here is what the hash sees and the file keeps.
+            if (const char* a = lb_unitlab_author(); a && std::strcmp(a, g_set.unit_author) != 0)
+                std::snprintf(g_set.unit_author, sizeof g_set.unit_author, "%s", a);
             size_t h = 1469598103934665603ull;
             const unsigned char* p = (const unsigned char*)&g_set;
             for (size_t i = 0; i < sizeof g_set; ++i) {
@@ -12431,6 +12656,16 @@ extern "C" int lb_setting_any_unit_repairs(void) {
     }
     return forced >= 0 ? forced : (g_set.any_unit_repairs ? 1 : 0);
 }
+// docs/497 (SG-0123): Smarter Unit Movement, this machine's choice
+// (LB_SMART_MOVE=0|1 forces it). What a match runs is lb_smart_move_live.
+extern "C" int lb_setting_smart_move(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_SMART_MOVE");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.smart_move ? 1 : 0);
+}
 extern "C" int lb_setting_unique_heroes(void) {
     static int forced = -2;
     if (forced == -2) {
@@ -12442,7 +12677,8 @@ extern "C" int lb_setting_unique_heroes(void) {
 // The second rule flags a host sends its players ('R' page, lb_teams.cpp).
 extern "C" int lb_rules2_local_flags(void) {
     return (lb_setting_any_unit_repairs() ? LB_RULE2_ANY_REPAIR : 0) |
-           (lb_setting_unique_heroes() ? LB_RULE2_UNIQUE_HEROES : 0);
+           (lb_setting_unique_heroes() ? LB_RULE2_UNIQUE_HEROES : 0) |
+           (lb_setting_smart_move() ? LB_RULE2_SMART_MOVE : 0);
 }
 
 // docs/469: Prevent Phantom Ties, this machine's choice (LB_PHANTOM_GUARD=0|1
@@ -12788,6 +13024,22 @@ extern "C" int lb_setting_random_army_banned(int bp) {
         forced = v ? 1 : 0;
         if (v) forced_list = v;
     }
+    // SG-0120 (docs/494): a custom unit is kept out by its folder name: in
+    // random_army_bans_custom, or as a "c:<folder>" entry of the forced list.
+    const int ck = lb_cunits_of_battle(bp);
+    if (ck >= 0) {
+        const char* folder = lb_cunits_folder(ck);
+        if (!folder || !*folder) return 0;
+        if (forced) {
+            for (const std::string& f : split_folders(forced_list.c_str()))
+                if (f.size() > 2 && f.compare(0, 2, "c:") == 0 && f.compare(2, std::string::npos, folder) == 0)
+                    return 1;
+            return 0;
+        }
+        for (const std::string& f : split_folders(g_set.random_army_bans_custom))
+            if (f == folder) return 1;
+        return 0;
+    }
     const char* p = forced ? forced_list.c_str() : g_set.random_army_bans;
     while (*p) {
         if (*p >= '0' && *p <= '9' && std::atoi(p) == bp) return 1;
@@ -13022,6 +13274,42 @@ extern "C" int lb_setting_ai_opp_packed(void) {
     // At most one extra whatever the source (file, env, recording): docs/414.
     return (opp - 1) | (x0 << 2) | (x1 << 5) | (t << 8) | (c0 << 9) |
            (g_set.ai_opp_colour[1] << 12);
+}
+
+// SG-0115 (docs/495): the computer player a HOST seats in an online match,
+// packed as lb_overlay.h says (0 off). Test aid LB_CPU_ONLINE=army,colour[,side]
+// (army 0..5, colour 0 automatic or 1 + the colour index, side 0..3) forces it
+// on with those values; LB_CPU_ONLINE=off forces it off.
+extern "C" int lb_setting_cpu_online_packed(void) {
+    static int forced = -2, fa = 1, fc = 0, fs = 0;
+    if (forced == -2) {
+        forced = -1;
+        if (const char* v = std::getenv("LB_CPU_ONLINE")) {
+            if (!std::strcmp(v, "off") || !std::strcmp(v, "0")) {
+                forced = 0;
+            } else {
+                forced = 1;
+                fa = std::atoi(v);
+                if (const char* c = std::strchr(v, ',')) {
+                    fc = std::atoi(c + 1);
+                    if (const char* s = std::strchr(c + 1, ',')) fs = std::atoi(s + 1);
+                }
+            }
+        }
+    }
+    // HELD BACK (docs/495): online, the computer is seated identically on every
+    // machine and stays in sync, but its starting base and units are never
+    // created (census: 0 things). Until that is solved it is a test aid only:
+    // the menu's choice is ignored and hidden, LB_CPU_ONLINE turns it on.
+    const bool on = forced == 1;
+    if (!on) return 0;
+    int a = forced == 1 ? fa : g_set.cpu_online_army;
+    int c = forced == 1 ? fc : g_set.cpu_online_colour;
+    int s = forced == 1 ? fs : g_set.cpu_online_side;
+    if (a < 0 || a > 5) a = 1;
+    if (c < 0 || c > 7 || (c == 7 && !lb_teal_live())) c = 0;
+    if (s < 0 || s > 3) s = 0;
+    return 1 | (a << 1) | (c << 4) | (s << 7);
 }
 
 // Which faction's music a match plays. 0 vanilla (the game untouched),
@@ -13430,9 +13718,11 @@ extern "C" const char* lb_net_lobby_options_json(void) {
     kv.push_back({"Stunned heroes can cast", g_set.stun_cast ? "On" : "Off"});
     kv.push_back({"Soldiers repair buildings", g_set.any_unit_repairs ? "On" : "Off"});   // docs/488
     kv.push_back({"One of each hero", g_set.unique_heroes ? "On" : "Off"});               // docs/488
+    kv.push_back({"Smarter unit movement", g_set.smart_move ? "On" : "Off"});             // docs/497
     kv.push_back({"AI rebuilds its hero", g_set.ai_hero_rebuild ? "On" : "Off"});
     kv.push_back({"AI builds more mines", g_set.ai_more_mines ? "On" : "Off"});
     kv.push_back({"Computers attack each other", g_set.ai_cross_fire ? "On" : "Off"});   // SG-0051
+    kv.push_back({"Computer player", (lb_setting_cpu_online_packed() & 1) ? "On" : "Off"});   // SG-0115
     kv.push_back({"AI bridges any map", g_set.ai_bridges ? "On" : "Off"});               // SG-0071
     kv.push_back({"AI shipyards any map", g_set.ai_shipyards ? "On" : "Off"});           // SG-0078
     kv.push_back({"AI finishes tower upgrades", g_set.ai_finish_upgrades ? "On" : "Off"});  // BR-0070

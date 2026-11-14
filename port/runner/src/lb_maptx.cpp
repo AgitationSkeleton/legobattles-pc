@@ -44,9 +44,12 @@ bool lb_cunits_bundle(uint64_t hash, std::vector<uint8_t>* out);                
 bool lb_cunits_received(uint64_t hash, const std::vector<uint8_t>& bundle);
 extern "C" int lb_mods_request_rebuild(void);
 extern "C" int lb_setting_fetch_maps(void);   /* lb_overlay.cpp */
+extern "C" int lb_rejoin_arm(const char* why);   /* lb_patches.cpp */
+extern "C" void lb_rejoin_disarm(void);
 
 namespace {
 namespace fs = std::filesystem;
+bool g_rejoin_armed = false;   // the last reset asked for will rejoin the lobby
 
 constexpr uint32_t kChunk = 1024;
 constexpr uint32_t kMaxBundle = 1u << 20;
@@ -215,13 +218,19 @@ void queue_chunks(uint64_t hash, uint32_t offset) {
 // neither (the player must restart).
 int register_received(const std::string& path) {
     if (lb_mods_register_folder(path.c_str())) return 1;
-    return lb_mods_request_rebuild() ? 2 : 0;
+    g_rejoin_armed = lb_rejoin_arm("the host's map") != 0;   // before the reset is asked for
+    if (lb_mods_request_rebuild()) return 2;
+    if (g_rejoin_armed) lb_rejoin_disarm();
+    g_rejoin_armed = false;
+    return 0;
 }
 
 std::string loaded_text(const std::string& name, const char* from, int how) {
     const std::string head = "The map \"" + name + "\" " + from + ". ";
     if (how == 1) return head + "You can ready up.";
-    if (how == 2) return head + "The game resets to load it: join the lobby again.";
+    if (how == 2)
+        return head + (g_rejoin_armed ? "The game resets to load it, then joins the lobby again."
+                                      : "The game resets to load it: join the lobby again.");
     return head + "Restart the game to use it, then join again.";
 }
 

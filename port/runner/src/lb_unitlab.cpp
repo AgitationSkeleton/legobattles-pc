@@ -667,6 +667,9 @@ const Field kFields[] = {
     // docs/488 (SG-0116): the collision layers, 0 automatic, else a mask of
     // 1 ground, 2 air, 4 bridge (padding +0x53, stock 0xA1 reads as 0).
     {"collision_layer", 0x53, 1},
+    // docs/494 (SG-0119): repairs and helps build, 1 on (padding +0x4F,
+    // stock 0xA1 reads as 0). Foot, ranged and mounted units only.
+    {"can_repair", 0x4F, 1},
     {"display_name_id", 0x06, 2},
 };
 const char* const kLayerNames[8] = {
@@ -689,6 +692,7 @@ std::string bonus_text(long v) {
 // 0xA2 is neither, so it shows, and saves, as 0.
 int port_field_max(const char* key) {
     if (!std::strcmp(key, "mountains")) return 1;
+    if (!std::strcmp(key, "can_repair")) return 1;   // docs/494
     // SG-0073 (docs/470): 0 normal, 1 immune, 2 always affected.
     if (!std::strcmp(key, "hotwire_immune") || !std::strcmp(key, "emp_immune") ||
         !std::strcmp(key, "esp_immune") || !std::strcmp(key, "trained_at") ||
@@ -764,6 +768,12 @@ const char* port_field_tip(const char* key) {
                "Cannot board: it never boards a transport.\n"
                "A transport still holds at most 4 hero, builder, foot and mounted units and\n"
                "2 siege/special units.";
+    if (!std::strcmp(key, "can_repair"))   // docs/494
+        return "Repairs damaged buildings and helps build unfinished ones, like a builder.\n"
+               "Select it and tap the building; no builder is needed in the selection.\n"
+               "Foot, ranged and mounted units only (role Close Combat, Ranged or Mounted):\n"
+               "ships, vehicles and specials have no work animation. Heroes and builders\n"
+               "always can. Online, every player has the same record.";
     if (!std::strcmp(key, "collision_layer"))   // docs/488
         return "Which units it bumps into and stacks with.\n"
                "Ground: soldiers, vehicles and buildings. Air: flyers. Bridge: bridges and gates.\n"
@@ -842,9 +852,10 @@ const HowStep kHowTo[] = {
      "is laid over the sheet."},
     {"Re-skin a model (transports and siege)",
      "Edit model/texture.png and keep its size. The model's shape stays the stock\n"
-     "one. Use at most 16 colours. The exported texture's three team blues stay\n"
-     "the owner's team colour in play: keep them exactly where the team colour\n"
-     "should show. The texture must be a PNG (a .tga is not read)."},
+     "one. The exported texture's three team blues stay the owner's team colour in\n"
+     "play (stock, teal or a custom colour): keep them exactly where the team colour\n"
+     "should show. Besides them, at most 12 other colours (more are drawn as the\n"
+     "nearest). The texture must be a PNG (a .tga is not read)."},
     {"A new shape for a model (optional)",
      "model/model_export.obj is the stock model as an OBJ. Edit it in a 3D program\n"
      "(keep its scale and position; at most 400 triangles; UVs over texture.png)\n"
@@ -856,7 +867,9 @@ const HowStep kHowTo[] = {
      "transport's or special's model (unit.json \"model\": its number); it stays a\n"
      "hero (spells, respawn, mana) or whatever it was. model/texture.png and\n"
      "model/model.obj apply to that model. When a level has no room (12 model\n"
-     "records) the unit is drawn with its sprites there and the log says so."},
+     "records) the unit is drawn with its sprites there and the log says so.\n"
+     "On a dragon's model, \"Dragon fire breath when it attacks\" (unit.json\n"
+     "\"attack_anim\": \"breath\") adds the dragons' flame to its attacks."},
     {"Portraits",
      "portraits/head.png is the small round head on the army screen, the Team\n"
      "Builder and the top screen (any size, fitted to 24x24). portraits/card.png and\n"
@@ -1866,6 +1879,7 @@ struct Edit {
     int role = -1;              // SG-0109: "role", the army slot it plays in; -1 its template's
     int model = -1;             // docs/492: "model", a stock 3D unit whose model a 2D unit is drawn with
     int sprites_from = -1;      // docs/492: "sprites_from", a stock 2D unit whose sheets a hero/special uses
+    bool breath = false;        // docs/496: "attack_anim": "breath", the dragons' fire when it attacks
     std::string asset;
     long field[sizeof kFields / sizeof kFields[0]] = {};
     bool has[sizeof kFields / sizeof kFields[0]] = {};
@@ -1902,6 +1916,7 @@ void edit_open(const Mine& m, const Rec& tmpl) {
     }
     e.asset = json_get_s(j, "asset");
     if (e.asset.empty()) e.asset = tmpl.asset;
+    e.breath = json_get_s(j, "attack_anim") == "breath";   // docs/496
     size_t fb, fe;
     const bool f = fields_span(j, &fb, &fe);
     for (size_t i = 0; i < sizeof kFields / sizeof kFields[0]; ++i) {
@@ -1926,6 +1941,9 @@ bool edit_save() {
     if (g_edit.credits[0] || !json_get_s(j, "credits").empty())
         json_set_s(j, "credits", credits_clean(g_edit.credits));
     json_set_s(j, "asset", g_edit.asset);
+    // docs/496 (SG-0122): written when on, or to clear an old one.
+    if (g_edit.breath || !json_get_s(j, "attack_anim").empty())
+        json_set_s(j, "attack_anim", g_edit.breath ? "breath" : "");
     {   // SG-0096: a top-level number; written when set, or to clear an old one
         size_t b, en;
         const size_t fb0 = j.find("\"fields\"");
@@ -2458,6 +2476,26 @@ void draw_edit_fields(const Mine& m, const std::vector<Rec>& rs) {
                               "%s. A Mounted sheet needs one of the level's three mounted slots; when they\n"
                               "are taken the unit is drawn its own way that level. Not with a 3D model.",
                               category_name(t.category), category_name(t.category));
+    }
+    // docs/496 (SG-0122): the dragons' fire breath, for a unit drawn with the
+    // King's (8) or Wizard's (28) Dragon's model -- a 2D unit's "3D model", or
+    // a special's "Model". Off by default; units made from a dragon have it.
+    {
+        auto is_dragon = [&](int i) { return i == 8 || i == 28; };
+        bool on_dragon = t.category <= 4 && is_dragon(g_edit.model);
+        if ((t.category == 5 || t.category == 6) && !is_dragon(m.tmpl))
+            for (int i : {8, 28})
+                if (i < (int)rs.size() && g_edit.asset == rs[(size_t)i].asset) on_dragon = true;
+        if (on_dragon) {
+            ImGui::Checkbox("Dragon fire breath when it attacks", &g_edit.breath);
+            ImGui::SetItemTooltip("Breathe the King's and Wizard's Dragons' fire when it attacks, from the\n"
+                                  "dragon's mouth, whatever its projectile. The model already plays the\n"
+                                  "dragons' attack frames; this adds their flame. Saved as\n"
+                                  "\"attack_anim\": \"breath\" in unit.json. Takes effect when custom units\n"
+                                  "are loaded again.");
+        } else if (g_edit.breath) {
+            ImGui::TextDisabled("Dragon fire breath: only with a dragon's model (it is ignored now)");
+        }
     }
     const auto choices = asset_choices(rs, t);
     std::string cur = g_edit.asset;
@@ -3608,6 +3646,13 @@ void draw_community(const std::vector<Rec>& rs) {
 }
 
 }  // namespace
+
+// SG-0118: the sharing name, kept in settings.json ("unit_author") so it
+// survives a restart.
+extern "C" const char* lb_unitlab_author(void) { return g_author; }
+extern "C" void lb_unitlab_set_author(const char* s) {
+    std::snprintf(g_author, sizeof g_author, "%s", s ? s : "");
+}
 
 // Balance > Custom units (lb_overlay.cpp's page).
 // The textures belong to one renderer; a new one (a window rebuilt) starts over.
