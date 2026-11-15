@@ -22,7 +22,7 @@
 //                              row; <s>_1 walk and <s>_2 attack, a row per
 //                              direction, five frames per row
 //   mounted (4)                rows y 96..255 of <faction>_bld_mtd, one per
-//                              direction, 32x32: frames 0-4 walk, 5-7 attack
+//                              direction, 32x32: frames 0-2 walk, 3-7 attack
 //   buildings (7+)             one cell of <faction>_bld_mtd: u16 +0x20 the
 //                              8-px tile index in the 32-tile-wide sheet,
 //                              +0x1E/+0x1F the size in tiles
@@ -203,9 +203,11 @@ Layout layout_of(const Rec& r) {
         keep(base);
         for (int d = 0; d < 5; ++d) {
             add(idle, d, base, 0, 96 + d * 32, 32, 32);
-            // Mounts have 4 walk and 4 attack frames (BR-0045/0048), not 5 and 3.
-            for (int f = 0; f < 4; ++f) add(walk, d, base, f * 32, 96 + d * 32, 32, 32);
-            for (int f = 4; f < 8; ++f) add(attack, d, base, f * 32, 96 + d * 32, 32, 32);
+            // BR-0102: mounts have 3 walk frames (0-2, the weapon at rest) and
+            // 5 attack frames (3-7: raise, swing, the slash, follow-through),
+            // measured on k_bld_mtd. BR-0045/0048's 4 and 4 was not measured.
+            for (int f = 0; f < 3; ++f) add(walk, d, base, f * 32, 96 + d * 32, 32, 32);
+            for (int f = 3; f < 8; ++f) add(attack, d, base, f * 32, 96 + d * 32, 32, 32);
         }
     } else {
         keep(base);

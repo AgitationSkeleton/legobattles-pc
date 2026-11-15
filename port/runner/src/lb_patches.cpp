@@ -8999,6 +8999,174 @@ void rj_tick() {
         break;
     }
 }
+
+// ---- SG-0133: PLAY A MAP STRAIGHT FROM THE LEVEL EDITOR ---------------------
+//
+// The editor's "Play this map" saves the level and reloads the map lists (the
+// "Load new maps" reset: a mod map is built into the cartridge image at boot).
+// This walk then takes the new boot into a Free Play battle on that map, the
+// way a player would, keyed on which screen is up, as the rejoin above is:
+//   StartScreen            tap to start
+//   ProfileSelect          the slot the player last used, then Use
+//   MainMenu               Single Player (select, then enter)
+//   SinglePlayerMenu       Free Play (select, then enter)
+//   SkirmishFactionSelect  the map carousel: the left arrow until the selected
+//                          mission's name is the level's (mod maps come after
+//                          the stock ones, so left is the short way), then
+//                          Continue
+//   SkirmishSetup, CustomizeArmy, OpponentSetup   Continue, with the player's
+//                          own choices as the screens open with them
+// It is done when no screen of the walk has updated for 3 s after the map was
+// confirmed (the battle is loading). It gives up, and says so, as the rejoin
+// does.
+uint32_t map_list_selected(uint32_t screen, int* index);   // below (the map list)
+constexpr uint32_t kVtSingle = 0x0214D4BCu, kVtMapSel = 0x0214D54Cu, kVtSetup = 0x0214DA50u,
+                   kVtArmy = 0x0214C960u, kVtOpp = 0x0214D1C0u;
+constexpr uint32_t kPlayWalk[8] = {kVtStart, kVtProfile, kVtMain, kVtSingle,
+                                   kVtMapSel, kVtSetup, kVtArmy, kVtOpp};
+struct PlayWalk {
+    bool armed = false;
+    unsigned gen = 0;
+    char name[64] = {};          // the level's name, as the map list shows it
+    uint32_t screen = 0;
+    unsigned screen_at = 0, vbl = 0, last_tap = 0, last_seen = 0;
+    int taps = 0, arrows = 0;
+    bool picked = false;         // the map was confirmed
+    unsigned seen_mask = 0, mask_hist[8] = {};
+    uint32_t obj[8] = {};        // each walk screen's object, while it updates
+    int tx = 0, ty = 0, press_left = 0;
+};
+PlayWalk g_pw;
+
+void pw_tap(int x, int y) {
+    g_pw.tx = x;
+    g_pw.ty = y;
+    g_pw.press_left = 5;
+    g_pw.last_tap = g_pw.vbl;
+    ++g_pw.taps;
+    std::fprintf(stderr, "[lb_playmap] tap %d,%d on screen %08X (tap %d there)\n", x, y, g_pw.screen, g_pw.taps);
+    std::fflush(stderr);
+}
+void pw_stop(const char* why, bool ok) {
+    std::fprintf(stderr, "[lb_playmap] %s: %s\n", ok ? "done" : "gave up", why);
+    std::fflush(stderr);
+    if (g_pw.press_left > 0) nds_set_touch((uint16_t)g_pw.tx, (uint16_t)g_pw.ty, false);
+    const bool listed = std::strcmp(why, "the map is not in the Free Play list") != 0;
+    g_pw = PlayWalk{};
+    if (!ok)
+        lb_overlay_notice(listed ? "Could not start the map by itself: pick it in Free Play."
+                                 : "The map is not in the Free Play list. Is Maps > Mod maps on, and does "
+                                   "it have at least two starts?");
+}
+void pw_note_screen(uint32_t screen) {
+    if (!g_pw.armed || g_pw.gen == g_boot_gen || !guest_ptr(screen)) return;
+    const uint32_t vt = bus_read_u32(screen);
+    for (int i = 0; i < 8; ++i)
+        if (vt == kPlayWalk[i]) {
+            g_pw.seen_mask |= 1u << i;
+            g_pw.obj[i] = screen;
+        }
+}
+// The selected map's name, from the map list (its mission's +0xF0 text id).
+bool pw_selected_name(uint32_t screen, char* out, size_t cap) {
+    const uint32_t m = map_list_selected(screen, nullptr);
+    if (!m) return false;
+    const uint32_t at = loc_text_addr(bus_read_u32(m + 0xF0u));
+    if (!at) return false;
+    size_t i = 0;
+    for (; i + 1 < cap; ++i) {
+        out[i] = (char)bus_read_u8(at + (uint32_t)i);
+        if (!out[i]) break;
+    }
+    out[i] = 0;
+    return true;
+}
+void pw_tick() {
+    if (!g_pw.armed || g_pw.gen == g_boot_gen) return;
+    ++g_pw.vbl;
+    g_pw.mask_hist[g_pw.vbl & 7u] = g_pw.seen_mask;
+    if (g_pw.seen_mask) g_pw.last_seen = g_pw.vbl;
+    g_pw.seen_mask = 0;
+    {
+        unsigned m = 0;
+        for (unsigned h : g_pw.mask_hist) m |= h;
+        uint32_t vt = 0;
+        for (int i = 7; i >= 0 && !vt; --i)
+            if (m & (1u << i)) vt = kPlayWalk[i];
+        if (vt && vt != g_pw.screen) {
+            std::fprintf(stderr, "[lb_playmap] screen %08X after %u vblanks\n", vt, g_pw.vbl);
+            std::fflush(stderr);
+            g_pw.screen = vt;
+            g_pw.screen_at = g_pw.vbl;
+            g_pw.taps = 0;
+        }
+    }
+    if (g_pw.press_left > 0) {
+        nds_set_touch((uint16_t)g_pw.tx, (uint16_t)g_pw.ty, --g_pw.press_left > 0);
+        return;
+    }
+    if (g_pw.picked && g_pw.vbl - g_pw.last_seen > 180u) { pw_stop("the battle is loading", true); return; }
+    if (g_pw.vbl > 180u * 60u) { pw_stop("180 s passed", false); return; }
+    const unsigned on = g_pw.vbl - g_pw.screen_at, since = g_pw.vbl - g_pw.last_tap;
+    if (on < 60u || since < 72u) return;   // let the screen settle; a tap per 1.2 s
+    switch (g_pw.screen) {
+    case kVtStart:
+        if (g_pw.taps < 8) pw_tap(128, 96);
+        else pw_stop("the title screen did not move on", false);
+        break;
+    case kVtProfile: {
+        if (g_pw.taps >= 10) { pw_stop("the profile screen did not move on", false); break; }
+        const uint32_t scr = g_pw.obj[1];
+        const uint32_t want = 0x238u + (uint32_t)(g_rj_profile_slot >= 0 ? g_rj_profile_slot : 0);
+        int x = 0, y = 0;
+        if (guest_ptr(scr) && bus_read_u32(scr) == kVtProfile && rj_focused_id(scr) != want && g_pw.taps < 4 &&
+            rj_widget_centre(scr, want, &x, &y))
+            pw_tap(x, y);
+        else
+            pw_tap(205, 169);   // Use
+        break;
+    }
+    case kVtMain:
+        if (g_pw.taps < 6) pw_tap(89, 52);   // Single Player: select, then enter
+        else pw_stop("the main menu did not move on", false);
+        break;
+    case kVtSingle:
+        if (g_pw.taps < 6) pw_tap(171, 91);   // Free Play: select, then enter
+        else pw_stop("the Single Player menu did not move on", false);
+        break;
+    case kVtMapSel: {
+        const uint32_t scr = g_pw.obj[4];
+        char cur[64] = "";
+        if (!guest_ptr(scr) || bus_read_u32(scr) != kVtMapSel || !pw_selected_name(scr, cur, sizeof cur)) {
+            if (on > 10u * 60u) pw_stop("the map list was not readable", false);
+            break;
+        }
+        if (std::strcmp(cur, g_pw.name) == 0) {
+            if (g_pw.taps - g_pw.arrows < 4) {
+                pw_tap(205, 169);   // Continue
+                g_pw.picked = true;
+            } else {
+                pw_stop("the map select did not move on", false);
+            }
+            break;
+        }
+        const uint32_t list = bus_read_u32(scr + 0x84u);
+        const int n = guest_ptr(list) ? (int)(bus_read_u32(list + 0x24u) & 0xFFu) : 0;
+        if (g_pw.arrows > n + 2) { pw_stop("the map is not in the Free Play list", false); break; }
+        ++g_pw.arrows;
+        pw_tap(52, 134);   // the carousel's left arrow
+        break;
+    }
+    case kVtSetup:
+    case kVtArmy:
+    case kVtOpp:
+        if (g_pw.taps < 6) pw_tap(205, 169);   // Continue
+        else pw_stop("a setup screen did not move on", false);
+        break;
+    default:
+        break;
+    }
+}
 }  // namespace
 
 // Arm the rejoin before a content reload's reset (lb_cunits.cpp, lb_maptx.cpp).
@@ -9030,7 +9198,23 @@ extern "C" int lb_rejoin_arm(const char* why) {
     return 1;
 }
 extern "C" void lb_rejoin_disarm(void) { g_rj.armed = false; }
-extern "C" void lb_rejoin_note_screen(uint32_t screen) { rj_note_screen(screen); }
+extern "C" void lb_rejoin_note_screen(uint32_t screen) {
+    rj_note_screen(screen);
+    pw_note_screen(screen);   // SG-0133
+}
+// SG-0133: walk the next boot into a Free Play battle on the level `name`
+// (lb_leveledit.cpp's "Play this map", before it asks for the reset).
+extern "C" void lb_play_map_arm(const char* name) {
+    PlayWalk p;
+    std::snprintf(p.name, sizeof p.name, "%s", name ? name : "");
+    p.gen = g_boot_gen;
+    g_pw = p;
+    std::atomic_thread_fence(std::memory_order_release);
+    g_pw.armed = true;
+    std::fprintf(stderr, "[lb_playmap] armed: \"%s\", profile slot %d\n", g_pw.name, g_rj_profile_slot);
+    std::fflush(stderr);
+}
+extern "C" void lb_play_map_disarm(void) { g_pw.armed = false; }
 extern "C" void lb_request_game_reset(void);   /* lb_overlay.cpp */
 extern "C" void lb_rejoin_tick(void) {
     // TEST AID: LB_TEST_REJOIN=1 plays a content reload once: 5 s after this
@@ -9049,6 +9233,16 @@ extern "C" void lb_rejoin_tick(void) {
         }
     }
     rj_tick();
+    // TEST AID (SG-0133): LB_TEST_PLAYMAP=<level name> does what the level
+    // editor's "Play this map" does, once, when the title screen is first up.
+    static const char* play_test = std::getenv("LB_TEST_PLAYMAP");
+    static bool play_done = false;
+    if (play_test && !play_done && g_title_seen) {
+        play_done = true;
+        lb_play_map_arm(play_test);
+        if (!lb_mods_request_rebuild()) lb_play_map_disarm();
+    }
+    pw_tick();   // SG-0133
 }
 
 // SG-0125: AREA HEAL IN THE YELLOW BRICK. Spell 3 (Area Heal: button 1, cast

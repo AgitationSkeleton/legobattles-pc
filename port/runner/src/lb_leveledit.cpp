@@ -51,6 +51,9 @@ extern "C" int lb_palette_for_editor(int world, uint16_t* out);                 
 extern "C" unsigned lb_palette_editor_key(int world);
 extern "C" const char* lb_mods_dir(void);                                              // lb_mods.cpp
 extern "C" int lb_mods_request_rebuild(void);                                          // lb_mods.cpp
+extern "C" void lb_play_map_arm(const char* name);                                     // lb_patches.cpp, SG-0133
+extern "C" void lb_play_map_disarm(void);
+extern "C" void lb_overlay_close(void);                                                // lb_overlay.cpp
 extern "C" int lb_pick_level_file(char* buf, int cap, int saving);                     // lb_filedlg.cpp
 extern "C" int lb_maps_entry(int i, char* token, int tcap, char* name, int ncap, int* players);
 extern "C" const char* lb_swear_shown(const char* text);                               // lb_overlay.cpp
@@ -3193,6 +3196,22 @@ void panel_file() {
     }
     ImGui::SetItemTooltip("Resets to the title screen with your saved levels in the map lists.\n"
                           "Ends any match in progress.");
+    // SG-0133: save, reload the map lists, and walk into a Free Play battle on
+    // this level (lb_play_map_arm, lb_patches.cpp).
+    ImGui::SameLine();
+    if (ImGui::Button("Play this map")) {
+        if (save_folder()) {
+            lb_play_map_arm(g_doc.name);
+            if (!lb_mods_request_rebuild()) {
+                lb_play_map_disarm();
+                say(true, "Could not reload the map lists; press Load new maps now, then pick it in Free Play.");
+            } else {
+                lb_overlay_close();
+            }
+        }
+    }
+    ImGui::SetItemTooltip("Saves the level, reloads the map lists and starts a Free Play battle on it\n"
+                          "with your current army and opponent settings. Ends any match in progress.");
 }
 
 void panel_share() {

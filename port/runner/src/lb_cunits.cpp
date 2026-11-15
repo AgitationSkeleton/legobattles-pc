@@ -526,8 +526,23 @@ bool frame_unchanged(const std::vector<uint8_t>& tpx, int sw, int sh, const Img&
 }
 
 // The frames of a template's layout (lb_unitlab.cpp's, by category).
+//
+// BR-0102: a mount's 32x32 row is 3 walk frames (0-2) and 5 attack frames
+// (3-7), measured on k_bld_mtd. 0.4.4 to 0.4.22 said 4 and 4, and before that
+// 5 and 3, so folders exported then name their files by those layouts. Walk
+// file n is sheet frame n in all three; the attack files follow however many
+// walk files the folder has for direction 0 (3, 4 or 5). `folder` empty: the
+// current layout.
 struct Frame { std::string action, sheet; int dir, n, x, y, w, h; };
-std::vector<Frame> frames_of(int cat, const std::string& base, const std::vector<uint8_t>& rec) {
+int mount_walk_frames(const fs::path& folder) {
+    if (folder.empty()) return 3;
+    std::error_code ec;
+    int n = 0;
+    while (n < 5 && fs::exists(folder / "frames" / "walk" / ("d0_" + std::to_string(n) + ".png"), ec)) ++n;
+    return n >= 4 ? n : 3;
+}
+std::vector<Frame> frames_of(int cat, const std::string& base, const std::vector<uint8_t>& rec,
+                             const fs::path& folder = fs::path()) {
     std::vector<Frame> v;
     if (cat == 0)
         for (int d = 0; d < 5; ++d)
@@ -543,12 +558,14 @@ std::vector<Frame> frames_of(int cat, const std::string& base, const std::vector
                 v.push_back({"attack", base + "_2", d, f, f * 24, d * 24, 24, 24});
             }
         }
-    else if (cat == 4)
+    else if (cat == 4) {
+        const int wf = mount_walk_frames(folder);
         for (int d = 0; d < 5; ++d) {
             v.push_back({"idle", base, d, 0, 0, 96 + d * 32, 32, 32});
-            for (int f = 0; f < 4; ++f) v.push_back({"walk", base, d, f, f * 32, 96 + d * 32, 32, 32});
-            for (int f = 4; f < 8; ++f) v.push_back({"attack", base, d, f - 4, f * 32, 96 + d * 32, 32, 32});
+            for (int f = 0; f < wf; ++f) v.push_back({"walk", base, d, f, f * 32, 96 + d * 32, 32, 32});
+            for (int f = wf; f < 8; ++f) v.push_back({"attack", base, d, f - wf, f * 32, 96 + d * 32, 32, 32});
         }
+    }
     else if (cat >= 7) {
         const int cell = (int)get16(rec, 0x20), cw = rec[0x1E], chh = rec[0x1F];
         for (int d = 0; d < 5; ++d) v.push_back({"idle", base, d, 0, (cell & 31) * 8, (cell >> 5) * 8, cw * 8, chh * 8});
@@ -1238,7 +1255,7 @@ bool load_unit(const std::string& folder, const std::string& tag, const std::vec
     // `extra`: more sheet names the folder may hold without a note.
     auto build_sprites = [&](int lcat, const std::string& tbase, bool main,
                              const std::vector<std::string>* extra) -> bool {
-        const std::vector<Frame> frs = main ? frames_of(lcat, tbase, e->rec) : std::vector<Frame>();
+        const std::vector<Frame> frs = main ? frames_of(lcat, tbase, e->rec, dir) : std::vector<Frame>();
         // What the folder's art did, for the menu's Last build: a sheet or
         // frame that is the wrong size or format, or a sheet named for no
         // sheet of this template, is ignored, and saying so is the only way a
@@ -2037,7 +2054,7 @@ bool lb_cunits_folder_sheet(const std::string& folder, int tmpl, const std::stri
     const std::string src = sheet_stand_in(sdir, sheets_of(rec[0x5C], tbase), tbase, tsheet);
     if (slurp(sdir / (src + ".NCBR"), &mine) && parse_sheet(mine, &ms, s.w, s.h) && ms.w == s.w && ms.h == s.h) s.px = ms.px;
     else if (slurp(sdir / (src + ".png"), &mine) && read_png(mine, &im) && im.w == s.w && im.h == s.h) blit(s, im, 0, 0, fpal);
-    for (const Frame& fr : frames_of(rec[0x5C], tbase, rec)) {
+    for (const Frame& fr : frames_of(rec[0x5C], tbase, rec, dir)) {
         if (fr.sheet != tsheet) continue;
         char nm[32];
         std::snprintf(nm, sizeof nm, "d%d_%d.png", fr.dir, fr.n);

@@ -13620,6 +13620,9 @@ extern "C" int lb_setting_music_mode(void) {
     return (m < 0 || m > 9) ? 0 : m;   // docs/387: 4..9 one faction always
 }
 
+// SG-0133: close the settings menu (the level editor's "Play this map").
+extern "C" void lb_overlay_close(void) { g_visible = false; }
+
 // SG-0128: this machine's own name for LOC string id `id`, copied to `out`;
 // 0 when there is none. string_from_id_override (lb_patches.cpp) asks it for
 // every string the game fetches, so the parsed list is kept until the setting
