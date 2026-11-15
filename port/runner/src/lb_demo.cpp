@@ -1136,7 +1136,7 @@ extern "C" void lb_demo_tick(void) {
             else if (e.a == 28) g_demo_startpos = (e.b >= 0 && e.b <= 8) ? e.b : 0;   // SG-0081
             else if (e.a == 29) g_demo_fcpu = (e.b == 1 || (e.b >= 64 && e.b < 256)) ? e.b : 0;   // docs/484: 1 the governor
             else if (e.a == 26) g_demo_aix = e.b & 15;           // docs/472; bit 3 docs/478
-            else if (e.a == 30) g_demo_rules2 = e.b & (LB_RULE2_ANY_REPAIR | LB_RULE2_UNIQUE_HEROES | LB_RULE2_SMART_MOVE);   // docs/488, docs/497
+            else if (e.a == 30) g_demo_rules2 = e.b & (LB_RULE2_ANY_REPAIR | LB_RULE2_UNIQUE_HEROES | LB_RULE2_SMART_MOVE | LB_RULE2_THUNDER_FIX | LB_RULE2_FAST_PATH);   // docs/488, docs/497
             else if (e.a == 31) g_demo_aitap = e.b ? 1 : 0;      // docs/488 (SG-0113)
             else if (e.a == 32) g_demo_cpuo = (e.b & 1) && ((e.b >> 1) & 7) <= 5 ? (e.b & 0x1FF) : 0;   // SG-0115
             else if (e.a == 17) g_demo_aiopp = (e.b & 0x7FFC) | ((e.b & 3) > 1 ? 1 : (e.b & 3));   // at most one extra (docs/414)   // docs/414

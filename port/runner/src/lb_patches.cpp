@@ -4872,6 +4872,55 @@ void tabs_keep_enter(uint32_t screen, int group) {
 
 static int g_mm_log = 0;   // updates until the minimap tap's result is logged
 
+// BR-0099: THE BATTLE HUD'S SCREEN-SWAP BUTTON, IN ENHANCED. FUN_020DDDD4 is
+// its handler: FUN_02024DC8(0) flips the LCD swap flag (byte 0 of 0x02151344,
+// which Task_SwapBuffersAndOam turns into POWCNT1 bit 15), then the view is
+// refreshed. docs/251 pinned Enhanced's PICTURE (engine A always fills the
+// window) but not the flag, and the game's widgets choose their screen by
+// comparing against it: once swapped, the touch panel belonged to the info
+// screen, unseen, so clicks on the field did nothing or hit its minimap (the
+// camera jumped) until the button was pressed again. In Enhanced the button
+// now only ever swaps back; a press that would swap away does nothing. DS
+// Vanilla swaps as the cartridge does.
+constexpr uint32_t kScreenSwap = 0x020DDDD4u;   // thumb
+constexpr uint32_t kLcdSwapFlag = 0x02151344u;
+extern "C" int lb_setting_enhanced(void);
+// Only the BUTTON's two paths are refused: FUN_020DDE14 (the press, which
+// then plays the swap sound, 0x15; its own override below skips both) and
+// FUN_020E013C (a tap on the swap widget, bl at 020E0164). FUN_020D9AA0, a
+// screen's setup, also calls it to set its layout and is left alone.
+constexpr uint32_t kSwapFromWidget = 0x020E0168u;   // lr & ~1 of the bl at 020E0164
+constexpr uint32_t kSwapPress = 0x020DDE14u;        // thumb
+bool swap_refused() { return lb_setting_enhanced() && bus_read_u8(kLcdSwapFlag) == 0u; }
+void swap_press_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kSwapPress);
+    if (swap_refused()) {
+        static unsigned said = 0;
+        if (said++ < 4u) {
+            std::fprintf(stderr, "[lb_swap] the screen-swap button does nothing in Enhanced "
+                         "(the field stays the touch screen; BR-0099)\n");
+            std::fflush(stderr);
+        }
+        lb_override_return();
+        return;
+    }
+    if (original) original();
+}
+void screen_swap_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kScreenSwap);
+    if ((g_cpu.R[14] & ~1u) == kSwapFromWidget && swap_refused()) {
+        static unsigned said = 0;
+        if (said++ < 4u) {
+            std::fprintf(stderr, "[lb_swap] the screen-swap button does nothing in Enhanced "
+                         "(the field stays the touch screen; BR-0099)\n");
+            std::fflush(stderr);
+        }
+        lb_override_return();
+        return;
+    }
+    if (original) original();
+}
+
 extern "C" int ai_opp_kill_step(void (*original)(void));   // docs/414 test aid
 void view_update_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kViewUpdate);
@@ -6348,7 +6397,12 @@ void unit_draw_test_override(void) {
                 ++n_fog;
                 // The setting: drawn only when its own cell is visible, as a
                 // one-cell unit's corner test amounts to.
-                if (lb_setting_hide_fogged_specials()) g_cpu.R[0] = 0u;
+                // BR-0098: not while Reveal Map is on (cheat flag 0 of the
+                // block at *0x02150A70): nothing is fogged for the player then,
+                // but the visible grid is not updated, so every special was hidden.
+                const uint32_t cheats = bus_read_u32(0x02150A70u);
+                const bool revealed = guest_ptr(cheats) && bus_read_u8(cheats) == 1u;
+                if (lb_setting_hide_fogged_specials() && !revealed) g_cpu.R[0] = 0u;
                 static uint32_t said[32];
                 static uint32_t said_vb[32];
                 const uint32_t vb = bus_read_u32(kVBlankCounter);
@@ -9577,6 +9631,18 @@ void string_from_id_override(void) {
             }
             g_cpu.R[1] = (uint32_t)id;
         }
+    }
+    // SG-0128: a name of the player's own for this string (Renames > Custom
+    // Names) wins over the renames below; supplied as the Random labels are.
+    {
+        char mine[64];
+        if (g_cpu.R[1] > 0u && g_cpu.R[1] < 0x10000u && lb_custom_name((int)g_cpu.R[1], mine, (int)sizeof mine))
+            if (const uint32_t at = scratch_text(mine)) {
+                g_cpu.R[1] = at;
+                g_cpu.R[15] = kStringAssign;
+                runtime_dispatch_with_exchange(kStringAssign);
+                return;
+            }
     }
     if (const unsigned am = ren_active_mask()) {
         const uint32_t id = g_cpu.R[1];
@@ -13552,6 +13618,10 @@ const NdsDispatchEntry kOverrideTable[] = {
        pending battle shortcut's button callback in front of it, as a tail
        call that returns here; otherwise a pure tail call. docs/383. */
     {kViewUpdate, 1u, view_update_override, nullptr},      /* 0x020DD708 */
+    /* Thumb. BR-0099: the HUD's screen-swap button; in Enhanced it only
+       swaps back (the touch screen stays the field). Else a tail call. */
+    {kScreenSwap, 1u, screen_swap_override, nullptr},      /* 0x020DDDD4 */
+    {kSwapPress, 1u, swap_press_override, nullptr},        /* 0x020DDE14 */
     /* Thumb. BR-0092: the build menu bar's items; the trained_at byte swap
        for a factory's or shipyard's categories 5/6 (CallWrap with three
        stack words), else a pure tail call. docs/487. */
@@ -22487,6 +22557,145 @@ static void apply_tall_maps(void) {
     std::fflush(stderr);
 }
 
+// ---- BR-0100/0101: the gather rect's far corner clamps the wrong axes --------
+//
+// View_GetCullCellRect (0x02038F28) gathers the entities to draw and hit-test
+// in a cell rectangle around the camera. It loads r4 = width-1 and r5 = height-1,
+// then clamps the far corner's ROW (r1, +5) to r4 and its COLUMN (r0, +4) to r5:
+//
+//     0203900C  cmp   r1, r4      ; row    vs width-1
+//     02039010  movge r1, r4
+//     02039018  cmp   r0, r5      ; column vs height-1
+//     0203901C  movge r0, r5
+//
+// Every stock map is square, so it never showed. On a custom 128x64 map the
+// column stops at 63, and no unit right of it gets a sprite: units vanish
+// "after a certain distance", in Vanilla as well. The four words swap r4 and
+// r5. A square map gets the same numbers as before.
+namespace {
+constexpr uint32_t kFarClampAddr[4] = {0x0203900Cu, 0x02039010u, 0x02039018u, 0x0203901Cu};
+constexpr uint32_t kFarClampStock[4] = {0xE1510004u, 0xA1A01004u, 0xE1500005u, 0xA1A00005u};
+constexpr uint32_t kFarClampFixed[4] = {0xE1510005u, 0xA1A01005u, 0xE1500004u, 0xA1A00004u};
+unsigned g_farclamp_gen = ~0u;
+}  // namespace
+
+static void apply_cull_far_clamp(void) {
+    if (g_farclamp_gen == g_boot_gen) return;
+    for (int i = 0; i < 4; ++i)
+        if (bus_read_u32(kFarClampAddr[i]) != kFarClampStock[i]) return;   // not loaded yet
+    for (int i = 0; i < 4; ++i) bus_write_u32(kFarClampAddr[i], kFarClampFixed[i]);
+    g_farclamp_gen = g_boot_gen;
+    std::fprintf(stderr, "[lb_cull] gather rect's far corner clamps to the map's own width and height "
+                         "(BR-0100)\n");
+    std::fflush(stderr);
+}
+
+// ---- SG-0127: Fix Thunder Hammer (a rule, off by default) --------------------
+//
+// Sim::ProjectileSpellThunderHammer::virtual_06 (0x0207A470) is the hammer
+// reaching what it was thrown at. It is FireBall's (0x020795AC) line for line,
+// with one register wrong. Both read the target's team into r5 and the
+// caster's into r0, fizzle when they match, and otherwise ask FUN_02085D58
+// whether the CASTER's team is allied with the target's owner: 0 explodes.
+// FireBall passes the caster's team (its r5). The hammer passes r5, which in
+// its copy is the TARGET's team, so the question is "is the target allied
+// with itself", always yes: a hammer thrown at a unit fizzles, and only one
+// thrown at the ground explodes.
+//
+// The fix keeps the caster's team for that call. The block 0x0207A4A0..
+// 0x0207A544 is laid out again to make room for the one extra `mov r5, r0`.
+// Its stock `r0 = (r0 == 0); cmp; beq` becomes a plain `bne`, and the fizzle
+// tail is shared by every check. Then the hammer explodes on its target with
+// its own record (spell 0x10) as on the ground. It changes the simulation, so
+// it is a rule: a replay's, else the host's online, else this machine's.
+namespace {
+constexpr uint32_t kThunderFixAt = 0x0207A4A0u;
+constexpr uint32_t kThunderStock[42] = {
+    0xE3500000u, 0x03A00001u, 0x13A00000u, 0xE3500000u, 0x0A000024u, 0xE1A00006u,
+    0xEB00336Fu, 0xE3500000u, 0x03A00004u, 0x028DD004u, 0x05840054u, 0x08BD8078u,
+    0xE28000E4u, 0xEB00343Bu, 0xE1B05000u, 0x03A00004u, 0x028DD004u, 0x05840054u,
+    0x08BD8078u, 0xE2840018u, 0xEB003361u, 0xE3500000u, 0x03A00004u, 0x028DD004u,
+    0x05840054u, 0x08BD8078u, 0xE2840018u, 0xEB00339Fu, 0xEB00342Cu, 0xE1550000u,
+    0x0A000006u, 0xE1A00006u, 0xEB00339Au, 0xE1A01000u, 0xE1A00005u, 0xEB002E09u,
+    0xE3500000u, 0x0A000003u, 0xE3A00004u, 0xE28DD004u, 0xE5840054u, 0xE8BD8078u};
+constexpr uint32_t kThunderFixed[42] = {
+    0xE3500000u, 0x1A000027u, 0xE1A00006u, 0xEB003372u, 0xE3500000u, 0x0A000014u,   // cmp; bne explode; target
+    0xE28000E4u, 0xEB003441u, 0xE1B05000u, 0x0A000010u, 0xE2840018u, 0xEB00336Au,   // r5 = target's team; caster
+    0xE3500000u, 0x0A00000Cu, 0xE2840018u, 0xEB0033ABu, 0xEB003438u, 0xE1550000u,   // r0 = caster's team; cmp
+    0x0A000007u, 0xE1A05000u, 0xE1A00006u, 0xEB0033A5u, 0xE1A01000u, 0xE1A00005u,   // mov r5,r0 (the fix)
+    0xEB002E14u, 0xE3500000u, 0x0A00000Eu, 0xE3A00004u, 0xE28DD004u, 0xE5840054u,   // allied? ; fizzle tail
+    0xE8BD8078u, 0xE1A00000u, 0xE1A00000u, 0xE1A00000u, 0xE1A00000u, 0xE1A00000u,
+    0xE1A00000u, 0xE1A00000u, 0xE1A00000u, 0xE1A00000u, 0xE1A00000u, 0xE1A00000u};
+}  // namespace
+
+extern "C" int lb_thunder_fix_live(void) {
+    return (lb_rules2_live() & LB_RULE2_THUNDER_FIX) ? 1 : 0;
+}
+
+static void apply_thunder_fix(void) {
+    static int applied = 0;           // 0 = stock, 1 = fixed
+    static unsigned gen = ~0u;        // a reset reloads the image: stock again
+    if (gen != g_boot_gen) { gen = g_boot_gen; applied = 0; }
+    const int want = lb_thunder_fix_live();
+    if (want == applied) return;
+    const uint32_t* from = want ? kThunderStock : kThunderFixed;
+    for (uint32_t i = 0; i < 42u; ++i)
+        if (bus_read_u32(kThunderFixAt + 4u * i) != from[i]) return;   // not loaded yet, or not this build
+    const uint32_t* to = want ? kThunderFixed : kThunderStock;
+    for (uint32_t i = 0; i < 42u; ++i) bus_write_u32(kThunderFixAt + 4u * i, to[i]);
+    applied = want;
+    std::fprintf(stderr, "[lb_spells] Fix Thunder Hammer %s\n",
+                 want ? "ON: a hammer thrown at a unit explodes on it" : "off (stock: it fizzles on a unit)");
+    std::fflush(stderr);
+}
+
+// ---- SG-0131: Faster Pathfinding (a rule, off by default) --------------------
+//
+// Units seem to "stick" on a mountain, trees or water for seconds before going
+// round. Read from the decompile (not a timer): a terrain block goes to the
+// A* planner almost at once (WaitForObstaclePlotter gives up when no unit is in
+// the cell, SidestepAvoidancePlotter tries three side cells, then
+// AstarPlotter::v03 queues a request). The delay is the planner's budget.
+// FUN_02082704 services the request at the head of ONE queue shared by every
+// unit, and stops when the manager's counter (+0x24) reaches 6. The counter
+// counts hash-bucket links walked per expansion (256 buckets), and a sim event
+// resets it each tick. Once a search has a few hundred nodes it gets about one
+// expansion a tick, so a detour round a lake takes hundreds of ticks, and
+// every unit queued behind it stands idle.
+//
+//     0208271C  cmp r0, #6     ; before the first expansion
+//     02082860  cmp r0, #6     ; the loop's test
+//
+// The rule raises both to 1,024 (E3500B01, `cmp r0, #0x400`): a detour is
+// found within a tick or two. The work is in links walked, not time, so it
+// stays deterministic. It changes routes and timing, so it is a rule: a
+// replay's, else the host's online, else this machine's.
+namespace {
+constexpr uint32_t kAstarBudgetAt[2] = {0x0208271Cu, 0x02082860u};
+constexpr uint32_t kAstarBudgetStock = 0xE3500006u;   // cmp r0, #6
+constexpr uint32_t kAstarBudgetFast = 0xE3500B01u;    // cmp r0, #0x400
+}  // namespace
+
+extern "C" int lb_fast_path_live(void) {
+    return (lb_rules2_live() & LB_RULE2_FAST_PATH) ? 1 : 0;
+}
+
+static void apply_fast_path(void) {
+    static int applied = 0;
+    static unsigned gen = ~0u;
+    if (gen != g_boot_gen) { gen = g_boot_gen; applied = 0; }
+    const int want = lb_fast_path_live();
+    if (want == applied) return;
+    const uint32_t from = want ? kAstarBudgetStock : kAstarBudgetFast;
+    for (uint32_t a : kAstarBudgetAt)
+        if (bus_read_u32(a) != from) return;   // not loaded yet, or not this build
+    for (uint32_t a : kAstarBudgetAt) bus_write_u32(a, want ? kAstarBudgetFast : kAstarBudgetStock);
+    applied = want;
+    std::fprintf(stderr, "[lb_path] Faster Pathfinding %s\n",
+                 want ? "ON: the A* planner walks up to 1024 links a tick (stock 6)" : "off (stock budget, 6)");
+    std::fflush(stderr);
+}
+
 // ---- BR-0046 (docs/467): the text count, 3,064 ------------------------------
 //
 // The cartridge's language files hold 0xBF8 strings, and the code knows that
@@ -25686,6 +25895,9 @@ extern "C" void lb_patches_on_vblank(void) {
     apply_custompal();                // docs/489: before apply_teal, whose block copies the tables
     apply_teal();                     // docs/412
     apply_tall_maps();                // BR-0039, docs/460
+    apply_cull_far_clamp();           // BR-0100/0101
+    apply_thunder_fix();              // SG-0127
+    apply_fast_path();                // SG-0131
     apply_text_count();               // BR-0046, docs/467
     models_paint();                  // docs/412 teal and docs/437 Shark: model palettes
     apply_ai_spectate();              // SG-0002

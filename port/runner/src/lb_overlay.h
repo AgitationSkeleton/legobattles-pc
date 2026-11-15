@@ -885,9 +885,18 @@ int          lb_ai_tap_spells_live(void);
 #define LB_RULE2_ANY_REPAIR     0x01   /* SG-0111: foot/ranged/mounted units repair and assist */
 #define LB_RULE2_UNIQUE_HEROES  0x02   /* SG-0107: one of each hero at a time */
 #define LB_RULE2_SMART_MOVE     0x04   /* SG-0123 (docs/497): group moves spread over slots */
+#define LB_RULE2_THUNDER_FIX    0x08   /* SG-0127: a Thunder Hammer explodes on the unit it hits */
+#define LB_RULE2_FAST_PATH      0x10   /* SG-0131: the A* planner's per-tick budget 6 -> 1024 */
+int          lb_setting_fast_path(void);
+int          lb_fast_path_live(void);
 int          lb_setting_any_unit_repairs(void);   /* this machine's choice */
 int          lb_setting_unique_heroes(void);
 int          lb_setting_smart_move(void);
+int          lb_setting_thunder_fix(void);
+/* SG-0128: this machine's own name for a LOC string id (Renames > Custom
+   Names) into out; 0 when there is none. */
+int          lb_custom_name(int id, char* out, int cap);
+int          lb_thunder_fix_live(void);
 int          lb_rules2_local_flags(void);         /* this machine's (lb_overlay) */
 int          lb_rules_host_flags2(void);          /* the host's; -1 unless joined */
 int          lb_demo_play_rules2(void);           /* a replay's (kind 30), else -1 */

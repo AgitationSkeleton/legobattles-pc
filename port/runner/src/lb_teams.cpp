@@ -3820,10 +3820,13 @@ extern "C" void lb_rules_incoming(const unsigned char* buf, int len,
                      ((unsigned)buf[r_at + 4] << 16) | ((unsigned)buf[r_at + 5] << 24);
             if (!g_bans_recv_ok || r2 != g_rules2_recv) {
                 std::fprintf(stderr, "[lb_teams] the host's second rule flags from instance %u: "
-                             "%08X (soldiers repair %s, one of each hero %s, smarter unit movement %s)\n",
+                             "%08X (soldiers repair %s, one of each hero %s, smarter unit movement %s, "
+                             "thunder hammer fix %s, faster pathfinding %s)\n",
                              sender, r2, (r2 & LB_RULE2_ANY_REPAIR) ? "on" : "off",
                              (r2 & LB_RULE2_UNIQUE_HEROES) ? "on" : "off",
-                             (r2 & LB_RULE2_SMART_MOVE) ? "on" : "off");
+                             (r2 & LB_RULE2_SMART_MOVE) ? "on" : "off",
+                             (r2 & LB_RULE2_THUNDER_FIX) ? "on" : "off",
+                             (r2 & LB_RULE2_FAST_PATH) ? "on" : "off");
                 std::fflush(stderr);
             }
             g_rules2_recv = r2;

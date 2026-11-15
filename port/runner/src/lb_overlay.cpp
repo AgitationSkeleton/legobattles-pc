@@ -335,6 +335,12 @@ struct Settings {
     // docs/497 (SG-0123): a group move order spreads its units over slots
     // round the tapped cell (smart_move_factory). Online, the host's ('R').
     bool smart_move = false;
+    // SG-0127: a Thunder Hammer thrown at a unit explodes on it (stock: it
+    // fizzles; apply_thunder_fix). Online, the host's ('R').
+    bool thunder_fix = false;
+    // SG-0131: the A* planner's per-tick budget raised (apply_fast_path).
+    // Online, the host's ('R').
+    bool fast_path = false;
     // docs/469: Prevent Phantom Ties. On (default): online, every machine
     // plays the host's cheats (BR-0011). Off: each its own, as on a DS --
     // where two machines' Super Magic / Far Reaching differ, ESP and EMP
@@ -510,6 +516,10 @@ bool card_tint = false;
     int  sfx_volume = -1;
     bool own_research_sound = true;   // BR-0067: research chimes only for this player's own army
     bool hide_fogged_specials = true; // BR-0063: enemy specials hidden while their cell is fogged
+    // SG-0130: a fixed window size (off: the window resizes freely).
+    bool fixed_window = false;
+    int  fixed_window_w = 1280;
+    int  fixed_window_h = 720;
     bool big_sprite_pool = true;      // docs/479: sheets past the DS's 33 slots get slots of their own
     bool native_logic = true;         // docs/479: hot cartridge routines as host code (game speed)
     bool faster_cpu = true;           // docs/484: an emulated ARM9 faster than the DS's (game speed)
@@ -534,6 +544,9 @@ bool card_tint = false;
     // SG-0021: the Pirate prototypes' names.
     int  rename_pirate_buildings = 0; // Shanty Shack -> Tavern, Plantation -> Shanty Shack
     int  rename_bounty = 0;           // Brickbeard's Bounty -> Flying Dutchman
+    // SG-0128: this machine's own names for any unit or building, by the
+    // name's LOC string id: "id=text|id=text" (text never holds '|').
+    char custom_names[4096] = "";
     // docs/392: the choice Free Play's opponent screen opens on -- 0..5 the
     // six factions in the game's order (King, Wizard, Pirate, Imperial,
     // Earth, Alien), 6 Custom, 7 Random. 1, Wizard, is the cartridge's own.
@@ -861,6 +874,10 @@ static std::string settings_text() {
                   g_set.unique_heroes ? "true" : "false"); o += buf;   // docs/488
     std::snprintf(buf, sizeof buf, "  \"smart_move\": %s,\n",
                   g_set.smart_move ? "true" : "false"); o += buf;   // docs/497
+    std::snprintf(buf, sizeof buf, "  \"thunder_fix\": %s,\n",
+                  g_set.thunder_fix ? "true" : "false"); o += buf;   // SG-0127
+    std::snprintf(buf, sizeof buf, "  \"fast_path\": %s,\n",
+                  g_set.fast_path ? "true" : "false"); o += buf;     // SG-0131
     std::snprintf(buf, sizeof buf, "  \"phantom_guard\": %s,\n",
                   g_set.phantom_guard ? "true" : "false"); o += buf;   // docs/469
     std::snprintf(buf, sizeof buf, "  \"ai_hero_rebuild\": %s,\n",
@@ -986,6 +1003,8 @@ static std::string settings_text() {
                   g_set.own_research_sound ? "true" : "false"); o += buf;   // BR-0067
     std::snprintf(buf, sizeof buf, "  \"hide_fogged_specials\": %s,\n",
                   g_set.hide_fogged_specials ? "true" : "false"); o += buf;   // BR-0063
+    std::snprintf(buf, sizeof buf, "  \"fixed_window\": %s,\n  \"fixed_window_w\": %d,\n  \"fixed_window_h\": %d,\n",
+                  g_set.fixed_window ? "true" : "false", g_set.fixed_window_w, g_set.fixed_window_h); o += buf;   // SG-0130
     std::snprintf(buf, sizeof buf, "  \"big_sprite_pool\": %s,\n",
                   g_set.big_sprite_pool ? "true" : "false"); o += buf;   // docs/479
     std::snprintf(buf, sizeof buf, "  \"native_logic\": %s,\n",
@@ -1022,6 +1041,7 @@ static std::string settings_text() {
                   g_set.default_opponent); o += buf;
     std::snprintf(buf, sizeof buf, "  \"extra_opponents\": %s,\n",
                   g_set.extra_opponents ? "true" : "false"); o += buf;   // docs/384
+    json_put_str(o, "custom_names", g_set.custom_names, true);   // SG-0128
     std::snprintf(buf, sizeof buf, "  \"wheel_zoom\": %s,\n", g_set.wheel_zoom ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"lobby_map_fix\": %s,\n", g_set.lobby_map_fix ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"lobby_server_label\": %s,\n",
@@ -1221,6 +1241,8 @@ extern "C" void lb_settings_load(void) {
     json_get_bool(s, "any_unit_repairs", &g_set.any_unit_repairs);   // docs/488
     json_get_bool(s, "unique_heroes", &g_set.unique_heroes);         // docs/488
     json_get_bool(s, "smart_move", &g_set.smart_move);               // docs/497
+    json_get_bool(s, "thunder_fix", &g_set.thunder_fix);             // SG-0127
+    json_get_bool(s, "fast_path", &g_set.fast_path);                 // SG-0131
     json_get_bool(s, "phantom_guard", &g_set.phantom_guard);     // docs/469
     json_get_bool(s, "ai_hero_rebuild", &g_set.ai_hero_rebuild);
     json_get_bool(s, "ai_more_mines", &g_set.ai_more_mines);   // SG-0032
@@ -1311,6 +1333,9 @@ extern "C" void lb_settings_load(void) {
     json_get_int(s, "cunit_volume", &g_set.cunit_volume);   // BR-0047
     json_get_bool(s, "own_research_sound", &g_set.own_research_sound);   // BR-0067
     json_get_bool(s, "hide_fogged_specials", &g_set.hide_fogged_specials);   // BR-0063
+    json_get_bool(s, "fixed_window", &g_set.fixed_window);       // SG-0130
+    json_get_int(s, "fixed_window_w", &g_set.fixed_window_w);
+    json_get_int(s, "fixed_window_h", &g_set.fixed_window_h);
     json_get_bool(s, "big_sprite_pool", &g_set.big_sprite_pool);             // docs/479
     json_get_bool(s, "native_logic", &g_set.native_logic);                   // docs/479
     json_get_bool(s, "faster_cpu", &g_set.faster_cpu);                       // docs/484
@@ -1332,6 +1357,7 @@ extern "C" void lb_settings_load(void) {
     json_get_int(s, "default_opponent", &g_set.default_opponent);   // docs/392
     json_get_bool(s, "extra_opponents", &g_set.extra_opponents);     // docs/384
     json_get_bool(s, "wheel_zoom", &g_set.wheel_zoom);
+    json_get_str(s, "custom_names", g_set.custom_names, sizeof g_set.custom_names);   // SG-0128
     json_get_bool(s, "lobby_map_fix", &g_set.lobby_map_fix);
     json_get_bool(s, "lobby_server_label", &g_set.lobby_server_label);
     json_get_bool(s, "mod_maps", &g_set.mod_maps);
@@ -1773,6 +1799,52 @@ void tab_display() {
     // own aspect and named the 1024x512 ceiling. Both are now on the
     // Magnification tooltip, beside the slider that actually decides them.
     badge(WIRED);
+
+    // SG-0130: a fixed window size, with presets and a custom entry.
+    {
+        ImGui::Checkbox("Fixed Window Size", &g_set.fixed_window);
+        help("Keeps the game window at the size chosen here, and stops it\n"
+             "being resized by dragging its edges. Off, the window resizes\n"
+             "freely, as before. Enhanced fills whatever size it is.");
+        ImGui::BeginDisabled(!g_set.fixed_window);
+        static const int kSizes[][2] = {{768, 576},   {1024, 768},  {1280, 720},  {1366, 768},
+                                        {1600, 900},  {1920, 1080}, {2560, 1080}, {2560, 1440},
+                                        {3440, 1440}, {3840, 2160}};
+        char cur[32];
+        std::snprintf(cur, sizeof cur, "%d x %d", g_set.fixed_window_w, g_set.fixed_window_h);
+        ImGui::SetNextItemWidth(160.0f * g_ui_scale);
+        if (ImGui::BeginCombo("Preset##fixedwin", cur)) {
+            for (const auto& s : kSizes) {
+                char item[48];
+                std::snprintf(item, sizeof item, "%d x %d%s", s[0], s[1],
+                              s[0] == 768 ? " (DS x3)" : s[0] == 1024 ? " (DS x4)" : "");
+                if (ImGui::Selectable(item, s[0] == g_set.fixed_window_w && s[1] == g_set.fixed_window_h)) {
+                    g_set.fixed_window_w = s[0];
+                    g_set.fixed_window_h = s[1];
+                }
+            }
+            ImGui::EndCombo();
+        }
+        static int cw = 0, ch = 0;
+        if (cw == 0) { cw = g_set.fixed_window_w; ch = g_set.fixed_window_h; }
+        ImGui::SetNextItemWidth(90.0f * g_ui_scale);
+        ImGui::InputInt("##fixedw", &cw, 0, 0);
+        ImGui::SameLine();
+        ImGui::TextUnformatted("x");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(90.0f * g_ui_scale);
+        ImGui::InputInt("##fixedh", &ch, 0, 0);
+        ImGui::SameLine();
+        if (ImGui::Button("Use Custom Size")) {
+            g_set.fixed_window_w = std::clamp(cw, 256, 7680);
+            g_set.fixed_window_h = std::clamp(ch, 192, 4320);
+            cw = g_set.fixed_window_w;
+            ch = g_set.fixed_window_h;
+        }
+        help("Any width and height, at least 256 x 192 (the DS screen).");
+        ImGui::EndDisabled();
+        badge(WIRED);
+    }
 
     // docs/411: the 3D models (ships, siege, specials) without the outline
     // and with smoothed edges. Off is the game's own look.
@@ -2447,6 +2519,34 @@ void tab_balance_spells() {
                             lb_smart_move_live() ? "On" : "Off");
     ImGui::Spacing();
 
+    // SG-0127: the hammer's hit test asks the wrong team (apply_thunder_fix).
+    ImGui::Checkbox("Fix Thunder Hammer", &g_set.thunder_fix);
+    help("In the game, a Thunder Hammer thrown at a unit fizzles when it\n"
+         "reaches it, and only a hammer thrown at the ground explodes: its\n"
+         "hit test checks the target's team against itself (Fireball checks\n"
+         "the caster's). On: the hammer explodes on the unit it hits, with\n"
+         "its own blast (Balance > Spell Values, Thunder Hammer). Online, the\n"
+         "host's setting applies.");
+    badge(WIRED);
+    if (lb_rules_host_flags2() >= 0)
+        ImGui::TextDisabled("In this lobby, the host's: %s",
+                            lb_thunder_fix_live() ? "On" : "Off");
+    ImGui::Spacing();
+
+    // SG-0131: the A* planner's per-tick budget (apply_fast_path).
+    ImGui::Checkbox("Faster Pathfinding", &g_set.fast_path);
+    help("Units stop at a mountain, trees or water for seconds before going\n"
+         "round. That wait is the game's route planner, which only gets a\n"
+         "tiny amount of work each moment, shared by every unit. On: it\n"
+         "finds the way round at once, so units set off round obstacles\n"
+         "straight away. Off: as in the game. Online, the host's setting\n"
+         "applies.");
+    badge(WIRED);
+    if (lb_rules_host_flags2() >= 0)
+        ImGui::TextDisabled("In this lobby, the host's: %s",
+                            lb_fast_path_live() ? "On" : "Off");
+    ImGui::Spacing();
+
     {
         bool fh = hw_lock ? g_hs.fix_healing != 0 : g_set.fix_hotwired_healing;
         ImGui::Checkbox("Fix Hotwired Healing", &fh);
@@ -2732,6 +2832,55 @@ void draw_after_balance_pack() {
 // (apply_plantation_name / apply_leader_name, docs/392, docs/356); the other
 // three are longer than the words they replace, so string_from_id_override in
 // lb_patches.cpp supplies the rewritten text as it is fetched.
+// SG-0128: custom_names holds "id=text|id=text". These read and write it.
+std::vector<std::pair<int, std::string>> custom_names_list() {
+    std::vector<std::pair<int, std::string>> out;
+    const char* p = g_set.custom_names;
+    while (*p) {
+        const char* end = std::strchr(p, '|');
+        const std::string item(p, end ? (size_t)(end - p) : std::strlen(p));
+        const size_t eq = item.find('=');
+        if (eq != std::string::npos && eq > 0) {
+            const int id = std::atoi(item.substr(0, eq).c_str());
+            const std::string text = item.substr(eq + 1);
+            if (id > 0 && !text.empty()) out.emplace_back(id, text);
+        }
+        if (!end) break;
+        p = end + 1;
+    }
+    return out;
+}
+std::string custom_names_get(int id) {
+    for (const auto& e : custom_names_list())
+        if (e.first == id) return e.second;
+    return "";
+}
+// Set (or with "" remove) the name for string id `id`.
+void custom_names_set(int id, const char* text) {
+    std::string o;
+    bool done = false;
+    for (const auto& e : custom_names_list()) {
+        std::string t = e.second;
+        if (e.first == id) {
+            done = true;
+            t = text;
+        }
+        if (t.empty()) continue;
+        const std::string item = std::to_string(e.first) + "=" + t;
+        if (o.size() + item.size() + 2 >= sizeof g_set.custom_names) break;
+        if (!o.empty()) o += '|';
+        o += item;
+    }
+    if (!done && text && *text) {
+        const std::string item = std::to_string(id) + "=" + text;
+        if (o.size() + item.size() + 2 < sizeof g_set.custom_names) {
+            if (!o.empty()) o += '|';
+            o += item;
+        }
+    }
+    std::snprintf(g_set.custom_names, sizeof g_set.custom_names, "%s", o.c_str());
+}
+
 void tab_renames() {
     if (!tab_begin("Renames")) return;
     guide("Change the names of some characters, units and buildings. Only you see "
@@ -2867,6 +3016,85 @@ void tab_renames() {
     help("From the Pirate prototypes: \"Brickbeard's Bounty\" becomes\n"
          "\"Flying Dutchman\".");
     badge(WIRED);
+
+    // SG-0128: any unit or building, any name (custom_names_*).
+    ImGui::Separator();
+    ImGui::Text("Custom Names");
+    ImGui::SameLine();
+    ImGui::TextDisabled("(this machine only)");
+    help("Give any unit or building a name of your own. It shows in the game's\n"
+         "menus and on the info screen wherever that name is used. Only you\n"
+         "see it: online players, Discord and the servers keep the game's\n"
+         "names. Letters, digits and punctuation (no accented letters).");
+    badge(WIRED);
+    {
+        static std::vector<std::pair<int, std::string>> units;   // name id, the cartridge's name
+        static std::vector<int> bps;
+        if (units.empty()) {
+            for (int bp = 0; bp < 202; ++bp) {
+                const int id = lb_teams_unit_name_id(bp);
+                const char* n = lb_teams_unit_name_stock(bp);
+                if (id <= 0 || !n || !*n) continue;
+                bool seen = false;
+                for (const auto& u : units) seen = seen || u.first == id;
+                if (seen) continue;
+                units.emplace_back(id, n);
+                bps.push_back(bp);
+            }
+            std::vector<size_t> order(units.size());
+            for (size_t i = 0; i < order.size(); ++i) order[i] = i;
+            std::sort(order.begin(), order.end(),
+                      [](size_t a, size_t b) { return units[a].second < units[b].second; });
+            std::vector<std::pair<int, std::string>> u2;
+            for (size_t i : order) u2.push_back(units[i]);
+            units.swap(u2);
+        }
+        static int pick = 0;
+        static char text[48] = "";
+        if (units.empty()) {
+            ImGui::TextDisabled("The unit list appears once the game's data is loaded.");
+        } else {
+            if (pick >= (int)units.size()) pick = 0;
+            ImGui::SetNextItemWidth(220.0f * g_ui_scale);
+            if (ImGui::BeginCombo("##custom_name_unit", units[(size_t)pick].second.c_str())) {
+                for (int i = 0; i < (int)units.size(); ++i)
+                    if (ImGui::Selectable(units[(size_t)i].second.c_str(), i == pick)) {
+                        pick = i;
+                        const std::string cur = custom_names_get(units[(size_t)i].first);
+                        std::snprintf(text, sizeof text, "%s", cur.c_str());
+                    }
+                ImGui::EndCombo();
+            }
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(200.0f * g_ui_scale);
+            ImGui::InputTextWithHint("##custom_name_text", "new name", text, sizeof text,
+                                     ImGuiInputTextFlags_CallbackCharFilter,
+                                     [](ImGuiInputTextCallbackData* d) -> int {
+                                         return (d->EventChar < 32 || d->EventChar > 126 || d->EventChar == '|') ? 1 : 0;
+                                     });
+            ImGui::SameLine();
+            if (ImGui::Button("Set##custom_name") && text[0]) {
+                custom_names_set(units[(size_t)pick].first, text);
+                settings_save();
+            }
+        }
+        // The names set so far, each with a button to take it away.
+        const std::vector<std::pair<int, std::string>> set = custom_names_list();
+        for (const auto& e : set) {
+            const char* stock = "";
+            for (const auto& u : units)
+                if (u.first == e.first) stock = u.second.c_str();
+            ImGui::PushID(e.first);
+            if (ImGui::SmallButton("Remove")) {
+                custom_names_set(e.first, "");
+                settings_save();
+            }
+            ImGui::SameLine();
+            ImGui::Text("%s  ->  %s", *stock ? stock : ("text " + std::to_string(e.first)).c_str(),
+                        e.second.c_str());
+            ImGui::PopID();
+        }
+    }
     tab_end();
 }
 
@@ -4783,14 +5011,23 @@ void draw_custom_colour() {
          "stock. Online only if the host allows it (below); everyone then sees\n"
          "everyone's custom colours.");
     badge(WIRED);
-    ImGui::SameLine();
+    // The picker in plain view: a hue wheel, then R/G/B and hex entry. (It was
+    // one swatch that opened the wheel on a click, which players did not find.)
     float col[3] = {((g_set.custom_colour_rgb >> 16) & 255) / 255.0f, ((g_set.custom_colour_rgb >> 8) & 255) / 255.0f,
                     (g_set.custom_colour_rgb & 255) / 255.0f};
-    if (ImGui::ColorEdit3("##custom_colour", col,
-                          ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_PickerHueWheel)) {
-        auto b = [](float v) { return (int)std::lround(std::min(1.0f, std::max(0.0f, v)) * 255.0f); };
+    auto b = [](float v) { return (int)std::lround(std::min(1.0f, std::max(0.0f, v)) * 255.0f); };
+    ImGui::SetNextItemWidth(170.0f * g_ui_scale);
+    if (ImGui::ColorPicker3("##custom_colour_wheel", col,
+                            ImGuiColorEditFlags_PickerHueWheel | ImGuiColorEditFlags_NoSidePreview |
+                                ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel))
         g_set.custom_colour_rgb = (b(col[0]) << 16) | (b(col[1]) << 8) | b(col[2]);
-    }
+    ImGui::SetNextItemWidth(220.0f * g_ui_scale);
+    if (ImGui::ColorEdit3("RGB##custom_colour_rgb", col, ImGuiColorEditFlags_DisplayRGB))
+        g_set.custom_colour_rgb = (b(col[0]) << 16) | (b(col[1]) << 8) | b(col[2]);
+    ImGui::SetNextItemWidth(220.0f * g_ui_scale);
+    if (ImGui::ColorEdit3("Hex##custom_colour_hex", col, ImGuiColorEditFlags_DisplayHex | ImGuiColorEditFlags_NoPicker))
+        g_set.custom_colour_rgb = (b(col[0]) << 16) | (b(col[1]) << 8) | b(col[2]);
+    ImGui::TextDisabled("Drawn as:");
     // The three shades the game will draw with (light, mid, dark).
     const unsigned rgb = forced ? live_rgb : (unsigned)g_set.custom_colour_rgb & 0xFFFFFFu;
     unsigned short sh[3];
@@ -10035,7 +10272,7 @@ extern "C" int lb_pick_pack_file(char* buf, int cap, int saving);   /* lb_filedl
 // else personal.
 const char* const kPackKeysRules[] = {
     "hotwire_mode", "hotwire_neutrals", "hotwire_transport", "emp_transports", "many_mines", "stun_cast",
-    "any_unit_repairs", "unique_heroes", "smart_move", "phantom_guard", "transport_release", "attack_boost_ranged",
+    "any_unit_repairs", "unique_heroes", "smart_move", "thunder_fix", "fast_path", "phantom_guard", "transport_release", "attack_boost_ranged",
     "fix_hotwired_healing", "own_hero_spells", "same_builders_from", "start_position", "gold_rush_target",
     nullptr};
 const char* const kPackKeysAi[] = {
@@ -11256,6 +11493,39 @@ extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
     if (!window || !renderer) return;
     g_main_window = window;   // SG-0072
     g_maps_ren = renderer;   // docs/431
+    // SG-0130: the fixed window size. Applied when it is turned on or its size
+    // changes (not every frame, so a maximise or full screen is not fought);
+    // dragging the edges is off while it holds. LB_WINDOW (tests) wins.
+    {
+        static bool was_on = false;
+        static int at_w = 0, at_h = 0;
+        static const bool env_size = std::getenv("LB_WINDOW") != nullptr;
+        const bool on = g_set.fixed_window && !env_size;
+        const int fw = std::clamp(g_set.fixed_window_w, 256, 7680);
+        const int fh = std::clamp(g_set.fixed_window_h, 192, 4320);
+        if (on && (!was_on || fw != at_w || fh != at_h)) {
+            if (SDL_GetWindowFlags(window) & SDL_WINDOW_MAXIMIZED) SDL_RestoreWindow(window);
+            SDL_SetWindowResizable(window, SDL_FALSE);
+            SDL_SetWindowSize(window, fw, fh);
+            // Kept on its display: centred there when it no longer fits where it is.
+            const int d = std::max(0, SDL_GetWindowDisplayIndex(window));
+            SDL_Rect r{};
+            int x = 0, y = 0;
+            SDL_GetWindowPosition(window, &x, &y);
+            if (SDL_GetDisplayUsableBounds(d, &r) == 0 &&
+                (x < r.x || y < r.y || x + fw > r.x + r.w || y + fh > r.y + r.h))
+                SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED_DISPLAY(d), SDL_WINDOWPOS_CENTERED_DISPLAY(d));
+            std::fprintf(stderr, "[lb_window] fixed window size %dx%d (SG-0130)\n", fw, fh);
+            std::fflush(stderr);
+            at_w = fw;
+            at_h = fh;
+        } else if (!on && was_on) {
+            SDL_SetWindowResizable(window, SDL_TRUE);
+            std::fprintf(stderr, "[lb_window] fixed window size off: resizable again\n");
+            std::fflush(stderr);
+        }
+        was_on = on;
+    }
     // Before any panel logic and independent of every panel's visibility, so
     // the band audit's reference dump lands whether or not anything is open.
     // See the note at its definition and docs/291.
@@ -12666,6 +12936,26 @@ extern "C" int lb_setting_smart_move(void) {
     }
     return forced >= 0 ? forced : (g_set.smart_move ? 1 : 0);
 }
+// SG-0127: Fix Thunder Hammer, this machine's choice (LB_THUNDER_FIX=0|1
+// forces it). What a match runs is lb_thunder_fix_live (lb_patches.cpp).
+extern "C" int lb_setting_thunder_fix(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_THUNDER_FIX");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.thunder_fix ? 1 : 0);
+}
+// SG-0131: Faster Pathfinding, this machine's choice (LB_FAST_PATH=0|1
+// forces it). What a match runs is lb_fast_path_live (lb_patches.cpp).
+extern "C" int lb_setting_fast_path(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_FAST_PATH");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.fast_path ? 1 : 0);
+}
 extern "C" int lb_setting_unique_heroes(void) {
     static int forced = -2;
     if (forced == -2) {
@@ -12678,7 +12968,9 @@ extern "C" int lb_setting_unique_heroes(void) {
 extern "C" int lb_rules2_local_flags(void) {
     return (lb_setting_any_unit_repairs() ? LB_RULE2_ANY_REPAIR : 0) |
            (lb_setting_unique_heroes() ? LB_RULE2_UNIQUE_HEROES : 0) |
-           (lb_setting_smart_move() ? LB_RULE2_SMART_MOVE : 0);
+           (lb_setting_smart_move() ? LB_RULE2_SMART_MOVE : 0) |
+           (lb_setting_thunder_fix() ? LB_RULE2_THUNDER_FIX : 0) |
+           (lb_setting_fast_path() ? LB_RULE2_FAST_PATH : 0);
 }
 
 // docs/469: Prevent Phantom Ties, this machine's choice (LB_PHANTOM_GUARD=0|1
@@ -13328,6 +13620,36 @@ extern "C" int lb_setting_music_mode(void) {
     return (m < 0 || m > 9) ? 0 : m;   // docs/387: 4..9 one faction always
 }
 
+// SG-0128: this machine's own name for LOC string id `id`, copied to `out`;
+// 0 when there is none. string_from_id_override (lb_patches.cpp) asks it for
+// every string the game fetches, so the parsed list is kept until the setting
+// changes. LB_CUSTOM_NAMES="id=text|..." replaces the setting (test aid).
+extern "C" int lb_custom_name(int id, char* out, int cap) {
+    static char seen[sizeof g_set.custom_names] = "\x01";
+    static std::vector<std::pair<int, std::string>> list;
+    static const char* forced = std::getenv("LB_CUSTOM_NAMES");
+    const char* now = forced ? forced : g_set.custom_names;
+    if (!now[0] && list.empty()) return 0;
+    if (std::strncmp(seen, now, sizeof seen) != 0) {
+        std::snprintf(seen, sizeof seen, "%s", now);
+        if (forced) {
+            char keep[sizeof g_set.custom_names];
+            std::snprintf(keep, sizeof keep, "%s", g_set.custom_names);
+            std::snprintf(g_set.custom_names, sizeof g_set.custom_names, "%s", forced);
+            list = custom_names_list();
+            std::snprintf(g_set.custom_names, sizeof g_set.custom_names, "%s", keep);
+        } else {
+            list = custom_names_list();
+        }
+    }
+    for (const auto& e : list)
+        if (e.first == id) {
+            std::snprintf(out, (size_t)cap, "%s", e.second.c_str());
+            return 1;
+        }
+    return 0;
+}
+
 // docs/356: what this machine's text calls the Space Criminal Leader, 0 the
 // cartridge's own words, 1 Kranxx, 2 Plisken. Read every VBlank by
 // apply_leader_name in lb_patches.cpp. LB_LEADER_NAME=<0|1|2> forces it
@@ -13719,6 +14041,8 @@ extern "C" const char* lb_net_lobby_options_json(void) {
     kv.push_back({"Soldiers repair buildings", g_set.any_unit_repairs ? "On" : "Off"});   // docs/488
     kv.push_back({"One of each hero", g_set.unique_heroes ? "On" : "Off"});               // docs/488
     kv.push_back({"Smarter unit movement", g_set.smart_move ? "On" : "Off"});             // docs/497
+    kv.push_back({"Fix Thunder Hammer", g_set.thunder_fix ? "On" : "Off"});               // SG-0127
+    kv.push_back({"Faster pathfinding", g_set.fast_path ? "On" : "Off"});                 // SG-0131
     kv.push_back({"AI rebuilds its hero", g_set.ai_hero_rebuild ? "On" : "Off"});
     kv.push_back({"AI builds more mines", g_set.ai_more_mines ? "On" : "Off"});
     kv.push_back({"Computers attack each other", g_set.ai_cross_fire ? "On" : "Off"});   // SG-0051
