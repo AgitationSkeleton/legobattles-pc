@@ -67,6 +67,24 @@ npx wrangler secret put ADMIN_KEY         # any long random string
 
 It is deployed (2026-10-16). Later changes are `npx wrangler deploy` again.
 
+## Limits (GitHub issue #2, docs/499)
+
+Per address (`CF-Connecting-IP`):
+- 120 GETs and 120 POSTs a minute;
+- 6 announces every 10 minutes, and 3 lobbies listed at once;
+- 30 joins and leaves every 10 minutes;
+- 20 punches a minute.
+
+Across every address: 200 lobbies, and at most 100 in one `/list` reply (`total` gives the full count).
+
+Past a limit the answer is 429 with `Retry-After`; when full, or when no room code is free, it is 503.
+
+A host's `address` is listed only when it is the address seen (or the host came over IPv6); otherwise the lobby is listed at the address seen.
+
+The Discord lines are limited to 30 at once, then one every 2 s. One source address (a lobby's host, or a joiner) gets 10 at once, then one every 30 s. The next line that goes says how many were held back.
+
+`npx wrangler dev --var TEST_LIMIT_SCALE:100` relaxes the counts for the older suites; `test/limits.mjs` and `test/discord_flood.mjs` test the real ones (their headers say how to run them).
+
 ## Testing
 
 ```

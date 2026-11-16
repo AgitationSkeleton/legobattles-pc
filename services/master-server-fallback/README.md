@@ -42,5 +42,6 @@ Deploy it whenever the Worker is deployed, so the two stay the same.
 - **The front door.** `server.mjs` listens on port 8787 itself and passes requests to Miniflare, which listens on 127.0.0.1 only (with its internal loopback port). On the way it:
   - sets `CF-Connecting-IP` from the connection, as Cloudflare does, so a client cannot name another address for itself;
   - refuses bodies over 64 KiB, and connections that send no headers within 15 s.
+- **Connections** (GitHub issue #2, docs/499): an idle socket is closed after 15 s, at most 512 are open at once and 24 from one address (`max_connections`, `max_connections_per_ip` in config.json). A relay's WebSocket is exempt from the idle timeout. The Worker's own limits (lobbies, rates, Discord lines) apply here too.
 - **No Cloudflare in front.** There is no DDoS protection, and the DNS record shows your home IP. Only port 8787 is open, and the server holds nothing but lobby listings and scores, but a flood would load your connection.
 - **No HTTPS.** The game's client speaks plain HTTP here (it tries HTTPS first only on port 80/443).

@@ -71,6 +71,116 @@ MAX_IMAGE_BODY = MAX_IMAGE_BYTES * 4 // 3 + 4096
 
 NAME_OK = re.compile(r"^[\w \-'.!?]{1,%d}$" % MAX_NAME)
 
+# ---------------------------------------------------------------- limits ----
+#
+# GitHub issue #2 (a load test on a public instance): a slow client could hold
+# a handler thread forever, one address could list lobbies without end and
+# flood the Discord channel, and `address` was taken on trust. The game's own
+# traffic, for scale: a host announces once per lobby, heartbeats every 30 s,
+# polls every 2 s for its first two minutes (then every 6 s); the Join screen
+# fetches the list every 5 s. Every limit below sits far above that, and an
+# address that passes one gets a 429 (a 503 when the server is full), which
+# the game treats as a refusal and retries later.
+
+READ_TIMEOUT = 10          # s: a request line, a header or a body read
+CONN_DEADLINE = 20         # s: a connection's whole life; then it is cut
+MAX_CONNECTIONS = 96       # handled at once; the rest are closed at once
+MAX_CONNECTIONS_PER_IP = 8
+MAX_LOBBIES = 200          # listed at once, every address together
+MAX_LOBBIES_PER_IP = 3     # listed at once from one address
+MAX_LIST = 100             # lobbies in one /list reply
+# Per address: (requests, seconds).
+RATE_GET = (120, 60)
+RATE_POST = (120, 60)
+RATE_ANNOUNCE = (6, 600)
+RATE_MEMBER = (30, 600)    # /join and /leave, which make Discord lines
+RATE_PUNCH = (20, 60)
+# The Discord channel: a token bucket for every line, and one per source
+# address (the lobby's host, or the joiner): (burst, seconds per token).
+DISCORD_GLOBAL = (30, 2.0)
+DISCORD_PER_SOURCE = (10, 30.0)
+
+
+class Window:
+    """Fixed-window counters per key, pruned as they age. Thread-safe."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.data = {}   # (kind, key) -> [window start, count]
+        self.pruned = 0.0
+
+    def over(self, kind, key, limit, now=None):
+        count, seconds = limit
+        now = time.monotonic() if now is None else now
+        with self.lock:
+            if now - self.pruned > 60:
+                self.pruned = now
+                self.data = {k: v for k, v in self.data.items() if now - v[0] < 3600}
+            w = self.data.get((kind, key))
+            if not w or now - w[0] >= seconds:
+                self.data[(kind, key)] = [now, 1]
+                return False
+            w[1] += 1
+            return w[1] > count
+
+
+class Bucket:
+    """Token buckets per key: `burst` at most, one more every `every` s."""
+
+    def __init__(self, burst, every):
+        self.burst, self.every = burst, every
+        self.lock = threading.Lock()
+        self.data = {}   # key -> [tokens, last]
+
+    def take(self, key, now=None):
+        now = time.monotonic() if now is None else now
+        with self.lock:
+            if len(self.data) > 4096:
+                self.data = {k: v for k, v in self.data.items()
+                             if v[0] + (now - v[1]) / self.every < self.burst}
+            t = self.data.get(key)
+            tokens = self.burst if t is None else min(self.burst, t[0] + (now - t[1]) / self.every)
+            if tokens < 1:
+                self.data[key] = [tokens, now]
+                return False
+            self.data[key] = [tokens - 1, now]
+            return True
+
+
+_V4 = re.compile(r"^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$")
+
+
+def is_v4(s):
+    return bool(_V4.match(str(s or "")))
+
+
+def is_public_v4(s):
+    """A dotted quad on the public internet: not private, loopback, link-local,
+    carrier-grade NAT, 'this network', multicast or reserved."""
+    if not is_v4(s):
+        return False
+    a, b = (int(x) for x in s.split(".")[:2])
+    if a in (0, 10, 127) or a >= 224:
+        return False
+    if (a == 172 and 16 <= b <= 31) or (a == 192 and b == 168) or (a == 169 and b == 254):
+        return False
+    return not (a == 100 and 64 <= b <= 127)
+
+
+def host_address(claimed, peer):
+    """issue #2, finding 3: the address a lobby is listed at. A host names its
+    public address (from UPnP or STUN), which is normally the one this server
+    sees; it is believed only then, or when the server cannot check it: the
+    host is on this server's own network (seen by a private address, docs/400)
+    or reached it over IPv6. Anything else is listed at the address seen, so a
+    listing can never point joiners at a third party."""
+    claimed = str(claimed or "").strip()
+    if claimed == peer and is_v4(claimed):
+        return claimed
+    if is_public_v4(claimed) and (is_local(peer) or ":" in str(peer)):
+        return claimed
+    return peer
+
 
 # ------------------------------------------------------------------ storage --
 
@@ -89,7 +199,8 @@ CREATE TABLE IF NOT EXISTS lobby (
     version     TEXT NOT NULL DEFAULT '',
     options     TEXT NOT NULL DEFAULT '{}',
     created     REAL NOT NULL,
-    seen        REAL NOT NULL
+    seen        REAL NOT NULL,
+    peer        TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS player (
     code        TEXT NOT NULL,
@@ -116,6 +227,11 @@ class Store:
         self.db.row_factory = sqlite3.Row
         with self.lock:
             self.db.executescript(SCHEMA)
+            # issue #2: the address a lobby was announced from (never shown),
+            # for the per-address cap; a database from before it gains it.
+            cols = [r[1] for r in self.db.execute("PRAGMA table_info(lobby)")]
+            if "peer" not in cols:
+                self.db.execute("ALTER TABLE lobby ADD COLUMN peer TEXT NOT NULL DEFAULT ''")
             self.db.commit()
 
     def close(self):
@@ -141,13 +257,25 @@ class Store:
             self.db.execute(
                 "INSERT OR REPLACE INTO lobby (code, token, name, host_name, "
                 "address, port, players, max_players, map_name, mode, version, "
-                "options, created, seen) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "options, created, seen, peer) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (code, token, fields["name"], fields["host_name"],
                  fields["address"], fields["port"], fields["players"],
                  fields["max_players"], fields.get("map_name", ""),
                  fields.get("mode", ""), fields.get("version", ""),
-                 json.dumps(fields.get("options", {})), now, now))
+                 json.dumps(fields.get("options", {})), now, now,
+                 fields.get("peer", "")))
             self.db.commit()
+
+    def count(self, now, peer=None, ttl=TTL_SECONDS):
+        """Lobbies listed now: all of them, or those announced from `peer`."""
+        with self.lock:
+            if peer is None:
+                row = self.db.execute("SELECT COUNT(*) FROM lobby WHERE seen >= ?",
+                                      (now - ttl,)).fetchone()
+            else:
+                row = self.db.execute("SELECT COUNT(*) FROM lobby WHERE seen >= ? AND peer = ?",
+                                      (now - ttl, peer)).fetchone()
+            return int(row[0])
 
     def heartbeat(self, code, token, players, now):
         with self.lock:
@@ -201,13 +329,18 @@ class Store:
     # -- players, so the GUI can expand a lobby --
 
     def set_players(self, code, players):
+        # issue #2: a player's name is cleaned like any other, and an address
+        # is kept only as a dotted quad (it is shown to every client).
         with self.lock:
             self.db.execute("DELETE FROM player WHERE code=?", (code,))
             for slot, p in enumerate(players):
+                if not isinstance(p, dict):
+                    continue
+                addr = str(p.get("address") or "")
                 self.db.execute(
                     "INSERT OR REPLACE INTO player (code, slot, name, address) "
                     "VALUES (?,?,?,?)",
-                    (code, slot, p.get("name", "Player"), p.get("address", "")))
+                    (code, slot, clean_name(p.get("name"), "Player"), addr if is_v4(addr) else ""))
             self.db.commit()
 
     def players(self, code):
@@ -329,23 +462,59 @@ def lan_port(value):
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "LegoBattlesMaster/1.0"
+    server_version = "LegoBattlesMaster/1.1"
+    sys_version = ""   # issue #2: the banner no longer names the Python version
+    # issue #2, finding 1: a socket timeout for every read, so a client that
+    # sends half a request cannot hold this thread (StreamRequestHandler sets
+    # it in setup()). MasterServer also cuts any connection after CONN_DEADLINE.
+    timeout = READ_TIMEOUT
+    head = False
 
     # -- plumbing --
 
     def log_message(self, fmt, *args):
         pass  # the server's own Log does this; BaseHTTPRequestHandler's is noise
 
-    def _send(self, code, payload):
+    def _send(self, code, payload, retry_after=None):
         body = json.dumps(payload).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        if retry_after:
+            self.send_header("Retry-After", str(int(retry_after)))
         self.end_headers()
+        if self.head:
+            return   # issue #2, finding 4: HEAD gets the headers only
         try:
             self.wfile.write(body)
         except OSError:
             pass
+
+    def _limited(self, kind, limit):
+        """True (and a 429 sent) when this address is over `limit` for `kind`."""
+        if not self.server.window.over(kind, self.peer, limit):
+            return False
+        self.server.note("LIMIT", "%s %s over %d per %d s" % (self.peer, kind, limit[0], limit[1]),
+                         (kind, self.peer))
+        self._send(429, {"ok": False, "error": "slow down"}, retry_after=limit[1])
+        return True
+
+    def send_error(self, code, message=None, explain=None):
+        """The stock error page as JSON with a correct length (an unknown
+        method, a malformed request line, a request line too long)."""
+        self.close_connection = True
+        try:
+            self._send(code, {"ok": False, "error": message or self.responses.get(code, ("error",))[0]})
+        except OSError:
+            pass
+
+    def version_string(self):
+        return self.server_version
+
+    def do_HEAD(self):
+        self.head = True
+        self.do_GET()
 
     def _body(self, limit=MAX_BODY):
         try:
@@ -361,7 +530,16 @@ class Handler(BaseHTTPRequestHandler):
 
     @property
     def peer(self):
-        return self.client_address[0]
+        """The client's address: the socket's, or behind a reverse proxy named
+        with --trusted-proxy, the last hop of its X-Forwarded-For (issue #2).
+        The header is never read from anyone else, so a client cannot name an
+        address for itself."""
+        ip = self.client_address[0]
+        if ip in self.server.trusted_proxies:
+            hops = [h.strip() for h in (self.headers.get("X-Forwarded-For") or "").split(",") if h.strip()]
+            if hops and (is_v4(hops[-1]) or ":" in hops[-1]):
+                return hops[-1]
+        return ip
 
     # -- routes --
 
@@ -370,25 +548,32 @@ class Handler(BaseHTTPRequestHandler):
         now = time.time()
         srv.sweep(now)
         path = self.path.split("?")[0].rstrip("/") or "/"
+        if self._limited("get", RATE_GET):
+            return
 
         if path in ("/", "/health"):
             return self._send(200, {"ok": True, "service": "legobattles-master",
                                     "lobbies": len(srv.store.lobbies(now))})
         if path == "/list":
+            # issue #2, finding 2: at most MAX_LIST lobbies in one reply (the
+            # oldest first, as before), with the total beside them.
             out = []
-            for lob in srv.store.lobbies(now):
+            every = srv.store.lobbies(now)
+            for lob in every[:MAX_LIST]:
                 lob.pop("token", None)
+                lob.pop("peer", None)
                 lob["options"] = json.loads(lob.get("options") or "{}")
                 lob["players_list"] = srv.store.players(lob["code"])
                 self._local_view(lob)
                 out.append(lob)
-            return self._send(200, {"ok": True, "lobbies": out})
+            return self._send(200, {"ok": True, "lobbies": out, "total": len(every)})
         if path.startswith("/lobby/"):
             code = path.rsplit("/", 1)[-1].upper()
             lob = srv.store.lobby(code)
             if not lob:
                 return self._send(404, {"ok": False, "error": "no such lobby"})
             lob.pop("token", None)
+            lob.pop("peer", None)
             lob["options"] = json.loads(lob.get("options") or "{}")
             lob["players_list"] = srv.store.players(code)
             self._local_view(lob)
@@ -402,8 +587,16 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0].rstrip("/") or "/"
 
         if srv.store.is_banned(self.peer):
-            srv.log("REFUSED", "banned address %s tried %s" % (self.peer, path))
+            srv.note("REFUSED", "banned address %s tried %s" % (self.peer, path), ("ban", self.peer))
             return self._send(403, {"ok": False, "error": "banned"})
+        if self._limited("post", RATE_POST):
+            return
+        if path == "/announce" and self._limited("announce", RATE_ANNOUNCE):
+            return
+        if path in ("/join", "/leave") and self._limited("member", RATE_MEMBER):
+            return
+        if path == "/punch" and self._limited("punch", RATE_PUNCH):
+            return
 
         body = self._body(MAX_IMAGE_BODY if path == "/match_image" else MAX_BODY)
         if body is None:
@@ -465,7 +658,8 @@ class Handler(BaseHTTPRequestHandler):
             host = m["host"] if m else lob.get("host_name", "")
             map_name = (m["map"] if m else "") or clean_name(body.get("map_name"), "")
         srv.discord.image("\U0001F5FA\uFE0F **%s**'s match%s."
-                          % (plain(host), " on **%s**" % plain(map_name) if map_name else ""), png)
+                          % (plain(host), " on **%s**" % plain(map_name) if map_name else ""), png,
+                          source=self.peer)
         return self._send(200, {"ok": True})
 
     def _ended(self, code, m, body):
@@ -490,10 +684,12 @@ class Handler(BaseHTTPRequestHandler):
         if m["state"] == "playing" or str(body.get("reason") or "") == "end":
             self.server.discord("\u23F9\uFE0F **%s**'s match%s ended after %s.%s"
                                 % (plain(m["host"]), " on **%s**" % plain(m["map"]) if m["map"] else "",
-                                   lasted(now - (m["started"] or m["created"])), result))
+                                   lasted(now - (m["started"] or m["created"])), result),
+                                source=m.get("peer", ""))
         else:
             self.server.discord("\u274C **%s** disbanded the lobby `%s` after %s."
-                                % (plain(m["host"]), code, lasted(now - m["created"])))
+                                % (plain(m["host"]), code, lasted(now - m["created"])),
+                                source=m.get("peer", ""))
 
     def _local_view(self, lob):
         lan = self.server.lan.get(lob.get("code"))
@@ -568,12 +764,25 @@ class Handler(BaseHTTPRequestHandler):
                                              % srv.max_players})
         players = max(0, min(players, maxp))
 
-        code = srv.store.new_code()
+        # issue #2, finding 2: lobbies from one address, and in all.
+        if srv.store.count(now, self.peer) >= MAX_LOBBIES_PER_IP:
+            srv.note("LIMIT", "%s already lists %d lobbies" % (self.peer, MAX_LOBBIES_PER_IP),
+                     ("lobbies", self.peer))
+            return self._send(429, {"ok": False, "error": "too many lobbies from this address"},
+                              retry_after=TTL_SECONDS)
+        if srv.store.count(now) >= MAX_LOBBIES:
+            srv.note("FULL", "the list is full (%d lobbies)" % MAX_LOBBIES, ("full",))
+            return self._send(503, {"ok": False, "error": "the server is full"}, retry_after=60)
+        try:
+            code = srv.store.new_code()
+        except RuntimeError:
+            return self._send(503, {"ok": False, "error": "no room code is free"}, retry_after=60)
         token = secrets.token_hex(16)
         fields = {
             "name": clean_name(body.get("name"), "LEGO Battles"),
             "host_name": clean_name(body.get("host_name"), "Player"),
-            "address": body.get("address") or self.peer,
+            "address": host_address(body.get("address"), self.peer),
+            "peer": self.peer,
             "port": port,
             "players": players,
             "max_players": maxp,
@@ -592,13 +801,16 @@ class Handler(BaseHTTPRequestHandler):
                 srv.lan.pop(code, None)
         if isinstance(body.get("players_list"), list):
             srv.store.set_players(code, body["players_list"][:maxp])
+        if body.get("address") and fields["address"] != str(body.get("address")):
+            srv.note("ADDRESS", "%s named %r; listed at %s" % (code, str(body.get("address"))[:64],
+                                                               fields["address"]), ("addr", self.peer))
         srv.log("ANNOUNCE", "%s  %s hosted by %s at %s:%d  (%d/%d)"
                 % (code, fields["name"], fields["host_name"],
                    fields["address"], port, players, maxp))
         with srv.lock:   # the Discord lines' record, in memory only
             srv.meta[code] = {"host": fields["host_name"], "created": now, "state": "open",
                               "started": 0.0, "map": fields["map_name"],
-                              "max": maxp, "members": [], "image": False,
+                              "max": maxp, "members": [], "image": False, "peer": self.peer,
                               # A host on Both lists the same lobby on a second server
                               # quietly: the first one already posts it to the channel.
                               "quiet": bool(body.get("quiet"))}
@@ -607,7 +819,7 @@ class Handler(BaseHTTPRequestHandler):
           srv.discord("\U0001F3AE **%s** is hosting a LEGO Battles lobby `%s` (up to %d players%s)%s"
                     % (plain(fields["host_name"]), code, maxp,
                        ", build " + plain(fields["version"]) if fields["version"] else "",
-                       "\n" + settings if settings else ""))
+                       "\n" + settings if settings else ""), source=self.peer)
         return self._send(200, {"ok": True, "code": code, "token": token,
                                 "ttl": TTL_SECONDS})
 
@@ -623,7 +835,7 @@ class Handler(BaseHTTPRequestHandler):
             srv.log("STALE", "heartbeat for unknown or expired lobby %s" % code)
             return self._send(404, {"ok": False, "error": "unknown lobby"})
         if isinstance(body.get("players_list"), list):
-            srv.store.set_players(code, body["players_list"])
+            srv.store.set_players(code, body["players_list"][:srv.max_players])
         self._match_state(code, body, now)
         return self._send(200, {"ok": True, "ttl": TTL_SECONDS})
 
@@ -657,8 +869,9 @@ class Handler(BaseHTTPRequestHandler):
                 m["image"] = False   # the next match gets its own picture
             if m.get("quiet"):
                 line = None
+            source = m.get("peer", "")
         if line:
-            srv.discord(line)
+            srv.discord(line, source=source)
 
     def _member(self, body, now, joining):
         """POST /join and /leave {code, name}: a player in a lobby, as the
@@ -686,7 +899,7 @@ class Handler(BaseHTTPRequestHandler):
                 if m.get("quiet"):
                     line = None
         if line:
-            srv.discord(line)
+            srv.discord(line, source=self.peer)
         return self._send(200, {"ok": True})
 
     def _remove(self, body):
@@ -706,6 +919,7 @@ class Handler(BaseHTTPRequestHandler):
 class MasterServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+    request_queue_size = 64
 
     def __init__(self, addr, store, log, max_players=DEFAULT_MAX_PLAYERS, discord=None):
         super().__init__(addr, Handler)
@@ -719,11 +933,87 @@ class MasterServer(ThreadingHTTPServer):
         self.lock = threading.Lock()
         self.lan = {}        # code -> (lan_address, lan_port)
         self.punches = {}    # code -> [(address, port, when)]
+        # issue #2: the request limits, and the connections being handled.
+        self.window = Window()
+        self.conn_lock = threading.Lock()
+        self.conns = {}      # socket -> [address, accepted (monotonic), cut]
+        self.per_ip = {}     # address -> connections being handled
+        self.noted = {}      # note() key -> [last logged, dropped since]
+        self.trusted_proxies = set()   # --trusted-proxy
+
+    def note(self, kind, message, key):
+        """A log line that a flood cannot multiply: once a minute per key, with
+        a count of the ones left out."""
+        now = time.monotonic()
+        with self.conn_lock:
+            n = self.noted.get(key)
+            if n and now - n[0] < 60:
+                n[1] += 1
+                return
+            if len(self.noted) > 4096:
+                self.noted = {k: v for k, v in self.noted.items() if now - v[0] < 60}
+            dropped = n[1] if n else 0
+            self.noted[key] = [now, 0]
+        self.log(kind, message + (" (and %d more like it)" % dropped if dropped else ""))
+
+    # issue #2, finding 1: at most MAX_CONNECTIONS handled at once, and
+    # MAX_CONNECTIONS_PER_IP from one address; one more is closed at once
+    # instead of taking a thread. Each has READ_TIMEOUT per read (Handler) and
+    # CONN_DEADLINE in all (service_actions cuts it), so a client that trickles
+    # a byte at a time cannot keep a thread either.
+    def process_request(self, request, client_address):
+        ip = client_address[0]
+        with self.conn_lock:
+            refuse = (len(self.conns) >= MAX_CONNECTIONS or
+                      (ip not in self.trusted_proxies and
+                       self.per_ip.get(ip, 0) >= MAX_CONNECTIONS_PER_IP))
+            if not refuse:
+                self.conns[request] = [ip, time.monotonic(), False]
+                self.per_ip[ip] = self.per_ip.get(ip, 0) + 1
+        if refuse:
+            self.note("BUSY", "%s refused: %d connections being handled, %d from it"
+                      % (ip, len(self.conns), self.per_ip.get(ip, 0)), ("busy", ip))
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except RuntimeError:   # no thread could be started
+            self._done(request)
+            self.note("BUSY", "%s refused: no thread could be started" % ip, ("thread",))
+            self.shutdown_request(request)
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._done(request)
+
+    def _done(self, request):
+        with self.conn_lock:
+            c = self.conns.pop(request, None)
+            if c:
+                left = self.per_ip.get(c[0], 1) - 1
+                if left > 0:
+                    self.per_ip[c[0]] = left
+                else:
+                    self.per_ip.pop(c[0], None)
 
     def service_actions(self):
         """Called by serve_forever about every half second: the watchdog ping
-        (systemd's WatchdogSec), so a loop that stops serving stops pinging."""
+        (systemd's WatchdogSec), so a loop that stops serving stops pinging;
+        and the deadline for connections held too long."""
         _watchdog_ping()
+        now = time.monotonic()
+        with self.conn_lock:
+            late = [(s, c) for s, c in self.conns.items() if not c[2] and now - c[1] > CONN_DEADLINE]
+            for _, c in late:
+                c[2] = True
+        for sock, c in late:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)   # the handler's read fails and it ends
+            except OSError:
+                pass
+            self.note("CUT", "%s held a connection past %d s" % (c[0], CONN_DEADLINE), ("cut", c[0]))
 
     def sweep(self, now):
         """Expire stale advertisements, at most once a second."""
@@ -734,12 +1024,15 @@ class MasterServer(ThreadingHTTPServer):
             self.log("EXPIRE", "lobby %s stopped heartbeating" % code)
             with self.lock:
                 m = self.meta.pop(code, None)
+            if m and m.get("quiet"):
+                continue
             if m and m["state"] == "playing":
                 self.discord("\u23F9\uFE0F **%s**'s match ended (the host stopped reporting) after %s."
-                             % (plain(m["host"]), lasted(now - (m["started"] or m["created"]))))
+                             % (plain(m["host"]), lasted(now - (m["started"] or m["created"]))),
+                             source=m.get("peer", ""))
             elif m:
                 self.discord("\U0001F4A4 **%s**'s lobby `%s` expired (the host stopped responding)."
-                             % (plain(m["host"]), code))
+                             % (plain(m["host"]), code), source=m.get("peer", ""))
 
 
 # ---------------------------------------------------------------- discord ----
@@ -780,28 +1073,62 @@ def settings_text(options):
 
 
 class Discord:
+    """issue #2: the channel is limited, every line together and per source
+    address (a lobby's host, or a joiner), so a flood of lobbies or of joins
+    cannot flood it. A line over a limit is dropped and counted; once lines
+    flow again, one says how many were held back (at most every 10 minutes)."""
+
     def __init__(self, urls, log, label=""):
         self.urls = [u for u in (urls or []) if u.startswith("https://")]
         self.log = log
         self.name = "LEGO Battles server" + (" (%s)" % label if label else "")
         self.queue = None
+        self.every = Bucket(*DISCORD_GLOBAL)
+        self.per_source = Bucket(*DISCORD_PER_SOURCE)
+        self.lock = threading.Lock()
+        self.held = 0
+        self.held_said = 0.0
         if self.urls:
             import queue
             self.queue = queue.Queue(maxsize=200)
             threading.Thread(target=self._run, name="discord", daemon=True).start()
 
-    def __call__(self, text, png=None):
+    def allow(self, source):
+        """Whether a line from `source` may go now (and counts it)."""
+        if source and not self.per_source.take(source):
+            ok = False
+        else:
+            ok = self.every.take("all")
+        with self.lock:
+            if not ok:
+                self.held += 1
+                if self.held == 1:
+                    self.log("DISCORD", "lines held back: too many (the latest from %s)" % (source or "?"))
+                return False, ""
+            now = time.monotonic()
+            note = ""
+            if self.held and now - self.held_said > 600:
+                note = "\n\u26A0\uFE0F %d lobby line%s held back (too many at once)." % (
+                    self.held, "" if self.held == 1 else "s")
+                self.log("DISCORD", "%d lines were held back" % self.held)
+                self.held, self.held_said = 0, now
+            return True, note
+
+    def __call__(self, text, png=None, source=""):
         if not self.queue:
             return
+        ok, note = self.allow(source)
+        if not ok:
+            return
         try:
-            self.queue.put_nowait((str(text)[:1900], png))
+            self.queue.put_nowait(((str(text) + note)[:1900], png))
         except Exception:
             self.log("DISCORD", "queue full; a message was dropped")
 
-    def image(self, text, png):
+    def image(self, text, png, source=""):
         """A message with a picture: a multipart post, the file shown by an
         embed as attachment://match.png (as the Worker's discordImage)."""
-        self(text, png)
+        self(text, png, source)
 
     def _run(self):
         import urllib.request
@@ -900,6 +1227,7 @@ def build(port=DEFAULT_PORT, db="master.sqlite3", logfile="logs/master.log",
 
 
 def main(argv=None):
+    global MAX_CONNECTIONS
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.reconfigure(encoding="utf-8", errors="replace")
@@ -927,7 +1255,14 @@ def main(argv=None):
                     help="shown after the sender's name, e.g. King")
     ap.add_argument("--quiet", action="store_true",
                     help="write the log file but do not echo to the console")
+    ap.add_argument("--max-connections", type=int, default=MAX_CONNECTIONS,
+                    help="requests handled at once (one thread each); keep it "
+                         "below systemd's TasksMax (default %d)" % MAX_CONNECTIONS)
+    ap.add_argument("--trusted-proxy", action="append", default=[], metavar="ADDRESS",
+                    help="a reverse proxy in front of this server: from it, the "
+                         "client's address is read from X-Forwarded-For (repeatable)")
     args = ap.parse_args(argv)
+    MAX_CONNECTIONS = max(8, args.max_connections)
     logfile = None if args.no_log_file or args.log in ("", "-") else args.log
     if logfile is None and args.quiet:
         ap.error("--quiet with no log file would log nowhere")
@@ -936,10 +1271,16 @@ def main(argv=None):
                                           os.environ.get("LB_DISCORD_WEBHOOK", "").split(",") if u.strip()]
     srv, store, log = build(args.port, args.db, logfile, not args.quiet,
                             args.max_players, args.host, hooks, args.discord_label)
+    srv.trusted_proxies = set(args.trusted_proxy)
     log("START", "LEGO Battles master server on %s:%d"
         % (args.host or "0.0.0.0", args.port))
     log("START", "database %s, log %s, ttl %ds, operator ceiling %d players"
         % (args.db, logfile or "(none: console only)", TTL_SECONDS, args.max_players))
+    log("START", "limits: %d connections (%d per address), %d lobbies (%d per address), "
+        "read timeout %d s, connection deadline %d s%s"
+        % (MAX_CONNECTIONS, MAX_CONNECTIONS_PER_IP, MAX_LOBBIES, MAX_LOBBIES_PER_IP,
+           READ_TIMEOUT, CONN_DEADLINE,
+           ", trusted proxies %s" % ", ".join(sorted(srv.trusted_proxies)) if srv.trusted_proxies else ""))
     if srv.discord.urls:
         log("START", "Discord: %d webhook(s)" % len(srv.discord.urls))
 

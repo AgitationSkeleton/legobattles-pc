@@ -130,8 +130,9 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 SocketBindDeny=any
 SocketBindAllow=ipv4:tcp:28555
 SocketBindAllow=ipv6:tcp:28555
-# The server starts a thread per request; leave room for them.
-TasksMax=128
+# The server handles at most --max-connections requests at once (96 by
+# default), a thread each; TasksMax must stay above that, with room to spare.
+TasksMax=256
 
 [Install]
 WantedBy=multi-user.target
@@ -139,6 +140,42 @@ WantedBy=multi-user.target
 
 The log is then in `journalctl -u <unit>`. `systemctl status` shows the
 server's own status line ("serving on port 28555").
+
+## Limits (GitHub issue #2)
+
+A load test on a public instance found a slow client could hold a thread
+forever, one address could list lobbies without end and flood the Discord
+channel, and a host could list itself at any address. Since then:
+
+| Limit | Value | Why |
+|---|---|---|
+| a read (request line, header, body) | 10 s | a half-sent request no longer holds a thread |
+| a connection's whole life | 20 s | nor does one that trickles a byte at a time |
+| requests handled at once | 96 (`--max-connections`) | below systemd's `TasksMax`; one more is closed at once |
+| requests handled at once from one address | 8 | one address cannot take every thread |
+| GET and POST per address | 120 a minute each | the game sends about 30 a minute while hosting |
+| `/announce` per address | 6 every 10 minutes | a host announces once per lobby |
+| lobbies listed from one address | 3 | a 429 beyond that |
+| lobbies listed in all | 200 | a 503 beyond that, and when no room code is free |
+| lobbies in one `/list` reply | 100 (`total` says how many there are) | |
+| `/join` and `/leave` per address | 30 every 10 minutes | each makes a Discord line |
+| `/punch` per address | 20 a minute | |
+| Discord lines | 30 at once, then one every 2 s; 10 per source address, then one every 30 s | the channel cannot be flooded; the next line that goes says how many were held back |
+
+A refused request gets 429 (or 503) with `Retry-After`; the game takes it as a
+refusal and tries later. Refusals are logged once a minute per address, with a
+count, so a flood cannot fill the log either.
+
+A host's `address` is believed only when it is the address the server sees.
+The exceptions are a host on the server's own network (seen by a private
+address, docs/400) and one reaching it over IPv6. Otherwise the lobby is
+listed at the address seen. A player list keeps only cleaned names and dotted
+quads.
+
+Behind a reverse proxy, the server sees the proxy's address for everyone.
+`--trusted-proxy ADDRESS` reads the client's address from `X-Forwarded-For`
+for requests from that address only, and exempts the proxy from the
+per-address connection limit.
 
 ## Discord
 

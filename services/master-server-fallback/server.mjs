@@ -125,6 +125,7 @@ const front = http.createServer((req, res) => {
   req.pipe(up);
 });
 front.on('upgrade', (req, sock, head) => {
+  sock.setTimeout(0);   // a relay's WebSocket is not an idle HTTP request
   const up = net.connect(Number(inner.port), inner.hostname, () => {
     const h = forwardHeaders(req);
     let raw = `${req.method} ${req.url} HTTP/1.1\r\n`;
@@ -144,6 +145,35 @@ front.on('upgrade', (req, sock, head) => {
 });
 front.headersTimeout = 15000;
 front.requestTimeout = 30000;
+// GitHub issue #2: connections held open. An idle socket is closed after 15 s
+// (a relay's WebSocket is spliced away from this server and keeps its own
+// life), at most MAX_CONNS are open at once, and MAX_CONNS_PER_IP from one
+// address; one more is closed at once. A relay host and its joiners each hold
+// one WebSocket, so the per-address cap leaves room for a LAN party.
+const MAX_CONNS = Number(cfg.max_connections || 512);
+const MAX_CONNS_PER_IP = Number(cfg.max_connections_per_ip || 24);
+const perIp = new Map();
+let refusedSaid = 0;
+front.maxConnections = MAX_CONNS;
+front.timeout = 15000;
+front.keepAliveTimeout = 5000;
+front.on('connection', (sock) => {
+  const ip = clientIp(sock);
+  const n = (perIp.get(ip) || 0) + 1;
+  if (n > MAX_CONNS_PER_IP) {
+    if (Date.now() - refusedSaid > 60000) {
+      refusedSaid = Date.now();
+      console.log(`[lb-fallback] ${ip} refused: ${MAX_CONNS_PER_IP} connections open from it`);
+    }
+    sock.destroy();
+    return;
+  }
+  perIp.set(ip, n);
+  sock.once('close', () => {
+    const left = (perIp.get(ip) || 1) - 1;
+    if (left > 0) perIp.set(ip, left); else perIp.delete(ip);
+  });
+});
 front.listen(port, host, () =>
   console.log(`[lb-fallback] serving on ${host}:${port}`));
 

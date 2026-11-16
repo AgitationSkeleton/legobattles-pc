@@ -69,6 +69,48 @@ const MAX_IMAGE_BYTES = 400 * 1024;                     // docs/428
 const MAX_IMAGE_BODY = Math.ceil(MAX_IMAGE_BYTES * 4 / 3) + 4096;
 const NAME_OK = /^[\w \-'.!?]{1,24}$/u;
 
+// GitHub issue #2 (a load test on the Python server, whose findings apply
+// here too): one address could list lobbies without end and flood the
+// Discord channel, and a host could list itself at any address. The game's
+// own traffic, for scale: a host announces once per lobby, heartbeats every
+// 30 s and polls every 2 s (6 s after two minutes); the Join screen fetches
+// the list every 5 s. Every limit sits far above that; past one, a 429 (a 503
+// when full), which the game takes as a refusal and retries later.
+const MAX_LOBBIES = 200;          // listed at once, every address together
+const MAX_LOBBIES_PER_IP = 3;     // listed at once from one address
+const MAX_LIST = 100;             // lobbies in one /list reply
+// Per address: [requests, ms].
+const RATE_GET = [120, 60000];
+const RATE_POST = [120, 60000];
+const RATE_ANNOUNCE = [6, 600000];
+const RATE_MEMBER = [30, 600000];  // /join and /leave, which make Discord lines
+const RATE_PUNCH = [20, 60000];
+// The Discord channel: token buckets, every line together and per source
+// address (the lobby's host, or the joiner): [burst, ms per token].
+const DISCORD_GLOBAL = [30, 2000];
+const DISCORD_PER_SOURCE = [10, 30000];
+
+const V4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
+function isV4(s) { return V4.test(String(s == null ? '' : s)); }
+function isPublicV4(s) {
+  if (!isV4(s)) return false;
+  const [a, b] = s.split('.').map(Number);
+  if (a === 0 || a === 10 || a === 127 || a >= 224) return false;
+  if ((a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254)) return false;
+  return !(a === 100 && b >= 64 && b <= 127);
+}
+// issue #2, finding 3: the address a lobby is listed at. A host names its
+// public address (UPnP or STUN), normally the one this server sees; it is
+// believed only then, or when this server cannot check it (the host reached
+// it over IPv6). Anything else is listed at the address seen, so a listing
+// can never point joiners at a third party.
+function hostAddress(claimed, peer) {
+  const c = String(claimed == null ? '' : claimed).trim();
+  if (c === peer && isV4(c)) return c;
+  if (isPublicV4(c) && String(peer).includes(':')) return c;
+  return peer;
+}
+
 function json(status, payload) {
   return new Response(JSON.stringify(payload), {
     status,
@@ -175,6 +217,17 @@ async function relay(request, env, code) {
 
 export default {
   async fetch(request, env) {
+    // issue #2, finding 4: HEAD is a GET answered with its headers only.
+    if (request.method === 'HEAD') {
+      const r = await route(new Request(request.url, { method: 'GET', headers: request.headers }), env);
+      return new Response(null, { status: r.status, headers: r.headers });
+    }
+    return route(request, env);
+  },
+};
+
+async function route(request, env) {
+  {
     if (request.method !== 'GET' && request.method !== 'POST')
       return json(405, { ok: false, error: 'GET or POST' });
     const path = new URL(request.url).pathname;
@@ -191,8 +244,8 @@ export default {
     }
     const stub = env.DIRECTORY.get(env.DIRECTORY.idFromName('directory'));
     return stub.fetch(request);
-  },
-};
+  }
+}
 
 // ------------------------------------------------------------- Directory ----
 
@@ -202,7 +255,10 @@ export class Directory extends DurableObject {
     this.env = env;
     this.lobbies = new Map();   // code -> lobby
     this.bans = new Map();      // address -> {reason, created}
-    this.rate = new Map();      // address -> {window, count}
+    this.rate = new Map();      // kind + address -> {window, count}  (issue #2)
+    this.buckets = new Map();   // Discord: source -> {tokens, at}  (issue #2)
+    this.held = 0;              // Discord lines held back since the last said so
+    this.heldSaid = 0;
     this.forgets = new Map();   // address -> {window, count}  (docs/443; memory only)
     this.punches = new Map();   // code -> [{address, port, at}]  (docs/400; memory only)
     ctx.blockConcurrencyWhile(async () => {
@@ -226,9 +282,34 @@ export class Directory extends DurableObject {
   // A lobby announced with `quiet` -- a host on Both lists the same lobby on
   // a second server, which then stays out of the Discord channel the first
   // one already posts to -- is listed and served as usual but never logged.
-  log(text, l) {
+  log(text, l, source) {
     if (l && l.quiet) return;
+    // issue #2: a flood of lobbies or joins cannot flood the channel. A line
+    // over a limit is dropped and counted; the next one that goes says how
+    // many were held back (at most every 10 minutes).
+    const src = source !== undefined ? source : (l && l.peer) || '';
+    if ((src && !this.take('s:' + src, DISCORD_PER_SOURCE)) || !this.take('all', DISCORD_GLOBAL)) {
+      if (++this.held === 1) console.log(`[discord] lines held back (the latest from ${src || '?'})`);
+      return;
+    }
+    const now = Date.now();
+    if (this.held && now - this.heldSaid > 600000) {
+      text += `\n⚠️ ${this.held} lobby line${this.held === 1 ? '' : 's'} held back (too many at once).`;
+      this.held = 0;
+      this.heldSaid = now;
+    }
     discord(this.env, this.ctx, text);
+  }
+
+  take(key, [burst, every]) {
+    const now = Date.now();
+    if (this.buckets.size > 4096)
+      for (const [k, b] of this.buckets) if (b.tokens + (now - b.at) / every >= burst) this.buckets.delete(k);
+    const b = this.buckets.get(key);
+    const tokens = b ? Math.min(burst, b.tokens + (now - b.at) / every) : burst;
+    if (tokens < 1) { this.buckets.set(key, { tokens, at: now }); return false; }
+    this.buckets.set(key, { tokens: tokens - 1, at: now });
+    return true;
   }
 
   // The host and everyone the joiners reported, in order.
@@ -285,15 +366,33 @@ export class Directory extends DurableObject {
     else if (this.lobbies.size) await this.save();   // reschedule
   }
 
-  limited(addr) {
+  // A fixed window per kind and address; the map is pruned as it ages.
+  limited(kind, addr, [count, ms]) {
     const now = Date.now();
-    const r = this.rate.get(addr);
-    if (!r || now - r.window > 60000) {
-      this.rate.set(addr, { window: now, count: 1 });
+    if (now - (this.pruned || 0) > 60000) {
+      this.pruned = now;
+      for (const [k, r] of this.rate) if (now - r.window > 3600000) this.rate.delete(k);
+    }
+    const key = kind + ' ' + addr;
+    const r = this.rate.get(key);
+    if (!r || now - r.window >= ms) {
+      this.rate.set(key, { window: now, count: 1 });
       return false;
     }
     r.count += 1;
-    return r.count > 60;   // a client sends a few a minute
+    return r.count > count * this.scale();
+  }
+
+  // TEST_LIMIT_SCALE: a test's `wrangler dev --var` (the older suites post
+  // more from one address than a player does), never set live.
+  scale() { return Math.max(1, toInt(this.env.TEST_LIMIT_SCALE, 1)); }
+
+  slowDown(ms) {
+    return new Response(JSON.stringify({ ok: false, error: 'slow down' }), {
+      status: 429,
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store',
+                 'Retry-After': String(Math.ceil(ms / 1000)) },
+    });
   }
 
   newCode() {
@@ -314,6 +413,8 @@ export class Directory extends DurableObject {
 
     if (path.startsWith('/admin/')) return this.admin(request, path);
 
+    if (request.method === 'GET' && path !== '/internal/relay-auth' && this.limited('get', peer, RATE_GET))
+      return this.slowDown(RATE_GET[1]);
     if (request.method === 'GET') {
       if (path === '/' || path === '/health')
         return json(200, { ok: true, service: 'legobattles-master', relay: !!this.env.RELAY,
@@ -333,11 +434,13 @@ export class Directory extends DurableObject {
         }
         return json(200, { ok: true });
       }
-      if (path === '/list')
-        return json(200, { ok: true, lobbies: [...this.lobbies.values()]
-          .filter((l) => l.state === 'open')
-          .sort((a, b) => a.created - b.created)
-          .map((l) => this.publicView(l, peer)), ...this.fallbackField() });
+      if (path === '/list') {
+        // issue #2, finding 2: at most MAX_LIST lobbies in one reply, with the total.
+        const open = [...this.lobbies.values()].filter((l) => l.state === 'open')
+          .sort((a, b) => a.created - b.created);
+        return json(200, { ok: true, lobbies: open.slice(0, MAX_LIST).map((l) => this.publicView(l, peer)),
+                           total: open.length, ...this.fallbackField() });
+      }
       if (path.startsWith('/lobby/')) {
         const l = this.lobbies.get(path.slice(7).toUpperCase());
         if (!l || l.state !== 'open') return json(404, { ok: false, error: 'no such lobby' });
@@ -346,11 +449,17 @@ export class Directory extends DurableObject {
       return json(404, { ok: false, error: 'no such endpoint' });
     }
 
+    // The body is read before any refusal: one left unread can drop the
+    // connection (as admin() notes).
+    const text = await request.text().catch(() => '');
     if (this.bans.has(peer)) return json(403, { ok: false, error: 'banned' });
-    if (this.limited(peer)) return json(429, { ok: false, error: 'slow down' });
+    if (this.limited('post', peer, RATE_POST)) return this.slowDown(RATE_POST[1]);
+    if (path === '/announce' && this.limited('announce', peer, RATE_ANNOUNCE)) return this.slowDown(RATE_ANNOUNCE[1]);
+    if ((path === '/join' || path === '/leave') && this.limited('member', peer, RATE_MEMBER))
+      return this.slowDown(RATE_MEMBER[1]);
+    if (path === '/punch' && this.limited('punch', peer, RATE_PUNCH)) return this.slowDown(RATE_PUNCH[1]);
     let body;
     try {
-      const text = await request.text();
       // docs/428: a match picture is a base64 PNG, far past the usual limit.
       const limit = path === '/match_image' ? MAX_IMAGE_BODY : MAX_BODY;
       if (!text || text.length > limit) throw new Error();
@@ -364,8 +473,8 @@ export class Directory extends DurableObject {
       case '/announce': return this.announce(body, peer, now);
       case '/heartbeat': return this.heartbeat(body, now);
       case '/remove': return this.remove(body, now);
-      case '/join': return this.join(body, now);
-      case '/leave': return this.leave(body, now);
+      case '/join': return this.join(body, peer, now);
+      case '/leave': return this.leave(body, peer, now);
       case '/punch': return this.punch(body, peer, now);
       case '/poll': return this.poll(body, now);
       case '/match_image': return this.matchImage(body, now);
@@ -489,14 +598,22 @@ export class Directory extends DurableObject {
     if (!(maxp >= 1 && maxp <= ceiling))
       return json(400, { ok: false, error: `max_players must be 1..${ceiling}` });
     const players = Math.max(0, Math.min(toInt(body.players, 1), maxp));
-    const code = this.newCode();
+    // issue #2, finding 2: lobbies from one address, and in all.
+    let mine = 0;
+    for (const o of this.lobbies.values()) if (o.peer === peer) ++mine;
+    if (mine >= MAX_LOBBIES_PER_IP * this.scale())
+      return json(429, { ok: false, error: 'too many lobbies from this address' });
+    if (this.lobbies.size >= MAX_LOBBIES) return json(503, { ok: false, error: 'the server is full' });
+    let code;
+    try { code = this.newCode(); } catch { return json(503, { ok: false, error: 'no room code is free' }); }
     const token = [...crypto.getRandomValues(new Uint8Array(16))]
       .map((b) => b.toString(16).padStart(2, '0')).join('');
     const l = {
       code, token,
       name: cleanName(body.name, 'LEGO Battles'),
       host_name: cleanName(body.host_name, 'Player'),
-      address: String(body.address || peer).slice(0, 64),
+      address: hostAddress(body.address, peer),
+      peer,   // issue #2: the address it was announced from (never in a view)
       port, players, max_players: maxp,
       lan_address: lanAddress(body.lan_address), lan_port: lanPort(body.lan_port),
       map_name: cleanName(body.map_name, ''),
@@ -571,7 +688,7 @@ export class Directory extends DurableObject {
     return json(200, { ok: true });
   }
 
-  async join(body, now) {
+  async join(body, peer, now) {
     const l = this.lobbies.get(String(body.code || '').toUpperCase());
     if (!l) return json(404, { ok: false, error: 'unknown lobby' });
     const name = cleanName(body.name, 'Player');
@@ -586,7 +703,7 @@ export class Directory extends DurableObject {
       l.members.push({ name, joined: now, owner });
       await this.save();
       this.log(`➕ **${plain(name)}** joined **${plain(l.host_name)}**'s lobby \`${l.code}\`` +
-               ` (${this.players(l)}/${l.max_players}).`, l);
+               ` (${this.players(l)}/${l.max_players}).`, l, peer);
     }
     return json(200, { ok: true });
   }
@@ -618,7 +735,7 @@ export class Directory extends DurableObject {
     return json(200, { ok: true, punch: list.map((p) => ({ address: p.address, port: p.port })) });
   }
 
-  async leave(body, now) {
+  async leave(body, peer, now) {
     const l = this.lobbies.get(String(body.code || '').toUpperCase());
     if (!l) return json(200, { ok: true });   // the lobby is gone already
     const name = cleanName(body.name, 'Player');
@@ -627,7 +744,7 @@ export class Directory extends DurableObject {
       l.members.splice(at, 1);
       await this.save();
       this.log(`➖ **${plain(name)}** left **${plain(l.host_name)}**'s ` +
-               (l.state === 'playing' ? 'match' : `lobby \`${l.code}\``) + '.', l);
+               (l.state === 'playing' ? 'match' : `lobby \`${l.code}\``) + '.', l, peer);
     }
     return json(200, { ok: true });
   }

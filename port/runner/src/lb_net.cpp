@@ -308,8 +308,15 @@ bool fb_target(std::string* host, int* port) {
 // A reply that says the Worker is not serving: no reply at all, a limit
 // (429; Cloudflare's "error code: 1015/1027"), a Worker exception (1101/1102)
 // or an edge error (502-504, 520-530).
+// docs/499 (GitHub issue #2): the Directory itself answers 429 to an address
+// over one of its limits, as JSON. That is this client being told to slow
+// down, not the Worker refusing everyone, so it is no reason to switch.
+bool own_limit(const std::string& reply, int status) {
+    return status == 429 && !reply.empty() && reply[0] == '{';
+}
 bool fb_failed(const std::string& reply, const std::string& error, int status) {
     if (!error.empty()) return true;
+    if (own_limit(reply, status)) return false;
     if (status == 429 || (status >= 502 && status <= 504) || (status >= 520 && status <= 530))
         return true;
     return reply.compare(0, 14, "error code: 10") == 0 ||
@@ -354,7 +361,8 @@ std::string http_request(const std::string& host, int port,
     const bool failed = fb_failed(reply, *error, status);
     // A limit answer is the Worker saying it will not serve: switch at once.
     // A connection that fails may be this machine's own network: two in a row.
-    const bool limit = status == 429 || reply.compare(0, 14, "error code: 10") == 0;
+    const bool limit = (status == 429 && !own_limit(reply, status)) ||
+                       reply.compare(0, 14, "error code: 10") == 0;
     {
         std::lock_guard<std::mutex> lk(g_fb_mu);
         if (!failed) {
