@@ -13,7 +13,11 @@
 // Run it with pm2 (ecosystem.config.cjs) or `node server.mjs`. Settings come
 // from config.json beside this file (config.example.json shows them).
 
-import { Miniflare, Log, LogLevel, convertV4MiniflareOptions } from 'miniflare';
+// miniflare is a CommonJS package. A default import works on every Node;
+// named imports depend on Node detecting its exports, which failed on the
+// server PC's Node ("Named export 'Log' not found", 2026-11-15).
+import miniflare from 'miniflare';
+const { Miniflare, Log, LogLevel, convertV4MiniflareOptions } = miniflare;
 import fs from 'node:fs';
 import http from 'node:http';
 import net from 'node:net';

@@ -23,8 +23,9 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "npm install failed ($LASTEXITCODE)" }
 } finally { Pop-Location }
 if (-not (Test-Path $Target)) { New-Item -ItemType Directory -Force $Target | Out-Null }
-# /MIR within the copied parts only; config.json, data and logs stay as they are.
-robocopy $stage $Target /MIR /XD data logs /XF config.json /NFL /NDL /NJH /NP | Out-Null
+# /MIR within the copied parts only; config.json, data, logs and any folder
+# starting with _ (an operator's backup, e.g. _prev-<date>) stay as they are.
+robocopy $stage $Target /MIR /XD data logs _* /XF config.json /NFL /NDL /NJH /NP | Out-Null
 if ($LASTEXITCODE -ge 8) { throw "robocopy failed ($LASTEXITCODE)" }
 if (-not (Test-Path (Join-Path $Target 'config.json'))) {
     Copy-Item (Join-Path $Target 'config.example.json') (Join-Path $Target 'config.json')
