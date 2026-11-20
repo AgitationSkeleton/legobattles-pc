@@ -1,0 +1,17 @@
+{
+  "$schema": "https://recomp.fyi/schema/v1.json",
+  "game": "LEGO Battles",
+  "wikidata": "Q1991495",
+  "system": "NDS",
+  "type": "recomp",
+  "project": "LEGO Battles PC",
+  "status": "released",
+  "original": [
+    { "region": "Europe", "sha1": "da60469bd143eb8f47ecf0d7951181b4783c91b4" },
+    { "region": "USA", "sha1": "f25d090feb840e9b4b07546b6929d897e3fb3965" }
+  ],
+  "targets": ["Windows"],
+  "toolchain": "ndsrecomp",
+  "approach": "Static recompilation of the Nintendo DS ARM code, with a widescreen-adaptive renderer and PC enhancements.",
+  "notes": "Playable start to finish, with online multiplayer through lobby servers, a level editor and custom units. A USA ROM is converted to the European image on first start."
+}
