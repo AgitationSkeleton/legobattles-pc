@@ -243,6 +243,10 @@ struct Settings {
     // is clear. Enhanced only (DS Vanilla already shows both screens). Off by
     // default. Closing that window turns this off again.
     bool top_own_window = false;
+    // SG-0147: that window at a fixed size (off: any size, freely resized).
+    bool top_win_fixed = false;
+    int  top_win_w = 512;
+    int  top_win_h = 384;
     // docs/398: while the blue brick's list is the open one, 1-9 pick from it
     // instead of the second brick's list. On by default.
     bool quick_keys_blue = true;
@@ -356,6 +360,7 @@ struct Settings {
     bool ai_finish_upgrades = false; // BR-0070 (docs/472): the AI does not re-order a tower that is upgrading
     bool ai_keep_bridges = false;   // SG-0089 (docs/472): the AI never retires its bridges
     bool ai_stuck_bridges = false;  // SG-0090 (docs/472): the AI's need-driven bridges on every map
+    bool ai_fewer_farms = false;    // SG-0146: the AI builds one farm at a time, only when full
     bool ai_transports_on_request = false;  // SG-0091 (docs/478): no transport nobody asked for
     // docs/408: a hotwired transport stops taking its old owner's orders
     // (lb_patches.cpp, release_stolen_transport).
@@ -822,6 +827,8 @@ static std::string settings_text() {
                   g_set.ff_speed); o += buf;   // BR-0041
     std::snprintf(buf, sizeof buf, "  \"top_own_window\": %s,\n",
                   g_set.top_own_window ? "true" : "false"); o += buf;   // SG-0072
+    std::snprintf(buf, sizeof buf, "  \"top_win_fixed\": %s,\n  \"top_win_w\": %d,\n  \"top_win_h\": %d,\n",
+                  g_set.top_win_fixed ? "true" : "false", g_set.top_win_w, g_set.top_win_h); o += buf;   // SG-0147
     std::snprintf(buf, sizeof buf, "  \"quick_keys_blue\": %s,\n",
                   g_set.quick_keys_blue ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"tabs_stay_open\": %s,\n",
@@ -896,6 +903,8 @@ static std::string settings_text() {
                   g_set.ai_keep_bridges ? "true" : "false"); o += buf;   // SG-0089
     std::snprintf(buf, sizeof buf, "  \"ai_stuck_bridges\": %s,\n",
                   g_set.ai_stuck_bridges ? "true" : "false"); o += buf;   // SG-0090
+    std::snprintf(buf, sizeof buf, "  \"ai_fewer_farms\": %s,\n",
+                  g_set.ai_fewer_farms ? "true" : "false"); o += buf;   // SG-0146
     std::snprintf(buf, sizeof buf, "  \"ai_transports_on_request\": %s,\n",
                   g_set.ai_transports_on_request ? "true" : "false"); o += buf;   // SG-0091
     std::snprintf(buf, sizeof buf, "  \"transport_release\": %s,\n",
@@ -1209,6 +1218,9 @@ extern "C" void lb_settings_load(void) {
     json_get_int(s, "ff_speed", &g_set.ff_speed);        // BR-0041
     if (g_set.ff_speed < 2 || g_set.ff_speed > 8) g_set.ff_speed = 4;
     json_get_bool(s, "top_own_window", &g_set.top_own_window);   // SG-0072
+    json_get_bool(s, "top_win_fixed", &g_set.top_win_fixed);     // SG-0147
+    json_get_int(s, "top_win_w", &g_set.top_win_w);
+    json_get_int(s, "top_win_h", &g_set.top_win_h);
     json_get_bool(s, "quick_keys_blue", &g_set.quick_keys_blue);   // docs/398
     json_get_bool(s, "tabs_stay_open", &g_set.tabs_stay_open);   // docs/451
     json_get_bool(s, "cancel_queue_click", &g_set.cancel_queue_click);   // SG-0006
@@ -1253,6 +1265,7 @@ extern "C" void lb_settings_load(void) {
     json_get_bool(s, "ai_keep_bridges", &g_set.ai_keep_bridges);         // SG-0089
     json_get_bool(s, "ai_stuck_bridges", &g_set.ai_stuck_bridges);       // SG-0090
     json_get_bool(s, "ai_transports_on_request", &g_set.ai_transports_on_request);   // SG-0091
+    json_get_bool(s, "ai_fewer_farms", &g_set.ai_fewer_farms);           // SG-0146
     json_get_bool(s, "transport_release", &g_set.transport_release);
     json_get_bool(s, "creatures", &g_set.creatures);   // docs/410
     json_get_bool(s, "creature_tint", &g_set.creature_tint);   // docs/437
@@ -2240,6 +2253,14 @@ void tab_enhancements() {
          "builds a transport only when it needs to cross water, and uses\n"
          "the slot for a siege unit instead. Transports it already has are\n"
          "kept. Free Play only.");
+    badge(WIRED);
+    // SG-0146: the farm step's "rich" want of 2 free slots (kAiFewerFarms).
+    ImGui::Checkbox("The AI Builds Fewer Farms", &g_set.ai_fewer_farms);
+    help("Normally a computer with plenty of bricks keeps two unit slots\n"
+         "free, so it keeps building farms, even past the unit cap where\n"
+         "they add nothing (and without end when it has the red-brick\n"
+         "cheats). On, it builds one farm at a time, only when it has no\n"
+         "free slot. Free Play only.");
     badge(WIRED);
     // docs/479: late in a big match the cartridge needs more than the DS's
     // processor, and the whole game slows down (docs/475). The hottest
@@ -6711,9 +6732,15 @@ static bool top_own_create(SDL_Renderer* main_ren) {
         x = b.x + b.w - w - 40;   // the display's top-right, clear of the game
         y = b.y + 40;
     }
+    // SG-0147: a fixed size opens at that size, not resizable.
+    if (g_set.top_win_fixed) {
+        w = std::clamp(g_set.top_win_w, 128, 7680);
+        h = std::clamp(g_set.top_win_h, 96, 4320);
+        if (b.w > 0) x = b.x + std::max(0, b.w - w - 40);
+    }
     SDL_SetHint(SDL_HINT_WINDOW_NO_ACTIVATION_WHEN_SHOWN, "1");
     g_top_win = SDL_CreateWindow("LEGO Battles - Top Screen", x, y, w, h,
-                                 SDL_WINDOW_RESIZABLE);
+                                 g_set.top_win_fixed ? 0 : SDL_WINDOW_RESIZABLE);
     SDL_SetHint(SDL_HINT_WINDOW_NO_ACTIVATION_WHEN_SHOWN, "0");
     if (!g_top_win) {
         std::fprintf(stderr, "[lb_topwin] window failed: %s\n", SDL_GetError());
@@ -6765,6 +6792,24 @@ static void top_own_draw(SDL_Renderer* main_ren, const void* src) {
         g_set.top_own_window = false;   // could not open: back to the panel
         g_top_env_off = true;
         return;
+    }
+    {   // SG-0147: the fixed size, applied as it is changed (and released when off).
+        static int applied_w = -1, applied_h = -1;
+        static bool applied_fixed = false;
+        if (g_set.top_win_fixed) {
+            const int fw = std::clamp(g_set.top_win_w, 128, 7680);
+            const int fh = std::clamp(g_set.top_win_h, 96, 4320);
+            if (!applied_fixed || fw != applied_w || fh != applied_h) {
+                SDL_SetWindowResizable(g_top_win, SDL_FALSE);
+                SDL_SetWindowSize(g_top_win, fw, fh);
+                applied_w = fw;
+                applied_h = fh;
+                applied_fixed = true;
+            }
+        } else if (applied_fixed) {
+            SDL_SetWindowResizable(g_top_win, SDL_TRUE);
+            applied_fixed = false;
+        }
     }
     SDL_Renderer* r = g_top_wren;
     if (!g_top_wtex || g_top_wtex_w != g_top_w || g_top_wtex_h != g_top_h) {
@@ -8376,6 +8421,51 @@ void section_windows() {
          "and keep the battlefield clear. Clicks work as on the panel (cancel\n"
          "queue, unload, minimap). Resize it freely: the picture keeps its\n"
          "shape. Closing that window puts the panel back. Enhanced only.");
+    // SG-0147: that window at a size of the player's choosing.
+    {
+        ImGui::BeginDisabled(!g_set.top_own_window);
+        ImGui::Checkbox("Fixed Top Screen Window Size", &g_set.top_win_fixed);
+        help("Keeps the Top Screen window at the size chosen here, and stops\n"
+             "it being resized by dragging its edges. Off, it resizes freely.");
+        ImGui::BeginDisabled(!g_set.top_win_fixed);
+        static const int kTopSizes[][2] = {{256, 192}, {512, 384}, {768, 576}, {1024, 768}};
+        char cur[32];
+        std::snprintf(cur, sizeof cur, "%d x %d", g_set.top_win_w, g_set.top_win_h);
+        ImGui::SetNextItemWidth(160.0f * g_ui_scale);
+        if (ImGui::BeginCombo("Preset##topwin", cur)) {
+            for (int i = 0; i < 4; ++i) {
+                char item[48];
+                std::snprintf(item, sizeof item, "%d x %d (DS x%d)", kTopSizes[i][0], kTopSizes[i][1], i + 1);
+                if (ImGui::Selectable(item, kTopSizes[i][0] == g_set.top_win_w &&
+                                                kTopSizes[i][1] == g_set.top_win_h)) {
+                    g_set.top_win_w = kTopSizes[i][0];
+                    g_set.top_win_h = kTopSizes[i][1];
+                }
+            }
+            ImGui::EndCombo();
+        }
+        static int tw = 0, th = 0;
+        if (tw == 0) { tw = g_set.top_win_w; th = g_set.top_win_h; }
+        ImGui::SetNextItemWidth(90.0f * g_ui_scale);
+        ImGui::InputInt("##topw", &tw, 0, 0);
+        ImGui::SameLine();
+        ImGui::TextUnformatted("x");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(90.0f * g_ui_scale);
+        ImGui::InputInt("##toph", &th, 0, 0);
+        ImGui::SameLine();
+        if (ImGui::Button("Use Custom Size##topwin")) {
+            g_set.top_win_w = std::clamp(tw, 128, 7680);
+            g_set.top_win_h = std::clamp(th, 96, 4320);
+            tw = g_set.top_win_w;
+            th = g_set.top_win_h;
+        }
+        help("Any width and height, at least 128 x 96. The picture keeps its\n"
+             "shape inside it.");
+        ImGui::EndDisabled();
+        ImGui::EndDisabled();
+        badge(WIRED);
+    }
         // THE "WIDE FIELD" VIEWER NO LONGER HAS A CONTROL HERE.
         //
         // Two rules settle it: adaptive window size is ONE toggle, and no
@@ -9161,15 +9251,25 @@ void tab_balance_attacks() {
                         bal_cell(LB_BAL_ATTACKS, rec, f, locked);
                 }
                 ImGui::TableNextColumn();
-                int shown = 0;
                 if (rec == 202) {   // docs/438: the spells' own shot, not a spare
                     ImGui::TextDisabled("the Fireball and Thunder Hammer spells");
-                    shown = 4;
-                }
-                for (int u = 0; u < units && shown < 4; ++u) {
-                    if (lb_balance_record_projectile(u) != rec) continue;
-                    if (shown++) ImGui::SameLine();
-                    ImGui::TextDisabled("%s", lb_teams_unit_name(u));
+                } else {
+                    // SG-0137: every unit that fires it. The cell shows four and
+                    // "+N more"; hovering it lists them all.
+                    std::vector<std::string> users;
+                    for (int u = 0; u < units; ++u)
+                        if (lb_balance_record_projectile(u) == rec) users.emplace_back(lb_teams_unit_name(u));
+                    std::string cell, all;
+                    for (size_t i = 0; i < users.size(); ++i) {
+                        if (i < 4) cell += (i ? ", " : "") + users[i];
+                        all += (i ? "\n" : "") + users[i];
+                    }
+                    if (users.size() > 4) cell += "  +" + std::to_string(users.size() - 4) + " more";
+                    if (!cell.empty()) {
+                        ImGui::TextDisabled("%s", cell.c_str());
+                        if (users.size() > 4 && ImGui::IsItemHovered())
+                            ImGui::SetTooltip("Used by %d units:\n%s", (int)users.size(), all.c_str());
+                    }
                 }
             }
             ImGui::EndTable();
@@ -10277,7 +10377,7 @@ const char* const kPackKeysRules[] = {
     nullptr};
 const char* const kPackKeysAi[] = {
     "ai_hero_rebuild", "ai_more_mines", "ai_cross_fire", "ai_bridges", "ai_shipyards", "ai_finish_upgrades",
-    "ai_keep_bridges", "ai_stuck_bridges", "ai_transports_on_request", "ai_cheats", "ai_cheats_only",
+    "ai_keep_bridges", "ai_stuck_bridges", "ai_transports_on_request", "ai_fewer_farms", "ai_cheats", "ai_cheats_only",
     "ai_tap_spells", nullptr};
 const char* const kPackKeysCaps[] = {"cap", "cheat", nullptr};
 const char* const kPackKeysBans[] = {
@@ -13084,6 +13184,16 @@ extern "C" int lb_setting_ai_stuck_bridges(void) {
     return forced >= 0 ? forced : (g_set.ai_stuck_bridges ? 1 : 0);
 }
 
+// SG-0146: LB_AI_FEWER_FARMS=0|1 forces it.
+extern "C" int lb_setting_ai_fewer_farms(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_AI_FEWER_FARMS");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.ai_fewer_farms ? 1 : 0);
+}
+
 // SG-0091 (docs/478): LB_AI_TRANSPORTS=0|1 forces it.
 extern "C" int lb_setting_ai_transports_on_request(void) {
     static int forced = -2;
@@ -14052,6 +14162,7 @@ extern "C" const char* lb_net_lobby_options_json(void) {
     kv.push_back({"Computer player", (lb_setting_cpu_online_packed() & 1) ? "On" : "Off"});   // SG-0115
     kv.push_back({"AI bridges any map", g_set.ai_bridges ? "On" : "Off"});               // SG-0071
     kv.push_back({"AI shipyards any map", g_set.ai_shipyards ? "On" : "Off"});           // SG-0078
+    kv.push_back({"AI fewer farms", g_set.ai_fewer_farms ? "On" : "Off"});               // SG-0146
     kv.push_back({"AI finishes tower upgrades", g_set.ai_finish_upgrades ? "On" : "Off"});  // BR-0070
     kv.push_back({"AI keeps its bridges", g_set.ai_keep_bridges ? "On" : "Off"});          // SG-0089
     kv.push_back({"AI bridges when stuck", g_set.ai_stuck_bridges ? "On" : "Off"});        // SG-0090

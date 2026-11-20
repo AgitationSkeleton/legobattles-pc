@@ -588,6 +588,56 @@ void arc_mark_installed() {
         m.installed = g_inst_hashes.count(m.hash) || g_inst_names.count(lower(m.name));
 }
 
+// SG-0134: the folders under mods/maps/_archive that hold this map (its .map
+// by hash, or a folder named as the map). Only the archive's own folder is
+// searched, so a map the player put in mods/ themselves is never removed.
+std::vector<fs::path> arc_installed_folders(const ArcMap& m) {
+    std::vector<fs::path> out;
+    std::error_code ec;
+    const fs::path arc = fs::u8path(lb_mods_dir()) / "maps" / "_archive";
+    if (!fs::is_directory(arc, ec)) return out;
+    for (auto it = fs::recursive_directory_iterator(arc, ec); it != fs::recursive_directory_iterator();
+         it.increment(ec)) {
+        if (ec) break;
+        if (!it->is_regular_file(ec) || lower(it->path().extension().string()) != ".map") continue;
+        const fs::path dir = it->path().parent_path();
+        bool match = lower(dir.filename().string()) == lower(m.name);
+        if (!match) {
+            std::string b;
+            if (FILE* f = std::fopen(it->path().string().c_str(), "rb")) {
+                std::fseek(f, 0, SEEK_END);
+                const long n = std::ftell(f);
+                std::fseek(f, 0, SEEK_SET);
+                if (n > 0 && n < (8L << 20)) {
+                    b.resize((size_t)n);
+                    if (std::fread(&b[0], 1, b.size(), f) != b.size()) b.clear();
+                }
+                std::fclose(f);
+            }
+            match = !b.empty() && fnv_bytes(b) == m.hash;
+        }
+        if (match && std::find(out.begin(), out.end(), dir) == out.end()) out.push_back(dir);
+    }
+    return out;
+}
+
+// Removes the map's archive folders; the message says what happened.
+void arc_uninstall(ArcMap& m) {
+    std::error_code ec;
+    int removed = 0;
+    for (const fs::path& d : arc_installed_folders(m))
+        if (fs::remove_all(d, ec) > 0 && !ec) ++removed;
+    arc_scan_installed();
+    arc_mark_installed();
+    if (removed) {
+        g_dl_new = true;   // the lists change on the next Load new maps
+        g_dl_msg = "Removed \"" + m.name + "\". Press Load new maps now to drop it from the lists.";
+    } else {
+        g_dl_msg = "\"" + m.name + "\" could not be removed" + (ec ? ": " + ec.message() : ".");
+    }
+    std::fprintf(stderr, "[lb_mapfetch] uninstalled \"%s\": %d folder(s)\n", m.name.c_str(), removed);
+}
+
 void arc_load(bool download) {
     std::vector<ArcMap> maps;
     std::string warn;
@@ -1095,11 +1145,30 @@ void arc_draw(SDL_Renderer* ren) {
     if (m.installed) {
         ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "Installed");
         ImGui::SameLine();
-        ImGui::TextDisabled("(in your mods/maps folder)");
-    } else if (ImGui::Button("Download")) {
-        arc_download(m);
+        // SG-0134: a map downloaded from here can be removed again. Whether
+        // it is in the archive's folder is looked up once per map shown.
+        static const ArcMap* looked = nullptr;
+        static size_t looked_gen = 0;
+        static bool in_archive = false;
+        if (looked != &m || looked_gen != g_inst_hashes.size()) {
+            looked = &m;
+            looked_gen = g_inst_hashes.size();
+            in_archive = !arc_installed_folders(m).empty();
+        }
+        if (in_archive) {
+            if (ImGui::Button("Uninstall")) {
+                arc_uninstall(m);
+                looked = nullptr;
+            }
+            ImGui::SetItemTooltip("Removes this map from mods/maps/_archive. Press Load new maps now\n"
+                                  "afterwards to drop it from the map lists.");
+        } else {
+            ImGui::TextDisabled("(in your own mods folder; remove it there)");
+        }
+    } else {
+        if (ImGui::Button("Download")) arc_download(m);
+        ImGui::SetItemTooltip("Installs this map into mods/maps/_archive.");
     }
-    ImGui::SetItemTooltip("Installs this map into mods/maps/_archive.");
     if (!g_dl_msg.empty()) ImGui::TextWrapped("%s", g_dl_msg.c_str());
     // docs/432: a Reset rebuilds the cartridge with the mods folder as it is now.
     if (g_dl_new && ImGui::Button("Load new maps now")) {

@@ -7250,15 +7250,17 @@ extern "C" int lb_setting_ai_finish_upgrades(void);
 extern "C" int lb_setting_ai_keep_bridges(void);
 extern "C" int lb_setting_ai_stuck_bridges(void);
 extern "C" int lb_setting_ai_transports_on_request(void);
+extern "C" int lb_setting_ai_fewer_farms(void);   // SG-0146: bit 4
 extern "C" int lb_demo_play_ai_extra(void);
 extern "C" int lb_ai_extra_live(void) {
     if (lb_net_guest_state() > 0) return 0;
     return (lb_setting_ai_finish_upgrades() ? 1 : 0) | (lb_setting_ai_keep_bridges() ? 2 : 0) |
-           (lb_setting_ai_stuck_bridges() ? 4 : 0) | (lb_setting_ai_transports_on_request() ? 8 : 0);
+           (lb_setting_ai_stuck_bridges() ? 4 : 0) | (lb_setting_ai_transports_on_request() ? 8 : 0) |
+           (lb_setting_ai_fewer_farms() ? 16 : 0);
 }
 static int ai_extra_mask(void) {
     const int played = lb_demo_play_ai_extra();
-    return played >= 0 ? (played & 15) : lb_ai_extra_live();
+    return played >= 0 ? (played & 31) : lb_ai_extra_live();
 }
 
 // BR-0069 (docs/472): THE AI TRAINS A LAND TRANSPORT AT THE SHIPYARD.
@@ -10703,6 +10705,38 @@ static uint32_t cast_handle_entity(uint32_t h) {
     return (e && check_in_ram(e) && bus_read_u8(e + 0xDDu) == gen) ? e : 0u;
 }
 
+// BR-0103 (with SG-0127's rule): THE HAMMER'S AIM. FUN_0207A274(out, spell)
+// gives the point the Thunder Hammer is thrown at. FireBall's twin
+// (FUN_02079324) first resolves the spell's target handle (spell +0x2C) and
+// aims at that unit's tile (entity +0x124, +4/+5); the hammer's only copies
+// the cast's ground point (spell +0x24, FUN_02076988). A cast at a unit sets
+// no ground point, so the hammer flew towards a stale one, clamped to the
+// map's bottom-right corner: "diagonally down and right". With the rule on, a
+// target that resolves to a unit has its tile copied into the ground point
+// first, so the hammer is thrown at it. Otherwise a pure tail call.
+extern "C" int lb_thunder_fix_live(void);   // below
+constexpr uint32_t kHammerAim = 0x0207A274u;   // arm
+void hammer_aim_override(void) {
+    void (*original)(void) = lb_dispatch_original(0, kHammerAim);
+    const uint32_t spell = g_cpu.R[1];
+    if (lb_thunder_fix_live() && check_in_ram(spell)) {
+        const uint32_t e = cast_handle_entity(spell + 0x2Cu);
+        if (e) {
+            const uint32_t tile = e + 0x124u;
+            bus_write_u8(spell + 0x24u + 4u, bus_read_u8(tile + 4u));
+            bus_write_u8(spell + 0x24u + 5u, bus_read_u8(tile + 5u));
+            static int said = 0;
+            if (said < 6) {
+                ++said;
+                std::fprintf(stderr, "[lb_spells] Thunder Hammer aimed at its unit's tile %u,%u (BR-0103)\n",
+                             (unsigned)bus_read_u8(tile + 4u), (unsigned)bus_read_u8(tile + 5u));
+                std::fflush(stderr);
+            }
+        }
+    }
+    if (original) original();
+}
+
 void cast_spell_override(void) {
     void (*original)(void) = lb_dispatch_original(0, kCastSpell);
     const uint32_t out = g_cpu.R[0], order = g_cpu.R[3];
@@ -10737,6 +10771,34 @@ void cast_spell_override(void) {
             bus_write_u8(out + 1u, bus_read_u8(nul + 1u));
             lb_override_return();
             return;
+        }
+    }
+    // BR-0107: the unit buffs (0x04 Unit Speed, 0x06 Unit Damage, 0x08 Unit
+    // Armour Boost) belong on the caster's own side. The stock AI never casts
+    // at a unit (its entity-cast arm was dead code); "AI Uses Targeted Spells"
+    // revives it, and the AI's target query for a spell's desire category 0
+    // (Unit Damage Boost's) is the enemy's strongest unit (FUN_02097AF4 case
+    // 0: FUN_02098324 side argument 1), so the computer buffed the player's
+    // hero. A unit buff aimed at another owner's unit is cast on the caster
+    // itself: the 5th argument (a pointer to the target handle) is pointed at
+    // the caster's handle. A human cannot aim these at an enemy (the game's
+    // own tap rules), so only the computer's casts change.
+    if (out && order && check_in_ram(g_cpu.R[2])) {
+        const uint8_t id = bus_read_u8(order);
+        if (id == 0x04u || id == 0x06u || id == 0x08u) {
+            const uint32_t caster = cast_handle_entity(g_cpu.R[2]);
+            const uint32_t victim = cast_handle_entity(bus_read_u32(g_cpu.R[13]));
+            if (caster && victim && bus_read_u8(victim + 0xE4u) != bus_read_u8(caster + 0xE4u)) {
+                static int said = 0;
+                if (said < 8) {
+                    ++said;
+                    std::fprintf(stderr, "[lb_aispell] unit buff 0x%02X by owner %u aimed at owner %u's "
+                                 "unit: cast on the caster (BR-0107)\n", (unsigned)id,
+                                 (unsigned)bus_read_u8(caster + 0xE4u), (unsigned)bus_read_u8(victim + 0xE4u));
+                    std::fflush(stderr);
+                }
+                bus_write_u32(g_cpu.R[13], g_cpu.R[2]);
+            }
         }
     }
     if ((lb_setting_patch_hotwire_glitch() || human) && out && order &&
@@ -13657,6 +13719,9 @@ const NdsDispatchEntry kOverrideTable[] = {
     {kEmpCollect, 0u, emp_collect_override, nullptr},      /* 0x020775F0 */
     {kHealTick, 0u, heal_tick_override, nullptr},          /* 0x02078770 */
     {kHotWireTick, 0u, hotwire_tick_override, nullptr},    /* 0x02078D5C */
+    /* ARM. BR-0103: with Fix Thunder Hammer, the hammer is aimed at its unit's
+       tile (the stock copy aims at an unset ground point). */
+    {kHammerAim, 0u, hammer_aim_override, nullptr},        /* 0x0207A274 */
     /* ARM. The cast validator's only caller: "Patch the glitch" refuses a
        hotwire on a non-transport, non-special the way a 0 from the validator
        does (docs/392). Otherwise a pure tail call. Not on func_0207B73C: the
@@ -21468,6 +21533,32 @@ static void apply_ai_shipyards(void) {
 // lumber-mill and barracks arms before it are the cartridge's. Free Play
 // only; demo kind 26 bit 1.
 constexpr HalfWordPatch kAiKeepBridges = {0x020948A6u, 0xD93Fu, 0xE03Fu};
+// SG-0146: THE AI'S FARMS. FUN_02094BDC (Thumb), the farm step of the AI's
+// planner, wants 1 free unit slot, or 2 once it holds more than 2575 bricks
+// (`movs r4,#2` at 0x02094BF6, under `cmp bricks, #0xA0F; bls`), and queues a
+// farm (category 10) when the room left (FUN_02085E78: 4 + 4 * finished farms
+// - units) is less. That room never reaches the 20-unit cap's ceiling, so a
+// rich computer at the cap keeps building farms that add nothing, and with
+// the AI's red-brick cheats (Full Unit Cap makes the room read 1) it builds
+// one on every planner pass. With the setting the rich want is 1, as the poor
+// one: one farm at a time, only when no slot is free. Free Play only; demo
+// kind 26 bit 4.
+constexpr HalfWordPatch kAiFewerFarms = {0x02094BF6u, 0x2402u, 0x2401u};
+static void apply_ai_fewer_farms(void) {
+    static int applied = 0;
+    static unsigned gen = 0;
+    if (gen != g_boot_gen) { gen = g_boot_gen; applied = 0; }
+    const int want = (ai_extra_mask() & 16) ? 1 : 0;
+    if (want == applied) return;
+    const HalfWordPatch& q = kAiFewerFarms;
+    const uint32_t got = bus_read_u16(q.addr);
+    if (got != q.stock && got != q.want) return;   // not loaded, or not this build
+    bus_write_u16(q.addr, want ? q.want : q.stock);
+    applied = want;
+    std::fprintf(stderr, "[lb_aifarms] the AI builds fewer farms: %s (%08X)\n", want ? "ON" : "off", q.addr);
+    std::fflush(stderr);
+}
+
 static void apply_ai_keep_bridges(void) {
     static int applied = 0;
     static unsigned gen = 0;
@@ -26078,6 +26169,7 @@ extern "C" void lb_patches_on_vblank(void) {
     apply_ai_hero_rebuild();
     apply_ai_shipyards();   /* SG-0078 */
     apply_ai_keep_bridges();          // SG-0089, docs/472
+    apply_ai_fewer_farms();           // SG-0146
     apply_ai_transports_on_request(); // SG-0091, docs/478
     ai_transport_log();               // docs/478 test aid, read only
     apply_ai_hero_unstick();          // BR-0040
