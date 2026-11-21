@@ -3,3 +3,11 @@
 // SDL_WINDOWS_INTRESOURCE_ICON hint at it, so every window and its taskbar
 // button use it too.
 1 ICON "lb_app.ico"
+// BR-0108: the manifest (lb_app.manifest). Besides what the toolchain's default
+// one says (run as the user; the Windows versions it knows), it makes UTF-8 the
+// process's code page (Windows 10 1903 and later): every narrow-string path (the
+// command line, the exe's own folder, fopen) is then UTF-8, so an install folder
+// with any characters in its name works; older Windows ignores it. DPI awareness
+// stays in code (lb_setup.cpp). Keep XML comments out of the manifest: Windows'
+// side-by-side parser refuses the whole file for a malformed one.
+1 24 "lb_app.manifest"

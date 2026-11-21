@@ -206,6 +206,42 @@ Report a bug
 """
 
 
+def imported_dlls(exe):
+    """The DLL names `exe` imports (lower case), from its PE import table; None
+    when the file cannot be read as a PE."""
+    import struct
+    try:
+        with open(exe, "rb") as fh:
+            data = fh.read()
+        pe = struct.unpack_from("<I", data, 0x3C)[0]
+        if data[pe:pe + 4] != b"PE\0\0":
+            return None
+        nsec = struct.unpack_from("<H", data, pe + 6)[0]
+        opt = pe + 24
+        magic = struct.unpack_from("<H", data, opt)[0]
+        dirs = opt + (112 if magic == 0x20B else 96)
+        imp_rva = struct.unpack_from("<I", data, dirs + 8)[0]
+        sec = opt + struct.unpack_from("<H", data, pe + 20)[0]
+        sections = [struct.unpack_from("<IIII", data, sec + 40 * i + 8) for i in range(nsec)]
+
+        def off(rva):
+            for vsize, va, rsize, raw in sections:
+                if va <= rva < va + max(vsize, rsize):
+                    return raw + rva - va
+            return None
+        names, at = set(), off(imp_rva)
+        while at is not None:
+            name_rva = struct.unpack_from("<I", data, at + 12)[0]
+            if not name_rva:
+                break
+            o = off(name_rva)
+            names.add(data[o:data.index(b"\0", o)].decode("ascii", "replace").lower())
+            at += 20
+        return names
+    except Exception:
+        return None
+
+
 def find_dll(name):
     for d in DLL_DIRS:
         p = os.path.join(d, name)
@@ -274,14 +310,26 @@ def main(argv=None):
         print("  NO master server in services/master-server/dist -- run "
               "services/master-server/build_exe.sh", file=sys.stderr)
 
+    # BR-0108: only the DLLs the exe really imports. The release exe links
+    # SDL2 and the GCC runtime statically, so it needs none -- and shipping
+    # unneeded ones only invites "copy these DLLs" troubleshooting. A build
+    # that does import one gets it as before; an unreadable exe gets them all.
+    wanted = imported_dlls(args.exe)
+    need = [d for d in DLLS if wanted is None or d.lower() in wanted]
     missing = []
     for dll in DLLS:
+        stale = os.path.join(args.dest, dll)
+        if dll not in need:
+            if os.path.exists(stale):
+                os.remove(stale)   # a deployment refreshed from a dynamic build
+            continue
         src = find_dll(dll)
         if src:
-            shutil.copy2(src, os.path.join(args.dest, dll))
+            shutil.copy2(src, stale)
         else:
             missing.append(dll)
-    print("  %d/%d runtime DLLs" % (len(DLLS) - len(missing), len(DLLS)))
+    print("  %d runtime DLL(s) needed by the exe%s" % (len(need), (": " + ", ".join(need)) if need else
+                                                        " (SDL2 and the GCC runtime are linked in)"))
     if missing:
         print("  MISSING: %s -- the exe will not start without these"
               % ", ".join(missing), file=sys.stderr)

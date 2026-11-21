@@ -7998,6 +7998,21 @@ def apply(runner_dir, imgui_dir):
           "    PROPERTIES COMPILE_DEFINITIONS BATTLES_ON_RECOMP)"])
     done.append("CMakeLists.txt: BATTLES_ON_RECOMP for the decompilation")
 
+    # BR-0108: NO DLLS BESIDE THE EXE. The GCC runtime is already static
+    # (build.sh); SDL2 was the last DLL the game needed, and a player whose
+    # SDL2.dll went missing (a half-finished in-place update, an antivirus, a
+    # partial copy) got "SDL2.dll was not found" with no way back but a fresh
+    # install. On Windows the game now links SDL2's static library (MSYS2
+    # ships libSDL2.a and the SDL2::SDL2-static target with its system libs).
+    replace(cmake,
+            "    target_link_libraries(nds_runner PRIVATE SDL2::SDL2)\n",
+            "    if(WIN32 AND TARGET SDL2::SDL2-static)\n"
+            "        target_link_libraries(nds_runner PRIVATE SDL2::SDL2-static)\n"
+            "    else()\n"
+            "        target_link_libraries(nds_runner PRIVATE SDL2::SDL2)\n"
+            "    endif()\n")
+    done.append("CMakeLists.txt: SDL2 linked statically on Windows (BR-0108)")
+
     # The native file picker in src/lb_filedlg.cpp needs comdlg32 for
     # GetOpenFileNameW / GetSaveFileNameW. Guarded by WIN32 so a Linux build is
     # unaffected -- lb_filedlg.cpp compiles to a stub returning 0 there and the

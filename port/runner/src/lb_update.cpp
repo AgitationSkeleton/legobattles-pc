@@ -13,6 +13,12 @@
 //     overwritten but can be renamed: every replaced file is first renamed to
 //     <name>.old, and the .old files are deleted at the next start
 //     (lb_update_cleanup);
+//   * BR-0108: ALL OR NOTHING. A file that cannot be written puts every file
+//     already replaced back from its .old, so a failed update leaves the
+//     install as it was. Paths are wide (an install folder with any
+//     characters in its name), and the start-up clean-up deletes a .old only
+//     when the file it was replaced by is there -- otherwise it puts the .old
+//     back, which also repairs an install a failed update broke before this;
 //   * only an installed release updates itself: a development build (any exe
 //     name but LegoBattles.exe, or no version.txt beside it) refuses.
 // Then "Restart now" starts the new exe with this one's command line and quits.
@@ -150,11 +156,35 @@ bool players_own(const std::string& rel) {
     return r == "settings.json" || r == "imgui.ini";
 }
 
+// BR-0108: by the wide path on Windows (fopen with p.string() went through the
+// ANSI code page, and failed or threw for a folder whose name it cannot hold).
 bool write_file(const fs::path& p, const std::string& data) {
-    FILE* f = std::fopen(p.string().c_str(), "wb");
+#ifdef _WIN32
+    FILE* f = _wfopen(p.c_str(), L"wb");
+#else
+    FILE* f = std::fopen(p.c_str(), "wb");
+#endif
     if (!f) return false;
     const bool ok = std::fwrite(data.data(), 1, data.size(), f) == data.size();
-    return std::fclose(f) == 0 && ok;
+    if (std::fclose(f) != 0 || !ok) return false;
+    std::error_code ec;
+    return fs::file_size(p, ec) == data.size() && !ec;
+}
+
+fs::path old_of(const fs::path& p) {
+    fs::path o = p;
+    o += ".old";
+    return o;
+}
+
+// Every file this update replaced, back from its .old (a failed update).
+void roll_back(const std::vector<fs::path>& replaced, const std::vector<fs::path>& created) {
+    std::error_code ec;
+    for (const fs::path& t : created) fs::remove(t, ec);
+    for (const fs::path& t : replaced) {
+        fs::remove(t, ec);
+        fs::rename(old_of(t), t, ec);
+    }
 }
 
 void run(std::string url, std::string version) {
@@ -206,27 +236,28 @@ void run(std::string url, std::string version) {
     zip.shrink_to_fit();
     std::error_code ec;
     int written = 0;
+    std::vector<fs::path> replaced, created;   // BR-0108: for a roll-back
+    auto fail = [&](const std::string& what) {
+        roll_back(replaced, created);
+        std::fprintf(stderr, "[lb_update] %s; the install was put back as it was\n", what.c_str());
+        std::fflush(stderr);
+        set(4, what + ". Nothing was changed: try again, or download the release from its page.");
+        g_busy = false;
+    };
     for (const auto& f : data) {
         const fs::path target = dir / fs::u8path(f.first);
         fs::create_directories(target.parent_path(), ec);
-        if (fs::exists(target, ec)) {
-            const fs::path old = target.string() + ".old";
+        const bool had = fs::exists(target, ec);
+        if (had) {
+            const fs::path old = old_of(target);
             fs::remove(old, ec);
+            ec.clear();
             fs::rename(target, old, ec);
-            if (ec) {
-                set(4, "Could not replace " + f.first + " (" + ec.message() +
-                           "). The update stopped part way: download it from the release "
-                           "page instead.");
-                g_busy = false;
-                return;
-            }
+            if (ec) return fail("Could not replace " + f.first + " (" + ec.message() + ")");
+            replaced.push_back(target);
         }
-        if (!write_file(target, f.second)) {
-            set(4, "Could not write " + f.first + ". The update stopped part way: download "
-                   "it from the release page instead.");
-            g_busy = false;
-            return;
-        }
+        if (!write_file(target, f.second)) return fail("Could not write " + f.first);
+        if (!had) created.push_back(target);
         ++written;
     }
     set(3, version + " is installed (" + std::to_string(written) +
@@ -301,7 +332,7 @@ extern "C" void lb_update_restart(void) {
 extern "C" void lb_update_cleanup(void) {
     if (!lb_update_supported()) return;
     std::error_code ec;
-    int n = 0;
+    int n = 0, back = 0;
     const fs::path dir = install_dir();
     for (auto it = fs::recursive_directory_iterator(dir, ec);
          it != fs::recursive_directory_iterator(); it.increment(ec)) {
@@ -313,12 +344,27 @@ extern "C" void lb_update_cleanup(void) {
             continue;
         }
         if (it->is_regular_file(ec) && p.extension() == ".old") {
+            // BR-0108: only when the file that replaced it is there; a .old
+            // without it is the only copy left (an update that stopped part
+            // way), so it goes back instead.
             std::error_code e2;
-            if (fs::remove(p, e2)) ++n;
+            fs::path cur = p;
+            cur.replace_extension();
+            if (fs::exists(cur, e2) && fs::file_size(cur, e2) > 0 && !e2) {
+                if (fs::remove(p, e2)) ++n;
+            } else {
+                e2.clear();
+                fs::rename(p, cur, e2);
+                if (!e2) ++back;
+            }
         }
     }
     if (n) {
         std::fprintf(stderr, "[lb_update] removed %d file(s) left by the last update\n", n);
+        std::fflush(stderr);
+    }
+    if (back) {
+        std::fprintf(stderr, "[lb_update] put back %d file(s) a failed update had left as .old\n", back);
         std::fflush(stderr);
     }
 }
