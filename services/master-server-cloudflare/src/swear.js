@@ -4,6 +4,7 @@
 // are in swear_words.js (tools/lb_swear_js.py); no word is in either file.
 
 import { ROOT_MIN, ROOT_MAX, ROOTS, WORDS } from './swear_words.js';
+import { hasSlur } from './slur.js';   // docs/502
 
 const MASK = (1n << 64n) - 1n;
 const SALT = 'lbziff1:';
@@ -65,6 +66,7 @@ function wholeWord(t) {
 export function hasSwear(name, test) {
   testWords = new Set(String(test || '').toLowerCase().split(',').filter(Boolean));
   const s = String(name == null ? '' : name);
+  if (hasSlur(s)) return true;   // docs/502: slurs, however disguised
   const norm = [...s].map(letter);
   let i = 0;
   while (i < norm.length) {

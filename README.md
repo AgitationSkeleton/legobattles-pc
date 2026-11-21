@@ -88,6 +88,21 @@ replays it exactly: attaching it usually makes a bug reproducible.
 The port has been played widely, online and offline. Reports from other
 hardware and networks are still the most useful thing a player can send.
 
+## Playing without a Discord account (self-hosting)
+
+The official lobby servers, the high-score tables and publishing maps or units
+need a Discord sign-in. Two ways to play online need no account:
+
+- **Direct IP play.** Everyone ticks Network > Multiplayer > *Direct IP play
+  (no master server)*. The host opens the game's Host screen and shares its
+  public address and the UDP port the panel shows; that port must reach the
+  host (UPnP, or forward it on the router). Each joiner enters
+  `address:port`, presses Connect, then joins from the game's Join screen.
+- **Your own master server.** Run `services/master-server` on any machine
+  players can reach (`python master_server.py --port 28555`; Python 3, nothing
+  to install). Each player picks Custom under Master server and enters its
+  address. See [its README](services/master-server/README.md).
+
 ## What is in this repository
 
 | path | what |

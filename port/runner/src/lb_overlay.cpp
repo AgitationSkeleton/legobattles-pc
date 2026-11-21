@@ -612,6 +612,10 @@ bool card_tint = false;
     bool auto_browse = true;
     // docs/405: ask the router to forward the port (UPnP) when hosting.
     bool upnp = true;
+    // docs/501: Direct IP play (no master server, no account), and the last
+    // address typed for it.
+    bool direct_play = false;
+    char direct_peer[128] = "";
     // DELIBERATELY NOT PERSISTED, and this is the only field of this struct
     // that is not. Saying so here so a future sweep does not read the gap as
     // an oversight and "fix" it.
@@ -1066,6 +1070,9 @@ static std::string settings_text() {
                   g_set.auto_browse ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"upnp\": %s,\n",
                   g_set.upnp ? "true" : "false"); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"direct_play\": %s,\n",
+                  g_set.direct_play ? "true" : "false"); o += buf;   // docs/501
+    json_put_str(o, "direct_peer", g_set.direct_peer, true);
     json_put_str(o, "master_host", g_set.master_host, true);
     json_put_str(o, "unit_author", g_set.unit_author, true);   // SG-0118
     std::snprintf(buf, sizeof buf, "  \"master_both\": %s,\n",
@@ -1425,6 +1432,8 @@ extern "C" void lb_settings_load(void) {
     json_get_bool(s, "auto_advertise", &g_set.auto_advertise);
     json_get_bool(s, "auto_browse", &g_set.auto_browse);
     json_get_bool(s, "upnp", &g_set.upnp);   // docs/405, default on
+    json_get_bool(s, "direct_play", &g_set.direct_play);   // docs/501
+    json_get_str(s, "direct_peer", g_set.direct_peer, sizeof g_set.direct_peer);
 
     // Clamp anything a hand-edited file could put out of range.
     if (g_ui_scale < 0.75f || g_ui_scale > 3.0f) g_ui_scale = 1.0f;
@@ -3967,8 +3976,10 @@ void tab_input() {
     tab_end();
 }
 
+void account_status_line();   // docs/501, below
 void tab_multiplayer() {
     if (!tab_begin("Multiplayer")) return;
+    account_status_line();
     guide("Pick a server and how you connect. One player hosts; the others join from "
           "the game's menu. Match the host's Both servers and fast link settings. "
           "The relay kicks in if a direct link fails.");
@@ -4275,6 +4286,26 @@ void tab_multiplayer() {
     badge(WIRED);
     ImGui::TextDisabled("  then join from the game's own Multiplayer > Join "
                         "screen");
+    // docs/501: Direct IP play -- no master server, no account.
+    ImGui::Spacing();
+    ImGui::Checkbox("Direct IP play (no master server)", &g_set.direct_play);
+    help("Play by address, without the master servers or a Discord account.\n"
+         "The host opens the game's Host screen and gives the others their\n"
+         "public address and the UDP port shown below; that port must reach\n"
+         "the host (UPnP, or forward it on the router). Joiners connect here,\n"
+         "then join from the game's Multiplayer > Join screen. No lobby list,\n"
+         "relay, scores or uploads.");
+    badge(WIRED);
+    if (g_set.direct_play) {
+        ImGui::SetNextItemWidth(220.0f * g_ui_scale);
+        ImGui::InputTextWithHint("##directpeer", "address:port", g_set.direct_peer,
+                                 IM_ARRAYSIZE(g_set.direct_peer));
+        ImGui::SameLine();
+        if (ImGui::Button("Connect")) lb_net_direct_join(g_set.direct_peer);
+        char ds[256];
+        if (lb_net_direct_status(ds, (int)sizeof ds) > 0) ImGui::TextWrapped("%s", ds);
+        ImGui::TextDisabled("Hosting: open the game's Host screen; this machine listens while it is open.");
+    }
     ImGui::Spacing();
     {
         const unsigned short wp = lb_net_wireless_port();
@@ -10071,6 +10102,482 @@ ImVec4 sc_preset_colour(const std::string& p) {
     return ImVec4(r, g, b, 1.0f);
 }
 
+// ---------------------------------------------------------------- docs/501 --
+// THE DISCORD ACCOUNT. Online play through the official servers, and
+// publishing maps, units and scores, need a Discord sign-in. The account
+// token lives in auth.json beside settings.json -- never in settings.json,
+// which players copy around as presets -- and lb_net.cpp sends it to the main
+// server only, over HTTPS (everything else gets a short play token). Signing
+// in is a browser hand-off that comes back to this machine (RFC 8252): the
+// game listens on 127.0.0.1, opens https://<main server>/auth/start?state=
+// <random>&port=<that port>, the player approves on Discord, the browser is
+// sent to the listener with a one-time ticket, and the token is collected with
+// it over HTTPS.
+extern "C" void lb_setting_master(char* host, int cap, int* port);   /* below */
+constexpr const char* kAuthHost = "lbserver.viosarcade.xyz";
+constexpr int kAuthPort = 80;
+struct Acct { std::string token, name, id; long long exp = 0; };
+std::mutex g_acct_mu;
+Acct g_acct;                         // under g_acct_mu
+std::string g_acct_note;             // under g_acct_mu: the sign-in's last word
+std::atomic<int> g_acct_flow{0};     // 1 while waiting for the browser
+std::atomic<bool> g_acct_cancel{false};
+
+// The token's expiry (its payload's "exp", seconds), 0 when unreadable.
+long long acct_token_exp(const std::string& t) {
+    const size_t a = t.find('.');
+    const size_t b = a == std::string::npos ? std::string::npos : t.find('.', a + 1);
+    if (b == std::string::npos) return 0;
+    std::string out;
+    int val = 0, bits = -8;
+    for (size_t i = a + 1; i < b; ++i) {
+        const char c = t[i];
+        const int d = c >= 'A' && c <= 'Z' ? c - 'A' : c >= 'a' && c <= 'z' ? c - 'a' + 26
+                    : c >= '0' && c <= '9' ? c - '0' + 52 : c == '-' ? 62 : c == '_' ? 63 : -1;
+        if (d < 0) break;
+        val = (val << 6) | d;
+        bits += 6;
+        if (bits >= 0) { out += (char)((val >> bits) & 0xFF); bits -= 8; }
+    }
+    const size_t k = out.find("\"exp\":");
+    return k == std::string::npos ? 0 : std::strtoll(out.c_str() + k + 6, nullptr, 10);
+}
+
+bool acct_expired(const Acct& a) {
+    return !a.token.empty() && a.exp > 0 && (long long)std::time(nullptr) >= a.exp;
+}
+
+void acct_store(const Acct& a) {
+    {
+        std::lock_guard<std::mutex> lk(g_acct_mu);
+        g_acct = a;
+    }
+    lb_net_set_auth(a.token.c_str());
+    const std::string path = settings_path("auth.json");
+    if (a.token.empty()) { std::remove(path.c_str()); return; }
+    std::string o = "{\n";
+    json_put_str(o, "token", a.token.c_str(), true);
+    json_put_str(o, "name", a.name.c_str(), true);
+    json_put_str(o, "id", a.id.c_str(), false);
+    o += "}\n";
+    if (FILE* f = std::fopen(path.c_str(), "wb")) {
+        std::fwrite(o.data(), 1, o.size(), f);
+        std::fclose(f);
+    }
+}
+
+void acct_load_once() {
+    static bool done = false;
+    if (done) return;
+    done = true;
+    FILE* f = std::fopen(settings_path("auth.json").c_str(), "rb");
+    if (!f) return;
+    std::string s;
+    char chunk[1024];
+    size_t n;
+    while ((n = std::fread(chunk, 1, sizeof chunk, f)) > 0 && s.size() < 65536) s.append(chunk, n);
+    std::fclose(f);
+    static char tok[2100], name[128], id[32];
+    tok[0] = name[0] = id[0] = 0;
+    json_get_str(s, "token", tok, sizeof tok);
+    json_get_str(s, "name", name, sizeof name);
+    json_get_str(s, "id", id, sizeof id);
+    Acct a;
+    a.token = tok;
+    a.name = name;
+    a.id = id;
+    a.exp = acct_token_exp(a.token);
+    {
+        std::lock_guard<std::mutex> lk(g_acct_mu);
+        g_acct = a;
+    }
+    lb_net_set_auth(a.token.c_str());
+}
+
+void acct_flow_run(std::string state, long long sock) {
+    const unsigned long long t0 = SDL_GetTicks64();
+    std::string note = "Sign-in timed out. Try again.";
+    char ticket[64] = "";
+    int got = 0;
+    while (!g_acct_cancel.load() && SDL_GetTicks64() - t0 < 10ull * 60 * 1000) {
+        got = lb_net_signin_wait(sock, state.c_str(), 500, ticket, (int)sizeof ticket);
+        if (got != 0) break;
+    }
+    lb_net_signin_close(sock);
+    if (got == 1) {
+        std::vector<char> buf(8192);
+        const int n = lb_net_signin_finish(state.c_str(), ticket, buf.data(), (int)buf.size());
+        const std::string r = n >= 0 ? std::string(buf.data(), (size_t)n) : std::string();
+        const std::string tok = upd_json_str(r, "token");
+        if (!tok.empty()) {
+            Acct a;
+            a.token = tok;
+            a.name = upd_json_str(r, "name");
+            a.id = upd_json_str(r, "id");
+            a.exp = acct_token_exp(tok);
+            acct_store(a);
+            lb_net_auth_problem_clear();
+            note = "Signed in as " + (a.name.empty() ? std::string("?") : a.name) + ".";
+            std::fprintf(stderr, "[lb_auth] signed in\n");
+        } else {
+            note = n < 0 ? "The sign-in server could not be reached securely (HTTPS). Try again."
+                         : "The sign-in was not completed. Try again.";
+        }
+    } else if (got < 0) {
+        note = "The sign-in failed on this machine. Try again.";
+    }
+    if (g_acct_cancel.load()) note = "Sign-in cancelled.";
+    {
+        std::lock_guard<std::mutex> lk(g_acct_mu);
+        g_acct_note = note;
+    }
+    g_acct_flow = 0;
+}
+
+void acct_begin() {
+    if (g_acct_flow.exchange(1)) return;
+    g_acct_cancel = false;
+    int port = 0;
+    const long long sock = lb_net_signin_listen(&port);
+    if (sock < 0) {
+        std::lock_guard<std::mutex> lk(g_acct_mu);
+        g_acct_note = "The sign-in could not start on this machine (no local port).";
+        g_acct_flow = 0;
+        return;
+    }
+    std::random_device rd;   // MinGW-w64 UCRT: rand_s, the OS's generator
+    static const char* hex = "0123456789abcdef";
+    std::string state;
+    for (int i = 0; i < 32; ++i) state += hex[rd() & 15u];
+    {
+        std::lock_guard<std::mutex> lk(g_acct_mu);
+        g_acct_note = "Finish signing in in your browser. Waiting...";
+    }
+    // Test aid: LB_AUTH_TEST_HOST (lb_net.cpp) is the main server for a test.
+    const char* test = std::getenv("LB_AUTH_TEST_HOST");
+    const std::string base = test && *test ? std::string("http://") + test : std::string("https://") + kAuthHost;
+    const std::string url = base + "/auth/start?state=" + state + "&port=" + std::to_string(port);
+    if (test && *test) {
+        // A test plays the browser: the address goes to the log, no browser opens.
+        std::fprintf(stderr, "[lb_auth] test: sign in at %s\n", url.c_str());
+        std::fflush(stderr);
+    } else if (SDL_OpenURL(url.c_str()) != 0) {
+        std::lock_guard<std::mutex> lk(g_acct_mu);
+        g_acct_note = "Could not open a browser. Open this address yourself: " + url;
+    }
+    std::thread(acct_flow_run, state, sock).detach();
+}
+
+// The refusal banner: the official servers' last "sign in" / "update".
+void auth_problem_banner() {
+    char pb[600];
+    if (lb_net_auth_problem(pb, (int)sizeof pb) <= 0) return;
+    ImGui::PushTextWrapPos(0.0f);
+    ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.4f, 1.0f), "%s", pb);
+    ImGui::PopTextWrapPos();
+    if (ImGui::SmallButton("OK##authproblem")) lb_net_auth_problem_clear();
+}
+
+// Multiplayer's first line: who is signed in, or how to.
+void account_status_line() {
+    Acct a;
+    {
+        std::lock_guard<std::mutex> lk(g_acct_mu);
+        a = g_acct;
+    }
+    const ImVec4 amber(1.0f, 0.8f, 0.35f, 1.0f);
+    if (lb_name_has_slur(mp_player_name()))
+        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.4f, 1.0f),
+                           "Your profile name is not allowed online. Change it in the game's options.");
+    if (g_set.direct_play) {
+        ImGui::TextDisabled("Direct IP play: no master server, no account needed.");
+    } else if (a.token.empty() || acct_expired(a)) {
+        ImGui::TextColored(amber, a.token.empty()
+                                      ? "Online play through the official servers needs a Discord sign-in."
+                                      : "Your Discord sign-in has expired.");
+        ImGui::SameLine();
+        ImGui::BeginDisabled(g_acct_flow.load() != 0);
+        if (ImGui::SmallButton("Sign in with Discord")) acct_begin();
+        ImGui::EndDisabled();
+    } else {
+        ImGui::TextDisabled("Signed in with Discord as %s (Network > Account)", a.name.c_str());
+    }
+    auth_problem_banner();
+}
+
+// My uploads: the maps and units this account published, on the configured
+// master server (where uploads go).
+struct MyUp {
+    bool unit = false;
+    int id = 0;
+    std::string name, author, status;
+    bool hidden = false;
+    int downloads = 0, likes = 0;
+};
+std::mutex g_mine_mu;
+std::vector<MyUp> g_mine;          // under g_mine_mu
+std::string g_mine_note;           // under g_mine_mu
+bool g_mine_loaded = false;        // under g_mine_mu
+std::atomic<bool> g_mine_busy{false};
+
+// The flat objects of a JSON array "key": [ {...}, ... ].
+std::vector<std::string> json_objects(const std::string& r, const char* key) {
+    std::vector<std::string> v;
+    const size_t k = r.find(std::string("\"") + key + "\":[");
+    if (k == std::string::npos) return v;
+    int depth = 0;
+    size_t start = 0;
+    bool str = false;
+    for (size_t i = r.find('[', k) + 1; i < r.size(); ++i) {
+        const char c = r[i];
+        if (str) {
+            if (c == '\\') ++i;
+            else if (c == '"') str = false;
+            continue;
+        }
+        if (c == '"') str = true;
+        else if (c == '{') { if (depth++ == 0) start = i; }
+        else if (c == '}') { if (--depth == 0) v.push_back(r.substr(start, i - start + 1)); }
+        else if (c == ']' && depth == 0) break;
+    }
+    return v;
+}
+
+std::string json_quote(const std::string& v) {
+    std::string o = "\"";
+    for (unsigned char c : v) {
+        if (c == '"' || c == '\\') { o += '\\'; o += (char)c; }
+        else if (c < 0x20) o += ' ';
+        else o += (char)c;
+    }
+    return o + "\"";
+}
+
+void mine_run(std::string path, std::string body) {
+    char host[128];
+    int port = 80;
+    lb_setting_master(host, sizeof host, &port);
+    std::string note;
+    if (!path.empty()) {
+        std::vector<char> buf(16384);
+        const int n = lb_net_http_post(host, port, path.c_str(), body.c_str(), buf.data(), (int)buf.size());
+        const std::string r = n >= 0 ? std::string(buf.data(), (size_t)n) : std::string();
+        if (n < 0) note = std::string("Could not reach the master server (") + buf.data() + ").";
+        else if (r.find("\"ok\":true") == std::string::npos) {
+            note = upd_json_str(r, "error");
+            if (note.empty()) note = "The server refused that.";
+        }
+    }
+    std::vector<char> buf(1u << 20);
+    const int n = lb_net_http_post(host, port, "/levels/mine", "{}", buf.data(), (int)buf.size());
+    std::vector<MyUp> list;
+    bool ok = false;
+    if (n >= 0) {
+        const std::string r(buf.data(), (size_t)n);
+        if (r.find("\"ok\":true") != std::string::npos) {
+            ok = true;
+            for (int u = 0; u < 2; ++u)
+                for (const std::string& o : json_objects(r, u ? "units" : "levels")) {
+                    MyUp m;
+                    m.unit = u == 1;
+                    m.id = sc_num(o, "id");
+                    m.name = upd_json_str(o, "name");
+                    m.author = upd_json_str(o, "author");
+                    m.status = upd_json_str(o, "status");
+                    m.hidden = sc_num(o, "hidden") != 0;
+                    m.downloads = sc_num(o, "downloads");
+                    m.likes = sc_num(o, "likes");
+                    list.push_back(m);
+                }
+        } else if (note.empty()) {
+            note = upd_json_str(r, "error");
+            if (note.empty() || note == "no such endpoint")
+                note = "This master server keeps no uploads (pick lbserver.viosarcade.xyz).";
+        }
+    } else if (note.empty()) {
+        note = std::string("Could not reach the master server (") + buf.data() + ").";
+    }
+    std::lock_guard<std::mutex> lk(g_mine_mu);
+    if (ok) { g_mine = list; g_mine_loaded = true; }
+    g_mine_note = note;
+    g_mine_busy = false;
+}
+
+void mine_go(const std::string& path, const std::string& body) {
+    if (g_mine_busy.exchange(true)) return;
+    std::thread(mine_run, path, body).detach();
+}
+
+const char* mine_status_text(const MyUp& m) {
+    if (m.status == "pending") return "Waiting for a moderator";
+    if (m.status == "rejected") return "Rejected";
+    if (m.status == "banned") return "Taken down";
+    if (m.hidden) return "Hidden";
+    if (m.status == "approved") return "Published";
+    return m.status.c_str();
+}
+
+void my_uploads_ui(bool signed_in) {
+    ImGui::SeparatorText("My uploads");
+    if (!signed_in) {
+        ImGui::TextDisabled("Sign in to see and manage the maps and units you publish.");
+        return;
+    }
+    static bool asked = false;
+    if (!asked) { asked = true; mine_go("", ""); }
+    ImGui::BeginDisabled(g_mine_busy.load());
+    if (ImGui::Button("Refresh##mine")) mine_go("", "");
+    ImGui::EndDisabled();
+    help("Maps (Maps > Level Editor) and units (Balance > Unit Lab) you published\n"
+         "with this account. Hide takes one off the lists without deleting it.\n"
+         "Uploads from before Discord sign-in are legacy uploads: they stay\n"
+         "downloadable and belong to no account.");
+    if (g_mine_busy.load()) { ImGui::SameLine(); ImGui::TextDisabled("Asking..."); }
+    std::vector<MyUp> list;
+    std::string note;
+    bool loaded;
+    {
+        std::lock_guard<std::mutex> lk(g_mine_mu);
+        list = g_mine;
+        note = g_mine_note;
+        loaded = g_mine_loaded;
+    }
+    if (!note.empty()) ImGui::TextColored(ImVec4(1.0f, 0.55f, 0.4f, 1.0f), "%s", note.c_str());
+    if (loaded && list.empty()) ImGui::TextDisabled("Nothing published with this account yet.");
+    if (list.empty()) return;
+    static int rename_at = -1;
+    static char rename_buf[64] = "";
+    static int delete_at = -1;
+    if (ImGui::BeginTable("##mine", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("Kind");
+        ImGui::TableSetupColumn("Name");
+        ImGui::TableSetupColumn("State");
+        ImGui::TableSetupColumn("Downloads / likes");
+        ImGui::TableSetupColumn("");
+        ImGui::TableHeadersRow();
+        for (int i = 0; i < (int)list.size(); ++i) {
+            const MyUp& m = list[(size_t)i];
+            const std::string kind = m.unit ? "/units/" : "/levels/";
+            const std::string idj = "\"id\":" + std::to_string(m.id);
+            ImGui::PushID(i);
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn(); ImGui::TextUnformatted(m.unit ? "Unit" : "Map");
+            ImGui::TableNextColumn(); ImGui::TextUnformatted(m.name.c_str());
+            ImGui::TableNextColumn(); ImGui::TextUnformatted(mine_status_text(m));
+            ImGui::TableNextColumn(); ImGui::Text("%d / %d", m.downloads, m.likes);
+            ImGui::TableNextColumn();
+            ImGui::BeginDisabled(g_mine_busy.load());
+            if (m.status != "banned") {
+                if (ImGui::SmallButton(m.hidden ? "Show" : "Hide"))
+                    mine_go(kind + "hide", "{" + idj + ",\"hidden\":" + (m.hidden ? "false" : "true") + "}");
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Rename")) {
+                    rename_at = i;
+                    std::snprintf(rename_buf, sizeof rename_buf, "%s", m.name.c_str());
+                    ImGui::OpenPopup("Rename upload");
+                }
+                ImGui::SameLine();
+            }
+            if (ImGui::SmallButton("Delete")) { delete_at = i; ImGui::OpenPopup("Delete upload"); }
+            ImGui::EndDisabled();
+            if (ImGui::BeginPopupModal("Rename upload", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+                ImGui::InputText("Name", rename_buf, sizeof rename_buf);
+                if (ImGui::Button("Save") && rename_at >= 0 && rename_at < (int)list.size()) {
+                    const MyUp& r = list[(size_t)rename_at];
+                    mine_go(std::string(r.unit ? "/units/" : "/levels/") + "edit",
+                            "{\"id\":" + std::to_string(r.id) + ",\"name\":" + json_quote(rename_buf) + "}");
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+            }
+            if (ImGui::BeginPopupModal("Delete upload", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+                ImGui::TextUnformatted("Delete this upload from the server? This can't be undone.");
+                ImGui::TextDisabled("Hide keeps it, off the lists, instead.");
+                if (ImGui::Button("Delete") && delete_at >= 0 && delete_at < (int)list.size()) {
+                    const MyUp& r = list[(size_t)delete_at];
+                    mine_go(std::string(r.unit ? "/units/" : "/levels/") + "delete",
+                            "{\"id\":" + std::to_string(r.id) + "}");
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("Cancel")) ImGui::CloseCurrentPopup();
+                ImGui::EndPopup();
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+}
+
+// Scores: hide / show this account's rows (Network > Scores).
+std::mutex g_sch_mu;
+std::string g_sch_note;            // under g_sch_mu
+std::atomic<bool> g_sch_busy{false};
+void sc_hide_run(bool hide) {
+    std::vector<char> buf(8192);
+    const int n = lb_net_http_post(g_set.master_host, g_set.master_port, "/scores/hide",
+                                   hide ? "{\"hidden\":true}" : "{\"hidden\":false}", buf.data(),
+                                   (int)buf.size());
+    const std::string r = n >= 0 ? std::string(buf.data(), (size_t)n) : std::string();
+    std::string note;
+    if (n < 0) note = std::string("Could not reach the master server (") + buf.data() + ").";
+    else if (r.find("\"ok\":true") != std::string::npos)
+        note = hide ? "Your results are hidden." : "Your results are shown.";
+    else {
+        note = upd_json_str(r, "error");
+        if (note.empty() || note == "no such endpoint") note = "This master server keeps no score tables.";
+    }
+    std::lock_guard<std::mutex> lk(g_sch_mu);
+    g_sch_note = note;
+    g_sch_busy = false;
+}
+void sc_hide_go(bool hide) {
+    if (g_sch_busy.exchange(true)) return;
+    std::thread(sc_hide_run, hide).detach();
+}
+
+void tab_account() {
+    if (!tab_begin("Account")) return;
+    guide("Online play through the official servers, and publishing maps, units and scores, "
+          "need a Discord sign-in. Direct IP play and self-hosted servers don't.");
+    Acct a;
+    std::string note;
+    {
+        std::lock_guard<std::mutex> lk(g_acct_mu);
+        a = g_acct;
+        note = g_acct_note;
+    }
+    const bool flow = g_acct_flow.load() != 0;
+    if (!a.token.empty()) {
+        ImGui::Text("Signed in with Discord as %s", a.name.empty() ? "?" : a.name.c_str());
+        if (acct_expired(a))
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.35f, 1.0f), "This sign-in has expired: sign in again.");
+        if (ImGui::Button("Sign out")) {
+            lb_net_signout(a.token.c_str());   // voids this account's tokens on the server too
+            acct_store(Acct());
+            std::lock_guard<std::mutex> lk(g_acct_mu);
+            g_acct_note = "Signed out.";
+        }
+        ImGui::SameLine();
+    }
+    if (flow) {
+        if (ImGui::Button("Cancel sign-in")) g_acct_cancel = true;
+    } else if (ImGui::Button(a.token.empty() ? "Sign in with Discord" : "Sign in again")) {
+        acct_begin();
+    }
+    help("Opens Discord in your browser. Approve LEGO Battles PC there; the\n"
+         "browser comes back to the game on this computer, which finishes on its\n"
+         "own. The game only learns your Discord name and id. A sign-in lasts 30\n"
+         "days; Sign out ends it everywhere.");
+    if (!note.empty()) ImGui::TextWrapped("%s", note.c_str());
+    auth_problem_banner();
+    ImGui::Spacing();
+    my_uploads_ui(!a.token.empty() && !acct_expired(a));
+    tab_end();
+}
+
 void tab_scores() {
     if (!tab_begin("Scores")) return;
     guide("Top online players, with one table per balance preset, with or without unit "
@@ -10079,8 +10586,8 @@ void tab_scores() {
     help("Stops your future matches being counted. Past results stay.");
     ImGui::SameLine();
     if (ImGui::Button("Remove me from the scores table")) ImGui::OpenPopup("Remove my results");
-    ImGui::SetItemTooltip("Deletes your results from the master server(s). Results from\n"
-                          "older versions can only be removed by the server's operator.");
+    ImGui::SetItemTooltip("Deletes your Discord account's results from the master server(s).\n"
+                          "Legacy results (from before Discord sign-in) belong to no account.");
     if (ImGui::BeginPopupModal("Remove my results", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::TextUnformatted("Remove every result you have in the online score tables?");
         ImGui::TextDisabled("This can't be undone. To keep future matches out too, tick\n"
@@ -10121,6 +10628,23 @@ void tab_scores() {
             }
         }
         if (f.state == 3) ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.4f, 1.0f), "%s", f.error.c_str());
+    }
+    // docs/501: hide or show this account's rows on the tables (nothing deleted).
+    {
+        ImGui::BeginDisabled(g_sch_busy.load());
+        if (ImGui::Button("Hide my results")) sc_hide_go(true);
+        ImGui::SameLine();
+        if (ImGui::Button("Show my results")) sc_hide_go(false);
+        ImGui::EndDisabled();
+        help("Hides every result of your Discord account from the online tables,\n"
+             "or shows them again. Nothing is deleted. Needs a Discord sign-in\n"
+             "(Network > Account).");
+        std::string note;
+        {
+            std::lock_guard<std::mutex> lk(g_sch_mu);
+            note = g_sch_note;
+        }
+        if (!note.empty()) { ImGui::SameLine(); ImGui::TextDisabled("%s", note.c_str()); }
     }
     ImGui::Spacing();
 
@@ -11156,7 +11680,8 @@ const std::vector<MenuHeader>& menu_headers() {
         {"Cheats", {{"Cheats", "Cheats", tab_cheats},
                     {"Action Replay", "Action Replay", tab_action_replay}}},
         {"Network", {{"Multiplayer", "Multiplayer", tab_multiplayer},
-                     {"Scores", "Scores", tab_scores}}},
+                     {"Scores", "Scores", tab_scores},
+                     {"Account", "Account", tab_account}}},
         {"Maps", {{"Map archive", "Maps", tab_map_archive},
                   {"Community levels", "Community levels", tab_community_levels},
                   {"Level Editor", "Level Editor", tab_level_editor},
@@ -11772,8 +12297,20 @@ extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
     // master server. Every frame, whatever panel is open, for the same reason
     // as the heartbeat above; it returns at once unless the game's network
     // state calls for something.
+    // docs/501: Direct IP play leaves the master server out: no advertising,
+    // no lobby list; the game's lobby listens on its own while it is open.
+    acct_load_once();
+    // Test aid: LB_SIGNIN_TEST=1 (with LB_AUTH_TEST_HOST) starts a sign-in at once.
+    {
+        static bool asked = std::getenv("LB_SIGNIN_TEST") != nullptr;
+        if (asked) { asked = false; acct_begin(); }
+    }
+    // docs/502: a profile name with a slur goes nowhere online.
+    const bool name_ok = !lb_name_has_slur(mp_player_name());
+    lb_net_direct_tick(g_set.direct_play && name_ok ? 1 : 0);
     lb_net_auto_tick(g_set.master_host, g_set.master_port, mp_player_name(),
-                     g_set.auto_advertise ? 1 : 0, g_set.auto_browse ? 1 : 0,
+                     g_set.auto_advertise && !g_set.direct_play && name_ok ? 1 : 0,
+                     g_set.auto_browse && !g_set.direct_play && name_ok ? 1 : 0,
                      (long long)SDL_GetTicks64());
 
     // Rescale the whole style when asked. ImGui sizes everything in pixels, so

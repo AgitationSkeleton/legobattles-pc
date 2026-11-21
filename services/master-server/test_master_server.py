@@ -196,6 +196,7 @@ def main():
     store.close()
 
     issue2(tmp)
+    signin(tmp)
 
     print("\n%d passed, %d failed" % (len(PASS), len(FAIL)))
     if FAIL:
@@ -238,6 +239,7 @@ def issue2(tmp):
     print("\n-- issue #2 --")
     # Short limits so the test is quick: the same code paths as the defaults.
     master_server.Handler.timeout = 2
+    master_server.Handler.read_timeout = 2
     master_server.CONN_DEADLINE = 4
     sent = []
     disc = master_server.Discord([], master_server.Log(None, echo=False))
@@ -378,6 +380,239 @@ def issue2(tmp):
     disc("after the flood", source="192.0.2.1")
     check("the next line says how many were held back", "held back" in sent[-1], sent[-1][-60:])
 
+    srv.shutdown()
+    srv.server_close()
+    store.close()
+
+
+def mk(tag, sub, aud="play", exp_in=3600):
+    """A token shaped like the Worker's (v1.<payload>.<86-char signature>). The
+    fake Worker below trusts the payload's "tag": "good" is good."""
+    import base64
+    payload = {"sub": sub, "uid": "LB-TEST0001", "name": "Tester", "aud": aud, "tag": tag,
+               "iat": int(time.time()), "exp": int(time.time()) + exp_in}
+    b = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+    return "v1." + b + "." + "S" * 86
+
+
+GOOD = mk("good", "1000a1b")
+GOOD2 = mk("good", "1000d4e")
+BAD = mk("bad", "1000zzz")
+BANS = []   # the fake Worker's banned accounts
+
+
+def fake_auth():
+    """A stand-in for the Worker's POST /auth/verify (a payload tagged "good"
+    is good; anything else is refused with a 401 {ok:false}) and GET /auth/bans."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    calls = []
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            data = json.dumps({"ok": True, "banned": list(BANS)}).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length") or 0)
+            token = json.loads(self.rfile.read(n).decode("utf-8")).get("token", "")
+            calls.append(token)
+            c = master_server.token_claims(token) or {}
+            if self.path == "/auth/verify" and c.get("tag") == "good":
+                code, out = 200, {"ok": True, "sub": c["sub"], "uid": "LB-TEST0001",
+                                  "name": "Tester", "aud": c.get("aud")}
+            else:
+                code, out = 401, {"ok": False, "error": "bad token"}
+            data = json.dumps(out).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), H)
+    srv.daemon_threads = True
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, calls
+
+
+def signin(tmp):
+    """docs/501: --require-signin and --min-version."""
+    print("\n-- docs/501: sign-in and the version gate --")
+    master_server.Handler.timeout = 5
+    vk = master_server.version_older
+    check("versions compare per dotted part, numerically",
+          vk("0.9.9", "0.10.0") and not vk("0.10.0", "0.9.9") and not vk("0.10", "0.10.0"))
+    check("a suffix sorts below the plain release",
+          vk("0.5.0-beta", "0.5.0") and not vk("0.5.0", "0.5.0-beta") and not vk("0.5.1-beta", "0.5.0"))
+    check("a missing or malformed version is too old",
+          vk(None, "0.5.0") and vk("", "0.5.0") and vk("banana", "0.5.0"))
+
+    fake, calls = fake_auth()
+    auth_base = "http://127.0.0.1:%d" % fake.server_address[1]
+    logfile = os.path.join(tmp, "logs", "signin.log")
+    srv, store, log = master_server.build(0, os.path.join(tmp, "s.sqlite3"), logfile, echo=False,
+                                          max_players=8, host="127.0.0.1", require_signin=True,
+                                          auth_server=auth_base, min_version="0.5.0")
+    port = srv.server_address[1]
+    base = "http://127.0.0.1:%d" % port
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    c, b = get(base, "/health")
+    check("/health needs neither a token nor a version", c == 200 and b.get("ok") is True)
+
+    # The version gate comes first.
+    c, b = get(base, "/list?auth=" + GOOD)
+    check("a GET with no ?v= is refused with 426", c == 426 and b.get("reason") == "update"
+          and "Install update" in b.get("message", ""), "%d" % c)
+    c, b = get(base, "/list?v=0.4.18&auth=" + GOOD)
+    check("a GET below --min-version is refused with 426", c == 426, "%d" % c)
+    c, b = get(base, "/list?v=0.5.0-beta&auth=" + GOOD)
+    check("a pre-release of the minimum is refused", c == 426, "%d" % c)
+    c, b = post(base, "/announce", {"name": "Old", "port": 32000, "max_players": 2, "auth": GOOD})
+    check("a POST with no version is refused with 426", c == 426, "%d" % c)
+
+    # Then the token.
+    c, b = get(base, "/list?v=0.5.0")
+    check("a GET with no token is refused with 401 signin",
+          c == 401 and b.get("reason") == "signin" and "Sign in with Discord" in b.get("message", ""),
+          "%d %s" % (c, b.get("error")))
+    c, b = get(base, "/list?v=0.5.0&auth=" + BAD)
+    check("a GET with a bad token is refused with 401", c == 401, "%d" % c)
+    c, b = get(base, "/list?v=0.10.0&auth=" + GOOD)
+    check("a GET with a good token and a newer version is served", c == 200 and b.get("ok"), "%d" % c)
+    c, b = post(base, "/announce", {"name": "NoAuth", "port": 32001, "max_players": 2,
+                                    "version": "0.5.0"})
+    check("a POST with no token is refused with 401", c == 401 and b.get("reason") == "signin")
+    c, b = post(base, "/announce", {"name": "Bad", "port": 32002, "max_players": 2,
+                                    "version": "0.5.0", "auth": BAD})
+    check("a POST with a bad token is refused with 401", c == 401)
+    c, ann = post(base, "/announce", {"name": "Signed", "host_name": "Host", "port": 32003,
+                                      "max_players": 2, "version": "0.5.0", "auth": GOOD})
+    check("a signed-in host can announce", c == 200 and ann.get("ok"), "%d %s" % (c, ann.get("error")))
+    room = ann.get("code")
+    check("the lobby records the host's sub", srv.meta.get(room, {}).get("sub") == "1000a1b",
+          str(srv.meta.get(room, {}).get("sub")))
+    c, b = post(base, "/join", {"code": room, "name": "Guest", "version": "0.5.0", "auth": GOOD2})
+    check("a signed-in player can join, and its sub is recorded",
+          c == 200 and srv.meta[room]["member_subs"].get("guest") == "1000d4e",
+          str(srv.meta[room].get("member_subs")))
+    c, b = get(base, "/lobby/%s?v=0.5.0&auth=%s" % (room, GOOD))
+    check("GET /lobby needs the token too, and is served with it", c == 200
+          and get(base, "/lobby/%s?v=0.5.0" % room)[0] == 401)
+
+    n = len(calls)
+    for _ in range(5):
+        get(base, "/list?v=0.5.0&auth=" + GOOD)
+        get(base, "/list?v=0.5.0&auth=" + BAD)
+    check("answers are cached: no new /auth/verify calls", len(calls) == n,
+          "%d calls, then %d" % (n, len(calls)))
+    check("the cache is keyed by a hash, never the token",
+          all(GOOD not in k and BAD not in k for k in srv.auth.cache))
+
+    # security review: what is refused without asking the Worker at all.
+    n = len(calls)
+    for junk in ("v1.x.y", "notatoken", mk("good", "1000acc", aud="main"), mk("good", "1000old", exp_in=-5)):
+        c, b = get(base, "/list?v=0.5.0&auth=" + junk)
+        check("refused unasked: %s" % ("an account token" if "main" in str(master_server.token_claims(junk))
+                                         else "junk or expired"), c == 401, "%d" % c)
+    check("... and the Worker was not asked", len(calls) == n, "%d calls, then %d" % (n, len(calls)))
+    # A ban reaches this server within a minute (the list is fetched).
+    BANS.append("1000a1b")
+    srv.auth.bans_at = -1e9
+    get(base, "/list?v=0.5.0&auth=" + GOOD2)     # starts the fetch
+    time.sleep(0.5)
+    c, b = get(base, "/list?v=0.5.0&auth=" + GOOD)
+    check("a banned account's cached token is refused once the list arrives", c == 401, "%d" % c)
+    BANS.clear()
+    srv.auth.bad.clear()
+    srv.auth.cache.pop(srv.auth.key(GOOD), None)
+    srv.auth.bans_at = -1e9
+    get(base, "/list?v=0.5.0&auth=" + GOOD2)
+    time.sleep(0.5)
+    # Join/leave are only for the caller's own account.
+    c, b = post(base, "/leave", {"code": room, "name": "Guest", "version": "0.5.0", "auth": GOOD})
+    check("an account cannot take another account's name out", c == 403, "%d" % c)
+    c, b = post(base, "/join", {"code": room, "name": "Guest", "version": "0.5.0", "auth": GOOD})
+    check("... nor take it over", srv.meta[room]["member_subs"].get("guest") == "1000d4e" or c == 403,
+          str(srv.meta[room].get("member_subs")))
+    # Numbers that used to crash a request now get a clean answer.
+    c, b = post(base, "/announce", {"name": "Huge", "port": 32010, "max_players": 2, "version": "0.5.0",
+                                    "players": 10 ** 40, "auth": GOOD2})
+    check("a huge number is clamped, not a crash", c in (200, 429), "%d" % c)
+    c, b = get(base, "/list?" + "&".join("a%d=1" % i for i in range(20)))
+    check("too many query fields: a clean refusal", c in (401, 426), "%d" % c)
+
+    # The Worker goes away.
+    fake.shutdown()
+    fake.server_close()
+    key = srv.auth.key(GOOD)
+    srv.auth.cache[key][0] -= master_server.AUTH_TTL + 60      # past the reuse time
+    c, b = get(base, "/list?v=0.5.0&auth=" + GOOD)
+    check("unreachable: a token cached as good stays good (under an hour)", c == 200, "%d" % c)
+    srv.auth.cache[key][0] -= master_server.AUTH_STALE          # now past an hour
+    c, b = get(base, "/list?v=0.5.0&auth=" + GOOD)
+    check("... but not once its answer is an hour old (503)",
+          c == 503 and b.get("error") == "sign-in unavailable", "%d %s" % (c, b.get("error")))
+    c, b = get(base, "/list?v=0.5.0&auth=" + mk("good", "1000new"))
+    check("unreachable: a token never seen is refused with 503",
+          c == 503 and b == {"ok": False, "error": "sign-in unavailable"}, "%d %s" % (c, b))
+    c, b = get(base, "/list?v=0.5.0")
+    check("unreachable: no token at all is still a 401", c == 401, "%d" % c)
+
+    a = master_server.Auth(auth_base, max_entries=3)
+    for i in range(6):
+        a._put(a.key("t%d" % i), {"sub": str(i)}, time.monotonic())
+    check("the cache is bounded (oldest dropped)",
+          len(a.cache) == 3 and a.key("t0") not in a.cache and a.key("t5") in a.cache)
+
+    # A token is never logged or echoed.
+    with open(logfile, encoding="utf-8") as fh:
+        text = fh.read()
+    check("no token, nor part of one, reaches the log",
+          "v1." not in text and GOOD.split(".")[1][:20] not in text, "%d bytes of log" % len(text))
+
+    srv.shutdown()
+    srv.server_close()
+    store.close()
+
+    # Without the options (a self-hosted server), none of this applies.
+    srv, store, log = master_server.build(0, os.path.join(tmp, "s2.sqlite3"), None, echo=False,
+                                          max_players=8, host="127.0.0.1")
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    c, b = get("http://127.0.0.1:%d" % port, "/list")
+    check("self-hosted (no options): no token or version needed", c == 200 and srv.auth is None)
+
+    # docs/502: names with a slur are refused. No slur is written here: the
+    # refused name comes from LB_SLUR_TEST on the command line (unset: only the
+    # innocent half runs).
+    base2 = "http://127.0.0.1:%d" % port
+    c, b = post(base2, "/announce", {"name": "Night Knight", "host_name": "Big Gun", "port": 28700,
+                                     "max_players": 3})
+    check("innocent names that contain look-alikes are allowed", c == 200, "%d" % c)
+    bad = os.environ.get("LB_SLUR_TEST", "")
+    if bad:
+        c, b = post(base2, "/announce", {"name": "LEGO Battles", "host_name": bad, "port": 28701,
+                                         "max_players": 3})
+        check("a host name with a slur is refused", c == 403 and b.get("reason") == "name", "%d" % c)
+        c, b = post(base2, "/join", {"code": "ZZZZ", "name": bad})
+        check("a joiner name with a slur is refused", c == 403, "%d" % c)
+        # security review: and everywhere else a lobby shows text.
+        for what, extra in (("a lobby setting's value", {"options": {"Rules": bad}}),
+                            ("a lobby setting's name", {"options": {bad: True}}),
+                            ("the player list", {"players_list": [{"name": bad}]})):
+            c, b = post(base2, "/announce", dict({"name": "LEGO Battles", "host_name": "Fine", "port": 28702,
+                                                  "max_players": 3}, **extra))
+            check("a slur in %s is refused" % what, c == 403, "%d" % c)
+        c, b = post(base2, "/remove", {"code": "ZZZZ", "token": "x", "winners": [bad]})
+        check("a slur among the winners is refused", c == 403, "%d" % c)
     srv.shutdown()
     srv.server_close()
     store.close()

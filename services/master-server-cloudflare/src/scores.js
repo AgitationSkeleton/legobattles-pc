@@ -73,6 +73,11 @@ export class Scores extends DurableObject {
       this.sql.exec('UPDATE matches SET preset = ? WHERE preset IS NULL AND ruleset = ?', familyOf(r.ruleset), r.ruleset);
     this.sql.exec('CREATE INDEX IF NOT EXISTS matches_preset ON matches(preset)');
     this.sql.exec('CREATE INDEX IF NOT EXISTS results_owner ON results(owner)');
+    // docs/501: a result's Discord account (NULL: a legacy row from before
+    // sign-in), and the accounts that hide their rows from the tables.
+    try { this.sql.exec('ALTER TABLE results ADD COLUMN sub TEXT'); } catch { /* already there */ }
+    this.sql.exec('CREATE INDEX IF NOT EXISTS results_sub ON results(sub)');
+    this.sql.exec('CREATE TABLE IF NOT EXISTS hidden (sub TEXT PRIMARY KEY, at INTEGER)');
     this.sql.exec('CREATE INDEX IF NOT EXISTS results_match ON results(match_id)');
     this.sql.exec('CREATE INDEX IF NOT EXISTS matches_ruleset ON matches(ruleset)');
   }
@@ -86,6 +91,10 @@ export class Scores extends DurableObject {
     if (request.method === 'POST' && path === '/internal/remove-name') return this.removeName(await request.json());
     if (request.method === 'POST' && path === '/internal/forget') return this.forget(await request.json());
     if (request.method === 'GET' && path === '/internal/names') return this.names(url.searchParams.get('q') || '');
+    if (request.method === 'POST' && path === '/internal/hide') return this.hide(await request.json());
+    if (request.method === 'POST' && path === '/internal/purge') return this.purge(await request.json());
+    if (request.method === 'GET' && path === '/internal/hidden')
+      return json(200, { ok: true, hidden: !!this.sql.exec('SELECT 1 FROM hidden WHERE sub = ?', url.searchParams.get('sub') || '').toArray().length });
     if (request.method === 'GET' && path === '/scores/rulesets') return this.rulesets();
     if (request.method === 'GET' && path === '/scores') return this.table(url.searchParams);
     return json(404, { ok: false, error: 'no such endpoint' });
@@ -100,10 +109,11 @@ export class Scores extends DurableObject {
       m.map || '', Math.max(0, m.seconds | 0), m.version || '').one();
     for (const p of m.players) {
       this.sql.exec(
-        `INSERT INTO results (match_id, name, name_key, won, hero, ${STATS.join(', ')}, owner)
-         VALUES (?, ?, ?, ?, ?, ${STATS.map(() => '?').join(', ')}, ?)`,
+        `INSERT INTO results (match_id, name, name_key, won, hero, ${STATS.join(', ')}, owner, sub)
+         VALUES (?, ?, ?, ?, ?, ${STATS.map(() => '?').join(', ')}, ?, ?)`,
         row.id, p.name, p.name.toLowerCase(), p.won ? 1 : 0, p.hero,
-        ...STATS.map((k) => count(p[k])), /^[0-9a-f]{64}$/.test(p.owner || '') ? p.owner : null);
+        ...STATS.map((k) => count(p[k])), /^[0-9a-f]{64}$/.test(p.owner || '') ? p.owner : null,
+        /^[0-9]{5,25}$/.test(String(p.sub || '')) ? String(p.sub) : null);
     }
     return json(200, { ok: true, match: row.id });
   }
@@ -124,10 +134,29 @@ export class Scores extends DurableObject {
     return json(200, { ok: true, ...this.removeWhere('name_key = ?', name) });
   }
 
+  // docs/501: a signed-in player's own rows ({sub}); the old install-key form
+  // ({owner}) is no longer reached from outside.
   forget(b) {
+    const sub = String(b.sub || '');
+    if (/^[0-9]{5,25}$/.test(sub)) return json(200, { ok: true, ...this.removeWhere('sub = ?', sub) });
     const owner = String(b.owner || '');
     if (!/^[0-9a-f]{64}$/.test(owner)) return json(400, { ok: false, error: 'bad owner' });
     return json(200, { ok: true, ...this.removeWhere('owner = ?', owner) });
+  }
+
+  hide(b) {
+    const sub = String(b.sub || '');
+    if (!/^[0-9]{5,25}$/.test(sub)) return json(400, { ok: false, error: 'bad account' });
+    if (b.hidden === false) this.sql.exec('DELETE FROM hidden WHERE sub = ?', sub);
+    else this.sql.exec('INSERT OR REPLACE INTO hidden (sub, at) VALUES (?, ?)', sub, Date.now());
+    return json(200, { ok: true, hidden: b.hidden !== false });
+  }
+
+  // A banned account's rows go.
+  purge(b) {
+    const sub = String(b.sub || '');
+    if (!/^[0-9]{5,25}$/.test(sub)) return json(400, { ok: false, error: 'bad account' });
+    return json(200, { ok: true, ...this.removeWhere('sub = ?', sub) });
   }
 
   names(q) {
@@ -165,6 +194,8 @@ export class Scores extends DurableObject {
       for (const unit of units) { where.push('m.banned LIKE ?'); args.push('%,' + unit + ',%'); }
     }
     const limit = Math.min(Math.max(Number.parseInt(q.get('limit') || '100', 10) || 100, 1), 200);
+    // docs/501: rows of a player who hides them are left out.
+    where.push('(r.sub IS NULL OR r.sub NOT IN (SELECT sub FROM hidden))');
     const filter = where.length ? 'WHERE ' + where.join(' AND ') : '';
     // SG-0039: by=preset gives one row per player AND preset (the game's "All"
     // table, every preset at once, each row tagged with its own).

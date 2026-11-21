@@ -31,7 +31,12 @@
 
 import { DurableObject } from 'cloudflare:workers';
 import { hasSwear } from './swear.js';
-import { unitsSetup, unitsFetch, unitsAdmin, CATEGORY_NAMES } from './units.js';
+import { unitsSetup, unitsFetch, unitsAdmin, CATEGORY_NAMES, unitEmbed, unitButtons, unitPost, unitsChannel,
+         bundleFiles } from './units.js';
+import { postCopies, editCopies } from './modpost.js';
+import { hasSlur } from './slur.js';
+import { netKey } from './auth.js';
+import { verifyToken, isModerator, accountButton, SIGNIN_MESSAGE, discordWho, findAccounts, acctLine } from './auth.js';
 
 const MAX_MAP_BYTES = 200 * 1024;
 const MAX_TBP_ENTRIES = 4096;
@@ -43,7 +48,8 @@ const TABLE_METAS = 440;
 const DISCORD = 'https://discord.com/api/v10';
 
 const DEFAULTS = {
-  auto_approve: 0,       // 1: uploads go public without a decision
+  auto_approve: 0,       // 1: map uploads go public without a decision
+  auto_approve_units: 0, // docs/503: the same for units (unset: as auto_approve)
   uploads: 1,            // 0: uploads refused
   per_owner_day: 3,      // uploads per uploader per day (0: no limit)
   per_hour: 30,          // uploads per hour from everyone (0: no limit)
@@ -425,7 +431,7 @@ function levelEmbed(row, status) {
       { name: 'World', value: WORLD_NAMES[row.world] || '?', inline: true },
       { name: 'Size', value: `${row.width} x ${row.height}`, inline: true },
       { name: 'Status', value: status, inline: true },
-      { name: 'Uploader', value: '`' + row.owner.slice(0, 10) + '`', inline: true },
+      { name: 'Uploader', value: uploaderField(row), inline: true },
       { name: 'Level', value: '#' + row.id, inline: true },
     ],
     image: { url: 'attachment://preview.png' },
@@ -452,7 +458,7 @@ function panelMessage(cfg, counts) {
       title: 'Community levels: settings',
       color: 0x5865f2,
       description:
-        `Auto-approve: **${onoff(cfg.auto_approve)}**\n` +
+        `Auto-approve maps: **${onoff(cfg.auto_approve)}**, units: **${onoff(cfg.auto_approve_units)}**\n` +
         `Uploads: **${onoff(cfg.uploads)}**\n` +
         `Per uploader per day: **${cfg.per_owner_day || 'no limit'}**\n` +
         `Per hour from everyone: **${cfg.per_hour || 'no limit'}**\n` +
@@ -463,8 +469,10 @@ function panelMessage(cfg, counts) {
     }],
     components: [
       { type: 1, components: [
-        { type: 2, style: cfg.auto_approve ? 3 : 2, label: `Auto-approve: ${onoff(cfg.auto_approve)}`,
+        { type: 2, style: cfg.auto_approve ? 3 : 2, label: `Auto-approve maps: ${onoff(cfg.auto_approve)}`,
           custom_id: 'lvl:cfg:auto' },
+        { type: 2, style: cfg.auto_approve_units ? 3 : 2, label: `Auto-approve units: ${onoff(cfg.auto_approve_units)}`,
+          custom_id: 'lvl:cfg:uauto' },
         { type: 2, style: cfg.uploads ? 3 : 4, label: `Uploads: ${onoff(cfg.uploads)}`, custom_id: 'lvl:cfg:uploads' },
         { type: 2, style: 2, label: 'Refresh', custom_id: 'lvl:cfg:refresh' },
       ] },
@@ -483,6 +491,12 @@ function panelMessage(cfg, counts) {
 }
 
 // ------------------------------------------------------------------ object ----
+// SG-0149: an upload's account as moderators see it (Discord + LB id).
+export function uploaderField(row) {
+  if (!row.sub) return '`' + String(row.owner || '').slice(0, 10) + '` (legacy)';
+  return discordWho(row.sub, row.uname, '') + (row.uuid ? `\n\`${row.uuid}\`` : '');
+}
+
 export class Levels extends DurableObject {
   constructor(ctx, env) {
     super(ctx, env);
@@ -499,18 +513,44 @@ export class Levels extends DurableObject {
     this.sql.exec('CREATE TABLE IF NOT EXISTS config (k TEXT PRIMARY KEY, v TEXT)');
     // Likes: one per player (install-key hash) per level.
     this.sql.exec('CREATE TABLE IF NOT EXISTS likes (level INTEGER, owner TEXT, PRIMARY KEY (level, owner))');
-    for (const col of ['likes INTEGER DEFAULT 0', 'mini BLOB', 'relayed TEXT']) {
+    for (const col of ['likes INTEGER DEFAULT 0', 'mini BLOB', 'relayed TEXT',
+                       "sub TEXT DEFAULT ''", 'legacy INTEGER DEFAULT 0', 'hidden INTEGER DEFAULT 0',
+                       "uname TEXT DEFAULT ''", "uuid TEXT DEFAULT ''", "mirror TEXT DEFAULT ''"]) {
       try { this.sql.exec('ALTER TABLE levels ADD COLUMN ' + col); } catch { /* already there */ }
     }
     unitsSetup(this.sql);
-    try { this.sql.exec('ALTER TABLE units ADD COLUMN relayed TEXT'); } catch { /* already there */ }
+    for (const col of ['relayed TEXT', "sub TEXT DEFAULT ''", 'legacy INTEGER DEFAULT 0', 'hidden INTEGER DEFAULT 0',
+                       "uname TEXT DEFAULT ''", "uuid TEXT DEFAULT ''", "mirror TEXT DEFAULT ''"]) {
+      try { this.sql.exec('ALTER TABLE units ADD COLUMN ' + col); } catch { /* already there */ }
+    }
+    // docs/501: everything uploaded before Discord sign-in is LEGACY: kept and
+    // listed, owned by no account. Done once, when this code first runs.
+    if (!this.sql.exec("SELECT v FROM config WHERE k = 'legacy_done'").toArray().length) {
+      this.sql.exec("UPDATE levels SET legacy = 1 WHERE sub IS NULL OR sub = ''");
+      this.sql.exec("UPDATE units SET legacy = 1 WHERE sub IS NULL OR sub = ''");
+      this.sql.exec("INSERT INTO config (k, v) VALUES ('legacy_done', '1')");
+    }
+  }
+
+  // docs/501: the signed-in player of a request body ({auth}), or null. Their
+  // uploads, likes and bans are keyed by owner "d:<discord id>".
+  // docs/502: a Discord name with a slur publishes nothing (it was refused
+  // at sign-in too; this catches a name changed since the token was made).
+  async player(b) {
+    // docs/501: publishing takes the ACCOUNT token ("main"), never a play token.
+    const c = await verifyToken(this.env, b && b.auth, ['main']);
+    if (c && (hasSlur(c.name) || hasSlur(c.un))) return null;
+    return c ? { sub: String(c.sub), owner: 'd:' + String(c.sub), name: String(c.name || ''),
+                 un: String(c.un || ''), uid: String(c.uid || '') } : null;
   }
   swear(s) { return hasSwear(s, this.env.SWEAR_TEST_WORDS); }
 
   cfg() {
     const c = { ...DEFAULTS };
-    for (const r of this.sql.exec('SELECT k, v FROM config').toArray())
+    const rows = this.sql.exec('SELECT k, v FROM config').toArray();
+    for (const r of rows)
       if (r.k in c) c[r.k] = typeof DEFAULTS[r.k] === 'number' ? Number.parseInt(r.v, 10) || 0 : String(r.v);
+    if (!rows.some((r) => r.k === 'auto_approve_units')) c.auto_approve_units = c.auto_approve;   // docs/503
     return c;
   }
   setCfg(k, v) {
@@ -527,9 +567,33 @@ export class Levels extends DurableObject {
     };
   }
 
+  // security review: fixed windows in memory (per address, per account).
+  tooMany(kind, key, count, ms) {
+    const now = Date.now();
+    if (!this.windows || this.windows.size > 20000) this.windows = new Map();
+    const k = kind + ' ' + netKey(key);
+    const r = this.windows.get(k);
+    if (!r || now - r.at >= ms) { this.windows.set(k, { at: now, n: 1 }); return false; }
+    return ++r.n > count;
+  }
+
+  // One download counted per address per item per day.
+  countOnce(kind, id, request) {
+    const day = Math.floor(Date.now() / 86400000);
+    if (this.countDay !== day || !this.counted || this.counted.size > 50000) { this.counted = new Set(); this.countDay = day; }
+    const k = kind + id + ' ' + netKey(request.headers.get('X-Levels-Addr') || '');
+    if (this.counted.has(k)) return false;
+    this.counted.add(k);
+    return true;
+  }
+
   async fetch(request) {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, '');
+    const addr = request.headers.get('X-Levels-Addr') || '';
+    if (addr && path !== '/levels/admin' && !path.startsWith('/internal/') && this.tooMany('req', addr, 300, 60000))
+      return json(429, { ok: false, error: 'slow down' });
+    this.req = request;
     try { await this.armShowcase(); } catch { /* never blocks a request */ }
     try {
       if (request.method === 'GET' && path === '/levels/list') return this.list(url);
@@ -538,6 +602,11 @@ export class Levels extends DurableObject {
       if (request.method === 'POST' && path === '/levels/like') return await this.like(request);
       if (request.method === 'POST' && path === '/levels/upload') return await this.upload(request);
       if (request.method === 'POST' && path === '/levels/delete') return await this.remove(request);
+      if (request.method === 'POST' && path === '/levels/hide') return await this.hide(request);
+      if (request.method === 'POST' && path === '/levels/edit') return await this.edit(request);
+      if (request.method === 'POST' && path === '/levels/mine') return await this.mine(request);
+      if (request.method === 'POST' && path === '/internal/purge') return await this.purge(request);
+      if (request.method === 'POST' && path === '/internal/unpurge') return await this.unpurge(request);
       if (request.method === 'POST' && path === '/levels/admin') return await this.admin(request);
       if (path.startsWith('/units/')) return await unitsFetch(this, request, url, path);
     } catch (e) {
@@ -556,8 +625,8 @@ export class Levels extends DurableObject {
     const order = ORDERS[url.searchParams.get('sort') || 'new'] || ORDERS.new;
     const rows = this.sql.exec(
       `SELECT id, name, author, players, world, width, height, size, downloads, likes, created, hash
-         FROM levels WHERE status = 'approved' ORDER BY ${order} LIMIT ? OFFSET ?`, limit, offset).toArray();
-    const total = this.sql.exec("SELECT COUNT(*) AS n FROM levels WHERE status = 'approved'").toArray()[0].n;
+         FROM levels WHERE status = 'approved' AND hidden = 0 ORDER BY ${order} LIMIT ? OFFSET ?`, limit, offset).toArray();
+    const total = this.sql.exec("SELECT COUNT(*) AS n FROM levels WHERE status = 'approved' AND hidden = 0").toArray()[0].n;
     return json(200, { ok: true, total, levels: rows });
   }
 
@@ -588,11 +657,13 @@ export class Levels extends DurableObject {
   async like(request) {
     let b;
     try { b = JSON.parse(await request.text()); } catch { return json(400, { ok: false, error: 'bad request' }); }
-    if (!b || typeof b !== 'object' || !KEY_OK.test(String(b.key || ''))) return json(400, { ok: false, error: 'bad request' });
-    const owner = await sha256hex(new TextEncoder().encode(String(b.key).toLowerCase()));
+    if (!b || typeof b !== 'object') return json(400, { ok: false, error: 'bad request' });
+    const me = await this.player(b);
+    if (!me) return json(401, { ok: false, error: SIGNIN_MESSAGE, reason: 'signin', message: SIGNIN_MESSAGE });
+    const owner = me.owner;
     const id = Number.parseInt(b.id, 10);
     if (!Number.isFinite(id) || id < 1) return json(400, { ok: false, error: 'id' });
-    if (!this.sql.exec("SELECT 1 FROM levels WHERE id = ? AND status = 'approved'", id).toArray().length)
+    if (!this.sql.exec("SELECT 1 FROM levels WHERE id = ? AND status = 'approved' AND hidden = 0", id).toArray().length)
       return json(404, { ok: false, error: 'no such level' });
     if (b.like === false) this.sql.exec('DELETE FROM likes WHERE level = ? AND owner = ?', id, owner);
     else this.sql.exec('INSERT OR IGNORE INTO likes (level, owner) VALUES (?, ?)', id, owner);
@@ -605,11 +676,12 @@ export class Levels extends DurableObject {
     const id = Number.parseInt(url.searchParams.get('id') || '', 10);
     if (!Number.isFinite(id) || id < 1) return json(400, { ok: false, error: 'id' });
     const r = this.sql.exec(
-      "SELECT id, name, author, players, world, width, height, hash, map, tbp FROM levels WHERE id = ? AND status = 'approved'",
+      "SELECT id, name, author, players, world, width, height, hash, map, tbp FROM levels WHERE id = ? AND status = 'approved' AND hidden = 0",
       id).toArray()[0];
     if (!r) return json(404, { ok: false, error: 'no such level' });
     // A download counts; a preview (the game showing a picked level) does not.
-    if (url.searchParams.get('count') === '1') this.sql.exec('UPDATE levels SET downloads = downloads + 1 WHERE id = ?', id);
+    if (url.searchParams.get('count') === '1' && this.countOnce('l', id, this.req))
+      this.sql.exec('UPDATE levels SET downloads = downloads + 1 WHERE id = ?', id);
     return json(200, {
       ok: true, id: r.id, name: r.name, author: r.author, players: r.players, world: r.world,
       width: r.width, height: r.height, hash: r.hash,
@@ -626,8 +698,11 @@ export class Levels extends DurableObject {
     if (!b || typeof b !== 'object' || Array.isArray(b)) return json(400, { ok: false, error: 'bad request' });
     const cfg = this.cfg();
     if (!cfg.uploads) return json(403, { ok: false, error: 'uploads are closed for now' });
-    if (!KEY_OK.test(String(b.key || ''))) return json(400, { ok: false, error: 'bad request' });
-    const owner = await sha256hex(new TextEncoder().encode(String(b.key).toLowerCase()));
+    const me = await this.player(b);
+    if (!me) return json(401, { ok: false, error: SIGNIN_MESSAGE, reason: 'signin', message: SIGNIN_MESSAGE });
+    // security review: attempts per account, counted before any work.
+    if (this.tooMany('upload', me.sub, 20, 3600000)) return json(429, { ok: false, error: 'too many uploads; try later' });
+    const owner = me.owner;
     const ip = request.headers.get('X-Levels-Addr') || '';
     const addr = ip ? (await sha256hex(new TextEncoder().encode('lvl:' + ip))).slice(0, 32) : '';
     if (this.sql.exec('SELECT 1 FROM bans WHERE who = ? OR who = ?', owner, addr || '-').toArray().length)
@@ -674,23 +749,104 @@ export class Levels extends DurableObject {
                            created, map, tbp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       hash, name, author || '', v.map.players, v.map.world, v.map.w, v.map.h, map.length + tbp.length, status,
       owner, addr, now, map, tbp.length ? tbp : null);
+    this.sql.exec('UPDATE levels SET sub = ?, uname = ?, uuid = ? WHERE hash = ?', me.sub, me.un, me.uid, hash);
     const row = this.sql.exec('SELECT * FROM levels WHERE hash = ?', hash).toArray()[0];
     this.sql.exec('UPDATE levels SET mini = ? WHERE id = ?', miniNcgr(v.map.A, v.map.D, v.map.w, v.map.h), row.id);
     const png = await previewPng(v.map.A, v.map.D, v.map.w, v.map.h, v.map.world);
     const msg = await this.post(levelEmbed(row, status), levelButtons(row, status), png);
-    if (msg) this.sql.exec('UPDATE levels SET message = ? WHERE id = ?', msg, row.id);
+    if (msg.id || msg.mirror) this.sql.exec('UPDATE levels SET message = ?, mirror = ? WHERE id = ?', msg.id, msg.mirror, row.id);
     return json(200, { ok: true, id: row.id, status });
   }
 
-  async remove(request) {
+  // docs/501: a signed-in player's own uploads (legacy ones belong to nobody).
+  async mine(request) {
     let b;
     try { b = JSON.parse(await request.text()); } catch { return json(400, { ok: false, error: 'bad request' }); }
-    if (!b || !KEY_OK.test(String(b.key || ''))) return json(400, { ok: false, error: 'bad request' });
-    const owner = await sha256hex(new TextEncoder().encode(String(b.key).toLowerCase()));
-    const id = Number.parseInt(b.id, 10);
-    const r = this.sql.exec('SELECT id FROM levels WHERE id = ? AND owner = ?', id, owner).toArray()[0];
-    if (!r) return json(404, { ok: false, error: 'no such level of yours' });
-    this.sql.exec('DELETE FROM levels WHERE id = ?', id);
+    const me = await this.player(b);
+    if (!me) return json(401, { ok: false, error: SIGNIN_MESSAGE, reason: 'signin', message: SIGNIN_MESSAGE });
+    const levels = this.sql.exec(
+      `SELECT id, name, author, players, world, width, height, status, hidden, downloads, likes, created
+         FROM levels WHERE sub = ? AND status != 'deleted' ORDER BY id DESC LIMIT 200`, me.sub).toArray();
+    const units = this.sql.exec(
+      `SELECT id, name, author, credits, category, status, hidden, downloads, likes, created
+         FROM units WHERE sub = ? AND status != 'deleted' ORDER BY id DESC LIMIT 200`, me.sub).toArray();
+    return json(200, { ok: true, levels, units });
+  }
+
+  async ownRow(request, table) {
+    let b;
+    try { b = JSON.parse(await request.text()); } catch { return { err: json(400, { ok: false, error: 'bad request' }) }; }
+    const me = await this.player(b);
+    if (!me) return { err: json(401, { ok: false, error: SIGNIN_MESSAGE, reason: 'signin', message: SIGNIN_MESSAGE }) };
+    const id = Number.parseInt(b && b.id, 10);
+    const row = this.sql.exec(`SELECT * FROM ${table} WHERE id = ? AND sub = ? AND status != 'deleted'`, id, me.sub).toArray()[0];
+    if (!row) return { err: json(404, { ok: false, error: 'no such upload of yours' }) };
+    return { b, me, row };
+  }
+
+  // Deleting keeps the row (its showcase post is taken down by the sync) but
+  // drops the data.
+  async remove(request) {
+    const { err, row } = await this.ownRow(request, 'levels');
+    if (err) return err;
+    this.sql.exec("UPDATE levels SET status = 'deleted', hidden = 1, decided = ? WHERE id = ?", Date.now(), row.id);
+    return json(200, { ok: true });
+  }
+
+  async hide(request) {
+    const { err, b, row } = await this.ownRow(request, 'levels');
+    if (err) return err;
+    this.sql.exec('UPDATE levels SET hidden = ? WHERE id = ?', b.hidden === false ? 0 : 1, row.id);
+    return json(200, { ok: true, hidden: b.hidden !== false });
+  }
+
+  // Name and author; the map itself is changed by uploading it again.
+  async edit(request) {
+    const { err, b, row } = await this.ownRow(request, 'levels');
+    if (err) return err;
+    const name = b.name !== undefined ? cleanText(b.name, this.env.SWEAR_TEST_WORDS) : row.name;
+    if (!name) return json(400, { ok: false, error: 'the level name is not allowed' });
+    const author = b.author !== undefined ? (b.author ? cleanText(b.author, this.env.SWEAR_TEST_WORDS) : '') : row.author;
+    if (author === null) return json(400, { ok: false, error: 'the author name is not allowed' });
+    this.sql.exec('UPDATE levels SET name = ?, author = ? WHERE id = ?', name, author || '', row.id);
+    // security review: a renamed published level goes back to the moderators.
+    if (row.status === 'approved' && (name !== row.name || (author || '') !== (row.author || '')) && !this.cfg().auto_approve) {
+      this.sql.exec("UPDATE levels SET status = 'pending' WHERE id = ?", row.id);
+      this.ctx.waitUntil(this.syncMessage('map', { ...row, name, author: author || '', status: 'pending' }, 'pending'));
+    }
+    // A published level's showcase post is made again with the new name.
+    if (row.status === 'approved' && row.relayed && row.relayed !== 'err') {
+      const old = row.relayed;
+      this.sql.exec('UPDATE levels SET relayed = NULL WHERE id = ?', row.id);
+      this.ctx.waitUntil(fetch(`${this.env.DISCORD_API_BASE || DISCORD}/channels/${this.env.SHOWCASE_CHANNEL}/messages/${old}`,
+        { method: 'DELETE', headers: { Authorization: 'Bot ' + this.env.LEVELS_BOT_TOKEN } }).catch(() => null));
+    }
+    return json(200, { ok: true, name, author: author || '' });
+  }
+
+  // A banned account's uploads come down (from the Accounts object).
+  async purge(request) {
+    let b = {};
+    try { b = JSON.parse(await request.text()); } catch { /* empty */ }
+    const sub = String(b.sub || '');
+    if (!/^[0-9]{5,25}$/.test(sub)) return json(400, { ok: false });
+    const now = Date.now();
+    this.sql.exec("UPDATE levels SET status = 'banned', decided = ? WHERE sub = ? AND status != 'deleted'", now, sub);
+    this.sql.exec("UPDATE units SET status = 'banned', decided = ? WHERE sub = ? AND status != 'deleted'", now, sub);
+    this.sql.exec('INSERT OR REPLACE INTO bans (who, at, level) VALUES (?, ?, 0)', 'd:' + sub, now);
+    return json(200, { ok: true });
+  }
+
+  // An unban lifts the upload ban; what the ban took down goes back to the
+  // moderators as pending (an approve puts it up again).
+  async unpurge(request) {
+    let b = {};
+    try { b = JSON.parse(await request.text()); } catch { /* empty */ }
+    const sub = String(b.sub || '');
+    if (!/^[0-9]{5,25}$/.test(sub)) return json(400, { ok: false });
+    this.sql.exec('DELETE FROM bans WHERE who = ?', 'd:' + sub);
+    this.sql.exec("UPDATE levels SET status = 'pending' WHERE sub = ? AND status = 'banned'", sub);
+    this.sql.exec("UPDATE units SET status = 'pending' WHERE sub = ? AND status = 'banned'", sub);
     return json(200, { ok: true });
   }
 
@@ -705,8 +861,8 @@ export class Levels extends DurableObject {
   // (not retried).
   showcaseDue() {
     const q = (t) => this.sql.exec(
-      `SELECT COUNT(*) AS n FROM ${t} WHERE (status = 'approved' AND relayed IS NULL)
-         OR (status != 'approved' AND relayed IS NOT NULL AND relayed != 'err')`).toArray()[0].n;
+      `SELECT COUNT(*) AS n FROM ${t} WHERE (status = 'approved' AND hidden = 0 AND relayed IS NULL)
+         OR (NOT (status = 'approved' AND hidden = 0) AND relayed IS NOT NULL AND relayed != 'err')`).toArray()[0].n;
     return q('levels') + q('units');
   }
 
@@ -733,7 +889,7 @@ export class Levels extends DurableObject {
       let deleted = false;
       for (const table of ['levels', 'units']) {
         const gone = this.sql.exec(`SELECT id, relayed FROM ${table}
-            WHERE status != 'approved' AND relayed IS NOT NULL AND relayed != 'err' LIMIT 1`).toArray()[0];
+            WHERE NOT (status = 'approved' AND hidden = 0) AND relayed IS NOT NULL AND relayed != 'err' LIMIT 1`).toArray()[0];
         if (!gone) continue;
         const r = await fetch(`${env.DISCORD_API_BASE || DISCORD}/channels/${env.SHOWCASE_CHANNEL}/messages/${gone.relayed}`, {
           method: 'DELETE', headers: { Authorization: 'Bot ' + env.LEVELS_BOT_TOKEN } });
@@ -744,8 +900,8 @@ export class Levels extends DurableObject {
       }
       if (deleted) continue;
       // Then the oldest approved item without a post, levels and units by age.
-      const lv = this.sql.exec("SELECT * FROM levels WHERE status = 'approved' AND relayed IS NULL ORDER BY created LIMIT 1").toArray()[0];
-      const un = this.sql.exec("SELECT * FROM units WHERE status = 'approved' AND relayed IS NULL ORDER BY created LIMIT 1").toArray()[0];
+      const lv = this.sql.exec("SELECT * FROM levels WHERE status = 'approved' AND hidden = 0 AND relayed IS NULL ORDER BY created LIMIT 1").toArray()[0];
+      const un = this.sql.exec("SELECT * FROM units WHERE status = 'approved' AND hidden = 0 AND relayed IS NULL ORDER BY created LIMIT 1").toArray()[0];
       if (!lv && !un) return -1;
       const table = lv && (!un || lv.created <= un.created) ? 'levels' : 'units';
       const row = table === 'levels' ? lv : un;
@@ -804,23 +960,153 @@ export class Levels extends DurableObject {
     });
   }
 
-  // A Discord message in the moderation channel; its id, or '' (no token).
+  // A map's moderation message, in the maps channel and the mirror
+  // (docs/503): { id, mirror }, '' for a copy not posted.
   async post(embed, components, png) {
-    const env = this.env;
-    if (!env.LEVELS_BOT_TOKEN || !env.LEVELS_CHANNEL) return '';
-    const form = new FormData();
-    form.append('payload_json', JSON.stringify({
-      embeds: [embed], components, attachments: [{ id: 0, filename: 'preview.png' }],
-      allowed_mentions: { parse: [] },
-    }));
-    form.append('files[0]', new Blob([png], { type: 'image/png' }), 'preview.png');
-    const r = await fetch(`${DISCORD}/channels/${env.LEVELS_CHANNEL}/messages`, {
-      method: 'POST', headers: { Authorization: 'Bot ' + env.LEVELS_BOT_TOKEN }, body: form,
+    return postCopies(this.env, this.env.LEVELS_CHANNEL, () => {
+      const form = new FormData();
+      form.append('payload_json', JSON.stringify({
+        embeds: [embed], components, attachments: [{ id: 0, filename: 'preview.png' }],
+        allowed_mentions: { parse: [] },
+      }));
+      form.append('files[0]', new Blob([png], { type: 'image/png' }), 'preview.png');
+      return { body: form, json: false };
     });
-    if (!r.ok) return '';
-    const m = await r.json().catch(() => null);
-    return m && m.id ? String(m.id) : '';
   }
+
+  // ------------------------------------------------- docs/503: commands --
+  // The bot's moderation slash commands: {user_id, channel_id, command, args}.
+  // Map commands work in the maps channel, unit commands in the units
+  // channel, account commands in the accounts channel; the mirror channel
+  // takes them all. The presser was checked to be a moderator already.
+  sectionOf(channelId) {
+    const c = String(channelId || ''), e = this.env;
+    if (!c) return '';
+    if (c === String(e.MIRROR_CHANNEL || '')) return 'all';
+    if (c === String(e.LEVELS_CHANNEL || '')) return 'map';
+    if (c === String(e.UNITS_CHANNEL || '')) return 'unit';
+    if (c === String(e.ACCOUNTS_CHANNEL || '')) return 'account';
+    return '';
+  }
+
+  async syncMessage(kind, row, status) {
+    const env = this.env;
+    if (kind === 'map')
+      await editCopies(env, env.LEVELS_CHANNEL, row.message, row.mirror,
+                       { embeds: [levelEmbed(row, status)], components: levelButtons(row, status) });
+    else
+      await editCopies(env, unitsChannel(env), row.message, row.mirror,
+                       { embeds: [unitEmbed(row, status)], components: unitButtons(row, status) });
+  }
+
+  // A waiting upload posted again (into the channels as they are now).
+  async repost(kind, row) {
+    let ids = { id: '', mirror: '' };
+    if (kind === 'map') {
+      const tbp = row.tbp ? new Uint8Array(row.tbp) : new Uint8Array(0);
+      const v = validateMap(new Uint8Array(row.map), validateTbp(tbp).count || 0);
+      if (!v.ok) return false;
+      const png = await previewPng(v.map.A, v.map.D, v.map.w, v.map.h, v.map.world);
+      ids = await this.post(levelEmbed(row, row.status), levelButtons(row, row.status), png);
+    } else {
+      const files = bundleFiles(row.bundle);
+      const sheet = (files.find(([p]) => p.startsWith('sheets/') && p.endsWith('.png')) || [])[1];
+      if (!sheet) return false;
+      const sounds = files.filter(([p]) => p.startsWith('sounds/') && p.endsWith('.wav')).slice(0, 9)
+        .map(([p, d]) => ({ name: p.slice(7, -4).replace(/[^A-Za-z0-9_]/g, '_').slice(0, 40) || 'sound', wav: d }));
+      ids = await unitPost(this.env, unitEmbed(row, row.status), unitButtons(row, row.status), sheet, sounds);
+    }
+    if (!ids.id && !ids.mirror) return false;
+    this.sql.exec(`UPDATE ${kind === 'map' ? 'levels' : 'units'} SET message = ?, mirror = ? WHERE id = ?`,
+                  ids.id, ids.mirror, row.id);
+    return true;
+  }
+
+  async resolveAccount(who) {
+    const w = String(who || '').trim().replace(/^<@!?(\d+)>$/, '$1');
+    if (!w) return { error: 'Say who: a Discord id, a mention, an LB- account id or a name.' };
+    const found = await findAccounts(this.env, w);
+    if (/^[0-9]{5,25}$/.test(w)) return { sub: w, acct: found.find((a) => a.sub === w) || null };
+    const exact = found.filter((a) => a.uid.toLowerCase() === w.toLowerCase() ||
+                                      String(a.username || '').toLowerCase() === w.toLowerCase());
+    if (exact.length === 1) return { sub: exact[0].sub, acct: exact[0] };
+    if (found.length === 1) return { sub: found[0].sub, acct: found[0] };
+    if (!found.length) return { error: `No account matches "${w}".` };
+    return { error: `"${w}" matches ${found.length} accounts; use the Discord id:\n` +
+                    found.slice(0, 10).map(acctLine).join('\n') };
+  }
+
+  async command(b) {
+    const env = this.env;
+    const at = this.sectionOf(b.channel_id);
+    const a = b.args && typeof b.args === 'object' ? b.args : {};
+    const say = (t) => json(200, { ok: true, reply: String(t).slice(0, 1900) });
+    if (!at) return say('These commands work only in the moderation channels.');
+    const cmd = String(b.command || '');
+    const here = (s) => at === 'all' || at === s;
+
+    if (['users', 'user', 'ban', 'unban', 'purge'].includes(cmd)) {
+      if (!here('account')) return say('Account commands work in the accounts channel.');
+      if (cmd === 'users') {
+        const found = await findAccounts(env, a.query);
+        return say(found.length ? found.slice(0, 15).map(acctLine).join('\n') : 'No account matches.');
+      }
+      const who = await this.resolveAccount(a.who);
+      if (who.error) return say(who.error);
+      if (cmd === 'ban' || cmd === 'unban') {
+        const r = await accountButton(env, cmd, who.sub, b.user_id, String(a.reason || '').slice(0, 200));
+        return say(r.message);
+      }
+      const nl = this.sql.exec("SELECT COUNT(*) AS n FROM levels WHERE sub = ? AND status != 'deleted'", who.sub).toArray()[0].n;
+      const nu = this.sql.exec("SELECT COUNT(*) AS n FROM units WHERE sub = ? AND status != 'deleted'", who.sub).toArray()[0].n;
+      if (cmd === 'user')
+        return say((who.acct ? acctLine(who.acct) : `<@${who.sub}> \`${who.sub}\` (never signed in)`) +
+                   `\nUploads: ${nl} map(s), ${nu} unit(s).`);
+      // purge: every upload of theirs deleted, no ban
+      for (const [kind, table] of [['map', 'levels'], ['unit', 'units']]) {
+        const rows = this.sql.exec(`SELECT * FROM ${table} WHERE sub = ? AND status != 'deleted'`, who.sub).toArray();
+        this.sql.exec(`UPDATE ${table} SET status = 'deleted', hidden = 1, decided = ? WHERE sub = ? AND status != 'deleted'`,
+                      Date.now(), who.sub);
+        for (const r of rows.slice(0, 20)) this.ctx.waitUntil(this.syncMessage(kind, r, 'deleted'));
+      }
+      return say(`Deleted ${nl} map(s) and ${nu} unit(s) of <@${who.sub}>.`);
+    }
+
+    let kind = String(a.kind || '');
+    if (kind !== 'map' && kind !== 'unit') kind = at === 'map' || at === 'unit' ? at : '';
+    if (!kind) return say('Say which: map or unit.');
+    if (!here(kind)) return say(`${kind === 'map' ? 'Map' : 'Unit'} commands work in the ${kind}s channel.`);
+    const table = kind === 'map' ? 'levels' : 'units';
+    const Kind = kind === 'map' ? 'Map' : 'Unit';
+
+    if (cmd === 'autoapprove') {
+      const on = a.on === true || a.on === 1 || a.on === 'on';
+      this.setCfg(kind === 'map' ? 'auto_approve' : 'auto_approve_units', on ? 1 : 0);
+      return say(`Auto-approve for ${kind}s is now **${on ? 'on' : 'off'}**.`);
+    }
+    if (['approve', 'unapprove', 'reject', 'delete'].includes(cmd)) {
+      const id = Number.parseInt(a.id, 10);
+      const row = this.sql.exec(`SELECT * FROM ${table} WHERE id = ?`, Number.isFinite(id) ? id : -1).toArray()[0];
+      if (!row) return say(`No ${kind} #${a.id}.`);
+      const status = { approve: 'approved', unapprove: 'pending', reject: 'rejected', delete: 'deleted' }[cmd];
+      this.sql.exec(`UPDATE ${table} SET status = ?, decided = ?${cmd === 'delete' ? ', hidden = 1' : ''} WHERE id = ?`,
+                    status, Date.now(), row.id);
+      this.ctx.waitUntil(this.syncMessage(kind, { ...row, status }, status));
+      const word = { approve: 'approved (public)', unapprove: 'back in the queue (not public)',
+                     reject: 'rejected', delete: 'deleted' }[cmd];
+      return say(`${Kind} #${row.id} "${row.name}" is ${word}.`);
+    }
+    if (cmd === 'queue') {
+      const rows = this.sql.exec(`SELECT * FROM ${table} WHERE status = 'pending' ORDER BY id LIMIT 25`).toArray();
+      if (!rows.length) return say(`No ${kind}s are waiting.`);
+      let posted = 0;
+      if (a.repost) for (const r of rows) if (await this.repost(kind, r)) ++posted;
+      return say(`${rows.length} ${kind}(s) waiting` + (a.repost ? `; posted again: ${posted}` : '') + ':\n' +
+                 rows.map((r) => `#${r.id} "${r.name}"` + (r.sub ? ` by <@${r.sub}>` : ' (legacy)')).join('\n'));
+    }
+    return say('Unknown command.');
+  }
+
 
   // The bot forwards a button press: {user_id, custom_id}. The reply tells the
   // bot how to update the message ({update: {embeds, components}}) or what to
@@ -831,18 +1117,24 @@ export class Levels extends DurableObject {
     if (!env.LEVELS_KEY || !timingSafeEqual(key, env.LEVELS_KEY)) return json(403, { ok: false, error: 'forbidden' });
     let b;
     try { b = JSON.parse(await request.text()); } catch { return json(400, { ok: false, error: 'bad request' }); }
-    // The moderator must be configured (secret LEVELS_ADMIN_USER), and the
-    // presser must be them; an unset value never matches.
-    const admin = String(env.LEVELS_ADMIN_USER || '');
-    if (!b || !/^\d{15,22}$/.test(admin) || String(b.user_id) !== admin)
-      return json(200, { ok: true, reply: 'Only the moderator can use these buttons.' });
+    // docs/501: the presser must be one of the moderators (var MODERATORS);
+    // an unset list matches nobody.
+    if (!b || !isModerator(env, b.user_id))
+      return json(200, { ok: true, reply: 'Only a moderator can use these buttons.' });
+    if (b.command) return this.command(b);   // docs/503: a slash command
     const id = String(b.custom_id || '');
+    const acct = /^lvl:acct:(ban|unban):([0-9]{5,25})$/.exec(id);
+    if (acct) {
+      const r = await accountButton(env, acct[1], acct[2], b.user_id);
+      return json(200, { ok: true, reply: r.message });
+    }
     const cfg = this.cfg();
     if (id === 'lvl:panel') return json(200, { ok: true, post: panelMessage(cfg, this.counts()) });
-    let m = /^lvl:cfg:(auto|uploads|refresh|day[-+0]|hour[-+0])$/.exec(id);
+    let m = /^lvl:cfg:(auto|uauto|uploads|refresh|day[-+0]|hour[-+0])$/.exec(id);
     if (m) {
       const k = m[1];
       if (k === 'auto') this.setCfg('auto_approve', cfg.auto_approve ? 0 : 1);
+      if (k === 'uauto') this.setCfg('auto_approve_units', cfg.auto_approve_units ? 0 : 1);
       if (k === 'uploads') this.setCfg('uploads', cfg.uploads ? 0 : 1);
       if (k === 'day-') this.setCfg('per_owner_day', Math.max(1, (cfg.per_owner_day || 4) - 1));
       if (k === 'day+') this.setCfg('per_owner_day', Math.min(50, (cfg.per_owner_day || 0) + 1));
@@ -852,7 +1144,7 @@ export class Levels extends DurableObject {
       if (k === 'hour0') this.setCfg('per_hour', 0);
       return json(200, { ok: true, update: panelMessage(this.cfg(), this.counts()) });
     }
-    if (id.startsWith('lvl:unit:')) return unitsAdmin(this, id);
+    if (id.startsWith('lvl:unit:')) return unitsAdmin(this, id, b.user_id);
     m = /^lvl:(approve|reject|ban):(\d{1,9})$/.exec(id);
     if (!m) return json(200, { ok: true, reply: 'Unknown button.' });
     const row = this.sql.exec('SELECT * FROM levels WHERE id = ?', Number.parseInt(m[2], 10)).toArray()[0];
@@ -860,7 +1152,13 @@ export class Levels extends DurableObject {
     let status = row.status;
     if (m[1] === 'approve') status = 'approved';
     if (m[1] === 'reject') status = 'rejected';
-    if (m[1] === 'ban') {
+    if (m[1] === 'ban' && row.sub) {
+      // A signed-in uploader: the account is banned, which takes down
+      // everything of theirs (Accounts -> purge).
+      await accountButton(env, 'ban', row.sub, b.user_id);
+      status = 'banned';
+      this.sql.exec("UPDATE levels SET status = 'banned', decided = ? WHERE id = ?", Date.now(), row.id);
+    } else if (m[1] === 'ban') {
       status = 'banned';
       this.sql.exec('INSERT OR REPLACE INTO bans (who, at, level) VALUES (?, ?, ?)', row.owner, Date.now(), row.id);
       if (row.addr) this.sql.exec('INSERT OR REPLACE INTO bans (who, at, level) VALUES (?, ?, ?)', row.addr, Date.now(), row.id);
@@ -870,7 +1168,9 @@ export class Levels extends DurableObject {
     } else {
       this.sql.exec('UPDATE levels SET status = ?, decided = ? WHERE id = ?', status, Date.now(), row.id);
     }
-    return json(200, { ok: true, update: { embeds: [levelEmbed(row, status)], components: levelButtons(row, status) } });
+    const update = { embeds: [levelEmbed(row, status)], components: levelButtons(row, status) };
+    this.ctx.waitUntil(editCopies(env, env.LEVELS_CHANNEL, row.message, row.mirror, update));   // docs/503
+    return json(200, { ok: true, update });
   }
 }
 

@@ -69,6 +69,9 @@ using socket_t = int;
 #  define lb_closesock ::close
 #endif
 
+// docs/501: "&v=...&auth=..." for an official server, "" for any other (lb_net.cpp).
+extern "C" int lb_net_auth_query(const char* host, int port, char* out, int cap);
+
 namespace {
 
 using Clock = std::chrono::steady_clock;
@@ -360,7 +363,10 @@ bool ws_open(Session& s, const std::string& path, int timeout_ms,
         s.rng ^= (uint32_t)Clock::now().time_since_epoch().count() | 1u;
         for (uint8_t& b : key) b = (uint8_t)next_rand(s.rng);
     }
-    std::string req = "GET " + path + " HTTP/1.1\r\n";
+    // docs/501: the official relays want the sign-in and the build too.
+    char aq[2200] = "";
+    lb_net_auth_query(s.server.c_str(), s.port, aq, (int)sizeof aq);
+    std::string req = "GET " + path + aq + " HTTP/1.1\r\n";
     req += "Host: " + s.server + (s.port == 80 ? std::string() : ":" + std::to_string(s.port)) +
            "\r\n";
     req += "Upgrade: websocket\r\nConnection: Upgrade\r\n";

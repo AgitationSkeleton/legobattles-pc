@@ -46,6 +46,13 @@ for (const kv of (process.env.LB_FALLBACK_VARS || '').split(',').filter(Boolean)
   const i = kv.indexOf('=');
   if (i > 0) bindings[kv.slice(0, i)] = kv.slice(i + 1);
 }
+// docs/501 (security review): with sign-in required, the public key and the
+// main server (for its bans) are needed; without them this server would
+// let every token through, or none, so it does not start.
+if (bindings.REQUIRE_SIGNIN === '1' && (!bindings.AUTH_PUBLIC_KEY || !/^https:\/\//.test(bindings.AUTH_UPSTREAM || ''))) {
+  console.error('[lb-fallback] REQUIRE_SIGNIN is 1 but AUTH_PUBLIC_KEY or AUTH_UPSTREAM (https) is missing in config.json "vars"');
+  process.exit(1);
+}
 const dataOverride = process.env.LB_FALLBACK_DATA;
 // Discord lines from this server say so, so the channel can tell them apart.
 bindings.SERVER_LABEL = String(cfg.server_label || 'fallback');

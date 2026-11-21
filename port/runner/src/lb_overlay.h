@@ -653,6 +653,24 @@ int lb_net_http_post(const char* host, int port, const char* path, const char* b
                      char* out, int cap);
 /* docs/443: the second server of "Both" (or LB_EXTRA_SERVER), if any. */
 int lb_net_extra_server(char* host, int cap, int* port);
+/* docs/501 (lb_net.cpp): the Discord session token for the official servers ("" signed
+   out); their last refusal (sign in / update); the relay's query for one server. */
+void lb_net_set_auth(const char* token);
+/* docs/502 (lb_chat.cpp): 1 when a name or text holds a slur. */
+int  lb_name_has_slur(const char* text);
+int  lb_net_auth_problem(char* out, int cap);
+void lb_net_auth_problem_clear(void);
+int  lb_net_auth_query(const char* host, int port, char* out, int cap);
+/* docs/501: the sign-in's loopback listener (RFC 8252), its finish, and signing out. */
+long long lb_net_signin_listen(int* port_out);
+int  lb_net_signin_wait(long long sock, const char* state, int ms, char* ticket, int cap);
+void lb_net_signin_close(long long sock);
+int  lb_net_signin_finish(const char* state, const char* ticket, char* out, int cap);
+void lb_net_signout(const char* token);
+/* docs/501: Direct IP play: listen while the game hosts; point at "address:port". */
+void lb_net_direct_tick(int on);
+void lb_net_direct_join(const char* spec);
+int  lb_net_direct_status(char* out, int cap);
 /* SG-0029: a joiner's lobby server, and whether the fallback is in use. */
 int lb_net_peer_server(char* out, int cap);
 int lb_net_fallback_on(void);

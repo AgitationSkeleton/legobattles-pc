@@ -11158,6 +11158,8 @@ void filter_lobby_name(uint32_t entry) {
     char name[12];
     for (uint32_t i = 0; i < 11u; ++i) name[i] = (char)bus_read_u8(entry + i);
     name[11] = '\0';
+    // docs/502: with the swear filter off, only a slur is replaced.
+    if (!lb_setting_swear_filter() && !lb_name_has_slur(name)) return;
     char out[64];
     if (!lb_swear_filter(name, out, (int)sizeof out)) return;
     out[10] = '\0';   // the game's 10 characters
@@ -11172,7 +11174,7 @@ void filter_lobby_name(uint32_t entry) {
 // slot is the u16 at 0x02158AE0 (FUN_020F45E0).
 void lobby_names_filter(uint32_t pkt) {
     if (!guest_ptr(pkt)) return;
-    const bool on = lb_setting_swear_filter() != 0;
+    const bool on = true;   // docs/502: filter_lobby_name decides (slurs always)
     const uint8_t type = bus_read_u8(pkt);
     if (type == 1u) {
         if (on) filter_lobby_name(pkt + 4u);

@@ -113,11 +113,210 @@ bool lb_https_request(const std::string& host, int port, const std::string& meth
                       const std::string& path, const std::string& body,
                       std::string* reply, std::string* error);
 namespace {
+// docs/501: THE DISCORD SIGN-IN, ON THE WIRE. Two tokens (security review):
+//   * the ACCOUNT token (auth.json, 30 days) can publish, delete and change
+//     scores. It goes ONLY to the main server, ONLY over HTTPS, ONLY in a POST
+//     body -- never in a URL, never in the clear, never to King or the
+//     fallback, which speak plain HTTP;
+//   * a PLAY token (2 hours, lobby use only), had for the account token from
+//     the main server's /auth/play over HTTPS, goes everywhere else: the
+//     lobby routes of all three official servers (King and the fallback
+//     included), every GET, the relay, and any request that ends up over
+//     plain HTTP. A stolen one is worth two hours of lobby access.
+// Both go to the three official hosts only -- a self-hosted or custom master
+// server never sees either. The overlay owns auth.json (lb_net_set_auth). A
+// refusal (the reply's "reason" is "signin" or "update") is kept for the
+// Multiplayer tab.
+std::string json_str(const char* text);   /* below */
+std::mutex g_auth_mu;
+std::string g_auth_token;     // under g_auth_mu; the account token, "" signed out
+std::string g_play_token;     // under g_auth_mu; the current play token
+long long g_play_exp = 0;     // under g_auth_mu; its expiry (unix seconds)
+long long g_play_retry = 0;   // under g_auth_mu; no new try before (unix seconds)
+std::mutex g_play_fetch_mu;   // one /auth/play at a time
+std::string g_auth_problem;   // under g_auth_mu; the last refusal's message
+constexpr const char* kMainHost = "lbserver.viosarcade.xyz";
+
+const char* auth_test_host() {
+    // Test aid: LB_AUTH_TEST_HOST=host:port is treated as the official main
+    // server (a local `wrangler dev`, plain HTTP), so the sign-in path is
+    // tested without the live servers.
+    static const char* test = std::getenv("LB_AUTH_TEST_HOST");
+    return test && *test ? test : nullptr;
+}
+
+bool auth_is_test(const std::string& host, int port) {
+    const char* t = auth_test_host();
+    return t && host + ":" + std::to_string(port) == t;
+}
+
+bool auth_official(std::string host, int port) {
+    for (char& c : host) c = (char)std::tolower((unsigned char)c);
+    if (auth_is_test(host, port)) return true;
+    if (host == kMainHost) return port == 80 || port == 443;
+    if (host == "lbfallback.viosarcade.xyz") return port == 8787;
+    if (host == "king.legobattles.win") return port == 28555;
+    return false;
+}
+
+bool auth_is_main(std::string host, int port) {
+    for (char& c : host) c = (char)std::tolower((unsigned char)c);
+    return auth_is_test(host, port) || (host == kMainHost && (port == 80 || port == 443));
+}
+
+std::string auth_url_part(const std::string& v) {
+    static const char* hex = "0123456789ABCDEF";
+    std::string o;
+    for (unsigned char c : v) {
+        if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~') o += (char)c;
+        else { o += '%'; o += hex[c >> 4]; o += hex[c & 15]; }
+    }
+    return o;
+}
+
+std::string auth_token() {
+    std::lock_guard<std::mutex> lk(g_auth_mu);
+    return g_auth_token;
+}
+
+std::string http_request_raw(const std::string& host, int port,
+                             const std::string& method, const std::string& path,
+                             const std::string& body, std::string* error, int* status);
+
+// A request to the main server that carries the account token: HTTPS, or
+// (the test host only) its plain HTTP. False when it could not be made.
+bool main_secure(const std::string& method, const std::string& path, const std::string& body,
+                 std::string* reply) {
+    std::string err;
+    if (const char* t = auth_test_host()) {
+        const std::string spec = t;
+        const size_t c = spec.rfind(':');
+        int status = 0;
+        *reply = http_request_raw(spec.substr(0, c), std::atoi(spec.c_str() + c + 1), method, path, body,
+                                  &err, &status);
+        return err.empty();
+    }
+    return lb_https_request(kMainHost, 443, method, path, body, reply, &err);
+}
+
+// The current play token, fetched (over HTTPS, for the account token) when
+// there is none or it has less than 10 minutes left; "" without a sign-in.
+std::string play_token() {
+    const long long now = (long long)std::time(nullptr);
+    std::string acct;
+    {
+        std::lock_guard<std::mutex> lk(g_auth_mu);
+        if (!g_play_token.empty() && g_play_exp - now > 600) return g_play_token;
+        if (g_auth_token.empty() || now < g_play_retry) return g_play_token;
+        acct = g_auth_token;
+    }
+    std::lock_guard<std::mutex> fetch(g_play_fetch_mu);
+    {
+        std::lock_guard<std::mutex> lk(g_auth_mu);   // another thread may have just fetched it
+        if (!g_play_token.empty() && g_play_exp - now > 600) return g_play_token;
+    }
+    std::string reply;
+    const bool ok = main_secure("POST", "/auth/play", "{\"auth\":" + json_str(acct.c_str()) + "}", &reply);
+    std::string tok;
+    long long exp = 0;
+    const size_t k = reply.find("\"token\":\"");
+    if (ok && k != std::string::npos) {
+        for (size_t i = k + 9; i < reply.size() && reply[i] != '"'; ++i) tok += reply[i];
+        const size_t e = reply.find("\"exp\":");
+        if (e != std::string::npos) exp = std::atoll(reply.c_str() + e + 6);
+    }
+    std::lock_guard<std::mutex> lk(g_auth_mu);
+    if (!tok.empty() && exp > now) {
+        g_play_token = tok;
+        g_play_exp = exp;
+    } else {
+        g_play_retry = now + 30;   // the main server could not be had: not again for 30 s
+        if (ok && reply.find("\"reason\":\"signin\"") != std::string::npos) g_play_token.clear();
+    }
+    return g_play_token;
+}
+
+// "v=...&auth=<play token>" for an official host, "" for any other.
+std::string auth_query(const std::string& host, int port) {
+    if (!auth_official(host, port)) return {};
+    std::string q = "v=" + auth_url_part(lb_port_version());
+    const std::string t = play_token();
+    if (!t.empty()) q += "&auth=" + auth_url_part(t);
+    return q;
+}
+
+// `token` and the build into a JSON body (unless it names its own).
+void auth_into_body(std::string& body, const std::string& token) {
+    if (body.empty() || body[0] != '{') return;
+    std::string add;
+    if (body.find("\"version\":") == std::string::npos)
+        add += "\"version\":" + json_str(lb_port_version()) + ",";
+    if (!token.empty() && body.find("\"auth\":") == std::string::npos)
+        add += "\"auth\":" + json_str(token.c_str()) + ",";
+    if (add.empty()) return;
+    size_t i = 1;
+    while (i < body.size() && std::isspace((unsigned char)body[i])) ++i;
+    if (i < body.size() && body[i] == '}') add.pop_back();   // "{}": no trailing comma
+    body.insert(1, add);
+}
+
+// The play token, in the query (King checks a large POST's sign-in before it
+// reads the body) and in a JSON body.
+void auth_decorate_play(const std::string& host, int port, std::string& path, std::string& body) {
+    if (!auth_official(host, port)) return;
+    path += (path.find('?') == std::string::npos ? "?" : "&") + auth_query(host, port);
+    auth_into_body(body, play_token());
+}
+
+// A refusal from an official server, kept by its message.
+void auth_note(const std::string& host, int port, const std::string& reply) {
+    if (!auth_official(host, port)) return;
+    if (reply.find("\"reason\":\"signin\"") == std::string::npos &&
+        reply.find("\"reason\":\"update\"") == std::string::npos)
+        return;
+    std::string msg;
+    const size_t k = reply.find("\"message\":\"");
+    if (k != std::string::npos)
+        for (size_t i = k + 11; i < reply.size() && reply[i] != '"'; ++i) {
+            if (reply[i] == '\\' && i + 1 < reply.size()) ++i;
+            msg += reply[i];
+        }
+    if (msg.empty()) msg = "The server refused this request: sign in with Discord.";
+    std::lock_guard<std::mutex> lk(g_auth_mu);
+    if (g_auth_problem != msg)
+        std::fprintf(stderr, "[lb_auth] %s refused: %s\n", host.c_str(),
+                     reply.find("\"reason\":\"update\"") != std::string::npos ? "update needed" : "not signed in");
+    g_auth_problem = msg;
+}
+
 // One request, as it goes: `*status` gets the reply's HTTP status (0 when
 // there was none to read, or the HTTPS path answered).
 std::string http_request_once(const std::string& host, int port,
-                              const std::string& method, const std::string& path,
-                              const std::string& body, std::string* error, int* status) {
+                              const std::string& method, const std::string& path_in,
+                              const std::string& body_in, std::string* error, int* status) {
+    if (!auth_official(host, port)) return http_request_raw(host, port, method, path_in, body_in, error, status);
+    // A POST to the main server: the account token, over HTTPS only.
+    const std::string acct = auth_token();
+    if (auth_is_main(host, port) && method == "POST" && !acct.empty() && !body_in.empty() && body_in[0] == '{') {
+        std::string body = body_in, reply;
+        auth_into_body(body, acct);
+        if (main_secure(method, path_in, body, &reply)) {
+            *status = 0;
+            auth_note(host, port, reply);
+            return reply;
+        }
+        // No HTTPS: what follows carries the play token, never the account one.
+    }
+    std::string path = path_in, body = body_in;
+    auth_decorate_play(host, port, path, body);
+    std::string r = http_request_raw(host, port, method, path, body, error, status);
+    auth_note(host, port, r);
+    return r;
+}
+
+std::string http_request_raw(const std::string& host, int port,
+                             const std::string& method, const std::string& path,
+                             const std::string& body, std::string* error, int* status) {
     *status = 0;
     if (lb_setting_master_https()) {
         std::string reply, herr;
@@ -2239,6 +2438,226 @@ extern "C" void lb_net_auto_tick(const char* server, int port,
     }
 
     relay_tick(s, server, port, now_ms);   // docs/424
+}
+
+// docs/501: the session token from the overlay (auth.json), "" when signed
+// out. Only base64url and dots are taken, so it can go into a URL as it is.
+extern "C" void lb_net_set_auth(const char* token) {
+    std::string t = token ? token : "";
+    for (char c : t)
+        if (!(std::isalnum((unsigned char)c) || c == '-' || c == '_' || c == '.')) { t.clear(); break; }
+    if (t.size() > 2048) t.clear();
+    std::lock_guard<std::mutex> lk(g_auth_mu);
+    if (t != g_auth_token) {
+        g_auth_problem.clear();
+        g_play_token.clear();
+        g_play_exp = 0;
+        g_play_retry = 0;
+    }
+    g_auth_token = t;
+}
+
+// docs/501 (security review): THE SIGN-IN COMES BACK TO THIS MACHINE. The
+// game listens on 127.0.0.1 (a port the system picks); the main server's
+// callback sends the browser to http://127.0.0.1:<port>/lb-signin with the
+// sign-in's state and a one-time ticket (RFC 8252). Only the browser of the
+// person who signed in reaches this listener, so a sign-in link someone else
+// made can never hand them the token. Returns the listening socket, or -1.
+extern "C" long long lb_net_signin_listen(int* port_out) {
+    SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (s == INVALID_SOCKET) return -1;
+    sockaddr_in a{};
+    a.sin_family = AF_INET;
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    a.sin_port = 0;
+    socklen_t n = sizeof a;
+    if (bind(s, (sockaddr*)&a, sizeof a) != 0 || listen(s, 4) != 0 ||
+        getsockname(s, (sockaddr*)&a, &n) != 0) {
+        closesocket(s);
+        return -1;
+    }
+    *port_out = ntohs(a.sin_port);
+    return (long long)s;
+}
+
+// One browser visit, waited for up to `ms`: 1 with the ticket (the visit's
+// state matched `state`), 0 when nothing came, -1 on an error. A visit with
+// the wrong state is answered and ignored.
+extern "C" int lb_net_signin_wait(long long sock, const char* state, int ms, char* ticket, int cap) {
+    const SOCKET s = (SOCKET)sock;
+    fd_set fds;
+    FD_ZERO(&fds);
+    FD_SET(s, &fds);
+    timeval tv{ms / 1000, (ms % 1000) * 1000};
+    const int r = select((int)s + 1, &fds, nullptr, nullptr, &tv);
+    if (r < 0) return -1;
+    if (r == 0) return 0;
+    SOCKET c = accept(s, nullptr, nullptr);
+    if (c == INVALID_SOCKET) return 0;
+    std::string req;
+    char buf[1024];
+    for (int i = 0; i < 8 && req.find("\r\n") == std::string::npos && req.size() < 4096; ++i) {
+        fd_set cf;
+        FD_ZERO(&cf);
+        FD_SET(c, &cf);
+        timeval ct{2, 0};
+        if (select((int)c + 1, &cf, nullptr, nullptr, &ct) <= 0) break;
+        const int got = recv(c, buf, (int)sizeof buf, 0);
+        if (got <= 0) break;
+        req.append(buf, (size_t)got);
+    }
+    auto param = [&](const char* key) {
+        const std::string k = std::string(key) + "=";
+        size_t at = req.find("?" + k);
+        if (at == std::string::npos) at = req.find("&" + k);
+        std::string v;
+        if (at == std::string::npos) return v;
+        for (size_t i = at + 1 + k.size(); i < req.size() && std::isxdigit((unsigned char)req[i]) && v.size() < 64; ++i)
+            v += req[i];
+        return v;
+    };
+    static const std::string kPrefix = "GET /lb-signin?";
+    const bool ours = req.compare(0, kPrefix.size(), kPrefix) == 0 && param("state") == (state ? state : "");
+    const std::string tk = ours ? param("ticket") : "";
+    const std::string page = ours && tk.size() == 32
+        ? "<!doctype html><meta charset=utf-8><title>LEGO Battles PC</title><body style=\"font-family:sans-serif;"
+          "background:#1b1d2a;color:#eee;text-align:center;padding-top:20vh\"><h2>Signed in</h2>"
+          "<p>You can close this page and go back to the game.</p>"
+        : "<!doctype html><meta charset=utf-8><title>LEGO Battles PC</title><body style=\"font-family:sans-serif;"
+          "background:#1b1d2a;color:#eee;text-align:center;padding-top:20vh\"><h2>Not this sign-in</h2>"
+          "<p>Start the sign-in from the game.</p>";
+    const std::string resp = "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: " +
+                             std::to_string(page.size()) + "\r\nConnection: close\r\n\r\n" + page;
+    send(c, resp.data(), (int)resp.size(), 0);
+    closesocket(c);
+    if (!ours || tk.size() != 32) return 0;
+    std::snprintf(ticket, (size_t)cap, "%s", tk.c_str());
+    return 1;
+}
+
+extern "C" void lb_net_signin_close(long long sock) {
+    if (sock >= 0) closesocket((SOCKET)sock);
+}
+
+// The account token for a finished sign-in: /auth/poll with the ticket, over
+// HTTPS only (the reply holds the token). The reply into `out`; its length,
+// or -1.
+extern "C" int lb_net_signin_finish(const char* state, const char* ticket, char* out, int cap) {
+    std::string reply;
+    const std::string path = std::string("/auth/poll?state=") + (state ? state : "") + "&ticket=" + (ticket ? ticket : "");
+    if (!main_secure("GET", path, "", &reply) || cap <= 0) return -1;
+    std::snprintf(out, (size_t)cap, "%s", reply.c_str());
+    return (int)std::strlen(out);
+}
+
+// Signing out voids the account's tokens on the server too (best effort).
+extern "C" void lb_net_signout(const char* token) {
+    const std::string t = token ? token : "";
+    if (t.empty()) return;
+    std::thread([t] {
+        std::string reply;
+        main_secure("POST", "/auth/signout", "{\"auth\":" + json_str(t.c_str()) + "}", &reply);
+    }).detach();
+}
+
+// The official servers' last refusal (sign in / update), "" when none.
+extern "C" int lb_net_auth_problem(char* out, int cap) {
+    if (!out || cap <= 0) return 0;
+    std::lock_guard<std::mutex> lk(g_auth_mu);
+    std::snprintf(out, (size_t)cap, "%s", g_auth_problem.c_str());
+    return (int)g_auth_problem.size();
+}
+extern "C" void lb_net_auth_problem_clear(void) {
+    std::lock_guard<std::mutex> lk(g_auth_mu);
+    g_auth_problem.clear();
+}
+
+// For the relay's WebSocket (lb_relay.cpp): "&v=...&auth=..." for an
+// official host, "" for any other.
+extern "C" int lb_net_auth_query(const char* host, int port, char* out, int cap) {
+    if (!out || cap <= 0) return 0;
+    const std::string q = auth_query(host ? host : "", port);
+    std::snprintf(out, (size_t)cap, "%s", q.empty() ? "" : ("&" + q).c_str());
+    return (int)std::strlen(out);
+}
+
+// docs/501: DIRECT IP PLAY, with no master server and no account. A host's
+// lobby listens on its UDP port while the game's Host screen is open (as an
+// advertised lobby does, without the advertisement); a joiner points the
+// bridge at "host:port" and joins from the game's own Join screen. The
+// router must let the host's port in (UPnP, or a forwarded port).
+namespace {
+bool g_direct_listening = false;
+std::atomic<bool> g_direct_busy{false};
+std::string g_direct_status;   // under g_mutex
+}  // namespace
+
+extern "C" void lb_net_direct_tick(int on) {
+    const int s = g_guest_state.load();
+    const bool want = on && (s == 2 || s == 10);
+    if (want == g_direct_listening) return;
+    g_direct_listening = want;
+    if (want) {
+        remember_manual_peer(0u, 0u);   // a host takes whoever comes
+        forget_learned_peer();
+        nds_local_wireless_set_listen(1);
+        request_stun();
+        std::fprintf(stderr, "[lb_net] direct: hosting, listening on UDP %u\n",
+                     (unsigned)nds_local_wireless_port());
+    } else {
+        nds_local_wireless_set_listen(0);
+        std::fprintf(stderr, "[lb_net] direct: no longer listening\n");
+    }
+}
+
+extern "C" void lb_net_direct_join(const char* spec_in) {
+    std::string spec = spec_in ? spec_in : "";
+    while (!spec.empty() && std::isspace((unsigned char)spec.back())) spec.pop_back();
+    while (!spec.empty() && std::isspace((unsigned char)spec.front())) spec.erase(0, 1);
+    const size_t colon = spec.rfind(':');
+    const std::string host = colon == std::string::npos ? spec : spec.substr(0, colon);
+    const int port = colon == std::string::npos ? 0 : std::atoi(spec.c_str() + colon + 1);
+    if (host.empty() || port <= 0 || port > 65535) {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        g_direct_status = "Enter the host's address as address:port (the port the host's panel shows).";
+        return;
+    }
+    if (g_direct_busy.exchange(true)) return;
+    {
+        std::lock_guard<std::mutex> lock(g_mutex);
+        g_direct_status = "Looking up " + host + "...";
+    }
+    std::thread([host, port] {
+        const uint32_t ip = resolve_ipv4(host.c_str());
+        std::string msg;
+        if (ip == INADDR_NONE) {
+            msg = "Cannot find " + host + ".";
+        } else {
+            remember_manual_peer(ip, (uint16_t)port);
+            std::lock_guard<std::mutex> lock(g_mutex);
+            g_join_ip = ip;
+            g_join_port = (uint16_t)port;
+            g_join_pending = true;   // to the bridge on the frame thread
+            g_peer_code.clear();     // no lobby on any master server
+            g_peer_server.clear();
+            g_peer_sport = 0;
+            msg = "Connected to " + ip_text(ip) + ":" + std::to_string(port) +
+                  ". Now join from the game's Multiplayer > Join screen.";
+            std::fprintf(stderr, "[lb_net] direct: peer %s:%d\n", ip_text(ip).c_str(), port);
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_mutex);
+            g_direct_status = msg;
+        }
+        g_direct_busy = false;
+    }).detach();
+}
+
+extern "C" int lb_net_direct_status(char* out, int cap) {
+    if (!out || cap <= 0) return 0;
+    std::lock_guard<std::mutex> lock(g_mutex);
+    std::snprintf(out, (size_t)cap, "%s", g_direct_status.c_str());
+    return (int)g_direct_status.size();
 }
 
 // LB_MP_PEER=host:port and LB_MP_LISTEN=1 do from the command line what the

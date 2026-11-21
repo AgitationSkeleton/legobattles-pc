@@ -7,5 +7,11 @@
   "DISCORD_WEBHOOK": "",
   "DISCORD_WEBHOOK_2": "",
   "ADMIN_KEY": "",
-  "debug": false
+  "debug": false,
+  "vars": {
+    "REQUIRE_SIGNIN": "1",
+    "MIN_CLIENT_VERSION": "0.4.26",
+    "AUTH_PUBLIC_KEY": "<the main server's /auth/key, as one line of JSON>",
+    "AUTH_UPSTREAM": "https://lbserver.viosarcade.xyz"
+  }
 }

@@ -40,6 +40,10 @@ export const CATEGORY_NAMES = ['Hero', 'Builder', 'Melee', 'Ranged', 'Mounted', 
   'Gate', 'Wall'];
 const MAX_CATEGORY = CATEGORY_NAMES.length - 1;
 const DISCORD = 'https://discord.com/api/v10';
+import { SIGNIN_MESSAGE, accountButton } from './auth.js';
+import { hasSlur } from './slur.js';
+import { postCopies, editCopies } from './modpost.js';
+import { uploaderField } from './levels.js';
 
 function json(status, payload, cache) {
   return new Response(JSON.stringify(payload), {
@@ -127,9 +131,28 @@ export function validateBundle(b) {
     if (path === 'unit.json') unitJson = d;
   }
   if (at !== b.length) return { ok: false, why: 'trailing bytes' };
+  // docs/502: no file of the unit may carry a slur in its name.
+  for (const p of seen) {
+    const leaf = p.split('/').pop().replace(/\.[^.]*$/, '');
+    if (hasSlur(leaf)) return { ok: false, why: 'a file name in the unit is not allowed' };
+  }
   if (!unitJson || unitJson.length > 256 * 1024) return { ok: false, why: 'no unit.json' };
   let j;
   try { j = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(unitJson)); } catch { return { ok: false, why: 'unit.json is not JSON' }; }
+  // docs/502: nor any text in unit.json, keys included (names, descriptions,
+  // credits). Past the caps the unit is refused, not half checked; a long
+  // text is checked in overlapping pieces.
+  const texts = [];
+  let deep = false, chars = 0;
+  (function walk(v, depth) {
+    if (depth > 8) { deep = true; return; }
+    if (typeof v === 'string') { texts.push(v); chars += v.length; }
+    else if (Array.isArray(v)) for (const x of v) walk(x, depth + 1);
+    else if (v && typeof v === 'object') for (const k of Object.keys(v)) { texts.push(k); walk(v[k], depth + 1); }
+  })(j, 0);
+  if (deep || texts.length > 4000 || chars > 65536) return { ok: false, why: 'unit.json is too large or too deep' };
+  const pieces = (t) => { const o = []; for (let i = 0; i < t.length; i += 480) o.push(t.slice(Math.max(0, i - 32), i + 480)); return o.length ? o : ['']; };
+  if (texts.some((t) => pieces(t).some((x) => hasSlur(x)))) return { ok: false, why: 'a name or text in the unit is not allowed' };
   if (!j || typeof j !== 'object' || !Number.isInteger(j.index) || j.index < 0 || j.index > 181)
     return { ok: false, why: 'unit.json has no template index' };
   if (j.fields !== undefined) {
@@ -141,7 +164,7 @@ export function validateBundle(b) {
 }
 
 // ------------------------------------------------------------ moderation ----
-function unitEmbed(row, status) {
+export function unitEmbed(row, status) {
   const colour = status === 'approved' ? 0x3ba55d : status === 'rejected' ? 0xed4245
                : status === 'banned' ? 0x8b0000 : 0xfaa61a;
   return {
@@ -153,14 +176,14 @@ function unitEmbed(row, status) {
       { name: 'Template', value: String(row.template), inline: true },
       { name: 'Sounds', value: String(row.sounds), inline: true },
       { name: 'Status', value: status, inline: true },
-      { name: 'Uploader', value: '`' + row.owner.slice(0, 10) + '`', inline: true },
+      { name: 'Uploader', value: uploaderField(row), inline: true },
       { name: 'Unit', value: '#' + row.id, inline: true },
     ],
     image: { url: 'attachment://sheet.png' },
     timestamp: new Date(row.created).toISOString(),
   };
 }
-function unitButtons(row, status) {
+export function unitButtons(row, status) {
   if (status !== 'pending')
     return [{ type: 1, components: [
       { type: 2, style: 2, label: status === 'approved' ? 'Unpublish' : 'Approve after all',
@@ -200,31 +223,34 @@ export async function unitsFetch(obj, request, url, path) {
     const byCat = Number.isInteger(cat) && cat >= 0 && cat <= MAX_CATEGORY;
     const rows = sql.exec(
       `SELECT id, name, author, credits, category, template, sounds, size, downloads, likes, created, hash FROM units
-         WHERE status = 'approved' ${byCat ? 'AND category = ?' : ''} ORDER BY ${order} LIMIT ? OFFSET ?`,
+         WHERE status = 'approved' AND hidden = 0 ${byCat ? 'AND category = ?' : ''} ORDER BY ${order} LIMIT ? OFFSET ?`,
       ...(byCat ? [cat, limit, offset] : [limit, offset])).toArray();
-    const total = sql.exec(`SELECT COUNT(*) AS n FROM units WHERE status = 'approved' ${byCat ? 'AND category = ?' : ''}`,
+    const total = sql.exec(`SELECT COUNT(*) AS n FROM units WHERE status = 'approved' AND hidden = 0 ${byCat ? 'AND category = ?' : ''}`,
       ...(byCat ? [cat] : [])).toArray()[0].n;
     return json(200, { ok: true, total, units: rows });
   }
   if (request.method === 'GET' && (path === '/units/get' || path === '/units/thumb')) {
     const id = Number.parseInt(url.searchParams.get('id') || '', 10);
     if (!Number.isFinite(id) || id < 1) return json(400, { ok: false, error: 'id' });
-    const r = sql.exec("SELECT id, name, author, credits, category, template, hash, bundle, thumb FROM units WHERE id = ? AND status = 'approved'", id).toArray()[0];
+    const r = sql.exec("SELECT id, name, author, credits, category, template, hash, bundle, thumb FROM units WHERE id = ? AND status = 'approved' AND hidden = 0", id).toArray()[0];
     if (!r) return json(404, { ok: false, error: 'no such unit' });
     if (path === '/units/thumb')
       return json(200, { ok: true, id: r.id, png: r.thumb ? bytesB64(new Uint8Array(r.thumb)) : '' }, 'public, max-age=86400');
-    if (url.searchParams.get('count') === '1') sql.exec('UPDATE units SET downloads = downloads + 1 WHERE id = ?', id);
+    if (url.searchParams.get('count') === '1' && obj.countOnce('u', id, request))
+      sql.exec('UPDATE units SET downloads = downloads + 1 WHERE id = ?', id);
     return json(200, { ok: true, id: r.id, name: r.name, author: r.author, credits: r.credits || '', category: r.category, template: r.template,
       hash: r.hash, bundle: bytesB64(new Uint8Array(r.bundle)) });
   }
   if (request.method === 'POST' && path === '/units/like') {
     let b;
     try { b = JSON.parse(await request.text()); } catch { return json(400, { ok: false, error: 'bad request' }); }
-    if (!b || typeof b !== 'object' || !KEY_OK.test(String(b.key || ''))) return json(400, { ok: false, error: 'bad request' });
-    const owner = await sha256hex(new TextEncoder().encode(String(b.key).toLowerCase()));
+    if (!b || typeof b !== 'object') return json(400, { ok: false, error: 'bad request' });
+    const me = await obj.player(b);
+    if (!me) return json(401, { ok: false, error: SIGNIN_MESSAGE, reason: 'signin', message: SIGNIN_MESSAGE });
+    const owner = me.owner;
     const id = Number.parseInt(b.id, 10);
     if (!Number.isFinite(id) || id < 1) return json(400, { ok: false, error: 'id' });
-    if (!sql.exec("SELECT 1 FROM units WHERE id = ? AND status = 'approved'", id).toArray().length)
+    if (!sql.exec("SELECT 1 FROM units WHERE id = ? AND status = 'approved' AND hidden = 0", id).toArray().length)
       return json(404, { ok: false, error: 'no such unit' });
     if (b.like === false) sql.exec('DELETE FROM unit_likes WHERE unit = ? AND owner = ?', id, owner);
     else sql.exec('INSERT OR IGNORE INTO unit_likes (unit, owner) VALUES (?, ?)', id, owner);
@@ -232,16 +258,40 @@ export async function unitsFetch(obj, request, url, path) {
     sql.exec('UPDATE units SET likes = ? WHERE id = ?', n, id);
     return json(200, { ok: true, id, likes: n, liked: b.like !== false });
   }
-  if (request.method === 'POST' && path === '/units/delete') {
-    let b;
-    try { b = JSON.parse(await request.text()); } catch { return json(400, { ok: false, error: 'bad request' }); }
-    if (!b || !KEY_OK.test(String(b.key || ''))) return json(400, { ok: false, error: 'bad request' });
-    const owner = await sha256hex(new TextEncoder().encode(String(b.key).toLowerCase()));
-    const id = Number.parseInt(b.id, 10);
-    if (!sql.exec('SELECT id FROM units WHERE id = ? AND owner = ?', id, owner).toArray()[0])
-      return json(404, { ok: false, error: 'no such unit of yours' });
-    sql.exec('DELETE FROM units WHERE id = ?', id);
-    return json(200, { ok: true });
+  // docs/501: a signed-in uploader's own units: delete (the data goes, the row
+  // stays for the showcase sync), hide or show, rename.
+  if (request.method === 'POST' && (path === '/units/delete' || path === '/units/hide' || path === '/units/edit')) {
+    const { err, b, row } = await obj.ownRow(request, 'units');
+    if (err) return err;
+    if (path === '/units/delete') {
+      sql.exec("UPDATE units SET status = 'deleted', hidden = 1, decided = ? WHERE id = ?", Date.now(), row.id);
+      return json(200, { ok: true });
+    }
+    if (path === '/units/hide') {
+      sql.exec('UPDATE units SET hidden = ? WHERE id = ?', b.hidden === false ? 0 : 1, row.id);
+      return json(200, { ok: true, hidden: b.hidden !== false });
+    }
+    const clean = (v) => {
+      const s = String(v == null ? '' : v).trim();
+      return NAME_OK.test(s) && !obj.swear(s) ? s : null;
+    };
+    const name = b.name !== undefined ? clean(b.name) : row.name;
+    if (!name) return json(400, { ok: false, error: 'the unit name is not allowed' });
+    const author = b.author !== undefined ? (b.author ? clean(b.author) : '') : row.author;
+    if (author === null) return json(400, { ok: false, error: 'the author name is not allowed' });
+    sql.exec('UPDATE units SET name = ?, author = ? WHERE id = ?', name, author || '', row.id);
+    // security review: a renamed published unit goes back to the moderators.
+    if (row.status === 'approved' && (name !== row.name || (author || '') !== (row.author || '')) && !obj.cfg().auto_approve_units) {
+      sql.exec("UPDATE units SET status = 'pending' WHERE id = ?", row.id);
+      obj.ctx.waitUntil(obj.syncMessage('unit', { ...row, name, author: author || '', status: 'pending' }, 'pending'));
+    }
+    if (row.status === 'approved' && row.relayed && row.relayed !== 'err') {
+      const old = row.relayed;
+      sql.exec('UPDATE units SET relayed = NULL WHERE id = ?', row.id);
+      obj.ctx.waitUntil(fetch(`${obj.env.DISCORD_API_BASE || DISCORD}/channels/${obj.env.SHOWCASE_CHANNEL}/messages/${old}`,
+        { method: 'DELETE', headers: { Authorization: 'Bot ' + obj.env.LEVELS_BOT_TOKEN } }).catch(() => null));
+    }
+    return json(200, { ok: true, name, author: author || '' });
   }
   if (request.method === 'POST' && path === '/units/upload') return upload(obj, request);
   return json(404, { ok: false, error: 'no such endpoint' });
@@ -256,8 +306,11 @@ async function upload(obj, request) {
   if (!b || typeof b !== 'object' || Array.isArray(b)) return json(400, { ok: false, error: 'bad request' });
   const cfg = obj.cfg();
   if (!cfg.uploads) return json(403, { ok: false, error: 'uploads are closed for now' });
-  if (!KEY_OK.test(String(b.key || ''))) return json(400, { ok: false, error: 'bad request' });
-  const owner = await sha256hex(new TextEncoder().encode(String(b.key).toLowerCase()));
+  const me = await obj.player(b);
+  if (!me) return json(401, { ok: false, error: SIGNIN_MESSAGE, reason: 'signin', message: SIGNIN_MESSAGE });
+  // security review: attempts per account, counted before any work.
+  if (obj.tooMany('upload', me.sub, 20, 3600000)) return json(429, { ok: false, error: 'too many uploads; try later' });
+  const owner = me.owner;
   const ip = request.headers.get('X-Levels-Addr') || '';
   const addr = ip ? (await sha256hex(new TextEncoder().encode('lvl:' + ip))).slice(0, 32) : '';
   if (sql.exec('SELECT 1 FROM bans WHERE who = ? OR who = ?', owner, addr || '-').toArray().length)
@@ -303,40 +356,57 @@ async function upload(obj, request) {
     if (n >= cfg.per_hour) return json(429, { ok: false, error: 'too many uploads right now; try later' });
   }
   const pending = sql.exec("SELECT COUNT(*) AS n FROM units WHERE status = 'pending'").toArray()[0].n;
-  if (pending >= cfg.max_pending && !cfg.auto_approve) return json(429, { ok: false, error: 'the review queue is full; try later' });
+  if (pending >= cfg.max_pending && !cfg.auto_approve_units) return json(429, { ok: false, error: 'the review queue is full; try later' });
   const hash = await sha256hex(bundle);
   if (sql.exec('SELECT 1 FROM units WHERE hash = ?', hash).toArray().length)
     return json(409, { ok: false, error: 'this unit was uploaded before' });
-  const status = cfg.auto_approve ? 'approved' : 'pending';
+  const status = cfg.auto_approve_units ? 'approved' : 'pending';   // docs/503: its own switch
   sql.exec(`INSERT INTO units (hash, name, author, credits, category, template, sounds, size, status, owner, addr, created, bundle, thumb)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     hash, name, author || '', credits, category, v.unit.template, sounds.length, bundle.length, status, owner, addr, now, bundle, thumb);
+  // docs/501: the uploader's account (My uploads, hide/edit/delete, ban purge).
+  sql.exec('UPDATE units SET sub = ?, uname = ?, uuid = ? WHERE hash = ?', me.sub, me.un, me.uid, hash);
   const row = sql.exec('SELECT * FROM units WHERE hash = ?', hash).toArray()[0];
-  const msg = await post(env, unitEmbed(row, status), unitButtons(row, status), sheet, sounds);
-  if (msg) sql.exec('UPDATE units SET message = ? WHERE id = ?', msg, row.id);
+  const msg = await unitPost(env, unitEmbed(row, status), unitButtons(row, status), sheet, sounds);
+  if (msg.id || msg.mirror) sql.exec('UPDATE units SET message = ?, mirror = ? WHERE id = ?', msg.id, msg.mirror, row.id);
   return json(200, { ok: true, id: row.id, status });
 }
 
-// The moderation post: the embed, the full spritesheet and every sound.
-async function post(env, embed, components, sheet, sounds) {
-  if (!env.LEVELS_BOT_TOKEN || !env.LEVELS_CHANNEL) return '';
-  const form = new FormData();
-  const attachments = [{ id: 0, filename: 'sheet.png' }];
-  sounds.forEach((s, i) => attachments.push({ id: i + 1, filename: s.name + '.wav' }));
-  form.append('payload_json', JSON.stringify({ embeds: [embed], components, attachments, allowed_mentions: { parse: [] } }));
-  form.append('files[0]', new Blob([sheet], { type: 'image/png' }), 'sheet.png');
-  sounds.forEach((s, i) => form.append(`files[${i + 1}]`, new Blob([s.wav], { type: 'audio/wav' }), s.name + '.wav'));
-  const r = await fetch(`${DISCORD}/channels/${env.LEVELS_CHANNEL}/messages`, {
-    method: 'POST', headers: { Authorization: 'Bot ' + env.LEVELS_BOT_TOKEN }, body: form,
+// The moderation post: the embed, the full spritesheet and every sound, in
+// the units channel and the mirror (docs/503). Returns { id, mirror }.
+export function unitsChannel(env) { return env.UNITS_CHANNEL || env.LEVELS_CHANNEL; }
+export async function unitPost(env, embed, components, sheet, sounds) {
+  return postCopies(env, unitsChannel(env), () => {
+    const form = new FormData();
+    const attachments = [{ id: 0, filename: 'sheet.png' }];
+    sounds.forEach((s, i) => attachments.push({ id: i + 1, filename: s.name + '.wav' }));
+    form.append('payload_json', JSON.stringify({ embeds: [embed], components, attachments, allowed_mentions: { parse: [] } }));
+    form.append('files[0]', new Blob([sheet], { type: 'image/png' }), 'sheet.png');
+    sounds.forEach((s, i) => form.append(`files[${i + 1}]`, new Blob([s.wav], { type: 'audio/wav' }), s.name + '.wav'));
+    return { body: form, json: false };
   });
-  if (!r.ok) return '';
-  const m = await r.json().catch(() => null);
-  return m && m.id ? String(m.id) : '';
+}
+
+// A stored bundle's files ([path, bytes]), for a re-post of a waiting unit.
+export function bundleFiles(bundle) {
+  const b = new Uint8Array(bundle);
+  const out = [];
+  if (b.length < 7) return out;
+  const count = u16(b, 5);
+  let at = 7;
+  for (let i = 0; i < count && at + 2 <= b.length; ++i) {
+    const pl = u16(b, at); at += 2;
+    const path = String.fromCharCode(...b.subarray(at, at + pl)); at += pl;
+    const dl = u32(b, at); at += 4;
+    out.push([path, b.subarray(at, at + dl)]);
+    at += dl;
+  }
+  return out;
 }
 
 // A moderator's press on a unit's message ("lvl:unit:<what>:<id>"), already
 // checked to be the moderator by the Levels object.
-export function unitsAdmin(obj, customId) {
+export function unitsAdmin(obj, customId, userId) {
   const m = /^lvl:unit:(approve|reject|ban):(\d{1,9})$/.exec(customId);
   if (!m) return json(200, { ok: true, reply: 'Unknown button.' });
   const sql = obj.sql;
@@ -345,7 +415,12 @@ export function unitsAdmin(obj, customId) {
   let status = row.status;
   if (m[1] === 'approve') status = 'approved';
   if (m[1] === 'reject') status = 'rejected';
-  if (m[1] === 'ban') {
+  if (m[1] === 'ban' && row.sub) {
+    // A signed-in uploader: the account is banned (Accounts -> purge), as with maps.
+    status = 'banned';
+    obj.ctx.waitUntil(accountButton(obj.env, 'ban', row.sub, userId));
+    sql.exec("UPDATE units SET status = 'banned', decided = ? WHERE id = ?", Date.now(), row.id);
+  } else if (m[1] === 'ban') {
     status = 'banned';
     sql.exec('INSERT OR REPLACE INTO bans (who, at, level) VALUES (?, ?, ?)', row.owner, Date.now(), 0);
     if (row.addr) sql.exec('INSERT OR REPLACE INTO bans (who, at, level) VALUES (?, ?, ?)', row.addr, Date.now(), 0);
@@ -354,5 +429,7 @@ export function unitsAdmin(obj, customId) {
   } else {
     sql.exec('UPDATE units SET status = ?, decided = ? WHERE id = ?', status, Date.now(), row.id);
   }
-  return json(200, { ok: true, update: { embeds: [unitEmbed(row, status)], components: unitButtons(row, status) } });
+  const update = { embeds: [unitEmbed(row, status)], components: unitButtons(row, status) };
+  obj.ctx.waitUntil(editCopies(obj.env, unitsChannel(obj.env), row.message, row.mirror, update));   // docs/503
+  return json(200, { ok: true, update });
 }

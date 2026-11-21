@@ -41,6 +41,7 @@ import sqlite3
 import sys
 import threading
 import time
+import unicodedata
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # ------------------------------------------------------------------ config --
@@ -84,8 +85,15 @@ NAME_OK = re.compile(r"^[\w \-'.!?]{1,%d}$" % MAX_NAME)
 
 READ_TIMEOUT = 10          # s: a request line, a header or a body read
 CONN_DEADLINE = 20         # s: a connection's whole life; then it is cut
-MAX_CONNECTIONS = 96       # handled at once; the rest are closed at once
+MAX_CONNECTIONS = 256      # handled at once; the rest are closed at once
 MAX_CONNECTIONS_PER_IP = 8
+MAX_CONNECTIONS_PER_NET = 24   # security review: from one IPv4 /24 (or IPv6 /64)
+FIRST_BYTE_TIMEOUT = 3     # s: the request line must arrive this soon (slowloris)
+MAX_LOBBIES_PER_ACCOUNT = 2   # docs/501: listed at once by one signed-in account
+MAX_IMAGES_PER_LOBBY = 3   # match pictures in one lobby's life
+MAX_OPTIONS = 24           # a lobby's settings: entries, and each key/value's length
+MAX_OPTION_TEXT = 64
+MAX_CHECKED_TEXT = 64      # characters of one string the slur check looks at
 MAX_LOBBIES = 200          # listed at once, every address together
 MAX_LOBBIES_PER_IP = 3     # listed at once from one address
 MAX_LIST = 100             # lobbies in one /list reply
@@ -180,6 +188,209 @@ def host_address(claimed, peer):
     if is_public_v4(claimed) and (is_local(peer) or ":" in str(peer)):
         return claimed
     return peer
+
+
+# ---------------------------------------------------------------- sign-in ----
+#
+# docs/501: the official "King" server runs with --require-signin, so every
+# lobby route needs a Discord session token ("auth" in a POST body, ?auth= on
+# a GET). This server cannot check the signature itself (stdlib only, and the
+# token is Ed25519), so it asks the Worker: POST <auth server>/auth/verify
+# {token}. Each answer is kept 10 minutes; while the Worker cannot be reached,
+# a token already known good stays good until its answer is an hour old. A
+# self-hosted server runs without the option and needs no account at all.
+#
+# A token is never logged or echoed, not even partly. The cache is keyed by
+# the token's SHA-256, so not even memory holds it longer than a request.
+
+DEFAULT_AUTH_SERVER = "https://lbserver.viosarcade.xyz"
+AUTH_TIMEOUT = 5          # s: one /auth/verify request
+AUTH_TTL = 300            # s: a good answer is reused this long
+AUTH_STALE = 1800         # s: a good answer outlives an unreachable Worker this long
+AUTH_BAD_TTL = 60         # s: a refusal is remembered this long (its own, smaller cache)
+AUTH_BANS_EVERY = 60      # s: the banned accounts are fetched this often
+AUTH_MAX_ENTRIES = 4096
+AUTH_MAX_BAD = 1024
+AUTH_MAX_TOKEN = 2048     # characters; a longer "token" is refused unasked
+# A play token's shape (docs/501): v1.<base64url payload>.<base64url Ed25519
+# signature>. Anything else is refused without asking the Worker.
+_TOKEN_SHAPE = re.compile(r"^v1\.[A-Za-z0-9_-]{16,1600}\.[A-Za-z0-9_-]{80,90}$")
+
+
+def token_claims(token):
+    """The unverified payload of a token (for refusing junk early only), or None."""
+    import base64
+    if not isinstance(token, str) or not _TOKEN_SHAPE.match(token):
+        return None
+    part = token.split(".")[1]
+    try:
+        c = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)).decode("utf-8"))
+    except Exception:
+        return None
+    return c if isinstance(c, dict) else None
+
+SIGNIN_MESSAGE = "Sign in with Discord to play online or publish (Network > Account). Direct IP play needs no account."
+UPDATE_MESSAGE = ("This version of LEGO Battles PC is too old for this server. "
+                  "Update the game (Settings > General > Install update).")
+
+
+class Auth:
+    """Token verification against the Worker, cached. Thread-safe.
+
+    verify(token) answers ("ok", info), ("bad", None) or ("down", None);
+    info is {sub, uid, name}.
+
+    Only PLAY tokens are taken (aud "play", docs/501): short-lived tokens
+    for the lobby servers. The account token, which can publish and delete,
+    never needs to come here -- this server speaks plain HTTP. A token whose
+    shape, audience or expiry is wrong is refused without asking the Worker,
+    refusals have their own small cache (junk cannot push good answers out),
+    and the banned accounts are fetched every AUTH_BANS_EVERY seconds, so a
+    ban reaches this server within about a minute."""
+
+    def __init__(self, server=DEFAULT_AUTH_SERVER, timeout=AUTH_TIMEOUT, ttl=AUTH_TTL,
+                 stale=AUTH_STALE, max_entries=AUTH_MAX_ENTRIES):
+        from collections import OrderedDict
+        self.url = str(server).rstrip("/") + "/auth/verify"
+        self.timeout, self.ttl, self.stale = timeout, ttl, stale
+        self.max_entries = max_entries
+        self.lock = threading.Lock()
+        self.cache = OrderedDict()   # sha256(token) -> [when (monotonic), info]
+        self.bad = OrderedDict()     # sha256(token) -> when (monotonic)
+        self.bans_url = str(server).rstrip("/") + "/auth/bans"
+        self.banned = frozenset()
+        self.bans_at = -1e9
+        self.bans_busy = False
+
+    def _bans_refresh(self):
+        import urllib.request
+        try:
+            req = urllib.request.Request(self.bans_url, headers={"User-Agent": "LEGOBattlesMasterServer"})
+            with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                d = json.loads(r.read(1 << 20).decode("utf-8"))
+            if isinstance(d, dict) and isinstance(d.get("banned"), list):
+                with self.lock:
+                    self.banned = frozenset(str(x)[:32] for x in d["banned"][:100000])
+        except Exception:   # noqa: BLE001 -- keep the last list
+            pass
+        finally:
+            with self.lock:
+                self.bans_busy = False
+
+    def _bans_due(self, now):
+        with self.lock:
+            if self.bans_busy or now - self.bans_at < AUTH_BANS_EVERY:
+                return
+            self.bans_busy = True
+            self.bans_at = now
+        threading.Thread(target=self._bans_refresh, daemon=True).start()
+
+    @staticmethod
+    def key(token):
+        import hashlib
+        return hashlib.sha256(token.encode("utf-8", "replace")).hexdigest()
+
+    def _put(self, key, info, now):
+        with self.lock:
+            self.cache[key] = [now, info]
+            self.cache.move_to_end(key)
+            while len(self.cache) > self.max_entries:
+                self.cache.popitem(last=False)
+
+    def ask(self, token):
+        """The Worker's answer: its JSON dict, or None when it cannot be had."""
+        import urllib.error
+        import urllib.request
+        req = urllib.request.Request(
+            self.url, data=json.dumps({"token": token}).encode("utf-8"), method="POST",
+            headers={"Content-Type": "application/json",
+                     "User-Agent": "LEGOBattlesMasterServer"})
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                answer = json.loads(r.read(65536).decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            # A refusal may come as a 4xx with {ok:false}; a 5xx is an outage.
+            if e.code >= 500:
+                return None
+            try:
+                answer = json.loads(e.read(65536).decode("utf-8"))
+            except Exception:
+                return None
+        except Exception:   # noqa: BLE001 -- unreachable, timed out, not JSON
+            return None
+        return answer if isinstance(answer, dict) and "ok" in answer else None
+
+    def _refuse(self, key, now):
+        with self.lock:
+            self.bad[key] = now
+            self.bad.move_to_end(key)
+            while len(self.bad) > AUTH_MAX_BAD:
+                self.bad.popitem(last=False)
+        return "bad", None
+
+    def verify(self, token, now=None):
+        if not isinstance(token, str) or not token or len(token) > AUTH_MAX_TOKEN:
+            return "bad", None
+        c = token_claims(token)
+        if not c or c.get("aud") != "play" or not isinstance(c.get("exp"), (int, float)) \
+                or c["exp"] < time.time():
+            return "bad", None   # junk, an account token, or expired: nothing is asked
+        now = time.monotonic() if now is None else now
+        self._bans_due(now)
+        key = self.key(token)
+        with self.lock:
+            entry = self.cache.get(key)
+            entry = list(entry) if entry else None
+            bad = self.bad.get(key)
+            banned = self.banned
+        if bad is not None and now - bad < AUTH_BAD_TTL:
+            return "bad", None
+        if entry and entry[1]["sub"] in banned:
+            return self._refuse(key, now)
+        if entry and now - entry[0] < self.ttl:
+            return "ok", entry[1]
+        answer = self.ask(token)
+        if answer is None:
+            # The Worker cannot be reached: a recent good answer stands.
+            if entry and now - entry[0] < self.stale:
+                return "ok", entry[1]
+            return "down", None
+        if answer.get("ok") is True and answer.get("sub") and answer.get("aud") == "play":
+            info = {"sub": str(answer.get("sub"))[:64], "uid": str(answer.get("uid") or "")[:32],
+                    "name": clean_name(answer.get("name"), "Player")}
+            if info["sub"] in banned:
+                return self._refuse(key, now)
+            self._put(key, info, now)
+            return "ok", info
+        return self._refuse(key, now)
+
+
+_VERSION = re.compile(r"^v?(\d+(?:\.\d+)*)(?:([-+~ ]).*)?$", re.IGNORECASE)
+
+
+def version_key(value):
+    """A version as a comparable tuple, or None when it is not one. Dotted
+    parts compare as numbers; a suffix ("-beta") sorts below the plain release
+    ("+build" metadata does not)."""
+    m = _VERSION.match(str(value if value is not None else "").strip())
+    if not m:
+        return None
+    parts = [int(p) for p in m.group(1).split(".")][:8]
+    return parts, 0 if m.group(2) in ("-", "~", " ") else 1
+
+
+def version_older(value, minimum):
+    """True when `value` is below `minimum`, missing or not a version."""
+    v, lo = version_key(value), version_key(minimum)
+    if lo is None:
+        return False
+    if v is None:
+        return True
+    a, b = list(v[0]), list(lo[0])
+    width = max(len(a), len(b))
+    a += [0] * (width - len(a))
+    b += [0] * (width - len(b))
+    return (a, v[1]) < (b, lo[1])
 
 
 # ------------------------------------------------------------------ storage --
@@ -429,6 +640,488 @@ class Log:
 
 # --------------------------------------------------------------- handlers ----
 
+# ------------------------------------------------------------------ slurs ----
+# docs/502: SLURS, AND THE WAYS THEY ARE DISGUISED. A lobby, player, map or
+# unit name that contains a slur is refused outright. The stems are never in
+# this file or the repository: only their salted FNV-1a 64 hashes, made by
+# tools/lb_slur_hash.py (which runs slur_keys() below on each stem first).
+# The text is folded before matching -- accents and look-alike letters from
+# other alphabets to plain a-z, digits and symbols to the letters they stand
+# for, separators dropped (so dots or spaces between letters do not help),
+# runs of one letter shortened -- and every substring is looked up. A second
+# reading also takes l and | for i and q for g. A few ordinary words that
+# happen to contain a stem are removed first; they are hashed too
+# (SLUR_ALLOW_HASHES), so nothing here hints at what is matched.
+# The same code is in the Worker (src/slur.js) and the game (lb_chat.cpp).
+
+SLUR_SALT = b"lbslur1:"
+SLUR_MAX_TEXT = 512   # characters of one text looked at (the check is not free)
+_SLUR_FOLD = {
+    "ı": "i", "і": "i", "ї": "i", "ӏ": "i", "ɪ": "i", "ι": "i", "¡": "i", "|": "i", "!": "i", "1": "i",
+    "а": "a", "α": "a", "@": "a", "4": "a", "ä": "a",
+    "е": "e", "ё": "e", "є": "e", "ε": "e", "3": "e", "€": "e",
+    "о": "o", "ο": "o", "σ": "o", "ө": "o", "0": "o", "ø": "o",
+    "р": "p", "ρ": "p", "с": "c", "ϲ": "c", "х": "x", "χ": "x", "у": "y", "ү": "y", "γ": "y",
+    "к": "k", "κ": "k", "ѕ": "s", "$": "s", "5": "s", "§": "s", "ԁ": "d", "đ": "d",
+    "ɡ": "g", "ǥ": "g", "ԍ": "g", "9": "g", "6": "g", "т": "t", "τ": "t", "7": "t", "+": "t",
+    "в": "b", "β": "b", "8": "b", "н": "h", "м": "m", "п": "n", "η": "n", "ո": "n", "ŋ": "n",
+    "ν": "v", "ω": "w", "ш": "w", "ł": "l", "ℓ": "l", "υ": "u",
+    "ß": "ss", "æ": "ae", "œ": "oe",
+}
+_SLUR_VOWELS = set("aeiouy")
+
+
+def _slur_collapse(t):
+    out = []
+    for c in t:
+        if out and out[-1] == c and (c in _SLUR_VOWELS or len(out) > 1 and out[-2] == c):
+            continue
+        out.append(c)
+    return "".join(out)
+
+
+def _slur_fold(text):
+    """Accents, look-alikes and stand-ins to a-z; everything else dropped."""
+    folded = []
+    for ch in unicodedata.normalize("NFKD", str(text if text is not None else "")):
+        if unicodedata.category(ch).startswith("M"):
+            continue
+        c = ch.lower()
+        c = _SLUR_FOLD.get(c) or SLUR_FOLD_EXTRA.get(c) or c
+        folded.append(c if c.isascii() and c.isalpha() else "")
+    return "".join(folded)
+
+
+def _slur_allowed(v):
+    """The spans [i, j) of `v` that are ordinary words containing a stem."""
+    spans = []
+    for n in range(SLUR_ALLOW_MIN, SLUR_ALLOW_MAX + 1):
+        for i in range(0, len(v) - n + 1):
+            if slur_hash(v[i:i + n]) in SLUR_ALLOW_HASHES:
+                spans.append((i, i + n))
+    return spans
+
+
+def _slur_collapse_map(v):
+    """_slur_collapse, with each kept letter's index in `v`."""
+    out, idx = [], []
+    for i, c in enumerate(v):
+        if out and out[-1] == c and (c in _SLUR_VOWELS or len(out) > 1 and out[-2] == c):
+            continue
+        out.append(c)
+        idx.append(i)
+    return "".join(out), idx
+
+
+def _slur_readings(text):
+    """(collapsed reading, index map, allowed spans) for each reading."""
+    base = _slur_fold(str(text if text is not None else "")[:SLUR_MAX_TEXT])
+    seen = set()
+    for v in (base, base.replace("l", "i").replace("q", "g")):
+        if v in seen:
+            continue
+        seen.add(v)
+        k, idx = _slur_collapse_map(v)
+        yield k, idx, _slur_allowed(v)
+
+
+def slur_keys(text):
+    """The collapsed readings of a text (what stems are matched against)."""
+    return [k for k, _, _ in _slur_readings(text)]
+
+
+def slur_hash(stem):
+    h = 0xCBF29CE484222325
+    for c in SLUR_SALT + stem.encode("ascii"):
+        h ^= c
+        h = (h * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+    return h
+
+
+# BEGIN SLUR FOLD (tools/lb_slur_hash.py --fold)
+SLUR_FOLD_EXTRA = {
+    'ø': 'o',
+    'đ': 'd',
+    'ħ': 'h',
+    'ı': 'i',
+    'ŀ': 'l',
+    'ł': 'l',
+    'ŧ': 't',
+    'ƀ': 'b',
+    'ƃ': 'b',
+    'ƈ': 'c',
+    'ƌ': 'd',
+    'ƒ': 'f',
+    'ƙ': 'k',
+    'ƚ': 'l',
+    'ƞ': 'n',
+    'ƥ': 'p',
+    'ƫ': 't',
+    'ƭ': 't',
+    'ƴ': 'y',
+    'ƶ': 'z',
+    'ǝ': 'e',
+    'ǥ': 'g',
+    'ǿ': 'o',
+    'ȡ': 'd',
+    'ȥ': 'z',
+    'ȴ': 'l',
+    'ȵ': 'n',
+    'ȶ': 't',
+    'ȷ': 'j',
+    'ȼ': 'c',
+    'ȿ': 's',
+    'ɀ': 'z',
+    'ɇ': 'e',
+    'ɉ': 'j',
+    'ɋ': 'q',
+    'ɍ': 'r',
+    'ɏ': 'y',
+    'ɐ': 'a',
+    'ɑ': 'a',
+    'ɓ': 'b',
+    'ɔ': 'o',
+    'ɕ': 'c',
+    'ɖ': 'd',
+    'ɗ': 'd',
+    'ɘ': 'e',
+    'ɛ': 'e',
+    'ɜ': 'e',
+    'ɝ': 'e',
+    'ɞ': 'e',
+    'ɟ': 'j',
+    'ɠ': 'g',
+    'ɡ': 'g',
+    'ɢ': 'g',
+    'ɥ': 'h',
+    'ɦ': 'h',
+    'ɨ': 'i',
+    'ɩ': 'i',
+    'ɪ': 'i',
+    'ɫ': 'l',
+    'ɬ': 'l',
+    'ɭ': 'l',
+    'ɯ': 'm',
+    'ɰ': 'm',
+    'ɱ': 'm',
+    'ɲ': 'n',
+    'ɳ': 'n',
+    'ɴ': 'n',
+    'ɵ': 'o',
+    'ɹ': 'r',
+    'ɺ': 'r',
+    'ɻ': 'r',
+    'ɼ': 'r',
+    'ɽ': 'r',
+    'ɾ': 'r',
+    'ɿ': 'r',
+    'ʀ': 'r',
+    'ʁ': 'r',
+    'ʂ': 's',
+    'ʄ': 'j',
+    'ʇ': 't',
+    'ʈ': 't',
+    'ʊ': 'u',
+    'ʋ': 'v',
+    'ʌ': 'v',
+    'ʍ': 'w',
+    'ʎ': 'y',
+    'ʏ': 'y',
+    'ʐ': 'z',
+    'ʑ': 'z',
+    'ʗ': 'c',
+    'ʙ': 'b',
+    'ʚ': 'e',
+    'ʛ': 'g',
+    'ʜ': 'h',
+    'ʝ': 'j',
+    'ʞ': 'k',
+    'ʟ': 'l',
+    'ʠ': 'q',
+    'ʮ': 'h',
+    'ʯ': 'h',
+    'ϰ': 'k',
+    'ϱ': 'p',
+    'ϲ': 'c',
+    'ϳ': 'j',
+    'ј': 'j',
+    'ѡ': 'w',
+    'ѵ': 'v',
+    'ҡ': 'k',
+    'ү': 'y',
+    'һ': 'h',
+    'ԛ': 'q',
+    'ԝ': 'w',
+    'ᴀ': 'a',
+    'ᴃ': 'b',
+    'ᴄ': 'c',
+    'ᴅ': 'd',
+    'ᴇ': 'e',
+    'ᴈ': 'e',
+    'ᴉ': 'i',
+    'ᴊ': 'j',
+    'ᴋ': 'k',
+    'ᴌ': 'l',
+    'ᴍ': 'm',
+    'ᴎ': 'n',
+    'ᴏ': 'o',
+    'ᴐ': 'o',
+    'ᴑ': 'o',
+    'ᴒ': 'o',
+    'ᴓ': 'o',
+    'ᴘ': 'p',
+    'ᴙ': 'r',
+    'ᴚ': 'r',
+    'ᴛ': 't',
+    'ᴜ': 'u',
+    'ᴝ': 'u',
+    'ᴟ': 'm',
+    'ᴠ': 'v',
+    'ᴡ': 'w',
+    'ᴢ': 'z',
+    'ᵬ': 'b',
+    'ᵭ': 'd',
+    'ᵮ': 'f',
+    'ᵯ': 'm',
+    'ᵰ': 'n',
+    'ᵱ': 'p',
+    'ᵲ': 'r',
+    'ᵳ': 'r',
+    'ᵴ': 's',
+    'ᵵ': 't',
+    'ᵶ': 'z',
+    'ᵷ': 'g',
+    'ᵹ': 'g',
+    'ᵽ': 'p',
+    'ᶀ': 'b',
+    'ᶁ': 'd',
+    'ᶂ': 'f',
+    'ᶃ': 'g',
+    'ᶄ': 'k',
+    'ᶅ': 'l',
+    'ᶆ': 'm',
+    'ᶇ': 'n',
+    'ᶈ': 'p',
+    'ᶉ': 'r',
+    'ᶊ': 's',
+    'ᶌ': 'v',
+    'ᶍ': 'x',
+    'ᶎ': 'z',
+    'ᶏ': 'a',
+    'ᶑ': 'd',
+    'ᶒ': 'e',
+    'ᶓ': 'e',
+    'ᶔ': 'e',
+    'ᶖ': 'i',
+    'ᶗ': 'o',
+    'ᶙ': 'u',
+    'ẚ': 'a',
+    'ẜ': 's',
+    'ẝ': 's',
+    'ỽ': 'v',
+    'ỿ': 'y',
+    'ⱡ': 'l',
+    'ⱥ': 'a',
+    'ⱦ': 't',
+    'ⱨ': 'h',
+    'ⱪ': 'k',
+    'ⱬ': 'z',
+    'ⱱ': 'v',
+    'ⱳ': 'w',
+    'ⱴ': 'v',
+    'ⱸ': 'e',
+    'ⱹ': 'r',
+    'ⱺ': 'o',
+    'ⱻ': 'e',
+    'ꜰ': 'f',
+    'ꜱ': 's',
+    'ꜿ': 'c',
+    'ꝁ': 'k',
+    'ꝃ': 'k',
+    'ꝅ': 'k',
+    'ꝇ': 'l',
+    'ꝉ': 'l',
+    'ꝋ': 'o',
+    'ꝍ': 'o',
+    'ꝑ': 'p',
+    'ꝓ': 'p',
+    'ꝕ': 'p',
+    'ꝗ': 'q',
+    'ꝙ': 'q',
+    'ꝟ': 'v',
+    'ꝺ': 'd',
+    'ꝼ': 'f',
+    'ꝿ': 'g',
+    'ꞁ': 'l',
+    'ꞃ': 'r',
+    'ꞅ': 's',
+    'ꞇ': 't',
+    'ꞎ': 'l',
+    'ꞑ': 'n',
+    'ꞓ': 'c',
+    'ꞔ': 'c',
+    'ꞕ': 'h',
+    'ꞗ': 'b',
+    'ꞙ': 'f',
+    'ꞡ': 'g',
+    'ꞣ': 'k',
+    'ꞥ': 'n',
+    'ꞧ': 'r',
+    'ꞩ': 's',
+    'ꞯ': 'q',
+    'ꞹ': 'u',
+    'ꟈ': 'd',
+    'ꟊ': 's',
+    'ꟑ': 'g',
+    'ꟺ': 'm',
+    'ꬳ': 'e',
+    'ꬴ': 'e',
+    'ꬶ': 'g',
+    'ꬷ': 'l',
+    'ꬸ': 'l',
+    'ꬹ': 'l',
+    'ꬺ': 'm',
+    'ꬻ': 'n',
+    'ꬿ': 'o',
+    'ꭆ': 'r',
+    'ꭉ': 'r',
+    'ꭋ': 'r',
+    'ꭌ': 'r',
+    'ꭎ': 'u',
+    'ꭒ': 'u',
+    'ꭖ': 'x',
+    'ꭗ': 'x',
+    'ꭘ': 'x',
+    'ꭙ': 'x',
+    'ꭚ': 'y',
+    'ꭨ': 'r',
+}
+# END SLUR FOLD
+
+
+# BEGIN SLUR HASHES (tools/lb_slur_hash.py)
+SLUR_MIN, SLUR_MAX = 4, 11
+SLUR_HASHES = frozenset((
+    0x049F7F6E4CA888EC,
+    0x17A0674A29428C9B,
+    0x213B79EE0F177D0A,
+    0x2560FD000DAF07B8,
+    0x2D97482E1F405205,
+    0x2DAB442E1F50F443,
+    0x39A5F9A19790D363,
+    0x3F6B34A99D5862E9,
+    0x4F77A4C9A5EBDC75,
+    0x6B4DE8A6764CFBA4,
+    0x6B4DF5A6764D11BB,
+    0x6B4DFBA6764D1BED,
+    0x79EB1F9C9DFC6F6C,
+    0x7AE92FD01C6A8CF8,
+    0x86A28865FC2709A0,
+    0x920705700098DC60,
+    0x9B3A0AB76E2DF11D,
+    0xA25A22DB04CBF999,
+    0xA5CCFDECAF725EAB,
+    0xBB185E5104002D64,
+    0xC077735D6FBD3D67,
+    0xC0C2D5EE00B22C64,
+    0xCDF0F4DB1D90AB64,
+    0xDF0345A6265B928B,
+    0xDF034BA6265B9CBD,
+    0xE08B05957D2975E5,
+    0xE8C4462949C9FB07,
+    0xEDC4BFCFCBBFD6C8,
+    0xFC21BAF38BA603C7,
+))
+SLUR_ALLOW_MIN, SLUR_ALLOW_MAX = 7, 9
+SLUR_ALLOW_HASHES = frozenset((
+    0x16D1D2AEF9EF9029,
+    0x59A4C10727EF5AB1,
+))
+# END SLUR HASHES
+
+
+NAME_REFUSED = ("That name is not allowed on the online servers. "
+                "Change your profile name (or the lobby's) and try again.")
+
+
+def has_slur(text):
+    """True when any reading of `text` contains a slur stem that is not
+    wholly inside one of the allowed ordinary words."""
+    if not SLUR_HASHES:
+        return False
+    for k, idx, spans in _slur_readings(text):
+        for n in range(SLUR_MIN, SLUR_MAX + 1):
+            for i in range(0, len(k) - n + 1):
+                if slur_hash(k[i:i + n]) in SLUR_HASHES:
+                    a, b = idx[i], idx[i + n - 1]
+                    if not any(s <= a and b < e for s, e in spans):
+                        return True
+    return False
+
+
+def to_int(value, lo, hi, default):
+    """A number from JSON as an int in [lo, hi]; `default` for anything else
+    (strings, NaN, infinities, numbers too big for SQLite)."""
+    import math
+    try:
+        f = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+    if not math.isfinite(f):
+        return default
+    return int(max(lo, min(hi, f)))
+
+
+def clean_options(value):
+    """A lobby's settings as the game sends them, bounded: at most MAX_OPTIONS
+    entries of short keys and short scalar values; anything else is dropped."""
+    out = {}
+    if not isinstance(value, dict):
+        return out
+    for k, v in list(value.items())[:MAX_OPTIONS]:
+        if not isinstance(k, str) or not k or len(k) > MAX_OPTION_TEXT:
+            continue
+        if isinstance(v, bool) or v is None:
+            out[k] = v
+        elif isinstance(v, (int, float)):
+            out[k] = to_int(v, -10**9, 10**9, 0) if isinstance(v, int) else (v if abs(v) < 1e9 else 0)
+        elif isinstance(v, str):
+            out[k] = v[:MAX_OPTION_TEXT]
+    return out
+
+
+def shown_texts(body):
+    """Every string of a request body that a lobby, a reply or a Discord line
+    can show, each cut to MAX_CHECKED_TEXT (docs/502)."""
+    out = []
+
+    def add(v):
+        if isinstance(v, str) and v:
+            out.append(v[:MAX_CHECKED_TEXT])
+    for k in ("name", "host_name", "map_name", "mode"):
+        add(body.get(k))
+    for k in ("players_list", "winners", "losers"):
+        v = body.get(k)
+        if isinstance(v, list):
+            for x in v[:16]:
+                add(x.get("name") if isinstance(x, dict) else x)
+    o = body.get("options")
+    if isinstance(o, dict):
+        for k, v in list(o.items())[:MAX_OPTIONS]:
+            add(k)
+            add(v)
+    return out
+
+
+ROOM_CODE = re.compile(r"^[%s]{%d}$" % (CROCKFORD, CODE_LENGTH))
+
+
+def log_code(value):
+    """A room code for a log line: as sent when it is one, else '?'."""
+    s = str(value or "").upper()
+    return s if ROOM_CODE.match(s) else "?"
+
+
 def clean_name(value, fallback="Player"):
     value = (value or "").strip()
     if not value:
@@ -467,8 +1160,17 @@ class Handler(BaseHTTPRequestHandler):
     # issue #2, finding 1: a socket timeout for every read, so a client that
     # sends half a request cannot hold this thread (StreamRequestHandler sets
     # it in setup()). MasterServer also cuts any connection after CONN_DEADLINE.
-    timeout = READ_TIMEOUT
+    timeout = FIRST_BYTE_TIMEOUT   # the request line; then READ_TIMEOUT (parse_request)
+    read_timeout = READ_TIMEOUT
     head = False
+
+    def parse_request(self):
+        # The request line arrived: the rest of the request gets the usual time.
+        try:
+            self.connection.settimeout(self.read_timeout)
+        except OSError:
+            pass
+        return super().parse_request()
 
     # -- plumbing --
 
@@ -512,6 +1214,43 @@ class Handler(BaseHTTPRequestHandler):
     def version_string(self):
         return self.server_version
 
+    account = None   # docs/501: the signed-in player ({sub, uid, name}), or None
+
+    def _query(self):
+        from urllib.parse import parse_qs
+        try:
+            q = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "",
+                         keep_blank_values=True, max_num_fields=16)
+        except ValueError:   # more fields than that: nothing usable
+            return {}
+        return {k: v[0] for k, v in q.items() if v}
+
+    def _gate(self, version, token):
+        """docs/501: --min-version, then --require-signin. True when the
+        request may go on; otherwise the refusal has been sent. The token
+        never reaches a log line or a reply."""
+        srv = self.server
+        version = str(version or "")[:32]
+        if srv.min_version and version_older(version, srv.min_version):
+            srv.note("OLD", "%s refused: version %r is below %s"
+                     % (self.peer, str(version or "")[:32], srv.min_version), ("old", self.peer))
+            self._send(426, {"ok": False, "error": UPDATE_MESSAGE, "reason": "update", "message": UPDATE_MESSAGE})
+            return False
+        if srv.auth is None:
+            return True
+        status, info = srv.auth.verify(token)
+        if status == "ok":
+            self.account = info
+            return True
+        if status == "down":
+            srv.note("AUTH", "the sign-in server cannot be reached; %s refused" % self.peer,
+                     ("authdown",))
+            self._send(503, {"ok": False, "error": "sign-in unavailable"}, retry_after=30)
+            return False
+        srv.note("AUTH", "%s refused: not signed in" % self.peer, ("signin", self.peer))
+        self._send(401, {"ok": False, "error": SIGNIN_MESSAGE, "reason": "signin", "message": SIGNIN_MESSAGE})
+        return False
+
     def do_HEAD(self):
         self.head = True
         self.do_GET()
@@ -544,16 +1283,46 @@ class Handler(BaseHTTPRequestHandler):
     # -- routes --
 
     def do_GET(self):
+        try:
+            self._get()
+        except Exception as e:   # noqa: BLE001 -- security review: never a traceback
+            self.server.note("ERROR", "%s GET failed: %s" % (self.peer, type(e).__name__), ("err", self.peer))
+            self._send(400, {"ok": False, "error": "bad request"})
+
+    def do_POST(self):
+        try:
+            self._post()
+        except Exception as e:   # noqa: BLE001
+            self.server.note("ERROR", "%s POST failed: %s" % (self.peer, type(e).__name__), ("err", self.peer))
+            self._send(400, {"ok": False, "error": "bad request"})
+
+    def _proxy_check(self):
+        # Behind a proxy that this server does not trust, every client looks
+        # local (security review): say so, loudly, once a minute.
+        if self.client_address[0] in ("127.0.0.1", "::1") and self.headers.get("X-Forwarded-For") \
+                and not self.server.trusted_proxies:
+            self.server.note("PROXY", "a request through a proxy, but no --trusted-proxy is set: every "
+                             "client looks local (limits merged, LAN addresses shown). Set --trusted-proxy.",
+                             ("proxy",))
+
+    def _get(self):
         srv = self.server
         now = time.time()
         srv.sweep(now)
+        self._proxy_check()
         path = self.path.split("?")[0].rstrip("/") or "/"
+        if srv.store.is_banned(self.peer):
+            return self._send(403, {"ok": False, "error": "banned"})
         if self._limited("get", RATE_GET):
             return
 
         if path in ("/", "/health"):
             return self._send(200, {"ok": True, "service": "legobattles-master",
                                     "lobbies": len(srv.store.lobbies(now))})
+        if srv.auth is not None or srv.min_version:
+            q = self._query()
+            if not self._gate(q.get("v"), q.get("auth")):
+                return
         if path == "/list":
             # issue #2, finding 2: at most MAX_LIST lobbies in one reply (the
             # oldest first, as before), with the total beside them.
@@ -580,10 +1349,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"ok": True, "lobby": lob})
         return self._send(404, {"ok": False, "error": "no such endpoint"})
 
-    def do_POST(self):
+    def _post(self):
         srv = self.server
         now = time.time()
         srv.sweep(now)
+        self._proxy_check()
         path = self.path.split("?")[0].rstrip("/") or "/"
 
         if srv.store.is_banned(self.peer):
@@ -597,10 +1367,28 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/punch" and self._limited("punch", RATE_PUNCH):
             return
+        # A match picture is a large body: the sign-in (in the query) first.
+        gated = False
+        if path == "/match_image" and (srv.auth is not None or srv.min_version):
+            q = self._query()
+            if not self._gate(q.get("v"), q.get("auth")):
+                return
+            gated = True
 
         body = self._body(MAX_IMAGE_BODY if path == "/match_image" else MAX_BODY)
         if body is None:
             return self._send(400, {"ok": False, "error": "bad or oversized body"})
+        if not isinstance(body, dict):
+            return self._send(400, {"ok": False, "error": "the body must be a JSON object"})
+        if not gated and (srv.auth is not None or srv.min_version) and \
+                not self._gate(body.get("version"), body.get("auth")):
+            return
+        # docs/502: a slur in anything a lobby, a reply or a Discord line shows
+        # refuses the request (each string cut short first: the check is not free).
+        if path in ("/announce", "/join", "/heartbeat", "/leave", "/remove", "/match_image"):
+            if any(has_slur(t) for t in shown_texts(body)):
+                srv.note("SLUR", "%s refused: a name is not allowed" % self.peer, ("slur", self.peer))
+                return self._send(403, {"ok": False, "error": NAME_REFUSED, "reason": "name"})
 
         if path == "/announce":
             return self._announce(body, now)
@@ -642,7 +1430,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, {"ok": False, "error": "unknown lobby"})
         with srv.lock:
             m = srv.meta.get(code)
-            if m and m["image"]:
+            if m and (m["image"] or m.get("images", 0) >= MAX_IMAGES_PER_LOBBY):
                 return self._send(409, {"ok": False, "error": "already posted for this match"})
         try:
             png = base64.b64decode(str(body.get("png") or ""), validate=True)
@@ -655,10 +1443,14 @@ class Handler(BaseHTTPRequestHandler):
         with srv.lock:
             if m:
                 m["image"] = True
+                m["images"] = m.get("images", 0) + 1
             host = m["host"] if m else lob.get("host_name", "")
+            uid = m.get("uid", "") if m else ""
             map_name = (m["map"] if m else "") or clean_name(body.get("map_name"), "")
-        srv.discord.image("\U0001F5FA\uFE0F **%s**'s match%s."
-                          % (plain(host), " on **%s**" % plain(map_name) if map_name else ""), png,
+        srv.log("IMAGE", "%s  match picture from %s%s" % (code, self.peer, "  account %s" % uid if uid else ""))
+        srv.discord.image("\U0001F5FA\uFE0F **%s**'s match%s.%s"
+                          % (plain(host), " on **%s**" % plain(map_name) if map_name else "",
+                             " `%s`" % uid if uid else ""), png,
                           source=self.peer)
         return self._send(200, {"ok": True})
 
@@ -744,18 +1536,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def _announce(self, body, now):
         srv = self.server
-        try:
-            port = int(body.get("port") or 0)
-        except (TypeError, ValueError):
-            port = 0
+        port = to_int(body.get("port"), 0, 65536, 0)
         if not (1 <= port <= 65535):
             return self._send(400, {"ok": False, "error": "port out of range"})
 
-        try:
-            maxp = int(body.get("max_players") or 0)
-            players = int(body.get("players") or 1)
-        except (TypeError, ValueError):
-            return self._send(400, {"ok": False, "error": "bad player counts"})
+        maxp = to_int(body.get("max_players"), 0, 1000, 0)
+        players = to_int(body.get("players", 1), 0, 1000, 1)
         # The game's own cap is not established from the ROM, so the host states
         # it and the operator ceiling only stops nonsense.
         if not (1 <= maxp <= srv.max_players):
@@ -770,6 +1556,15 @@ class Handler(BaseHTTPRequestHandler):
                      ("lobbies", self.peer))
             return self._send(429, {"ok": False, "error": "too many lobbies from this address"},
                               retry_after=TTL_SECONDS)
+        # docs/501: and from one signed-in account, from any number of addresses.
+        if self.account:
+            with srv.lock:
+                mine = sum(1 for m in srv.meta.values() if m.get("sub") == self.account["sub"])
+            if mine >= MAX_LOBBIES_PER_ACCOUNT:
+                srv.note("LIMIT", "account %s already lists %d lobbies" % (self.account["uid"], mine),
+                         ("acct", self.account["sub"]))
+                return self._send(429, {"ok": False, "error": "you already have a lobby listed"},
+                                  retry_after=TTL_SECONDS)
         if srv.store.count(now) >= MAX_LOBBIES:
             srv.note("FULL", "the list is full (%d lobbies)" % MAX_LOBBIES, ("full",))
             return self._send(503, {"ok": False, "error": "the server is full"}, retry_after=60)
@@ -789,7 +1584,7 @@ class Handler(BaseHTTPRequestHandler):
             "map_name": clean_name(body.get("map_name"), ""),
             "mode": clean_name(body.get("mode"), ""),
             "version": str(body.get("version") or "")[:32],
-            "options": body.get("options") or {},
+            "options": clean_options(body.get("options")),
         }
         srv.store.announce(code, token, fields, now)
         # docs/400: the host's LAN pair, for players behind its router.
@@ -804,21 +1599,28 @@ class Handler(BaseHTTPRequestHandler):
         if body.get("address") and fields["address"] != str(body.get("address")):
             srv.note("ADDRESS", "%s named %r; listed at %s" % (code, str(body.get("address"))[:64],
                                                                fields["address"]), ("addr", self.peer))
-        srv.log("ANNOUNCE", "%s  %s hosted by %s at %s:%d  (%d/%d)"
+        srv.log("ANNOUNCE", "%s  %s hosted by %s at %s:%d  (%d/%d)%s"
                 % (code, fields["name"], fields["host_name"],
-                   fields["address"], port, players, maxp))
+                   fields["address"], port, players, maxp,
+                   "  account %s %s" % (self.account["uid"], self.account["sub"]) if self.account else ""))
         with srv.lock:   # the Discord lines' record, in memory only
             srv.meta[code] = {"host": fields["host_name"], "created": now, "state": "open",
                               "started": 0.0, "map": fields["map_name"],
                               "max": maxp, "members": [], "image": False, "peer": self.peer,
+                              # docs/501: the signed-in host, and each member by name.
+                              "sub": self.account["sub"] if self.account else "",
+                              "uid": self.account["uid"] if self.account else "",
+                              "images": 0,
+                              "member_subs": {},
                               # A host on Both lists the same lobby on a second server
                               # quietly: the first one already posts it to the channel.
                               "quiet": bool(body.get("quiet"))}
         settings = settings_text(fields["options"])
         if not srv.meta[code]["quiet"]:
-          srv.discord("\U0001F3AE **%s** is hosting a LEGO Battles lobby `%s` (up to %d players%s)%s"
+          srv.discord("\U0001F3AE **%s** is hosting a LEGO Battles lobby `%s` (up to %d players%s)%s%s"
                     % (plain(fields["host_name"]), code, maxp,
                        ", build " + plain(fields["version"]) if fields["version"] else "",
+                       " `%s`" % self.account["uid"] if self.account else "",
                        "\n" + settings if settings else ""), source=self.peer)
         return self._send(200, {"ok": True, "code": code, "token": token,
                                 "ttl": TTL_SECONDS})
@@ -827,12 +1629,10 @@ class Handler(BaseHTTPRequestHandler):
         srv = self.server
         code = str(body.get("code") or "").upper()
         token = str(body.get("token") or "")
-        try:
-            players = int(body.get("players") or 0)
-        except (TypeError, ValueError):
-            players = 0
-        if not srv.store.heartbeat(code, token, max(0, players), now):
-            srv.log("STALE", "heartbeat for unknown or expired lobby %s" % code)
+        players = to_int(body.get("players"), 0, 1000, 0)
+        if not srv.store.heartbeat(code, token, players, now):
+            srv.note("STALE", "heartbeat for unknown or expired lobby %s" % log_code(code),
+                     ("stale", self.peer))
             return self._send(404, {"ok": False, "error": "unknown lobby"})
         if isinstance(body.get("players_list"), list):
             srv.store.set_players(code, body["players_list"][:srv.max_players])
@@ -865,8 +1665,12 @@ class Handler(BaseHTTPRequestHandler):
                         % (plain(m["host"]), code,
                            " on **%s**" % plain(m["map"]) if m["map"] else "", who))
             if state == "open" and m["state"] != "open":
+                # The next match gets its own picture -- after one that ran a
+                # minute or more (security review: open/playing flips must not
+                # re-arm it), and at most MAX_IMAGES_PER_LOBBY in all.
+                if m["state"] == "playing" and now - (m["started"] or now) >= 60:
+                    m["image"] = False
                 m["state"] = "open"
-                m["image"] = False   # the next match gets its own picture
             if m.get("quiet"):
                 line = None
             source = m.get("peer", "")
@@ -885,6 +1689,25 @@ class Handler(BaseHTTPRequestHandler):
         with srv.lock:
             m = srv.meta.get(code)
             if m:
+                subs = m.setdefault("member_subs", {})
+                me = self.account["sub"] if self.account else ""
+                if me:
+                    # security review: one name per account per lobby, and an
+                    # account can only take its own name out.
+                    if joining and subs.get(name.lower()) not in (None, me):
+                        return self._send(403, {"ok": False, "error": "that name is taken in this lobby"})
+                    if joining:
+                        for old in [n for n, s in subs.items() if s == me and n != name.lower()]:
+                            subs.pop(old, None)
+                            m["members"] = [n for n in m["members"] if n.lower() != old]
+                    elif subs.get(name.lower()) not in (None, me):
+                        return self._send(403, {"ok": False, "error": "not your name"})
+                    elif subs.get(name.lower()) is None and name.lower() in [n.lower() for n in m["members"]]:
+                        return self._send(403, {"ok": False, "error": "not your name"})
+                if joining and me:
+                    subs[name.lower()] = me
+                elif not joining:
+                    subs.pop(name.lower(), None)
                 had = name.lower() in [n.lower() for n in m["members"]]
                 if joining and not had and name.lower() != m["host"].lower():
                     m["members"].append(name)
@@ -916,6 +1739,13 @@ class Handler(BaseHTTPRequestHandler):
         return self._send(404, {"ok": False, "error": "unknown lobby"})
 
 
+def net_of(ip):
+    """An address's network for the connection cap: its IPv4 /24, its IPv6 /64."""
+    if is_v4(ip):
+        return ip.rsplit(".", 1)[0]
+    return ":".join(str(ip).split(":")[:4])
+
+
 class MasterServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -938,8 +1768,11 @@ class MasterServer(ThreadingHTTPServer):
         self.conn_lock = threading.Lock()
         self.conns = {}      # socket -> [address, accepted (monotonic), cut]
         self.per_ip = {}     # address -> connections being handled
+        self.per_net = {}    # IPv4 /24 or IPv6 /64 -> connections being handled
         self.noted = {}      # note() key -> [last logged, dropped since]
         self.trusted_proxies = set()   # --trusted-proxy
+        self.auth = None               # docs/501 --require-signin: an Auth
+        self.min_version = ""          # docs/501 --min-version
 
     def note(self, kind, message, key):
         """A log line that a flood cannot multiply: once a minute per key, with
@@ -963,13 +1796,16 @@ class MasterServer(ThreadingHTTPServer):
     # a byte at a time cannot keep a thread either.
     def process_request(self, request, client_address):
         ip = client_address[0]
+        net = net_of(ip)
         with self.conn_lock:
             refuse = (len(self.conns) >= MAX_CONNECTIONS or
                       (ip not in self.trusted_proxies and
-                       self.per_ip.get(ip, 0) >= MAX_CONNECTIONS_PER_IP))
+                       (self.per_ip.get(ip, 0) >= MAX_CONNECTIONS_PER_IP or
+                        self.per_net.get(net, 0) >= MAX_CONNECTIONS_PER_NET)))
             if not refuse:
                 self.conns[request] = [ip, time.monotonic(), False]
                 self.per_ip[ip] = self.per_ip.get(ip, 0) + 1
+                self.per_net[net] = self.per_net.get(net, 0) + 1
         if refuse:
             self.note("BUSY", "%s refused: %d connections being handled, %d from it"
                       % (ip, len(self.conns), self.per_ip.get(ip, 0)), ("busy", ip))
@@ -997,6 +1833,12 @@ class MasterServer(ThreadingHTTPServer):
                     self.per_ip[c[0]] = left
                 else:
                     self.per_ip.pop(c[0], None)
+                net = net_of(c[0])
+                n = self.per_net.get(net, 1) - 1
+                if n > 0:
+                    self.per_net[net] = n
+                else:
+                    self.per_net.pop(net, None)
 
     def service_actions(self):
         """Called by serve_forever about every half second: the watchdog ping
@@ -1218,11 +2060,15 @@ def _watchdog_setup():
 # ------------------------------------------------------------------- main ----
 
 def build(port=DEFAULT_PORT, db="master.sqlite3", logfile="logs/master.log",
-          echo=True, max_players=DEFAULT_MAX_PLAYERS, host="", webhooks=None, label=""):
+          echo=True, max_players=DEFAULT_MAX_PLAYERS, host="", webhooks=None, label="",
+          require_signin=False, auth_server=DEFAULT_AUTH_SERVER, min_version=""):
     log = Log(logfile, echo=echo)
     store = Store(db)
     srv = MasterServer((host, port), store, log, max_players,
                        Discord(webhooks or [], log, label))
+    if require_signin:
+        srv.auth = Auth(auth_server)
+    srv.min_version = min_version or ""
     return srv, store, log
 
 
@@ -1261,7 +2107,20 @@ def main(argv=None):
     ap.add_argument("--trusted-proxy", action="append", default=[], metavar="ADDRESS",
                     help="a reverse proxy in front of this server: from it, the "
                          "client's address is read from X-Forwarded-For (repeatable)")
+    ap.add_argument("--require-signin", action="store_true",
+                    help="every lobby route needs a Discord session token, checked "
+                         "with --auth-server (docs/501; the official server only - "
+                         "leave it off when self-hosting)")
+    ap.add_argument("--auth-server", default=DEFAULT_AUTH_SERVER, metavar="URL",
+                    help="where tokens are verified (POST URL/auth/verify; "
+                         "default %s)" % DEFAULT_AUTH_SERVER)
+    ap.add_argument("--min-version", default="", metavar="X.Y.Z",
+                    help="refuse clients older than this version (426); default: no check")
     args = ap.parse_args(argv)
+    if args.min_version and version_key(args.min_version) is None:
+        ap.error("--min-version must look like 1.2.3")
+    if args.require_signin and not args.auth_server.startswith(("https://", "http://")):
+        ap.error("--auth-server must be an http(s) URL")
     MAX_CONNECTIONS = max(8, args.max_connections)
     logfile = None if args.no_log_file or args.log in ("", "-") else args.log
     if logfile is None and args.quiet:
@@ -1270,7 +2129,8 @@ def main(argv=None):
     hooks = list(args.discord_webhook) + [u.strip() for u in
                                           os.environ.get("LB_DISCORD_WEBHOOK", "").split(",") if u.strip()]
     srv, store, log = build(args.port, args.db, logfile, not args.quiet,
-                            args.max_players, args.host, hooks, args.discord_label)
+                            args.max_players, args.host, hooks, args.discord_label,
+                            args.require_signin, args.auth_server, args.min_version)
     srv.trusted_proxies = set(args.trusted_proxy)
     log("START", "LEGO Battles master server on %s:%d"
         % (args.host or "0.0.0.0", args.port))
@@ -1283,6 +2143,9 @@ def main(argv=None):
            ", trusted proxies %s" % ", ".join(sorted(srv.trusted_proxies)) if srv.trusted_proxies else ""))
     if srv.discord.urls:
         log("START", "Discord: %d webhook(s)" % len(srv.discord.urls))
+    log("START", "sign-in: %s; client version: %s"
+        % ("required, verified by %s" % srv.auth.url if srv.auth else "not required",
+           "at least %s" % srv.min_version if srv.min_version else "any"))
 
     # systemd stops a service with SIGTERM: shut down as Ctrl+C does, so the
     # database is closed cleanly.

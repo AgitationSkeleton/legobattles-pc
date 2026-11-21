@@ -27,6 +27,7 @@
 
 #include "lb_overlay.h"
 #include "lb_chat_words.h"
+#include "lb_slur_words.h"   /* docs/502 */
 
 #include <SDL.h>
 
@@ -49,6 +50,85 @@ extern "C" int lb_net_local_hero(void);         /* lb_patches.cpp */
 extern "C" const char* lb_overlay_player_name(void);   /* lb_overlay.cpp */
 
 namespace {
+
+// ---- docs/502: slurs ---------------------------------------------------------
+//
+// The servers' matcher (services/master-server/master_server.py has_slur), for
+// the names a DS profile can hold (plain ASCII): digits and symbols to the
+// letters they stand for, separators dropped, a few ordinary words removed,
+// runs of one letter shortened, every substring looked up among salted hashes
+// (lb_slur_words.h, tools/lb_slur_hash.py; no stem is in the source). A second
+// reading takes l for i and q for g. A name or line with a slur is shown as
+// "Ziff" whatever the swear filter's setting, and a player whose own name has
+// one is kept off the online servers (lb_overlay.cpp).
+
+uint64_t slur_hash(const std::string& s, size_t at, size_t n) {
+    uint64_t h = 0xCBF29CE484222325ull;
+    for (const char* p = "lbslur1:"; *p; ++p) {
+        h ^= (unsigned char)*p;
+        h *= 0x100000001B3ull;
+    }
+    for (size_t i = 0; i < n; ++i) {
+        h ^= (unsigned char)s[at + i];
+        h *= 0x100000001B3ull;
+    }
+    return h;
+}
+
+template <size_t N>
+bool slur_in(const uint64_t (&set)[N], uint64_t h) {
+    return std::binary_search(set, set + N, h);
+}
+
+char slur_fold(char ch) {
+    const char c = (char)std::tolower((unsigned char)ch);
+    if (c >= 'a' && c <= 'z') return c;
+    switch (c) {
+        case '1': case '!': case '|': return 'i';
+        case '@': case '4': return 'a';
+        case '3': return 'e';
+        case '0': return 'o';
+        case '5': case '$': return 's';
+        case '7': case '+': return 't';
+        case '9': case '6': return 'g';
+        case '8': return 'b';
+        default: return 0;
+    }
+}
+
+bool has_slur(const std::string& text) {
+    std::string base;
+    for (size_t i = 0; i < text.size() && i < 512; ++i)
+        if (const char c = slur_fold(text[i])) base += c;
+    std::string alt = base;
+    for (char& c : alt) c = c == 'l' ? 'i' : c == 'q' ? 'g' : c;
+    for (const std::string* v : {&base, &alt}) {
+        // The ordinary words that contain a stem: a stem wholly inside one is fine.
+        std::vector<std::pair<size_t, size_t>> spans;
+        for (int n = kSlurAllowMin; n <= kSlurAllowMax && n > 0; ++n)
+            for (size_t i = 0; i + (size_t)n <= v->size(); ++i)
+                if (slur_in(kSlurAllowHashes, slur_hash(*v, i, (size_t)n))) spans.push_back({i, i + (size_t)n});
+        std::string k;
+        std::vector<size_t> idx;
+        for (size_t i = 0; i < v->size(); ++i) {
+            const char c = (*v)[i];
+            const size_t m = k.size();
+            const bool vowel = std::strchr("aeiouy", c) != nullptr;
+            if (m && k[m - 1] == c && (vowel || (m > 1 && k[m - 2] == c))) continue;
+            k += c;
+            idx.push_back(i);
+        }
+        for (int n = kSlurMin; n <= kSlurMax; ++n)
+            for (size_t i = 0; i + (size_t)n <= k.size(); ++i)
+                if (slur_in(kSlurHashes, slur_hash(k, i, (size_t)n))) {
+                    const size_t a = idx[i], b = idx[i + (size_t)n - 1];
+                    bool inside = false;
+                    for (const auto& s : spans) inside = inside || (s.first <= a && b < s.second);
+                    if (!inside) return true;
+                }
+    }
+    return false;
+}
 
 // ---- the filter ------------------------------------------------------------
 
@@ -160,6 +240,7 @@ std::string replacement(const std::string& orig, bool ing) {
 }
 
 std::string filter(const std::string& in) {
+    if (has_slur(in)) return "Ziff";   // docs/502: the whole of it
     const size_t n = in.size();
     std::string norm(n, '\0');
     for (size_t i = 0; i < n; ++i) norm[i] = letter(in[i]);
@@ -218,6 +299,7 @@ std::string filter(const std::string& in) {
 
 // What a player sees: filtered while the setting is on.
 std::string shown(const std::string& s) {
+    if (has_slur(s)) return "Ziff";   // docs/502: whatever the setting
     return lb_setting_swear_filter() ? filter(s) : s;
 }
 
@@ -424,6 +506,9 @@ extern "C" int lb_swear_filter(const char* in, char* out, int cap) {
     std::snprintf(out, (size_t)cap, "%s", f.c_str());
     return f != s ? 1 : 0;
 }
+
+// docs/502: whether a name or text holds a slur (the own-name check).
+extern "C" int lb_name_has_slur(const char* in) { return has_slur(in ? in : "") ? 1 : 0; }
 
 extern "C" const char* lb_swear_shown(const char* in) {
     // For a caller that shows a string at once (the lobby browser): the

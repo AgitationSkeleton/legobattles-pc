@@ -12,7 +12,7 @@ Two flavours of the same service.
 ```
 python master_server.py                 # cmd: shows logs and keeps them
 python master_server_gui.py             # GUI: lobby sidepanel + console
-python test_master_server.py            # 18 tests against the live service
+python test_master_server.py            # 73 tests against the live service
 ```
 
 Standard library only — no pip install, no build step. SQLite for storage so the
@@ -211,6 +211,40 @@ ExecStart=/usr/bin/python3 ./master_server.py --port 28555 --db /srv/lbsserver/d
 ```
 
 `LB_DISCORD_WEBHOOK` takes several URLs separated by commas.
+
+## Sign-in and the version gate (docs/501)
+
+Both are off by default. **A self-hosted server runs without them:** no
+Discord account is needed to host or join on it, and nothing is relayed to the
+official channels (only to webhooks its operator gives it).
+
+`--require-signin` is for the official server (King). Every route except
+`/health` then needs a Discord session token: `"auth"` in a POST body, or
+`?auth=` on a GET. The server checks a token by posting `{"token": ...}` to
+`<--auth-server>/auth/verify`, with a 5 s timeout:
+- the answer is kept 10 minutes per token (at most 4096 tokens, the oldest
+  dropped);
+- while the auth server cannot be reached, a token already known good stays
+  good until its answer is an hour old; a token never seen gets 503
+  `{"ok":false,"error":"sign-in unavailable"}`;
+- a missing or refused token gets 401 `{"ok":false,"error":"signin",...}`,
+  whose `message` the game shows;
+- the lobby keeps the host's Discord id, and each member's, in memory.
+
+Tokens are never logged or echoed, and the cache holds only their SHA-256.
+
+`--auth-server URL` names the verifier (default
+`https://lbserver.viosarcade.xyz`).
+
+`--min-version X.Y.Z` refuses older clients with 426
+`{"ok":false,"error":"update",...}`. The version is the POST body's `"version"`
+or a GET's `?v=`; a request without one is refused too. Dotted parts compare as
+numbers (0.10.0 is above 0.9.9), and a suffix such as `-beta` sorts below the
+plain release. It is checked before the token. `/health` stays open.
+
+```
+python master_server.py --port 28555 --require-signin --min-version 0.5.0
+```
 
 ## Executables
 
