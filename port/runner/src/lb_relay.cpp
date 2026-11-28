@@ -36,6 +36,7 @@
 // after its room opens, to test the recovery (BR-0031/32).
 
 #include <algorithm>
+#include <cctype>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -71,6 +72,9 @@ using socket_t = int;
 
 // docs/501: "&v=...&auth=..." for an official server, "" for any other (lb_net.cpp).
 extern "C" int lb_net_auth_query(const char* host, int port, char* out, int cap);
+// BR-0111: the main server's relay over TLS (lb_https.cpp, WinHTTP).
+#include "lb_wss.h"
+extern "C" int lb_setting_master_https(void);   /* lb_overlay.cpp */
 
 namespace {
 
@@ -288,7 +292,8 @@ struct Session {
     std::atomic<bool> ready{false};    // host: the room is open; joiner: paired
     std::atomic<bool> done{false};     // the thread has finished
     std::atomic<int> peers{0};         // host: relayed joiners
-    std::atomic<long long> fd{-1};
+    std::atomic<long long> fd{-1};     // >= 0 while connected (0 for a TLS link)
+    std::shared_ptr<LbWss> wss;        // under send_mu: the TLS link, when it is one
     std::atomic<long long> last_send_ms{0};
     std::atomic<long long> last_recv_ms{0};   // anything from the room, pongs too
     std::mutex send_mu;               // the socket's writes
@@ -334,6 +339,12 @@ bool send_frame(Session& s, uint8_t opcode, const uint8_t* data, size_t n) {
     std::lock_guard<std::mutex> lk(s.send_mu);
     const long long fd = s.fd.load();
     if (fd < 0) return false;
+    if (s.wss) {   // WinHTTP frames, masks and answers pings itself
+        if (opcode != 1 && opcode != 2) return true;
+        if (!lb_wss_send(s.wss.get(), opcode, data, n)) return false;
+        s.last_send_ms = now_ms();
+        return true;
+    }
     const std::string f = ws_frame(opcode, data, n, next_rand(s.rng));
     if (!send_all((socket_t)fd, f.data(), f.size())) return false;
     s.last_send_ms = now_ms();
@@ -343,7 +354,96 @@ bool send_frame(Session& s, uint8_t opcode, const uint8_t* data, size_t n) {
 void close_socket(Session& s) {
     std::lock_guard<std::mutex> lk(s.send_mu);
     const long long fd = s.fd.exchange(-1);
+    if (s.wss) {
+        lb_wss_close(s.wss.get());
+        s.wss.reset();
+        return;
+    }
     if (fd >= 0) lb_closesock((socket_t)fd);
+}
+
+// Why an upgrade was refused, from its HTTP status (and the refusal's text);
+// `final` when retrying cannot help.
+void refusal(int code, const std::string& line, const std::string& text, std::string* why,
+             bool* final) {
+    *final = true;
+    if (code == 401) {
+        *why = "the relay did not accept this lobby's token";
+    } else if (code == 404) {
+        const bool absent = text.find("not on the relay") != std::string::npos;
+        *why = absent ? "the host is not on the relay" : "that lobby is no longer open";
+        *final = !absent;
+    } else if (code == 409) {
+        *why = "the relay room is full";
+    } else if (code == 426 || code == 503 || code == 400) {
+        *why = "this master server has no relay";
+    } else {
+        *why = "the relay refused (" + line + ")";
+        *final = false;
+    }
+}
+
+// BR-0111: the main server answers plain HTTP with a redirect to HTTPS (the
+// owner keeps that security option on), so its relay is reached over TLS
+// (wss://, port 443) when HTTPS is on and this WinHTTP has WebSockets. Other
+// servers (King, the fallback, a LAN one) have no TLS and keep the plain route.
+// Test aid: LB_TEST_WSS=host:port treats that server as a TLS relay on that
+// same port, with any certificate (a local `wrangler dev --local-protocol https`).
+const char* test_wss() {
+    static const char* v = std::getenv("LB_TEST_WSS");
+    return v && *v ? v : nullptr;
+}
+bool test_wss_match(const Session& s) {
+    const char* t = test_wss();
+    return t && s.server + ":" + std::to_string(s.port) == t;
+}
+bool tls_route(const Session& s) {
+    if (test_wss_match(s)) return lb_wss_available();
+    std::string h = s.server;
+    for (char& c : h) c = (char)std::tolower((unsigned char)c);
+    return h == "lbserver.viosarcade.xyz" && (s.port == 80 || s.port == 443) &&
+           lb_setting_master_https() && lb_wss_available();
+}
+
+// The upgrade over TLS. 1 open, 0 refused (why/final set), -1 TLS itself
+// failed (the caller tries the plain route).
+int wss_open(Session& s, const std::string& path, int timeout_ms, std::string* why, bool* final) {
+    char aq[2200] = "";
+    lb_net_auth_query(s.server.c_str(), s.port, aq, (int)sizeof aq);
+    const std::string headers = s.token.empty() ? std::string() : "X-Token: " + s.token + "\r\n";
+    int code = 0;
+    std::string body, err;
+    const bool test = test_wss_match(s);
+    std::shared_ptr<LbWss> w = lb_wss_open(s.server, test ? s.port : 443, path + aq, headers,
+                                           timeout_ms, &code, &body, &err, test);
+    if (!w) {
+        if (code == 0) {
+            static std::atomic<bool> said{false};
+            if (!said.exchange(true)) {
+                std::fprintf(stderr, "[lb_relay] TLS to %s failed (%s): plain HTTP instead\n",
+                             s.server.c_str(), err.c_str());
+                std::fflush(stderr);
+            }
+            return -1;
+        }
+        refusal(code, "HTTP " + std::to_string(code), body, why, final);
+        return 0;
+    }
+    {
+        std::lock_guard<std::mutex> lk(s.send_mu);
+        s.wss = w;
+        s.fd = 0;
+    }
+    if (s.stop) {   // stopped while connecting
+        close_socket(s);
+        return 0;
+    }
+    static std::atomic<bool> said_ok{false};
+    if (!said_ok.exchange(true)) {
+        std::fprintf(stderr, "[lb_relay] relay over TLS (wss://%s)\n", s.server.c_str());
+        std::fflush(stderr);
+    }
+    return 1;
 }
 
 // The upgrade. True with the socket in s.fd; false with a reason, and with
@@ -351,6 +451,10 @@ void close_socket(Session& s) {
 bool ws_open(Session& s, const std::string& path, int timeout_ms,
              std::vector<Message>* early, std::string* why, bool* final) {
     *final = false;
+    if (tls_route(s)) {
+        const int r = wss_open(s, path, timeout_ms, why, final);
+        if (r >= 0) return r == 1;
+    }
     const auto t0 = Clock::now();
     socket_t sock = connect_within(s.server, s.port, timeout_ms);
     if (sock == LB_INVALID) {
@@ -403,23 +507,9 @@ bool ws_open(Session& s, const std::string& path, int timeout_ms,
     if (end == std::string::npos || head.compare(0, 12, "HTTP/1.1 101") != 0) {
         lb_closesock(sock);
         const std::string line = head.substr(0, head.find("\r\n"));
-        *final = true;
-        if (line.find(" 401") != std::string::npos) {
-            *why = "the relay did not accept this lobby's token";
-        } else if (line.find(" 404") != std::string::npos) {
-            const bool absent = head.find("not on the relay") != std::string::npos;
-            *why = absent ? "the host is not on the relay" : "that lobby is no longer open";
-            *final = !absent;
-        } else if (line.find(" 409") != std::string::npos) {
-            *why = "the relay room is full";
-        } else if (line.find(" 426") != std::string::npos ||
-                   line.find(" 503") != std::string::npos ||
-                   line.find(" 400") != std::string::npos) {
-            *why = "this master server has no relay";
-        } else {
-            *why = "the relay refused (" + line + ")";
-            *final = false;
-        }
+        const size_t sp = line.find(' ');
+        const int code = sp == std::string::npos ? 0 : std::atoi(line.c_str() + sp + 1);
+        refusal(code, line, head, why, final);
         return false;
     }
     s.buf = head.substr(end + 4);
@@ -553,6 +643,19 @@ bool pump(Session& s) {
             (t - s.last_recv_ms.load() > kQuietMs && t - last_ping > kQuietMs)) {
             send_frame(s, 1, (const uint8_t*)"ping", 4);
             last_ping = t;
+        }
+        std::shared_ptr<LbWss> w;
+        {
+            std::lock_guard<std::mutex> lk(s.send_mu);
+            w = s.wss;
+        }
+        if (w) {   // the TLS link: its reader thread has queued what came
+            std::vector<LbWssMessage> in;
+            const int r = lb_wss_recv(w.get(), 200, &in);
+            if (r > 0) s.last_recv_ms = now_ms();
+            for (LbWssMessage& m : in) handle(s, Message{(uint8_t)m.opcode, std::move(m.data)});
+            if (r < 0) return true;
+            continue;
         }
         if (!wait_readable((socket_t)fd, 200)) continue;
         std::vector<Message> got;

@@ -3065,16 +3065,24 @@ def apply(runner_dir, imgui_dir):
             "       render_screen already crops with its own source rect, and\n"
             "       the rows this stops writing held whatever the out-of-bounds\n"
             "       read produced. */\n"
+            "    /* docs/508: under steady 30 Hz in a battle, the field's screen\n"
+            "       takes a new picture only on a pass's start frame\n"
+            "       (lb_picture_hold_frame); the other screen every frame. */\n"
             "    {\n"
+            "        const int lb_hold = lb_picture_hold_frame(top_pixels, bottom_pixels, top_width, bottom_width,\n"
+            "                                                  lb_present_src_h[0], lb_present_src_h[1],\n"
+            "                                                  lb_comp_field_screen());\n"
             "        const SDL_Rect lb_top_src{0, 0, (int)top_width,\n"
             "                                  lb_present_src_h[0] > 0\n"
             "                                      ? lb_present_src_h[0] : 192};\n"
+            "        if (!(lb_hold & 1))\n"
             "        SDL_UpdateTexture(presentation.textures[0], &lb_top_src,\n"
             "                          top_pixels,\n"
             "                          top_width * sizeof(uint32_t));\n"
             "        const SDL_Rect lb_bot_src{0, 0, (int)bottom_width,\n"
             "                                  lb_present_src_h[1] > 0\n"
             "                                      ? lb_present_src_h[1] : 192};\n"
+            "        if (!(lb_hold & 2))\n"
             "        SDL_UpdateTexture(presentation.textures[1], &lb_bot_src,\n"
             "                          bottom_pixels,\n"
             "                          bottom_width * sizeof(uint32_t));\n"
@@ -7899,6 +7907,8 @@ def apply(runner_dir, imgui_dir):
           "src/lb_maptx.cpp",
           # Download and install a release in place (docs/435).
           "src/lb_update.cpp",
+          # docs/506: Visuals 2.0 (Jaime A. Vives' improvements): the cutscene theatre.
+          "src/lb_visuals.cpp",
           # The first-run setup (docs/394).
           "src/lb_setup.cpp",
           # The executable's icon (lbapp.png), resource 1.
@@ -9276,6 +9286,32 @@ def apply(runner_dir, imgui_dir):
             "        std::fflush(stderr);\n"
             "    }\n")
     done.append("spu.cpp: LB_SPULOG counts channel key-ons (docs/376)")
+
+    # 0zzzzzzzz-v2. VISUALS 2.0'S CONTROLS: THE MUSIC MUTE (docs/506).
+    #
+    # Jaime's port mutes the music with M. The music is a stream on channels
+    # 6..9 (docs/376: the pairs 6/7 and 8/9 key on with it), so while the
+    # player has it muted those channels still run -- the stream keeps its
+    # place -- but add nothing to the mix. Host-side only: the game's own
+    # volume, and everything it reads, is untouched.
+    replace(spu,
+            "struct Channel {\n",
+            "extern \"C\" int lb_music_muted(void);   /* lb_overlay.cpp, docs/506 */\n"
+            "\n"
+            "struct Channel {\n")
+    replace(spu,
+            "        for (uint32_t i = 4; i < 16; ++i) {\n"
+            "            const int32_t sample = g_channel[i].run();\n"
+            "            g_channel[i].pan_output(sample, left, right);\n"
+            "        }\n",
+            "        const bool lb_mute = lb_music_muted() != 0;   /* docs/506 */\n"
+            "        for (uint32_t i = 4; i < 16; ++i) {\n"
+            "            const int32_t sample = g_channel[i].run();\n"
+            "            if (lb_mute && i >= 6u && i <= 9u) continue;\n"
+            "            g_channel[i].pan_output(sample, left, right);\n"
+            "        }\n")
+    done.append("spu.cpp: the music mute leaves channels 6..9 out of the mix (docs/506)")
+
 
     # 0zzzzzzzz. UI LAYER 0 IS DRAWN WITH THE HUD, AND FLAGGED (docs/380).
     #
@@ -12332,8 +12368,72 @@ def apply(runner_dir, imgui_dir):
             "extern \"C\" int lb_comp_field_screen(void);\n"
             "extern \"C\" const uint32_t* lb_comp_join(uint16_t* width);\n"
             "extern \"C\" void lb_comp_stats(unsigned long long* frames, unsigned long long* barriers);\n"
+            "extern \"C\" int lb_picture_hold_frame(const uint32_t* top, const uint32_t* bot, unsigned tw, unsigned bw, int th, int bh, int field);   /* docs/508 */\n"
             "int lb_present_src_w[2] = {0, 0};   /* legobattles-decomp */\n")
     done.append("gpu2d/frontend: the composite's rows overlapped with the next frame (docs/484)")
+
+    # docs/506: VISUALS 2.0, phase 1 -- the cutscene theatre (lb_visuals.cpp,
+    # lb_visuals_front.inc). The finished top screen goes to lb_visuals every
+    # frame (a film plays there); while one plays, the field is drawn into a
+    # strip along the bottom and the film, large, above it.
+    vfront = os.path.join(runner_dir, "src", "frontend.cpp")
+    replace(vfront,
+            "#include \"lb_hires_front.inc\"  /* legobattles-decomp docs/434 */\n",
+            "#include \"lb_hires_front.inc\"  /* legobattles-decomp docs/434 */\n"
+            "#include \"lb_visuals_front.inc\"  /* legobattles-decomp docs/506 */\n")
+    replace(vfront,
+            "    lb_overlay_set_top_pixels(top_pixels, top_width, kScreenHeight);  /* legobattles-decomp */\n",
+            "    lb_visuals_top_frame(top_pixels, top_width);  /* legobattles-decomp docs/506 */\n"
+            "    lb_overlay_set_top_pixels(top_pixels, top_width, kScreenHeight);  /* legobattles-decomp */\n")
+    replace(vfront,
+            "            const SDL_Rect lb_only{(win_w - lb_dw) / 2,\n"
+            "                                   (win_h - lb_dh) / 2,\n"
+            "                                   lb_dw, lb_dh};\n",
+            "            SDL_Rect lb_only{(win_w - lb_dw) / 2,\n"
+            "                             (win_h - lb_dh) / 2,\n"
+            "                             lb_dw, lb_dh};\n"
+            "            SDL_Rect lb_film{0, 0, 0, 0};   /* docs/506: the cutscene theatre */\n"
+            "            const bool lb_theatre =\n"
+            "                lb_theatre_layout(win_w, win_h, lb_gw, lb_ghh, &lb_only, &lb_s, &lb_film);\n"
+            "            if (!lb_theatre) lb_only.x += (int)lb_visuals_shake_px(lb_s);   /* docs/506: spell shake */\n")
+    replace(vfront,
+            "            if (!lb_hires_present_field(presentation, lb_only, lb_s))   /* docs/434 */\n"
+            "                lb_render_field(presentation, lb_only, lb_s, lb_gw, lb_ghh);   /* docs/382 */\n",
+            "            if (!lb_hires_present_field(presentation, lb_only, lb_s))   /* docs/434 */\n"
+            "                lb_render_field(presentation, lb_only, lb_s, lb_gw, lb_ghh);   /* docs/382 */\n"
+            "            if (lb_theatre) lb_theatre_draw(presentation, lb_film);   /* docs/506 */\n")
+    done.append("Visuals 2.0: the cutscene theatre (docs/506)")
+
+    # 0zzzzzzzz-v2b. VISUALS 2.0'S CONTROLS: MIDDLE-DRAG PANS (docs/506).
+    #
+    # Jaime's port pans the camera while the middle button is held and
+    # dragged. Here the drag holds the DS d-pad, the game's own scrolling
+    # input (docs/111), so it is recorded and sent like any button press:
+    # lb_v2_pan_keys() (lb_overlay.cpp) gives the d-pad bits for the drag's
+    # direction, and the key mask is published once a frame as well as on
+    # events, so a drag held still keeps scrolling.
+    fe = os.path.join(runner_dir, "src", "frontend.cpp")
+    replace(fe,
+            "            ~(keyboard_pressed | controller_pressed | mouse_pressed |\n"
+            "              mph_prime_pressed | stick_pressed)));\n"
+            "    };\n"
+            "    publish_keys();\n",
+            "            ~(keyboard_pressed | controller_pressed | mouse_pressed |\n"
+            "              mph_prime_pressed | stick_pressed |\n"
+            "              (uint16_t)lb_v2_pan_keys())));   /* docs/506 */\n"
+            "    };\n"
+            "    publish_keys();\n")
+    replace(fe,
+            "        lb_winloop_pump(presentation.windows[0],\n"
+            "                        presentation.windows[1]);\n",
+            "        lb_winloop_pump(presentation.windows[0],\n"
+            "                        presentation.windows[1]);\n"
+            "        publish_keys();   /* docs/506: a held middle-drag keeps scrolling */\n")
+    replace(fe,
+            "extern \"C\" void lb_winloop_pump(SDL_Window* a, SDL_Window* b);\n",
+            "extern \"C\" void lb_winloop_pump(SDL_Window* a, SDL_Window* b);\n"
+            "extern \"C\" int lb_v2_pan_keys(void);   /* lb_overlay.cpp, docs/506 */\n")
+    done.append("frontend: a middle-drag holds the d-pad (docs/506)")
 
     # Last, once every patch has been written: hold the mtime of any file whose
     # patched CONTENT is unchanged since the previous build, so make does not

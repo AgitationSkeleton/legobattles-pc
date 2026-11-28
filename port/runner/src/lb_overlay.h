@@ -291,7 +291,15 @@ int lb_setting_fix_hotwired_healing(void);
 int lb_setting_fix_monkey_cage(void);   // docs/385, cosmetic, default on
 int lb_cage_fix_live(void);             // docs/385: that, unless LB_CAGEFIX=0
 int lb_setting_own_hero_spells(void);   // docs/385, default on
+// SG-0141 (docs/510): each extra hero of an army draws from a sheet of its
+// own, so heroes no longer turn and animate in step. Presentation only, off
+// by default; LB_HERO_SHEETS=0|1 forces it. A replay takes the recording's
+// (demo kind 34); lb_hero_sheets_live (lb_patches.cpp) is what the patch runs.
+int lb_setting_hero_sheets(void);
+int lb_demo_play_hero_sheets(void);
+int lb_hero_sheets_live(void);
 int lb_setting_tabs_stay_open(void);    // docs/451, presentation only, default on
+int lb_setting_attack_move(void);       // SG-0154 (docs/509): a missed Attack tap takes the nearest visible enemy; default off
 int lb_setting_patch_hotwire_glitch(void);
 
 // 0 vanilla, 1 destroy the occupants, 2 convert them to the new owner.
@@ -387,6 +395,8 @@ int lb_pick_balance_rom_file(char* buf, int cap);
 // The reverse: the own blueprint with the player's values, as an Entities.ebp.
 int lb_balance_export_ebp(const char* path, char* msg, int msg_cap);
 int lb_pick_ebp_save_file(char* buf, int cap);
+int lb_pick_text_save_file(char* buf, int cap);   /* SG-0144 */
+int lb_balance_export_ar(const char* path, char* msg, int msg_cap);   /* SG-0144 */
 /* SG-0061: the custom unit lab's Convert tool. kind 0 an .NCBR, 1 an .NCLR, 2 a .PNG;
    saving 0 opens an existing file, else chooses a destination. */
 int lb_pick_art_file(char* buf, int cap, int saving, int kind);
@@ -415,6 +425,8 @@ int         lb_balance_custom_parse(const char* text);
 // The patcher's half (lb_patches.cpp): whether the set in force differs from
 // what is written, and writing or taking it out.
 int         lb_balance_custom_dirty(void);
+void        lb_balance_custom_touch(void);   /* SG-0155: Tournament Rules toggled */
+int         lb_setting_tourney_rules(void);  /* SG-0155 */
 int         lb_balance_custom_apply(unsigned int blueprint_base);
 void        lb_balance_custom_revert(unsigned int blueprint_base);
 void        lb_balance_custom_on_reset(void);
@@ -941,6 +953,7 @@ int          lb_setting_ai_finish_upgrades(void);
 int          lb_setting_ai_keep_bridges(void);
 int          lb_setting_ai_stuck_bridges(void);
 int          lb_setting_ai_transports_on_request(void);   /* SG-0091 */
+int          lb_setting_ai_gold_trees(void);   /* SG-0136 (docs/512): kind 26 bit 5 */
 int          lb_demo_play_ai_extra(void);
 int          lb_ai_extra_live(void);
 int          lb_setting_ai_cross_fire(void);   /* SG-0051 */
@@ -958,6 +971,7 @@ int          lb_ai_opp_live(void);           /* lb_patches.cpp: 0 online */
 int          lb_setting_cpu_online_packed(void);   /* lb_overlay.cpp: this machine's (host) choice */
 int          lb_rules_host_cpu_online(void);       /* lb_teams.cpp: the host's 'O' page; -1 unless joined */
 int          lb_demo_play_cpu_online(void);        /* lb_demo.cpp: a replay's (kind 32), else -1 */
+int          lb_demo_play_attack_move(void);       /* lb_demo.cpp: a replay's (kind 33), else -1 */
 int          lb_cpu_online_live(void);             /* lb_patches.cpp: replay, host's, else this machine's */
 int          lb_cpu_online_lobby_humans(void);     /* lb_patches.cpp: players in the lobby records */
 /* lb_patches.cpp: the seat the current (or last) online match made, for the

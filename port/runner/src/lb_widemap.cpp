@@ -761,6 +761,9 @@ bool g_ext3_valid = false;
 // The map-space record, one byte per MAP TILE, 1 = shrouded. Sized from the
 // metatile grid: 3 tiles across and 2 down per metatile.
 std::vector<uint8_t> g_seen;
+// Bumped whenever a g_seen cell changes (or the cache is rebuilt), so the band
+// fill's skip (fill_ext) sees a shroud change made while the camera is still.
+unsigned g_seen_gen = 0;
 // HAS THIS TILE EVER BEEN LOOKED AT?
 //
 // g_seen defaults every tile to "shrouded", which is the conservative
@@ -1711,6 +1714,7 @@ void scan_shroud(uint32_t dispcnt, uint32_t map, int map_w, int map_h,
     const int th = map_h * 2;
     if (g_seen_map != map || g_seen_w != tw || g_seen_h != th) {
         g_seen.assign(size_t(tw) * size_t(th), 1u);   // unseen == shrouded
+        ++g_seen_gen;
         g_obs.assign(size_t(tw) * size_t(th), 0u);    // nothing read yet
         g_seen_kind.assign(size_t(tw) * size_t(th), 0u);
         g_seen_w = tw;
@@ -2074,8 +2078,12 @@ void scan_shroud(uint32_t dispcnt, uint32_t map, int map_w, int map_h,
             // whatever it last had, and the next frame with an explained
             // camera writes it correctly.
             if (g_model_ok) {
-                g_seen[size_t(ar) * size_t(tw) + size_t(ac)] =
-                    shrouded ? 1u : 0u;
+                uint8_t& cell = g_seen[size_t(ar) * size_t(tw) + size_t(ac)];
+                const uint8_t now = shrouded ? 1u : 0u;
+                if (cell != now) {
+                    cell = now;
+                    ++g_seen_gen;
+                }
                 g_obs[size_t(ar) * size_t(tw) + size_t(ac)] = 1u;
                 if (!g_seen_kind.empty())
                     g_seen_kind[size_t(ar) * size_t(tw) + size_t(ac)] =
@@ -4685,6 +4693,7 @@ void audit_fog(uint32_t dispcnt) {
 // from. See the skip in lb_widemap_scan.
 uint32_t g_vis_sig = 0;
 uint32_t g_ext_fill_sig = 0xFFFFFFFFu;
+unsigned g_ext_fill_seen = ~0u;   // g_seen_gen at the last band fill
 int g_ext_fill_tx = INT32_MIN, g_ext_fill_ty = INT32_MIN;
 bool g_ext_fill_fog = false;
 
@@ -6034,16 +6043,37 @@ void fill_fog_for(int cam_tx, int cam_ty) {
     // and the frame can keep the tables it has. A camera that moves or
     // ground that gets explored rebuilds immediately, so nothing is
     // ever shown stale.
+    // THE SCAN'S OWN CACHE IS AN INPUT TOO.
+    // Every unrecorded cell answers from g_seen, which the guest's window keeps
+    // writing while the camera sits still -- Reveal Map, a unit exploring --
+    // and the skip did not look at it: the band kept its old cloud until the
+    // camera moved, over ground already revealed (and over the specials on
+    // it). g_seen_gen counts its changes.
+    // THE REVEAL MAP CHEAT (cheat flag 0 of the block at *0x02150A70, as
+    // BR-0098 reads it): the game draws no fog anywhere, but the band's
+    // unvisited cells default to shrouded, so the widened sides stayed under
+    // cloud until panned over. With it on, the band is
+    // clear; a change of the flag refills it.
+    const uint32_t cheat_blk = bus_read_u32(0x02150A70u);
+    const bool reveal_all = main_ram(cheat_blk) && bus_read_u8(cheat_blk) == 1u;
+    {
+        static bool last_reveal = false;
+        if (reveal_all != last_reveal) {
+            last_reveal = reveal_all;
+            ++g_seen_gen;
+        }
+    }
     if (g_ext2_valid && g_ext3_valid &&
         g_ext_fill_tx == cam_tx && g_ext_fill_ty == cam_ty &&
         g_ext_fill_sig == g_vis_sig && g_ext_fill_fog == fog_ok &&
-        bd == last_b) {
+        g_ext_fill_seen == g_seen_gen && bd == last_b) {
         audit_fog(g_dispcnt);
         return;
     }
     g_ext_fill_tx = cam_tx;
     g_ext_fill_ty = cam_ty;
     g_ext_fill_sig = g_vis_sig;
+    g_ext_fill_seen = g_seen_gen;
     g_ext_fill_fog = fog_ok;
     last_b = bd;
     for (int trow = bd.rlo; trow <= bd.rhi; ++trow) {
@@ -6327,6 +6357,7 @@ void fill_fog_for(int cam_tx, int cam_ty) {
             // see-through, varying for no apparent reason. A defect that only a
             // diagnostic nobody runs can see is a defect that gets argued
             // about instead of measured. This one rides on the assignment.
+            if (reveal_all) s = 0u;   // Reveal Map: nothing is fogged for the player
             if (s && !have_fog) ++g_bare_fill;
             g_ext2[trow - kExtRowLo][h - kExtLo] =
                 (s && have_fog) ? fog : kClearTile;

@@ -267,7 +267,15 @@ int g_rec_aitap = 0, g_demo_aitap = -1;
 // kind 32, SG-0115 (docs/495): the online computer player, packed as
 // lb_setting_cpu_online_packed (0 none).
 int g_rec_cpuo = 0, g_demo_cpuo = 0;
-int g_rec_aix = 0, g_demo_aix = 0;         // kind 26, docs/472: AI mask (1 finish upgrades, 2 keep bridges, 4 stuck bridges, 8 transports on request (docs/478); 0 stock)
+// kind 33, SG-0154 (docs/509): Attack Move, a missed Attack tap takes the
+// nearest visible enemy (0 stock).
+int g_rec_amove = 0, g_demo_amove = 0;
+// kind 34, SG-0141 (docs/510): Heroes Animate Independently. Presentation
+// only, but it makes the cartridge load extra hero sheets (instruction
+// counts and heap layout), so a replay takes the recorder's choice, as with
+// the cage fix. A recording before it ran without it (0).
+int g_rec_hsheet = 0, g_demo_hsheet = 0;
+int g_rec_aix = 0, g_demo_aix = 0;         // kind 26, docs/472: AI mask (1 finish upgrades, 2 keep bridges, 4 stuck bridges, 8 transports on request (docs/478), 16 fewer farms, 32 gold-brick trees (docs/512); 0 stock)
 // BR-0011: kinds 14 and 15, the attack boost and the healing fix, from
 // `sets=4`; a recording before it leaves them to this machine (-1).
 int g_rec_atk = 0, g_demo_atk = -1;
@@ -363,6 +371,8 @@ bool load(const char* path) {
     g_demo_rules2 = 0;            // and none of the second rule flags (docs/488)
     g_demo_aitap = -1;            // and this machine's AI spell choice, unless aitap=1 (docs/488)
     g_demo_cpuo = 0;              // and no online computer player (SG-0115)
+    g_demo_amove = 0;             // and Attack taps that miss stay stock (SG-0154)
+    g_demo_hsheet = 0;            // and the heroes sharing their army's sheet (SG-0141)
     g_demo_atk = g_demo_heal = -1;   // BR-0011: and this machine's
     g_demo_fw = g_demo_fh = 0;    // docs/409: and the window's own field
     g_demo_has_rtc = false;       // and the clock the replaying run has
@@ -690,6 +700,9 @@ extern "C" int lb_demo_play_gold_target(void) {   // SG-0036
 extern "C" int lb_demo_play_tabs(void) {   // docs/451
     return g_mode == Mode::Play ? g_demo_tabs : -1;
 }
+extern "C" int lb_demo_play_attack_move(void) {   // SG-0154 (docs/509)
+    return g_mode == Mode::Play ? g_demo_amove : -1;
+}
 extern "C" int lb_demo_play_hotwire_neutrals(void) {   // SG-0045
     return (g_mode == Mode::Play || g_replay_done) ? g_demo_hwneut : -1;
 }
@@ -713,6 +726,9 @@ extern "C" int lb_demo_play_ai_shipyards(void) {   // SG-0078
 }
 extern "C" int lb_demo_play_native_logic(void) {   // docs/479
     return (g_mode == Mode::Play || g_replay_done) ? g_demo_natq : -1;
+}
+extern "C" int lb_demo_play_hero_sheets(void) {   // SG-0141 (docs/510), kind 34
+    return (g_mode == Mode::Play || g_replay_done) ? g_demo_hsheet : -1;
 }
 extern "C" int lb_demo_play_faster_cpu(void) {   // docs/484: the clock, 0 the DS's
     return (g_mode == Mode::Play || g_replay_done) ? g_demo_fcpu : -1;
@@ -804,6 +820,8 @@ extern "C" void lb_demo_start_record(const char* path) {
     g_rec_rules2 = 0;             // docs/488
     g_rec_aitap = 0;              // docs/488: aitap=1, from Off
     g_rec_cpuo = 0;               // SG-0115
+    g_rec_amove = 0;              // SG-0154
+    g_rec_hsheet = 0;             // SG-0141: from Off
     g_rec_atk = g_rec_heal = 0;
     g_rec_fw = g_rec_fh = 0;      // docs/409: the first frame writes the size
     for (int& c : g_rec_cpal) c = -1;   // docs/489: the first frame writes the set in force
@@ -1004,7 +1022,7 @@ extern "C" void lb_demo_tick(void) {
             emit(e);
         }
         // docs/388: and the settings a replay takes from the recording.
-        const int now[33] = {lb_setting_force_tileset(),
+        const int now[35] = {lb_setting_force_tileset(),
                             lb_setting_level_palette(),
                             lb_setting_music_mode(),
                             lb_cage_fix_live() ? 1 : 0,
@@ -1036,8 +1054,10 @@ extern "C" void lb_demo_tick(void) {
                             lb_faster_cpu_clock_live(),             // docs/484
                             lb_rules2_live(),                       // docs/488, kind 30
                             lb_ai_tap_spells_live(),                // docs/488, kind 31
-                            lb_cpu_online_live()};                  // SG-0115, kind 32
-        int* const was[33] = {&g_rec_tileset, &g_rec_palette, &g_rec_music,
+                            lb_cpu_online_live(),                   // SG-0115, kind 32
+                            lb_setting_attack_move() ? 1 : 0,       // SG-0154, kind 33
+                            lb_setting_hero_sheets()};              // SG-0141, kind 34
+        int* const was[35] = {&g_rec_tileset, &g_rec_palette, &g_rec_music,
                               &g_rec_cage, &g_rec_ownhero, &g_rec_oppdef,
                               &g_rec_hwtransport, &g_rec_hwmode, &g_rec_emp,
                               &g_rec_cheats, &g_rec_aicheats, &g_rec_aihero,
@@ -1046,8 +1066,8 @@ extern "C" void lb_demo_tick(void) {
                               &g_rec_tabs, &g_rec_hwneut, &g_rec_stun, &g_rec_mines, &g_rec_cross,
                               &g_rec_bridges, &g_rec_yards, &g_rec_aix, &g_rec_natq,
                               &g_rec_startpos, &g_rec_fcpu, &g_rec_rules2, &g_rec_aitap,
-                              &g_rec_cpuo};
-        for (int k = 0; k < 33; ++k) {
+                              &g_rec_cpuo, &g_rec_amove, &g_rec_hsheet};
+        for (int k = 0; k < 35; ++k) {
             if (now[k] == *was[k]) continue;
             *was[k] = now[k];
             const Event e{g_frame, 's', k, now[k], 0, 0};
@@ -1134,10 +1154,12 @@ extern "C" void lb_demo_tick(void) {
             else if (e.a == 25) g_demo_yards = e.b ? 1 : 0;     // SG-0078
             else if (e.a == 27) g_demo_natq = e.b ? 1 : 0;      // docs/479
             else if (e.a == 28) g_demo_startpos = (e.b >= 0 && e.b <= 8) ? e.b : 0;   // SG-0081
-            else if (e.a == 29) g_demo_fcpu = (e.b == 1 || (e.b >= 64 && e.b < 256)) ? e.b : 0;   // docs/484: 1 the governor
-            else if (e.a == 26) g_demo_aix = e.b & 31;           // docs/472; bit 3 docs/478
+            else if (e.a == 29) g_demo_fcpu = (e.b == 1 || e.b == 2 || (e.b >= 64 && e.b < 256)) ? e.b : 0;   // docs/484: 1 the governor
+            else if (e.a == 26) g_demo_aix = e.b & 63;           // docs/472; bit 3 docs/478, bit 5 docs/512
             else if (e.a == 30) g_demo_rules2 = e.b & (LB_RULE2_ANY_REPAIR | LB_RULE2_UNIQUE_HEROES | LB_RULE2_SMART_MOVE | LB_RULE2_THUNDER_FIX | LB_RULE2_FAST_PATH);   // docs/488, docs/497
             else if (e.a == 31) g_demo_aitap = e.b ? 1 : 0;      // docs/488 (SG-0113)
+            else if (e.a == 33) g_demo_amove = e.b ? 1 : 0;      // SG-0154 (docs/509)
+            else if (e.a == 34) g_demo_hsheet = e.b ? 1 : 0;     // SG-0141 (docs/510)
             else if (e.a == 32) g_demo_cpuo = (e.b & 1) && ((e.b >> 1) & 7) <= 5 ? (e.b & 0x1FF) : 0;   // SG-0115
             else if (e.a == 17) g_demo_aiopp = (e.b & 0x7FFC) | ((e.b & 3) > 1 ? 1 : (e.b & 3));   // at most one extra (docs/414)   // docs/414
         } else if (e.kind == 'b') {   /* docs/404: a Balance tab value */

@@ -60,9 +60,16 @@ import { DurableObject } from 'cloudflare:workers';
 import { discord, discordImage, plain, lasted, settingsText } from './discord.js';
 import { hasSwear } from './swear.js';
 import { hasSlur, NAME_REFUSED } from './slur.js';
-import { authRoute, verifyToken, versionAtLeast, UPDATE_MESSAGE, SIGNIN_MESSAGE, netKey } from './auth.js';
+import { authRoute, verifyToken, versionAtLeast, UPDATE_MESSAGE, SIGNIN_MESSAGE, netKey, isModerator } from './auth.js';
 
 const TTL_MS = 90 * 1000;
+// BR-0110: a client that heartbeats faster says so ("beat": seconds, 5-30)
+// and its lobby goes after 2.5 beats + 5 s, so a host whose PC crashed drops
+// off the list in well under a minute. Older clients keep the 90 s TTL.
+function lobbyTtl(l) {
+  const b = l && l.beat;
+  return b >= 5 && b <= 30 ? Math.round(b * 2500) + 5000 : TTL_MS;
+}
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 const CODE_LENGTH = 4;
 const MAX_NAME = 24;
@@ -81,6 +88,7 @@ const NAME_OK = /^[\w \-'.!?]{1,24}$/u;
 const MAX_LOBBIES = 200;          // listed at once, every address together
 const MAX_LOBBIES_PER_IP = 3;     // listed at once from one address
 const MAX_LIST = 100;             // lobbies in one /list reply
+const NEWS_MAX = 10, NEWS_TITLE_MAX = 80, NEWS_TEXT_MAX = 600;   // SG-0151
 // Per address: [requests, ms].
 const RATE_GET = [120, 60000];
 const RATE_POST = [120, 60000];
@@ -335,7 +343,7 @@ export class Directory extends DurableObject {
   async save() {
     await this.ctx.storage.put('lobbies', [...this.lobbies.values()]);
     if (this.lobbies.size) {
-      const next = Math.min(...[...this.lobbies.values()].map((l) => l.seen)) + TTL_MS + 1000;
+      const next = Math.min(...[...this.lobbies.values()].map((l) => l.seen + lobbyTtl(l))) + 1000;
       await this.ctx.storage.setAlarm(Math.max(next, Date.now() + 1000));
     } else {
       await this.ctx.storage.deleteAlarm();
@@ -411,7 +419,7 @@ export class Directory extends DurableObject {
   sweep(now) {
     let changed = false;
     for (const [code, l] of this.lobbies) {
-      if (now - l.seen <= TTL_MS) continue;
+      if (now - l.seen <= lobbyTtl(l)) continue;
       this.lobbies.delete(code);
       changed = true;
       if (l.state === 'playing') {
@@ -521,6 +529,7 @@ export class Directory extends DurableObject {
         return json(200, { ok: true, lobbies: open.slice(0, MAX_LIST).map((l) => this.publicView(l, peer)),
                            total: open.length, ...this.fallbackField() });
       }
+      if (path === '/news') return json(200, { ok: true, news: await this.newsList() });   // SG-0151
       if (path.startsWith('/lobby/')) {
         const l = this.lobbies.get(path.slice(7).toUpperCase());
         if (!l || l.state !== 'open') return json(404, { ok: false, error: 'no such lobby' });
@@ -573,8 +582,42 @@ export class Directory extends DurableObject {
       case '/match_image': return this.matchImage(body, now);
       case '/score': return this.score(body, now, peer);
       case '/scores/forget': return this.forget(body, peer, now, me);
+      case '/news': return this.newsPost(body, now, me);          // SG-0151
+      case '/news/remove': return this.newsRemove(body, me);      // SG-0151
       default: return json(404, { ok: false, error: 'no such endpoint' });
     }
+  }
+
+  // SG-0151: COMMUNITY ANNOUNCEMENTS (tournaments and the like). Anyone reads
+  // GET /news; a moderator (MODERATORS, by Discord id: the account token's
+  // sub) posts with POST /news {auth, title, text} and takes one down with
+  // POST /news/remove {auth, id}. The newest NEWS_MAX are kept.
+  async newsList() {
+    return (await this.ctx.storage.get('news')) || [];
+  }
+  newsMod(me) {
+    return me && me.aud === 'main' && isModerator(this.env, me.sub);
+  }
+  async newsPost(body, now, me) {
+    if (!this.newsMod(me)) return json(403, { ok: false, error: 'Only a moderator can post announcements.' });
+    const title = String(body.title || '').trim().slice(0, NEWS_TITLE_MAX);
+    const text = String(body.text || '').trim().slice(0, NEWS_TEXT_MAX);
+    if (!title || !text) return json(400, { ok: false, error: 'An announcement needs a title and a text.' });
+    if (hasSlur(title) || hasSlur(text)) return json(403, { ok: false, error: NAME_REFUSED });
+    const news = await this.newsList();
+    const id = (news.reduce((m, n) => Math.max(m, n.id || 0), 0) || 0) + 1;
+    news.unshift({ id, time: Math.floor(now / 1000), title, text, by: String(me.name || me.un || '') });
+    await this.ctx.storage.put('news', news.slice(0, NEWS_MAX));
+    return json(200, { ok: true, id });
+  }
+  async newsRemove(body, me) {
+    if (!this.newsMod(me)) return json(403, { ok: false, error: 'Only a moderator can remove announcements.' });
+    const id = toInt(body.id, 0);
+    const news = await this.newsList();
+    const kept = news.filter((n) => n.id !== id);
+    if (kept.length === news.length) return json(404, { ok: false, error: 'no such announcement' });
+    await this.ctx.storage.put('news', kept);
+    return json(200, { ok: true });
   }
 
   // SG-0018: the host's report of a match, checked here, kept by Scores. The
@@ -765,6 +808,7 @@ export class Directory extends DurableObject {
       return json(404, { ok: false, error: 'unknown lobby' });
     l.seen = now;
     l.players = Math.max(0, toInt(body.players, l.players));
+    { const b = toInt(body.beat, 0); l.beat = b >= 5 && b <= 30 ? b : 0; }
     if (body.map_name) l.map_name = cleanName(body.map_name, l.map_name);
     const state = String(body.state || '');
     if (state === 'starting' && l.state === 'open') l.state = 'starting';

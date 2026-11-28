@@ -1349,7 +1349,10 @@ def main():
     env["PATH"] = (os.path.join(ROOT, "build") + os.pathsep +
                    "C:\\devkitPro\\msys2\\usr\\bin" + os.pathsep +
                    env.get("PATH", ""))
-    env["LB_DUMP_ADAPTIVE"] = out
+    # The dump writes a frame every 30 ticks, a hitch twice a second at large
+    # windows: LB_EXP_NODUMP=1 leaves it out for frame-time measurements.
+    if os.environ.get("LB_EXP_NODUMP") != "1":
+        env["LB_DUMP_ADAPTIVE"] = out
     # A run records its own session (lb-session-*.lbdemo), which the game
     # no longer does by default: a crashed run replays from it.
     env.setdefault("LB_DEMO_RECORD", "1")

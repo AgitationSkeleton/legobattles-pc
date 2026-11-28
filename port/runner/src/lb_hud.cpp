@@ -50,6 +50,7 @@
 #include <vector>
 
 #include "gpu3d.h"
+extern "C" int lb_v2_hud_top_inset(void);   // lb_overlay.cpp, docs/506: guest rows under the HUD bar
 
 extern "C" int lb_band_left(int output_width);   /* src/lb_widemap.cpp */
 extern "C" int lb_shown_band_x(void);            /* frontend.cpp (apply_hooks) */
@@ -1404,7 +1405,7 @@ static void lb_hud_scan_boxes(int output_width, int output_height, int band,
                 const bool t = dr_ny0 <= kEdgeSlack;
                 const bool bm = dr_ny1 >= 192 - kEdgeSlack;
                 const int cy = (dr_ny0 + dr_ny1) / 2;
-                const int dyt = (output_height - visr) / 2 - extra_y;
+                const int dyt = (output_height - visr) / 2 - extra_y + lb_v2_hud_top_inset();
                 const int dyb = (output_height + visr) / 2 - 192 - extra_y;
                 if (t != bm)
                     dr_dy = bm ? dyb + (192 - dr_ny1) : dyt - dr_ny0;
@@ -1584,7 +1585,9 @@ static void lb_hud_scan_boxes(int output_width, int output_height, int band,
         const int dx_right = (output_width + vis) / 2 - 256 - extra;
         const int dx_left = (output_width - vis) / 2 - extra;
         const int dy_bottom = (output_height + visr) / 2 - 192 - extra_y;
-        const int dy_top = (output_height - visr) / 2 - extra_y;
+        // docs/506: Visuals 2.0's resource bar runs along the window's top
+        // edge, so the top-anchored elements start under it (0 without it).
+        const int dy_top = (output_height - visr) / 2 - extra_y + lb_v2_hud_top_inset();
         // INSET CORNER ELEMENTS COUNT AS CORNER ELEMENTS.
         //
         // kEdgeSlack is 16, so an element has to be within 16 px of a native
@@ -1949,6 +1952,44 @@ static void lb_hud_scan_boxes(int output_width, int output_height, int band,
                 el->dx1 = dr_dx;
             }
             ++g_count;
+        }
+    }
+
+    // BR-0109: A SCALED BOX STAYS IN THE WINDOW. Under hud_scale a box grows
+    // from the edge it is anchored to: up from its bottom, and right from its
+    // left unless it moves right (dx > 0). A box that keeps its place (dx 0:
+    // a window no wider than the band) therefore grew rightward, and at 2-3x
+    // the blue brick in the bottom-right corner ran off the window. The same
+    // for a top box growing up past row 0. Shift the move so the enlarged box
+    // fits; the draw, the row tests and the click unmapping all read dx/dy,
+    // so they stay in step. The bounds are the VISIBLE region (vis x visr,
+    // centred on the surface), which is what the window shows -- at 640x480
+    // the surface runs past it and a box kept inside the surface still left
+    // the window.
+    {
+        const float sc = lb_setting_hud_scale();
+        const int lim_x0 = (output_width - vis) / 2, lim_x1 = lim_x0 + vis;
+        const int lim_y0 = (output_height - visr) / 2, lim_y1 = lim_y0 + visr;
+        if (sc > 1.01f) {
+            for (int i = 0; i < g_count; ++i) {
+                HudBox& b = g_boxes[i];
+                if (b.dx1 != b.dx) continue;   // a stretch keeps its anchors
+                const int bw = b.sx1 - b.sx0, bh = b.y1 - b.y0;
+                const int dw = (int)(bw * sc), dh = (int)(bh * sc);
+                if (dw <= 0 || dh <= 0) continue;
+                if (b.dx > 0) {                // right-anchored: grows left
+                    const int x0 = b.sx1 + b.dx - dw;
+                    if (x0 < lim_x0) b.dx += lim_x0 - x0;
+                } else {                       // left-anchored: grows right
+                    const int x1 = b.sx0 + b.dx + dw;
+                    if (x1 > lim_x1) b.dx -= x1 - lim_x1;
+                    if (b.sx0 + b.dx < lim_x0) b.dx = lim_x0 - b.sx0;
+                }
+                b.dx1 = b.dx;
+                const int y0 = b.y1 + b.dy - dh;
+                if (y0 < lim_y0) b.dy += lim_y0 - y0;
+                if (b.y1 + b.dy > lim_y1) b.dy = lim_y1 - b.y1;
+            }
         }
     }
 

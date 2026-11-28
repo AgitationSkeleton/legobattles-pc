@@ -39,6 +39,7 @@ extern "C" {
 #include "runtime_arm.h"
 }
 
+extern "C" int lb_setting_tourney_rules(void);   // lb_overlay.cpp, SG-0155
 namespace {
 
 constexpr int kTableCount =
@@ -555,8 +556,15 @@ int spell_write(const std::vector<Edit>* set) {
 
 bool guest_ram(uint32_t a) { return a >= 0x02000000u && a < 0x02400000u; }
 
+// SG-0155: with Tournament Rules on, this machine plays (and as a host
+// sends) no edits of its own; the player's set is kept for later.
+std::vector<Edit>& own() {
+    static std::vector<Edit> none;
+    none.clear();
+    return lb_setting_tourney_rules() ? none : g_live;
+}
 std::vector<Edit>& active() {
-    return g_play_on ? g_play : g_host_on ? g_host : g_live;
+    return g_play_on ? g_play : g_host_on ? g_host : own();
 }
 
 void put(std::vector<Edit>& set, int rec, int field, int value) {
@@ -974,7 +982,108 @@ extern "C" int lb_balance_export_ebp(const char* path, char* msg, int msg_cap) {
     return n;
 }
 
+// SG-0144: THE VALUES AN Entities.ebp CANNOT HOLD, AS ACTION REPLAY CODES.
+// The spell table (docs/488) is data in the ARM9 at kSpellTable, and the Gold
+// Brick value (docs/416) is the immediate of two instructions; the ROM keeps
+// its ARM9 compressed, so neither is a plain byte patch of the .nds. Action
+// Replay codes (type 0/1/2: a 32/16/8-bit write each frame) apply them on a DS
+// with a cheat device and in emulators (melonDS, DeSmuME, flashcart cheat
+// menus). The spell values are written as they are. The Gold Brick value is
+// `mov r5, #v` at 0x0205F04C and `moveq r5, #v*150/1000` at 0x0205F05C: an ARM
+// immediate is 8 bits rotated by an even amount, so a value that has no such
+// form takes the nearest one that does, and the file says so. Startup spell
+// fields live in code and are listed as not exported.
+namespace {
+// An ARM data-processing immediate for v: true and the 12-bit field, or false.
+bool arm_imm(uint32_t v, uint32_t* field) {
+    for (uint32_t rot = 0; rot < 16; ++rot) {
+        const uint32_t r = rot * 2u;
+        const uint32_t imm = r ? ((v << r) | (v >> (32u - r))) : v;   // undo "ror r"
+        if (imm <= 0xFFu) { *field = (rot << 8) | imm; return true; }
+    }
+    return false;
+}
+// The encodable value nearest to v (ties go down).
+uint32_t arm_imm_nearest(uint32_t v) {
+    uint32_t f = 0;
+    for (uint32_t d = 0; d < 0x100000u; ++d) {
+        if (v >= d && arm_imm(v - d, &f)) return v - d;
+        if (arm_imm(v + d, &f)) return v + d;
+    }
+    return 0xFFu;
+}
+}  // namespace
+
+extern "C" int lb_balance_export_ar(const char* path, char* msg, int msg_cap) {
+    auto say = [&](const std::string& s) {
+        if (msg && msg_cap > 0) std::snprintf(msg, (size_t)msg_cap, "%s", s.c_str());
+    };
+    std::string o = "LEGO Battles: spell and Gold Brick values as Action Replay codes\n"
+                    "(written by the PC port's Balance page; the unit and projectile values\n"
+                    "go in an Entities.ebp instead).\n\n";
+    char line[160];
+    int n = 0;
+    std::vector<std::string> skipped;
+    for (const Edit& e : g_live) {
+        if (e.rec < kSpellRecord0 || e.rec >= kSpellRecord0 + kSpellRecords) continue;
+        if (e.field < 0 || e.field >= kSpellFieldCount) continue;
+        const BalField& f = kSpellFields[e.field];
+        const int id = e.rec - kSpellRecord0;
+        if (f.width == 0) {   // Startup: in the code
+            skipped.push_back("spell " + std::to_string(id) + " " + f.name);
+            continue;
+        }
+        uint32_t v = (uint32_t)e.value;
+        if (e.field == LB_BAL_SPELL_DURATION && v == 0u) v = 1u;   // as spell_write
+        const uint32_t a = kSpellTable + (uint32_t)id * kSpellSize + f.off;
+        if (f.width == 4) std::snprintf(line, sizeof line, "0%07X %08X   ; spell %d %s = %d\n",
+                                        (unsigned)(a & 0x0FFFFFFFu), (unsigned)v, id, f.name, (int)v);
+        else if (f.width == 2) std::snprintf(line, sizeof line, "1%07X %08X   ; spell %d %s = %d\n",
+                                             (unsigned)(a & 0x0FFFFFFFu), (unsigned)(v & 0xFFFFu), id, f.name, (int)v);
+        else std::snprintf(line, sizeof line, "2%07X %08X   ; spell %d %s = %d\n",
+                           (unsigned)(a & 0x0FFFFFFFu), (unsigned)(v & 0xFFu), id, f.name, (int)v);
+        o += line;
+        ++n;
+    }
+    for (const Edit& e : g_live) {
+        if (e.rec != kGlobalRecord || e.field != 0) continue;
+        const uint32_t want = (uint32_t)std::max(e.value, 0);
+        const uint32_t v = arm_imm_nearest(want);
+        const uint32_t w150 = (want * 150u + 500u) / 1000u;
+        const uint32_t v150 = arm_imm_nearest(w150);
+        uint32_t f1 = 0, f2 = 0;
+        arm_imm(v, &f1);
+        arm_imm(v150, &f2);
+        std::snprintf(line, sizeof line, "0205F04C %08X   ; Gold Brick = %u (mov r5, #%u)\n",
+                      (unsigned)(0xE3A05000u | f1), (unsigned)v, (unsigned)v);
+        o += line;
+        std::snprintf(line, sizeof line, "0205F05C %08X   ; Gold Brick, the 150 case = %u (moveq r5, #%u)\n",
+                      (unsigned)(0x03A05000u | f2), (unsigned)v150, (unsigned)v150);
+        o += line;
+        if (v != want)
+            o += "; " + std::to_string(want) + " has no ARM immediate form: the nearest is " +
+                 std::to_string(v) + ".\n";
+        n += 2;
+    }
+    if (!skipped.empty()) {
+        o += "\nNot exported (these live in the game's code, not its data):\n";
+        for (const std::string& s : skipped) o += "; " + s + "\n";
+    }
+    if (n == 0) {
+        say("No spell or Gold Brick values are set, so there is nothing to export.");
+        return 0;
+    }
+    FILE* f = path ? std::fopen(path, "wb") : nullptr;
+    const bool ok = f && std::fwrite(o.data(), 1, o.size(), f) == o.size();
+    if (f) std::fclose(f);
+    if (!ok) { say("Could not write that file."); return -1; }
+    say("Exported " + std::to_string(n) + " Action Replay code line(s).");
+    return n;
+}
+
 extern "C" int lb_balance_custom_dirty(void) { return g_gen != g_written_gen ? 1 : 0; }
+// SG-0155: Tournament Rules turned on or off: the set in force changed.
+extern "C" void lb_balance_custom_touch(void) { if (!g_play_on) ++g_gen; }
 
 extern "C" void lb_balance_custom_revert(unsigned int base) {
     for (size_t i = g_written.size(); i-- > 0;)
@@ -1060,6 +1169,13 @@ extern "C" int lb_balance_custom_apply(unsigned int base) {
             char msg[256];
             lb_balance_export_ebp(path, msg, (int)sizeof msg);
             std::fprintf(stderr, "[lb_balance] export: %s\n", msg);
+            std::fflush(stderr);
+        }
+        // SG-0144: LB_BALANCE_EXPORT_AR=<file> writes the cheat codes once.
+        if (const char* path = std::getenv("LB_BALANCE_EXPORT_AR")) {
+            char msg[256];
+            lb_balance_export_ar(path, msg, (int)sizeof msg);
+            std::fprintf(stderr, "[lb_balance] cheat codes: %s\n", msg);
             std::fflush(stderr);
         }
     }
@@ -1160,10 +1276,10 @@ unsigned long long seed_of(int slot, int builders, std::vector<Edit> set) {
 // This machine's own set, for a host to send: its seed, and the values in
 // (record, field) order.
 extern "C" unsigned long long lb_balance_local_seed(int slot, int builders) {
-    return seed_of(slot, builders, g_live);
+    return seed_of(slot, builders, own());
 }
 extern "C" int lb_balance_local_values(int* triples, int max) {
-    std::vector<Edit> s = g_live;
+    std::vector<Edit> s = own();
     std::sort(s.begin(), s.end(), [](const Edit& a, const Edit& b) {
         return a.rec != b.rec ? a.rec < b.rec : a.field < b.field;
     });

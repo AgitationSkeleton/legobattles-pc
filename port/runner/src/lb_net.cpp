@@ -518,6 +518,9 @@ bool fb_failed(const std::string& reply, const std::string& error, int status) {
     if (own_limit(reply, status)) return false;
     if (status == 429 || (status >= 502 && status <= 504) || (status >= 520 && status <= 530))
         return true;
+    // BR-0111: a redirect (Cloudflare's "Always Use HTTPS" sends 301 to
+    // https://) is an answer this plain-HTTP client can never follow.
+    if (status >= 300 && status <= 399) return true;
     return reply.compare(0, 14, "error code: 10") == 0 ||
            reply.find("error code: 1027") != std::string::npos;
 }
@@ -561,6 +564,7 @@ std::string http_request(const std::string& host, int port,
     // A limit answer is the Worker saying it will not serve: switch at once.
     // A connection that fails may be this machine's own network: two in a row.
     const bool limit = (status == 429 && !own_limit(reply, status)) ||
+                       (status >= 300 && status <= 399) ||
                        reply.compare(0, 14, "error code: 10") == 0;
     {
         std::lock_guard<std::mutex> lk(g_fb_mu);
@@ -1509,8 +1513,10 @@ void host_poll(long long now_ms) {
 extern "C" void lb_net_host_tick(long long now_ms) {
     if (!g_hosting.load()) return;
     host_poll(now_ms);   // docs/400
-    // 30 s, comfortably inside the server's 90 s TTL.
-    if (now_ms - g_last_beat.load() < 30000) return;
+    // 15 s (BR-0110; was 30). The heartbeat says so ("beat"), and the Worker
+    // then drops the lobby 42.5 s after the last one instead of 90 s, so a
+    // host whose PC crashed leaves the list sooner. Other servers ignore it.
+    if (now_ms - g_last_beat.load() < 15000) return;
     g_last_beat = now_ms;
 
     std::string server, code, token, state, map;
@@ -1529,7 +1535,7 @@ extern "C" void lb_net_host_tick(long long now_ms) {
     // docs/394: and the lobby's state and map. The Python server ignores both.
     std::string body =
         "{\"code\":\"" + code + "\",\"token\":\"" + token + "\",\"players\":" +
-        std::to_string(g_host_players.load()) + ",\"state\":" +
+        std::to_string(g_host_players.load()) + ",\"beat\":15,\"state\":" +
         json_str(state.c_str());
     if (!map.empty()) body += ",\"map_name\":" + json_str(map.c_str());
     body += "}";

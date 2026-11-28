@@ -3787,6 +3787,7 @@ void lb_leveledit_draw(SDL_Renderer* ren) {
         //                       farm barracks factory tower tower2 tower3 shipyard
         //   water X0 Y0 X1 Y1   a rectangle of water (also mountain, stone, trees, gravel)
         //   bridge X Y H        a bridge site (H 1 horizontal, 0 vertical)
+        //   gold X Y            a Gold Brick (docs/512)
         // Each team's own blueprint for a role is what spawns (its army).
         if (const char* spec = std::getenv("LB_EDITOR_TESTMAP")) {
             static const char* const kRoles[] = {"hero", "builder", "melee", "ranged", "mounted",
@@ -3833,6 +3834,14 @@ void lb_leveledit_draw(SDL_Renderer* ren) {
                                      : word[0] == 's' ? kMatStone : word[0] == 'g' ? kMatGravel : kMatTrees;
                     for (int y = std::min(b, d); y <= std::max(b, d); ++y)
                         for (int x = std::min(a, c); x <= std::max(a, c); ++x) set_cell(x, y, m);
+                } else if (!std::strcmp(word, "gold") && std::sscanf(l.c_str(), "gold %d %d", &a, &b) == 2) {
+                    // gold X Y: a Gold Brick, as the editor's Gold Brick tool places it (docs/512)
+                    const int i = brick_event(true);
+                    lvl::Pickup p{};
+                    p.x = (uint8_t)a; p.y = (uint8_t)b; p.team = 0; p.type = lvl::kPickup; p.subtype = 8;
+                    p.hp = 0xFF; p.e0 = 2; p.e1 = 1;
+                    g_doc.m.events[i].picks.push_back(p);
+                    ++made;
                 } else if (!std::strcmp(word, "mine") && std::sscanf(l.c_str(), "mine %d %d", &a, &b) == 2) {
                     ensure_mine_groups();   // mine X Y: a mine spot (group 1, as stock maps)
                     g_doc.m.mines[1].push_back({(uint8_t)a, (uint8_t)b});

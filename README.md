@@ -172,8 +172,14 @@ Wi-Fi model the runner vendors. Both credits matter for licensing:
   with its runner sources under MIT and its melonDS-derived files under GPL.
   This port and its releases are noncommercial.
 
+**Visuals 2.0** (Settings > Display > Visuals) is the work of **Jaime A.
+Vives** ([jamsteh](https://github.com/jamsteh)), adapted from his own LEGO
+Battles PC port and contributed to this one: the cutscene theatre and his
+Anime4K cutscene clean-up and upscaling, with more of his presentation
+improvements to follow. Anime4K itself is by bloc97 (MIT).
+
 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) lists every component
-(FreeBIOS, libslirp, xxHash, glad, Dear ImGui, SDL2, the MinGW runtime) with
+(FreeBIOS, libslirp, xxHash, glad, Dear ImGui, SDL2, the MinGW runtime, Anime4K) with
 its licence, and [`LICENSES/`](LICENSES/) holds the full texts. Both also
 ship inside every release zip.
 

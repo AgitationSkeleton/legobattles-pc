@@ -106,8 +106,28 @@ bool lb_https_request(const std::string& host, int port, const std::string& meth
 extern "C" int lb_demo_playing(void);   /* lb_demo.cpp */
 extern "C" void lb_quick_request(int action);   /* lb_patches.cpp */
 extern "C" int lb_top_buttons(int* out, int max);   /* lb_patches.cpp, SG-0006 */
+extern "C" int lb_v2_group_count(void);                     /* lb_patches.cpp, docs/506 */
+extern "C" int lb_v2_group_hp(int k, int* hp, int* maxhp);  /* lb_patches.cpp, docs/506 */
 extern "C" int lb_top_minimap(void);                /* lb_patches.cpp */
 extern "C" int lb_top_occupants(void);              /* lb_patches.cpp */
+extern "C" unsigned lb_top_battle_seq(void);        /* lb_patches.cpp, docs/506 */
+extern "C" int lb_top_pane(void);                   /* lb_patches.cpp, docs/506 */
+extern "C" int lb_top_suspended(void);              /* lb_patches.cpp, docs/506 */
+extern "C" int lb_setting_v2_hud_bar(void);         /* below, docs/506 */
+extern "C" int lb_setting_v2_hud_minimap(void);
+extern "C" int lb_setting_v2_hud_card(void);
+extern "C" int lb_v2_hud_image(int which, const uint32_t** px, int* w, int* h);   /* lb_visuals.cpp */
+extern "C" int lb_v2_hud_read_bar(const uint32_t* top, char out[3][16]);          /* lb_visuals.cpp */
+extern "C" unsigned lb_level_ordinal(void);                                       /* lb_patches.cpp */
+extern "C" int lb_v2_red_list(uint32_t* out, int max, int* off);                  /* lb_patches.cpp */
+extern "C" int lb_v2_bp_cost(uint32_t bp);
+extern "C" int lb_v2_queue(int rects[3][4]);
+extern "C" int lb_v2_red_open(void);
+extern "C" uint32_t lb_v2_selected_entity(void);   /* lb_patches.cpp */
+extern "C" int lb_v2_train_progress(void);
+extern "C" int lb_overlay_field_rect(int* x, int* y, int* w, int* h, int* guest_width, int* guest_height);
+namespace { void v2_cmd_tick(); }   /* below, docs/506: a command key's blue button */
+namespace { void v2_jaime_keys(); }   /* below, docs/506: his layout for his controls */
 extern "C" int lb_rules_host_pace(void);           /* lb_teams.cpp, docs/459 */
 // docs/493: the LEGO Battles menu style (lb_skin.cpp).
 int g_skin_live = 0;   // 1 while the style is applied (set by the style rebuild)
@@ -210,6 +230,21 @@ struct Settings {
     char custom_pal[3][64] = {"", "", ""};
     int mod_palette = 0;   // docs/410: 0 the same, else Level Palettes' mode + 1
     bool smooth_models = false;   // docs/411: 3D models without edge marking, AA on
+    // docs/506: VISUALS 2.0 -- Jaime A. Vives' presentation improvements, every
+    // part its own switch, all off by default (Visuals 1.0). "Visuals 2.0" in
+    // the menu turns every part on; the choice shown is derived from the parts.
+    bool v2_movie_theatre = false;   // films large in the main window
+    bool v2_movie_upscale = false;   // films cleaned and doubled (Anime4K)
+    bool v2_fireworks = false;       // phase 2: fireworks over a won battle
+    bool v2_spell_shake = false;     // phase 2: a shake for Fireball, Artillery, Space Laser
+    // phase 3: Jaime's HUD, each part on its own. Positions: the minimap
+    // panel's from the window's left and bottom edges, the card's from its
+    // right and top edges, -1 for his defaults.
+    bool v2_hud_bar = false;         // the studded resource bar along the top
+    bool v2_hud_minimap = false;     // the minimap in a studded frame, bottom-left
+    bool v2_hud_card = false;        // the selection card, top-right
+    int v2_mm_x = -1, v2_mm_y = -1;
+    int v2_card_x = -1, v2_card_y = -1;
     int res3d = 0;                // docs/434: 3D resolution, 0 Native, 1 2x, 2 3x, 3 4x
     // docs/415: online chat. Toasts for received messages, the swear filter
     // (chat and players' names), and the key that opens the chat box.
@@ -254,10 +289,20 @@ struct Settings {
     // selection dies, while the rest of the selection still has items for it.
     // Presentation only (the HUD's own state). On by default.
     bool tabs_stay_open = true;
+    // SG-0154 (docs/509): Attack Move. An Attack order tapped on no unit or
+    // building goes to the nearest enemy you can see within 4 cells of the
+    // tap. Decided on this machine when the order is made, so the order sent
+    // is the retargeted one; recorded in replays (kind 33). Off by default.
+    bool attack_move = false;
     // SG-0006: click a unit in a building's queue, on the Top Screen panel, to
     // cancel it. The game's own cancel command; safe online. On by default:
     // it only reaches a button the game already has.
     bool cancel_queue_click = true;
+    // docs/506: Jaime A. Vives' controls, as shortcuts with nothing bound by
+    // default (the V2Act list below): a key (scancode, with Ctrl 1<<16, Shift
+    // 1<<17, Alt 1<<18) and a mouse button (2..5) each, 0 for none.
+    int v2_key[16] = {0};
+    int v2_mouse[16] = {0};
     // docs/384, the Team Builder and Ban Units tabs. A team is the army
     // screen's nine slots as blueprint indices (lb_overlay.h, LbTeam); both
     // start as Free Play's default, King's. Presets are "Name=p0,...,p8;..."
@@ -279,6 +324,7 @@ struct Settings {
     char ban_preset_maps[512] = "";
     bool random_maps = false;
     bool tourney_team = false;
+    bool tourney_rules = false;   // SG-0155: every gameplay option at its default
     // docs/388: the last five armies read from the save, newest first, as
     // "YYYY-MM-DD HH:MM=p0,...,p8;...". Kept by save_cache_tick, never by a
     // control: a way back after Set Team (or the game) replaces the army.
@@ -361,6 +407,7 @@ struct Settings {
     bool ai_keep_bridges = false;   // SG-0089 (docs/472): the AI never retires its bridges
     bool ai_stuck_bridges = false;  // SG-0090 (docs/472): the AI's need-driven bridges on every map
     bool ai_fewer_farms = false;    // SG-0146: the AI builds one farm at a time, only when full
+    bool ai_gold_trees = false;     // SG-0136 (docs/512): the AI fells the trees in its way to a Gold Brick
     bool ai_transports_on_request = false;  // SG-0091 (docs/478): no transport nobody asked for
     // docs/408: a hotwired transport stops taking its old owner's orders
     // (lb_patches.cpp, release_stolen_transport).
@@ -426,6 +473,9 @@ bool card_tint = false;
     bool fix_hotwired_healing = false;
     // docs/385: the monkey cage (cosmetic, this machine only), on by default.
     bool fix_monkey_cage = true;
+    // SG-0141 (docs/510): each extra hero of an army gets a sprite sheet of
+    // its own (cosmetic, this machine only), off by default.
+    bool hero_sheets = false;
     // docs/385: with several heroes selected, the HUD's spells are those of
     // the hero from this player's own army, not the first one selected
     // (lb_patches.cpp, hero_hud_override). On by default.
@@ -610,6 +660,7 @@ bool card_tint = false;
     // button in this panel. lb_net_auto_tick does both.
     bool auto_advertise = true;
     bool auto_browse = true;
+    int news_seen = 0;   // SG-0151: the newest announcement already announced
     // docs/405: ask the router to forward the port (UPnP) when hosting.
     bool upnp = true;
     // docs/501: Direct IP play (no master server, no account), and the last
@@ -641,6 +692,28 @@ bool card_tint = false;
     char room_code[8] = "";
 };
 Settings g_set;
+
+// SG-0155: TOURNAMENT RULES. On, every option that changes the game (the ones
+// a host sends its players: the rule flags, the second rule flags, the
+// hotwire and transport options, the ranged boost, the cheats, the unit caps,
+// the balance pack, Same Builders, and the player's own Balance values) plays
+// at its default, offline and online, without touching the player's own
+// choices, which come back when it is turned off. The performance options
+// (Native Game Logic, Faster CPU), the look and the map and unit bans are
+// not part of it. LB_TOURNEY_RULES=0|1 forces it (test aid).
+extern "C" int lb_setting_tourney_rules(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_TOURNEY_RULES");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.tourney_rules ? 1 : 0);
+}
+// The settings a gameplay option reads: the player's, or the defaults.
+static const Settings& play_set() {
+    static const Settings defaults{};
+    return lb_setting_tourney_rules() ? defaults : g_set;
+}
 
 // The name this machine advertises: the loaded profile's when asked for and
 // when there is one, otherwise the typed one.
@@ -801,6 +874,20 @@ static std::string settings_text() {
                   g_set.mod_palette); o += buf;   // docs/410
     std::snprintf(buf, sizeof buf, "  \"smooth_models\": %s,\n",
                   g_set.smooth_models ? "true" : "false"); o += buf;   // docs/411
+    std::snprintf(buf, sizeof buf, "  \"v2_movie_theatre\": %s,\n",
+                  g_set.v2_movie_theatre ? "true" : "false"); o += buf;   // docs/506
+    std::snprintf(buf, sizeof buf, "  \"v2_movie_upscale\": %s,\n",
+                  g_set.v2_movie_upscale ? "true" : "false"); o += buf;   // docs/506
+    std::snprintf(buf, sizeof buf, "  \"v2_fireworks\": %s,\n",
+                  g_set.v2_fireworks ? "true" : "false"); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"v2_spell_shake\": %s,\n",
+                  g_set.v2_spell_shake ? "true" : "false"); o += buf;
+    // Two writes: one would overflow `buf` (128) and cut the file mid-key.
+    std::snprintf(buf, sizeof buf, "  \"v2_hud_bar\": %s,\n  \"v2_hud_minimap\": %s,\n  \"v2_hud_card\": %s,\n",
+                  g_set.v2_hud_bar ? "true" : "false", g_set.v2_hud_minimap ? "true" : "false",
+                  g_set.v2_hud_card ? "true" : "false"); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"v2_mm_x\": %d,\n  \"v2_mm_y\": %d,\n  \"v2_card_x\": %d,\n  \"v2_card_y\": %d,\n",
+                  g_set.v2_mm_x, g_set.v2_mm_y, g_set.v2_card_x, g_set.v2_card_y); o += buf;
     std::snprintf(buf, sizeof buf, "  \"res3d\": %d,\n",
                   g_set.res3d); o += buf;   // docs/434
     std::snprintf(buf, sizeof buf, "  \"chat_toasts\": %s,\n",
@@ -837,6 +924,17 @@ static std::string settings_text() {
                   g_set.quick_keys_blue ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"tabs_stay_open\": %s,\n",
                   g_set.tabs_stay_open ? "true" : "false"); o += buf;   // docs/451
+    std::snprintf(buf, sizeof buf, "  \"attack_move\": %s,\n",
+                  g_set.attack_move ? "true" : "false"); o += buf;   // SG-0154
+    {   // docs/506: Jaime's controls' bindings, "a,b,..." of sixteen
+        std::string q, m;
+        for (int i = 0; i < 16; ++i) {
+            q += (i ? "," : "") + std::to_string(g_set.v2_key[i]);
+            m += (i ? "," : "") + std::to_string(g_set.v2_mouse[i]);
+        }
+        o += "  \"v2_key\": \"" + q + "\",\n";
+        o += "  \"v2_mouse\": \"" + m + "\",\n";
+    }
     std::snprintf(buf, sizeof buf, "  \"cancel_queue_click\": %s,\n",
                   g_set.cancel_queue_click ? "true" : "false"); o += buf;   // SG-0006
     // docs/384
@@ -865,6 +963,8 @@ static std::string settings_text() {
                   g_set.random_maps ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"tourney_team\": %s,\n",
                   g_set.tourney_team ? "true" : "false"); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"tourney_rules\": %s,\n",
+                  g_set.tourney_rules ? "true" : "false"); o += buf;   // SG-0155
     std::snprintf(buf, sizeof buf, "  \"balance_patch\": %d,\n",
                   g_set.balance_patch); o += buf;
     std::snprintf(buf, sizeof buf, "  \"hotwire_mode\": %d,\n",
@@ -909,6 +1009,8 @@ static std::string settings_text() {
                   g_set.ai_stuck_bridges ? "true" : "false"); o += buf;   // SG-0090
     std::snprintf(buf, sizeof buf, "  \"ai_fewer_farms\": %s,\n",
                   g_set.ai_fewer_farms ? "true" : "false"); o += buf;   // SG-0146
+    std::snprintf(buf, sizeof buf, "  \"ai_gold_trees\": %s,\n",
+                  g_set.ai_gold_trees ? "true" : "false"); o += buf;   // SG-0136
     std::snprintf(buf, sizeof buf, "  \"ai_transports_on_request\": %s,\n",
                   g_set.ai_transports_on_request ? "true" : "false"); o += buf;   // SG-0091
     std::snprintf(buf, sizeof buf, "  \"transport_release\": %s,\n",
@@ -950,6 +1052,8 @@ static std::string settings_text() {
                   g_set.fix_hotwired_healing ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"fix_monkey_cage\": %s,\n",
                   g_set.fix_monkey_cage ? "true" : "false"); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"hero_sheets\": %s,\n",
+                  g_set.hero_sheets ? "true" : "false"); o += buf;   // SG-0141
     std::snprintf(buf, sizeof buf, "  \"own_hero_spells\": %s,\n",
                   g_set.own_hero_spells ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"same_builders_from\": %d,\n",
@@ -1066,6 +1170,7 @@ static std::string settings_text() {
                   g_set.name_from_save ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"auto_advertise\": %s,\n",
                   g_set.auto_advertise ? "true" : "false"); o += buf;
+    std::snprintf(buf, sizeof buf, "  \"news_seen\": %d,\n", g_set.news_seen); o += buf;   // SG-0151
     std::snprintf(buf, sizeof buf, "  \"auto_browse\": %s,\n",
                   g_set.auto_browse ? "true" : "false"); o += buf;
     std::snprintf(buf, sizeof buf, "  \"upnp\": %s,\n",
@@ -1180,6 +1285,17 @@ extern "C" void lb_settings_load(void) {
     if (g_set.level_palette < 0 || g_set.level_palette > 3) g_set.level_palette = 0;
     json_get_int(s, "mod_palette", &g_set.mod_palette);   // docs/410
     json_get_bool(s, "smooth_models", &g_set.smooth_models);   // docs/411
+    json_get_bool(s, "v2_movie_theatre", &g_set.v2_movie_theatre);   // docs/506
+    json_get_bool(s, "v2_movie_upscale", &g_set.v2_movie_upscale);
+    json_get_bool(s, "v2_fireworks", &g_set.v2_fireworks);
+    json_get_bool(s, "v2_spell_shake", &g_set.v2_spell_shake);
+    json_get_bool(s, "v2_hud_bar", &g_set.v2_hud_bar);
+    json_get_bool(s, "v2_hud_minimap", &g_set.v2_hud_minimap);
+    json_get_bool(s, "v2_hud_card", &g_set.v2_hud_card);
+    json_get_int(s, "v2_mm_x", &g_set.v2_mm_x);
+    json_get_int(s, "v2_mm_y", &g_set.v2_mm_y);
+    json_get_int(s, "v2_card_x", &g_set.v2_card_x);
+    json_get_int(s, "v2_card_y", &g_set.v2_card_y);
     json_get_int(s, "res3d", &g_set.res3d);   // docs/434
     if (g_set.res3d < 0 || g_set.res3d > 3) g_set.res3d = 0;
     json_get_bool(s, "chat_toasts", &g_set.chat_toasts);       // docs/415
@@ -1220,6 +1336,7 @@ extern "C" void lb_settings_load(void) {
     if (g_set.mod_palette < 0 || g_set.mod_palette > 4) g_set.mod_palette = 0;
     if (g_set.force_tileset < 0 || g_set.force_tileset > 4) g_set.force_tileset = 0;
     json_get_bool(s, "quick_keys", &g_set.quick_keys);   // docs/383, default on
+    if (std::getenv("LB_V2_JAIMEKEYS")) v2_jaime_keys();   // docs/506 test aid: his layout for this run
     json_get_bool(s, "tas_keys", &g_set.tas_keys);       // SG-0027
     json_get_bool(s, "ff_battle", &g_set.ff_battle);     // BR-0041
     json_get_int(s, "ff_speed", &g_set.ff_speed);        // BR-0041
@@ -1230,7 +1347,32 @@ extern "C" void lb_settings_load(void) {
     json_get_int(s, "top_win_h", &g_set.top_win_h);
     json_get_bool(s, "quick_keys_blue", &g_set.quick_keys_blue);   // docs/398
     json_get_bool(s, "tabs_stay_open", &g_set.tabs_stay_open);   // docs/451
+    json_get_bool(s, "attack_move", &g_set.attack_move);         // SG-0154
     json_get_bool(s, "cancel_queue_click", &g_set.cancel_queue_click);   // SG-0006
+    {   // docs/506: Jaime's controls' bindings; a short or bad list keeps none
+        char q[256] = "", m[160] = "";
+        json_get_str(s, "v2_key", q, sizeof q);
+        json_get_str(s, "v2_mouse", m, sizeof m);
+        int vk[16], vm[16], nk = 0, nm = 0;
+        for (const char* c = q; *c && nk < 16;) {
+            char* end = nullptr;
+            const long x = std::strtol(c, &end, 10);
+            if (end == c) break;
+            vk[nk++] = (x >= 0 && (x & 0xFFFF) < SDL_NUM_SCANCODES && x < (1 << 19)) ? (int)x : 0;
+            c = *end == ',' ? end + 1 : end;
+        }
+        for (const char* c = m; *c && nm < 16;) {
+            char* end = nullptr;
+            const long x = std::strtol(c, &end, 10);
+            if (end == c) break;
+            vm[nm++] = (x >= SDL_BUTTON_MIDDLE && x <= SDL_BUTTON_X2) ? (int)x : 0;
+            c = *end == ',' ? end + 1 : end;
+        }
+        if (nk == 16)
+            for (int i = 0; i < 16; ++i) g_set.v2_key[i] = vk[i];
+        if (nm == 16)
+            for (int i = 0; i < 16; ++i) g_set.v2_mouse[i] = vm[i];
+    }
     // docs/384; a file without them keeps King's team and no presets or bans.
     json_get_ints(s, "team_working", g_set.team_working, LB_TEAM_SLOTS);
     json_get_ints(s, "enemy_team", g_set.enemy_team, LB_TEAM_SLOTS);
@@ -1250,6 +1392,7 @@ extern "C" void lb_settings_load(void) {
     json_get_str(s, "ban_preset_maps", g_set.ban_preset_maps, sizeof g_set.ban_preset_maps);
     json_get_bool(s, "random_maps", &g_set.random_maps);
     json_get_bool(s, "tourney_team", &g_set.tourney_team);
+    json_get_bool(s, "tourney_rules", &g_set.tourney_rules);   // SG-0155
     json_get_int(s, "balance_patch", &g_set.balance_patch);
     json_get_int(s, "hotwire_mode", &g_set.hotwire_mode);
     json_get_bool(s, "hotwire_neutrals", &g_set.hotwire_neutrals);   // SG-0045
@@ -1273,6 +1416,7 @@ extern "C" void lb_settings_load(void) {
     json_get_bool(s, "ai_stuck_bridges", &g_set.ai_stuck_bridges);       // SG-0090
     json_get_bool(s, "ai_transports_on_request", &g_set.ai_transports_on_request);   // SG-0091
     json_get_bool(s, "ai_fewer_farms", &g_set.ai_fewer_farms);           // SG-0146
+    json_get_bool(s, "ai_gold_trees", &g_set.ai_gold_trees);             // SG-0136
     json_get_bool(s, "transport_release", &g_set.transport_release);
     json_get_bool(s, "creatures", &g_set.creatures);   // docs/410
     json_get_bool(s, "creature_tint", &g_set.creature_tint);   // docs/437
@@ -1304,6 +1448,7 @@ extern "C" void lb_settings_load(void) {
     if (g_set.attack_boost_ranged == 1) g_set.attack_boost_ranged = 2;   // BR-0019: the old "On"
     json_get_bool(s, "fix_hotwired_healing", &g_set.fix_hotwired_healing);
     json_get_bool(s, "fix_monkey_cage", &g_set.fix_monkey_cage);   // docs/385
+    json_get_bool(s, "hero_sheets", &g_set.hero_sheets);           // SG-0141
     json_get_bool(s, "own_hero_spells", &g_set.own_hero_spells);   // docs/385
     {   // docs/396: the old checkbox meant "match the Imperial builder" (4)
         bool old = false;
@@ -1431,6 +1576,7 @@ extern "C" void lb_settings_load(void) {
     json_get_bool(s, "skip_intro", &g_set.skip_intro);   // SG-0016
     json_get_bool(s, "auto_advertise", &g_set.auto_advertise);
     json_get_bool(s, "auto_browse", &g_set.auto_browse);
+    json_get_int(s, "news_seen", &g_set.news_seen);   // SG-0151
     json_get_bool(s, "upnp", &g_set.upnp);   // docs/405, default on
     json_get_bool(s, "direct_play", &g_set.direct_play);   // docs/501
     json_get_str(s, "direct_peer", g_set.direct_peer, sizeof g_set.direct_peer);
@@ -1614,6 +1760,57 @@ int g_rebinding = -1;        // action waiting for a KEY, or -1
 int g_rebinding_pad = -1;    // action waiting for a PAD BUTTON, or -1
 bool g_rebinding_chat = false;   // docs/415: the chat key waits for a key
 bool g_rebinding_swap = false;   // SG-0012: the swap key waits for a key
+// docs/506: Jaime A. Vives' controls (the "Jaime A. Vives' controls" list).
+enum V2Act {
+    kV2Hero, kV2Mute, kV2Stop, kV2Attack, kV2Unload, kV2SelHero, kV2SelBuilder, kV2SelArmy,
+    kV2Set1, kV2Set2, kV2Set3, kV2Rec1, kV2Rec2, kV2Rec3, kV2Pan, kV2Send, kV2N
+};
+const char* const kV2Names[kV2N] = {
+    "Camera to your hero", "Music on and off", "Stop", "Attack", "Unload one unit",
+    "Select your hero", "Select the next builder", "Select your army",
+    "Store control group 1", "Store control group 2", "Store control group 3",
+    "Select control group 1", "Select control group 2", "Select control group 3",
+    "Pan the camera (hold and drag)", "Send the selection (click a minimap)"};
+const char* const kV2Help[kV2N] = {
+    "The camera to your hero, by the game's own minimap tap.",
+    "The music off, and on again. Only your speakers hear it; the game's volume\nis not changed. Works in menus too.",
+    "Presses the blue menu's Stop (opening the menu first).",
+    "Presses the blue menu's Attack (opening the menu first); then click the target.",
+    "Unloads one unit from the selected transport (its own unload button).",
+    "Selects your hero and brings the camera to it.",
+    "Selects your next builder and brings the camera to it.",
+    "Selects every unit that moves but builders, and brings the camera to them.",
+    "Stores the selection as control group 1.", "Stores the selection as control group 2.",
+    "Stores the selection as control group 3.",
+    "Selects control group 1 again.", "Selects control group 2 again.", "Selects control group 3 again.",
+    "Hold it and drag the mouse: the camera moves, as if the DS d-pad were held.",
+    "Click a spot on a minimap with it: the selection goes there."};
+int g_rebinding_v2 = -1;         // docs/506: the action waiting for a key, or -1
+int g_rebinding_v2_mouse = -1;   // docs/506: the action waiting for a mouse button
+constexpr int kV2Ctrl = 1 << 16, kV2Shift = 1 << 17, kV2Alt = 1 << 18;
+const char* v2_key_name(int v, char* buf, size_t cap) {
+    if (!(v & 0xFFFF)) return "(none)";
+    std::snprintf(buf, cap, "%s%s%s%s", (v & kV2Ctrl) ? "Ctrl+" : "", (v & kV2Shift) ? "Shift+" : "",
+                  (v & kV2Alt) ? "Alt+" : "", SDL_GetScancodeName((SDL_Scancode)(v & 0xFFFF)));
+    return buf;
+}
+// His layout. A key or button it takes leaves the shortcut it was on.
+void v2_jaime_keys() {
+    static const int keys[kV2N] = {SDL_SCANCODE_SPACE, SDL_SCANCODE_M, SDL_SCANCODE_H, SDL_SCANCODE_X,
+                                   SDL_SCANCODE_U, SDL_SCANCODE_E, SDL_SCANCODE_B, SDL_SCANCODE_Q,
+                                   kV2Ctrl | SDL_SCANCODE_1, kV2Ctrl | SDL_SCANCODE_2, kV2Ctrl | SDL_SCANCODE_3,
+                                   SDL_SCANCODE_F1, SDL_SCANCODE_F2, SDL_SCANCODE_F3, 0, 0};
+    static const int mouse[kV2N] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, SDL_BUTTON_MIDDLE, SDL_BUTTON_RIGHT};
+    for (int i = 0; i < kV2N; ++i) {
+        g_set.v2_key[i] = keys[i];
+        g_set.v2_mouse[i] = mouse[i];
+        for (int j = 0; j < 12; ++j) {
+            if (keys[i] && g_set.quick_bind[j] == keys[i]) g_set.quick_bind[j] = 0;
+            if (mouse[i] && g_set.quick_mouse[j] == mouse[i]) g_set.quick_mouse[j] = 0;
+        }
+    }
+}
+
 int g_rebinding_quick = -1;      // SG-0049: the shortcut waiting for a key, or -1
 int g_rebinding_quick_mouse = -1;   // SG-0074: the shortcut waiting for a mouse button
 const char* mouse_button_name(int b) {
@@ -1866,6 +2063,80 @@ void tab_display() {
         help("Any width and height, at least 256 x 192 (the DS screen).");
         ImGui::EndDisabled();
         badge(WIRED);
+    }
+
+    // docs/506: VISUALS 2.0. Every part of it is listed in v2_parts(); the
+    // choice shown is 1.0 when all are off, 2.0 when all are on.
+    {
+        bool* parts[] = {&g_set.v2_movie_theatre, &g_set.v2_movie_upscale, &g_set.v2_fireworks,
+                         &g_set.v2_spell_shake, &g_set.v2_hud_bar, &g_set.v2_hud_minimap,
+                         &g_set.v2_hud_card};
+        int on = 0;
+        for (bool* b : parts) on += *b ? 1 : 0;
+        const int n = (int)(sizeof parts / sizeof parts[0]);
+        ImGui::TextUnformatted("Visuals");
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Visuals 1.0", on == 0))
+            for (bool* b : parts) *b = false;
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Visuals 2.0", on == n))
+            for (bool* b : parts) *b = true;
+        if (on > 0 && on < n) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("(a mix)");
+        }
+        help("Visuals 1.0: the port's look as it has been.\n"
+             "Visuals 2.0: presentation improvements by Jaime A. Vives, adapted\n"
+             "from his own LEGO Battles PC port. Every part can be switched on\n"
+             "or off by itself below. Only you see them; online and replays are\n"
+             "not affected.");
+        badge(WIRED);
+        ImGui::TextDisabled("Visuals 2.0 by Jaime A. Vives");
+        if (ImGui::TreeNode("Visuals 2.0 parts")) {
+            ImGui::Checkbox("Cutscene Theatre", &g_set.v2_movie_theatre);
+            help("The story films fill the main window instead of the small Top\n"
+                 "Screen panel, with their pause, play and skip buttons in a strip\n"
+                 "below. Needs Enhanced mode.");
+            badge(WIRED);
+            ImGui::BeginDisabled(!g_set.v2_movie_theatre);
+            ImGui::Checkbox("Cutscene Upscaling", &g_set.v2_movie_upscale);
+            help("Cleans up the films' block noise and doubles their resolution\n"
+                 "with Anime4K (by bloc97, MIT licence), as Jaime A. Vives' port\n"
+                 "does. Runs on a spare core while a film plays. Needs Cutscene\n"
+                 "Theatre.");
+            ImGui::EndDisabled();
+            badge(WIRED);
+            ImGui::Checkbox("Victory Fireworks", &g_set.v2_fireworks);
+            help("Fireworks go off over the battlefield when you win a battle.");
+            badge(WIRED);
+            ImGui::Checkbox("Spell Screen Shake", &g_set.v2_spell_shake);
+            help("The screen shakes briefly for Fireball, Artillery and Space Laser.\n"
+                 "(Earthquake already shakes it on the DS, so it is left as it is.)\n"
+                 "Needs Enhanced mode.");
+            badge(WIRED);
+            ImGui::Checkbox("HUD: Resource Bar", &g_set.v2_hud_bar);
+            help("Jaime's studded bar along the top of the window in battle: bricks,\n"
+                 "minifigures and the third count with their spinning icons, and the\n"
+                 "battle's time. Needs Enhanced mode.");
+            badge(WIRED);
+            ImGui::Checkbox("HUD: Minimap Panel", &g_set.v2_hud_minimap);
+            help("The minimap in a studded frame, bottom-left. Click it to move the\n"
+                 "camera; drag its frame to move the panel. Needs Enhanced mode.");
+            badge(WIRED);
+            ImGui::Checkbox("HUD: Selection Card", &g_set.v2_hud_card);
+            help("The selected unit's card, top-right: its name, portrait and health,\n"
+                 "and the build costs or queue when there are some. Click it as you\n"
+                 "would the Top Screen; drag its frame to move it. With the Minimap\n"
+                 "Panel also on, these replace the Top Screen panel in battle.\n"
+                 "Needs Enhanced mode.");
+            badge(WIRED);
+            if (ImGui::SmallButton("Reset HUD panel positions")) {
+                g_set.v2_mm_x = g_set.v2_mm_y = g_set.v2_card_x = g_set.v2_card_y = -1;
+            }
+            help("Puts the minimap panel and the selection card back where Jaime's\n"
+                 "port has them.");
+            ImGui::TreePop();
+        }
     }
 
     // docs/411: the 3D models (ships, siege, specials) without the outline
@@ -2270,6 +2541,15 @@ void tab_enhancements() {
          "they add nothing (and without end when it has the red-brick\n"
          "cheats). On, it builds one farm at a time, only when it has no\n"
          "free slot. Free Play only.");
+    badge(WIRED);
+    // SG-0136 (docs/512): the squad move FUN_0208FFF4 sends to a Gold Brick
+    // (kAiGoldMoveRet) becomes an attack order, which fells blocking trees.
+    ImGui::Checkbox("The AI Clears Trees To Gold Bricks", &g_set.ai_gold_trees);
+    help("Normally the computer sends its units to a Gold Brick with a plain\n"
+         "move, and a plain move stops at the first tree in the way; only\n"
+         "now and then does one unit go back and attack a tree. On, the\n"
+         "units go with an attack order, so each one cuts down the trees\n"
+         "that block it and walks on to the brick. Free Play only.");
     badge(WIRED);
     // docs/479: late in a big match the cartridge needs more than the DS's
     // processor, and the whole game slows down (docs/475). The hottest
@@ -2843,6 +3123,16 @@ void draw_after_balance_pack() {
     help("Caught monkeys (Monkey Business) show the monkey cage the game\n"
          "has but never uses, instead of the Space Criminal's. Looks only.");
     badge(WIRED);
+
+    // SG-0141 (docs/510): an army's heroes all draw from ONE sprite sheet
+    // (FUN_0202DE70, a slot per army), which holds the direction and action
+    // of whichever hero last turned. With this on, the level load makes extra
+    // hero sheets in the larger pool's table and each extra hero draws from
+    // its own (lb_patches.cpp, "SG-0141"). Pictures only; recorded for
+    // replays (kind 34) because it changes what the cartridge loads.
+    // HELD BACK (docs/508): the extra sheets hang the level teardown (the
+    // pool's slot free on a copy reads freed memory). Not in the menu, and a
+    // saved value is ignored; LB_HERO_SHEETS=1 still forces it (test aid).
 
     // docs/385: the spells of the menu vary when several heroes are
     // selected; "Prioritize Own Hero Spells" always defers to the hero
@@ -3854,6 +4144,43 @@ void tab_input() {
                             "cannot be bound.");
         ImGui::TreePop();
     }
+    // docs/506: Jaime A. Vives' controls, nothing bound until the player binds it.
+    if (ImGui::TreeNode("Jaime A. Vives' controls")) {
+        ImGui::TextDisabled("From Jaime A. Vives' LEGO Battles PC port. Nothing is bound\n"
+                            "until you bind it. Each uses the game's own buttons and\n"
+                            "inputs, so all are safe online.");
+        for (int i = 0; i < kV2N; ++i) {
+            ImGui::PushID(1000 + i);
+            char kn[64];
+            const char* name = g_rebinding_v2 == i ? "press a key..." : v2_key_name(g_set.v2_key[i], kn, sizeof kn);
+            if (ImGui::Button(name, ImVec2(120.0f * g_ui_scale, 0))) {
+                g_rebinding_v2 = i;
+                g_rebinding_v2_mouse = -1;
+            }
+            ImGui::SameLine();
+            const char* mname = g_rebinding_v2_mouse == i ? "press a button..." : mouse_button_name(g_set.v2_mouse[i]);
+            if (ImGui::Button(mname, ImVec2(120.0f * g_ui_scale, 0))) {
+                g_rebinding_v2_mouse = i;
+                g_rebinding_v2 = -1;
+            }
+            ImGui::SameLine();
+            ImGui::TextUnformatted(kV2Names[i]);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", kV2Help[i]);
+            ImGui::PopID();
+        }
+        if (ImGui::Button("Use Jaime's keys")) v2_jaime_keys();
+        help("Binds his layout: Space camera to your hero, M music, H stop,\n"
+             "X attack, U unload, E hero, B builder, Q army, Ctrl+1-3 store and\n"
+             "F1-F3 select control groups, middle-drag pan, right-click a minimap\n"
+             "to send. Those keys and buttons leave the shortcuts above they were\n"
+             "on; in a battle X, Q and F1 are his rather than DS B, DS L and this\n"
+             "menu, which keep them everywhere else.");
+        ImGui::SameLine();
+        if (ImGui::Button("Clear all")) {
+            for (int i = 0; i < kV2N; ++i) g_set.v2_key[i] = g_set.v2_mouse[i] = 0;
+        }
+        ImGui::TreePop();
+    }
     // SG-0027: pause and frame advance, for slow play and tool-assisted runs.
     ImGui::Checkbox("TAS controls", &g_set.tas_keys);
     help("F5: pause or resume. F6 while paused: advance one frame.\n"
@@ -3877,6 +4204,13 @@ void tab_input() {
          "selected unit died. It now stays open while the units left in the\n"
          "selection still have items in it, and closes if they have none.\n"
          "Only changes your menu; nothing is sent to other players.");
+    ImGui::Checkbox("Attack Move", &g_set.attack_move);
+    help("Attack from the blue brick, then tap the ground near the enemy:\n"
+         "the order goes to the nearest enemy you can see within 4 cells\n"
+         "of the tap (units before buildings). Enemies hidden by fog are\n"
+         "never picked. With none in reach the tap does what it always did.\n"
+         "A tap on a unit or building is not changed. Safe online: the\n"
+         "order is chosen on your machine before it is sent.");
     ImGui::Checkbox("Clickable top screen", &g_set.cancel_queue_click);
     help("Click the Top Screen panel like a touch screen: cancel a queued\n"
          "unit (bricks back), drop a unit from the selection, or move the\n"
@@ -3977,6 +4311,204 @@ void tab_input() {
 }
 
 void account_status_line();   // docs/501, below
+// SG-0151: COMMUNITY ANNOUNCEMENTS. The main server keeps up to ten posts by
+// the moderators (GET /news; services/master-server-cloudflare). They are
+// read once at startup and every 10 minutes while the game runs, shown under
+// Network > Multiplayer, and a post newer than the last one announced gets a
+// notice once. A moderator signed in with Discord can post and take one down
+// there (the server checks who may). LB_NEWS=0 turns the reading off (the
+// harness sets LB_UPDATE_CHECK=0, which does too); LB_NEWS_HOST=host:port
+// reads another server (tests).
+struct NewsItem { int id = 0; long long time = 0; std::string title, text, by; };
+std::mutex g_news_mu;
+std::vector<NewsItem> g_news;            // under g_news_mu
+std::string g_news_note;                 // under g_news_mu
+std::atomic<bool> g_news_busy{false};
+std::atomic<int> g_news_gen{0};
+static void news_host(std::string* host, int* port) {
+    *host = "lbserver.viosarcade.xyz";
+    *port = 80;
+    if (const char* v = std::getenv("LB_NEWS_HOST")) {
+        const char* c = std::strrchr(v, ':');
+        if (c) { host->assign(v, (size_t)(c - v)); *port = std::atoi(c + 1); }
+        else *host = v;
+    }
+}
+static bool news_enabled() {
+    const char* n = std::getenv("LB_NEWS");
+    if (n) return n[0] != '0';
+    const char* u = std::getenv("LB_UPDATE_CHECK");
+    return !(u && u[0] == '0') || std::getenv("LB_NEWS_HOST");
+}
+// One JSON string value starting at the quote at s[i]; i moves past it.
+static std::string news_jstr(const std::string& s, size_t& i) {
+    std::string out;
+    if (i >= s.size() || s[i] != '"') return out;
+    for (++i; i < s.size() && s[i] != '"'; ++i) {
+        char c = s[i];
+        if (c == '\\' && i + 1 < s.size()) {
+            c = s[++i];
+            if (c == 'n') c = '\n';
+            else if (c == 't') c = ' ';
+            else if (c == 'u' && i + 4 < s.size()) {
+                const unsigned cp = (unsigned)std::strtoul(s.substr(i + 1, 4).c_str(), nullptr, 16);
+                i += 4;
+                if (cp < 0x80) out += (char)cp;
+                else if (cp < 0x800) { out += (char)(0xC0 | (cp >> 6)); out += (char)(0x80 | (cp & 0x3F)); }
+                else { out += (char)(0xE0 | (cp >> 12)); out += (char)(0x80 | ((cp >> 6) & 0x3F)); out += (char)(0x80 | (cp & 0x3F)); }
+                continue;
+            }
+        }
+        out += c;
+    }
+    ++i;
+    return out;
+}
+static std::vector<NewsItem> news_parse(const std::string& r) {
+    std::vector<NewsItem> out;
+    size_t i = r.find("\"news\":[");
+    if (i == std::string::npos) return out;
+    i += 8;
+    while (i < r.size() && r[i] != ']') {
+        if (r[i] != '{') { ++i; continue; }
+        NewsItem it;
+        ++i;
+        while (i < r.size() && r[i] != '}') {
+            if (r[i] != '"') { ++i; continue; }
+            const std::string key = news_jstr(r, i);
+            while (i < r.size() && (r[i] == ':' || r[i] == ' ')) ++i;
+            if (i < r.size() && r[i] == '"') {
+                const std::string v = news_jstr(r, i);
+                if (key == "title") it.title = v;
+                else if (key == "text") it.text = v;
+                else if (key == "by") it.by = v;
+            } else {
+                const long long v = std::strtoll(r.c_str() + i, nullptr, 10);
+                if (key == "id") it.id = (int)v;
+                else if (key == "time") it.time = v;
+                while (i < r.size() && r[i] != ',' && r[i] != '}') ++i;
+            }
+        }
+        if (it.id > 0 && !it.title.empty()) out.push_back(it);
+        if (out.size() >= 10) break;
+    }
+    return out;
+}
+static std::string news_json_esc(const char* t) {
+    std::string o;
+    for (const char* p = t; *p; ++p) {
+        const unsigned char c = (unsigned char)*p;
+        if (c == '"' || c == '\\') { o += '\\'; o += (char)c; }
+        else if (c == '\n') o += "\\n";
+        else if (c >= 0x20) o += (char)c;
+    }
+    return o;
+}
+// kind 0: read; 1: post {title,text}; 2: remove {id}.
+static void news_run(int kind, std::string body) {
+    std::string host;
+    int port = 80;
+    news_host(&host, &port);
+    std::vector<char> buf(1u << 16);
+    std::string note;
+    if (kind != 0) {
+        const int n = lb_net_http_post(host.c_str(), port, kind == 1 ? "/news" : "/news/remove",
+                                       body.c_str(), buf.data(), (int)buf.size());
+        const std::string r = n >= 0 ? std::string(buf.data(), (size_t)n) : std::string();
+        if (n < 0) note = std::string("Could not reach the server (") + buf.data() + ").";
+        else if (r.find("\"ok\":true") != std::string::npos) note = kind == 1 ? "Posted." : "Taken down.";
+        else {
+            size_t k = r.find("\"error\":");
+            note = "Refused";
+            if (k != std::string::npos) { k += 8; note += ": " + news_jstr(r, k); }
+        }
+    }
+    const int n = lb_net_http_get(host.c_str(), port, "/news", buf.data(), (int)buf.size());
+    {
+        std::lock_guard<std::mutex> lk(g_news_mu);
+        if (n >= 0) g_news = news_parse(std::string(buf.data(), (size_t)n));
+        else if (note.empty()) note = std::string("Could not read the announcements (") + buf.data() + ").";
+        std::fprintf(stderr, "[lb_news] %s: %d announcement(s)%s%s%s\n", host.c_str(), n >= 0 ? (int)g_news.size() : -1,
+                     g_news.empty() ? "" : ", newest #", g_news.empty() ? "" : std::to_string(g_news.front().id).c_str(),
+                     note.empty() ? "" : (" (" + note + ")").c_str());
+        std::fflush(stderr);
+        g_news_note = note;
+    }
+    ++g_news_gen;
+    g_news_busy = false;
+}
+static void news_start(int kind, const std::string& body) {
+    if (g_news_busy.exchange(true)) return;
+    std::thread(news_run, kind, body).detach();
+}
+static void news_tick() {
+    static double next_at = 2.0;   // a moment after startup
+    static int seen_gen = 0;
+    if (!news_enabled()) return;
+    const double now = ImGui::GetCurrentContext() ? ImGui::GetTime() : 0.0;
+    if (now >= next_at && !g_news_busy.load()) {
+        next_at = now + 600.0;
+        news_start(0, "");
+    }
+    const int gen = g_news_gen.load();
+    if (gen == seen_gen) return;
+    seen_gen = gen;
+    std::lock_guard<std::mutex> lk(g_news_mu);
+    if (!g_news.empty() && g_news.front().id > g_set.news_seen) {
+        const std::string t = std::string("Announcement: ") + lb_swear_shown(g_news.front().title.c_str()) +
+                              " (Esc > Network > Multiplayer)";
+        lb_overlay_notice(t.c_str());
+        g_set.news_seen = g_news.front().id;
+    }
+}
+static void news_draw() {
+    ImGui::SeparatorText("Community announcements");
+    std::vector<NewsItem> items;
+    std::string note;
+    {
+        std::lock_guard<std::mutex> lk(g_news_mu);
+        items = g_news;
+        note = g_news_note;
+    }
+    ImGui::BeginDisabled(g_news_busy.load());
+    if (ImGui::Button("Refresh announcements")) news_start(0, "");
+    ImGui::EndDisabled();
+    if (!note.empty()) { ImGui::SameLine(); ImGui::TextDisabled("%s", note.c_str()); }
+    if (items.empty()) ImGui::TextDisabled("No announcements.");
+    for (const NewsItem& it : items) {
+        char when[32] = "";
+        const std::time_t tt = (std::time_t)it.time;
+        if (std::tm* lt = std::localtime(&tt)) std::strftime(when, sizeof when, "%Y-%m-%d", lt);
+        ImGui::PushID(it.id);
+        ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.35f, 1.0f), "#%d %s", it.id, lb_swear_shown(it.title.c_str()));
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s%s%s", when, it.by.empty() ? "" : " - ", lb_swear_shown(it.by.c_str()));
+        ImGui::TextWrapped("%s", lb_swear_shown(it.text.c_str()));
+        ImGui::PopID();
+    }
+    if (ImGui::TreeNode("Moderators: post an announcement")) {
+        static char title[81] = "", text[601] = "";
+        static int remove_id = 0;
+        ImGui::InputText("Title", title, sizeof title);
+        ImGui::InputTextMultiline("Text", text, sizeof text, ImVec2(-1.0f, ImGui::GetTextLineHeight() * 5));
+        ImGui::BeginDisabled(g_news_busy.load() || !title[0] || !text[0]);
+        if (ImGui::Button("Post")) {
+            news_start(1, std::string("{\"title\":\"") + news_json_esc(title) + "\",\"text\":\"" +
+                              news_json_esc(text) + "\"}");
+            title[0] = text[0] = '\0';
+        }
+        ImGui::EndDisabled();
+        ImGui::InputInt("Announcement number", &remove_id);
+        ImGui::BeginDisabled(g_news_busy.load() || remove_id <= 0);
+        if (ImGui::Button("Take it down")) news_start(2, "{\"id\":" + std::to_string(remove_id) + "}");
+        ImGui::EndDisabled();
+        help("Only the server's moderators, signed in with Discord, can post or\n"
+             "take down; anyone else's request is refused. The number of each\n"
+             "post is shown in the list as #N.");
+        ImGui::TreePop();
+    }
+}
+
 void tab_multiplayer() {
     if (!tab_begin("Multiplayer")) return;
     account_status_line();
@@ -3991,6 +4523,30 @@ void tab_multiplayer() {
     ImGui::Checkbox("Show the Lobby's Server", &g_set.lobby_server_label);
     help("While hosting or joined, a line in the lobby names the server it is on.");
     badge(WIRED);
+
+    // SG-0155: one switch for the agreed rules, without undoing the player's own.
+    {
+        const bool was = g_set.tourney_rules;
+        ImGui::Checkbox("Tournament Rules", &g_set.tourney_rules);
+        if (g_set.tourney_rules != was) {
+            lb_balance_custom_touch();
+            lb_settings_save();
+        }
+        help("On: every option that changes the game plays at its default, here\n"
+             "and in the lobbies you host -- the rule options, hotwire and\n"
+             "transport options, the ranged boost, the red-brick cheats, the unit\n"
+             "caps, the balance pack, Same Builders and your own Balance values.\n"
+             "Your own choices are kept and come back when you turn it off.\n"
+             "Not changed: performance (Native Game Logic, Faster CPU), looks,\n"
+             "and the map and unit bans. A change waits until you leave a battle\n"
+             "or lobby, as balance changes do.");
+        badge(WIRED);
+        if (lb_setting_tourney_rules() && !g_set.tourney_rules)
+            ImGui::TextDisabled("Forced on by LB_TOURNEY_RULES.");
+        else if (g_set.tourney_rules)
+            ImGui::TextDisabled("Tournament Rules are on: gameplay options play at their defaults.");
+    }
+    news_draw();   // SG-0151
 
     // docs/469: the phantom tie. ESP's and EMP's stun length (Super Magic) and
     // every spell's range (Far Reaching) read the machine's OWN cheat flags, so
@@ -4204,15 +4760,31 @@ void tab_multiplayer() {
     ImGui::TextDisabled("Game network: %s", lb_net_guest_state_text());
 
     ImGui::Spacing();
+    // BR-0110: the list is what the server said when it was last asked (the
+    // Join screen asks every 5 s while it is open, this button once). Shown
+    // here later, a crashed host's lobby stayed listed on this machine only.
+    // While a list is on show it is asked for again every 10 s, and its age
+    // is shown.
+    static double s_browsed_at = -1.0;
+    const double now_s = ImGui::GetTime();
     ImGui::BeginDisabled(lb_net_busy() != 0);
-    if (ImGui::Button("Browse lobbies"))
+    if (ImGui::Button("Browse lobbies")) {
         lb_net_refresh_lobbies(g_set.master_host, g_set.master_port);
+        s_browsed_at = now_s;
+    }
     ImGui::EndDisabled();
     badge(WIRED);
     ImGui::SameLine();
     ImGui::TextDisabled("%s", lb_net_status());
 
     const int n = lb_net_lobby_count();
+    if (n > 0 && s_browsed_at < 0.0) s_browsed_at = now_s;   // a list the Join screen fetched
+    if (n > 0 && lb_net_busy() == 0 && now_s - s_browsed_at >= 10.0) {
+        lb_net_refresh_lobbies(g_set.master_host, g_set.master_port);
+        s_browsed_at = now_s;
+    }
+    if (n > 0) ImGui::TextDisabled("Refreshed %d s ago; refreshes every 10 s while shown.",
+                                   (int)(now_s - s_browsed_at));
     if (n > 0 && ImGui::BeginTable("lobbies", 7,
                                    ImGuiTableFlags_Borders |
                                    ImGuiTableFlags_RowBg |
@@ -6818,6 +7390,56 @@ static bool top_camera_box(float* ax, float* ay, float* bx, float* by) {
     return true;
 }
 
+// Visuals 2.0: the minimap as last drawn by the game, its camera box taken out.
+uint32_t g_v2_clean[96 * 96];
+bool g_v2_have_clean = false;
+// Is the top screen's right pane (136..231 x 40..135) the minimap right now?
+// Seen in play: clicking off a factory, the game drew its minimap there
+// a frame before its pane mode said so, and the card kept that frame as its
+// unit icons -- the minimap tiled over the prices. Most pixels equal to the
+// last clean minimap means it is the minimap.
+//
+// Only the minimap's own marks count: its empty ground (the most common colour,
+// unexplored dark) is the same colour as the builds pane's background, which
+// alone made every builds pane look like the minimap.
+static bool v2_pane_is_minimap(const uint32_t* top) {
+    if (!g_v2_have_clean || !top) return false;
+    const uint32_t bg = g_v2_clean[95 * 96 + 95];   // a corner: outside the map's disc
+    int marks = 0, same = 0;
+    for (int yy = 0; yy < 96; yy += 2)
+        for (int xx = 0; xx < 96; xx += 2) {
+            const uint32_t c = g_v2_clean[yy * 96 + xx];
+            if (c == bg) continue;
+            ++marks;
+            if (top[(40 + yy) * 256 + 136 + xx] == c) ++same;
+        }
+    return marks >= 40 && same * 10 > marks * 7;
+}
+
+// docs/506: the box Visuals 2.0's minimap draws, from the live camera every
+// frame (top_camera_box also needs the game's small box found this frame).
+static bool v2_live_box(float* ax, float* ay, float* bx, float* by) {
+    float vx0 = g_view_x0, vy0 = g_view_y0, vx1 = g_view_x1, vy1 = g_view_y1;
+    bool have = g_wide_field && g_view_valid;
+    if (!have) {
+        const int ow = (int)nds_gpu3d_output_width();
+        const int oh = (int)nds_gpu3d_output_height();
+        int cx = 0, cy = 0;
+        if (lb_widemap_cam_px(&cx, &cy)) {
+            const int w = ow > 256 ? ow : 256, h = oh > 192 ? oh : 192;
+            vx0 = (float)(cx - (ow > 256 ? lb_band_left(ow) : 0));
+            vy0 = (float)(cy - (oh > 192 ? lb_band_top(oh) : 0));
+            vx1 = vx0 + (float)w;
+            vy1 = vy0 + (float)h;
+            have = true;
+        }
+    }
+    if (!have) return false;
+    lb_field_map_to_minimap((int)vx0, (int)vy0, ax, ay);
+    lb_field_map_to_minimap((int)vx1, (int)vy1, bx, by);
+    return true;
+}
+
 static void top_own_draw(SDL_Renderer* main_ren, const void* src) {
     if (!g_top_win && !top_own_create(main_ren)) {
         g_set.top_own_window = false;   // could not open: back to the panel
@@ -6945,7 +7567,1027 @@ static bool top_own_event(const SDL_Event* e) {
     }
 }
 
+extern "C" int lb_visuals_theatre_active(void);   // lb_visuals.cpp, docs/506
+extern "C" void lb_visuals_overlay(void);
+// The ImGui mouse index of the button bound to "Send the selection", or -1.
+static int v2_send_button() {
+    switch (g_set.v2_mouse[kV2Send]) {
+        case SDL_BUTTON_RIGHT: return ImGuiMouseButton_Right;
+        case SDL_BUTTON_MIDDLE: return ImGuiMouseButton_Middle;
+        case SDL_BUTTON_X1: return 3;
+        case SDL_BUTTON_X2: return 4;
+        default: return -1;
+    }
+}
+// docs/506, Jaime's right-click on the minimap: the camera to that point of the
+// cartridge's minimap square (its own tap), then, once it has moved, a plain
+// left click in the middle of the game's view (v2_send_tick) -- the tap a
+// player would make to send the selection there.
+static int g_v2_send_frames = 0;
+static uint32_t g_v2_win_id = 0;   // the main window, for the click
+static void v2_send_to(int lx, int ly) {
+    if (!lb_top_minimap()) return;
+    lb_quick_request(1000 + ly * 96 + lx);
+    g_v2_send_frames = 14;
+}
+static void v2_send_tick() {
+    // The pointer moves to the spot eight frames before the end, so that the
+    // panel it was over (ImGui) has let it go before the press (a press while
+    // ImGui holds the mouse is not a touch). Down four frames before the end,
+    // up at the end: a press shorter than one of the game's 30 Hz updates may
+    // never be seen (measured: a one-frame click sent nobody anywhere).
+    if (g_v2_send_frames <= 0) return;
+    --g_v2_send_frames;
+    if (g_v2_send_frames != 8 && g_v2_send_frames != 4 && g_v2_send_frames != 0) return;
+    int fx = 0, fy = 0, fw = 0, fh = 0, gw = 0, gh = 0;
+    if (!g_v2_win_id || !lb_overlay_field_rect(&fx, &fy, &fw, &fh, &gw, &gh) || gw <= 0 || gh <= 0) return;
+    // The middle of the game's own 256x192 view, inside the widened surface.
+    const float s = (float)fw / (float)gw;
+    const int bl = gw > 256 ? lb_band_left(gw) : 0, bt = gh > 192 ? lb_band_top(gh) : 0;
+    const int x = fx + (int)((float)(bl + 128) * s), y = fy + (int)((float)(bt + 96) * s);
+    SDL_Event e{};
+    e.type = g_v2_send_frames == 4 ? SDL_MOUSEBUTTONDOWN : SDL_MOUSEBUTTONUP;
+    e.button.windowID = g_v2_win_id;
+    e.button.button = SDL_BUTTON_LEFT;
+    e.button.state = e.type == SDL_MOUSEBUTTONDOWN ? SDL_PRESSED : SDL_RELEASED;
+    e.button.clicks = 1;
+    e.button.x = x;
+    e.button.y = y;
+    SDL_Event m{};
+    m.type = SDL_MOUSEMOTION;
+    m.motion.windowID = g_v2_win_id;
+    m.motion.x = x;
+    m.motion.y = y;
+    if (g_v2_send_frames == 8) {   // only the move, this time
+        SDL_PushEvent(&m);
+        return;
+    }
+    if (e.type == SDL_MOUSEBUTTONDOWN) SDL_PushEvent(&m);
+    SDL_PushEvent(&e);
+}
+
+// THE TOP SCREEN'S CLICKABLE SPOTS (SG-0006), over a picture of the top
+// screen whose guest (0,0) is at `img0`, `sx` x `sy` window pixels per guest
+// pixel. Only spots inside the guest rect (cx0,cy0)..(cx1,cy1) are made: the
+// Visuals 2.0 PC HUD (docs/506) shows the top screen in pieces.
+//
+// The DS has no touch on its top screen, so the cartridge's own buttons there
+// -- the selected units' portraits, the production queue, and the minimap --
+// never get a pen event. A click here asks the game to run the handler it
+// already has for that spot (lb_patches.cpp: kQuickInfo for the buttons,
+// kQuickMinimap for the minimap); the game declines unless it would take the
+// click itself. lb_top_buttons lists only the buttons it would take NOW.
+//
+// Each spot is an InvisibleButton, so a press on one is a click on an item and
+// does not start dragging the panel by its picture, which a press on the bare
+// Image does.
+static void top_click_spots(ImVec2 img0, float sx, float sy, float cx0, float cy0, float cx1,
+                            float cy1) {
+    if (!g_set.cancel_queue_click || sx <= 0.0f || sy <= 0.0f) return;
+    int btn[24 * 5];
+    const int nb = lb_top_buttons(btn, 24);
+    for (int k = 0; k < nb; ++k) {
+        const int id = btn[k * 5];
+        const float x0 = (float)btn[k * 5 + 1], y0 = (float)btn[k * 5 + 2];
+        const float x1 = (float)btn[k * 5 + 3], y1 = (float)btn[k * 5 + 4];
+        if (x1 <= x0 || y1 <= y0) continue;
+        const float mx = (x0 + x1) * 0.5f, my = (y0 + y1) * 0.5f;
+        if (mx < cx0 || mx >= cx1 || my < cy0 || my >= cy1) continue;   // not in this piece
+        ImGui::SetCursorScreenPos(ImVec2(img0.x + x0 * sx, img0.y + y0 * sy));
+        ImGui::PushID(id);
+        ImGui::InvisibleButton("##topbtn", ImVec2((x1 - x0) * sx, (y1 - y0) * sy),
+                               ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            const bool occupant = id >= 730 && lb_top_occupants();
+            ImGui::SetTooltip(id >= 730 && id <= 732 && !occupant
+                                  ? "Click to cancel this unit\nand get its bricks back"
+                              : id >= 730 ? "Click to unload this unit\nfrom the transport"
+                              : id <= 721 ? "Click to take this unit\nout of the selection"
+                                          : "Click to use this button");
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
+                ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+                lb_quick_request(id >= 730 && id <= 732 ? 40 + (id - 730) : 50 + (id - 713));
+        }
+        ImGui::PopID();
+    }
+    // The minimap: the 96x96 square at (136,40) the cartridge's own tap
+    // handler takes. A click, or a drag across it, centres the camera.
+    if (lb_top_minimap() && cx0 <= 136.0f && cy0 <= 40.0f && cx1 >= 232.0f && cy1 >= 136.0f) {
+        ImGui::SetCursorScreenPos(ImVec2(img0.x + 136.0f * sx, img0.y + 40.0f * sy));
+        ImGui::InvisibleButton("##topmap", ImVec2(96.0f * sx, 96.0f * sy),
+                               ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+        if (ImGui::IsItemHovered() && v2_send_button() >= 0 && ImGui::IsMouseClicked(v2_send_button())) {
+            const ImVec2 mp = ImGui::GetIO().MousePos;
+            v2_send_to(std::clamp((int)std::floor((mp.x - img0.x) / sx) - 136, 0, 95),
+                       std::clamp((int)std::floor((mp.y - img0.y) / sy) - 40, 0, 95));
+        }
+        if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
+            ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+            if (!ImGui::IsItemActive()) ImGui::SetTooltip("Click to move the camera here");
+        }
+        if (ImGui::IsItemActive() && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+            const ImVec2 mp = ImGui::GetIO().MousePos;
+            int lx = (int)std::floor((mp.x - img0.x) / sx) - 136;
+            int ly = (int)std::floor((mp.y - img0.y) / sy) - 40;
+            lx = lx < 0 ? 0 : (lx > 95 ? 95 : lx);
+            ly = ly < 0 ? 0 : (ly > 95 ? 95 : ly);
+            static int last_x = -1, last_y = -1;
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) || lx != last_x || ly != last_y) {
+                last_x = lx;
+                last_y = ly;
+                lb_quick_request(1000 + ly * 96 + lx);
+            }
+        }
+    }
+}
+
+// ── docs/506 phase 3: Visuals 2.0's HUD, Jaime A. Vives' layout ────────────
+//
+// His port's battle HUD, part by part, each its own setting:
+//
+//   the resource bar   a studded team-colour baseplate 48 px tall across the
+//                      top, a 544 px tray centred on it (snapped to the 16 px
+//                      stud grid) with four cells: bricks, minifigures, the
+//                      third count, each behind its spinning icon, and the
+//                      battle's time. (His BGM and FOG buttons are left out.)
+//   the minimap panel  a 192x208 studded frame, bottom-left (64 px in, 8 up),
+//                      holding a 146x146 slate panel with the minimap
+//   the selection card top-right under the bar (16 px in, 64 down): a header
+//                      slate with the name, a 146x146 slate with the portrait
+//                      and health, and, when the game shows build costs or a
+//                      queue, a 162x146 slate with them; 384x256, or 192x256
+//                      without that third panel
+//
+// Sizes, positions and colours are his, in window pixels, as his renderer
+// draws them. The art is his too, decoded from the ROM as he decodes it
+// (lb_visuals.cpp: the stud tile, the DS HUD digits, the spinning icons). What
+// fills it is the cartridge's own: the values are read off its top screen's
+// resource bar (the same digit tiles), and the minimap, the name, the portrait
+// and the costs or queue are its top screen's own pictures, so they are
+// always exactly what the game says. A click on them goes where a click on
+// the Top Screen panel goes (top_click_spots, the game's own handlers).
+//
+// The minimap panel and the card can be dragged by their frames, and remember
+// where; "Reset HUD panel positions" puts them back. With both of them on, they
+// replace the Top Screen panel in battle; otherwise the panel stays as well.
+// The bar pushes the bottom screen's top-anchored HUD (the brick strips and
+// lists) down by its own height (lb_v2_hud_top_inset, read by lb_hud.cpp), so
+// it covers none of it.
+//
+// Battle or not is lb_top_battle_seq, the battle view's heartbeat. Outside a
+// battle (menus, films, the pause screens) nothing here is drawn and the
+// panel is as it always was.
+
+// Anything selected? The name banner holds white text, or the left pane a
+// portrait; both are dark with nothing selected.
+static bool pc_hud_selected(const uint32_t* top) {
+    int white = 0, bright = 0;
+    for (int y = 6; y < 31; ++y)
+        for (int x = 12; x < 212; ++x) {
+            const uint32_t p = top[y * 256 + x];
+            if (((p >> 16) & 0xFF) > 200 && ((p >> 8) & 0xFF) > 200 && (p & 0xFF) > 200) ++white;
+        }
+    for (int y = 44; y < 132; y += 2)
+        for (int x = 26; x < 118; x += 2) {
+            const uint32_t p = top[y * 256 + x];
+            const int r = (int)((p >> 16) & 0xFF), g = (int)((p >> 8) & 0xFF), b = (int)(p & 0xFF);
+            if (r + g + b > 330) ++bright;
+        }
+    return white >= 12 || bright >= 60;
+}
+
+namespace {
+
+std::atomic<int> g_v2_inset{0};          // guest rows under the bar, for lb_hud
+std::atomic<uint32_t> g_v2_inset_ms{0};  // when it was last set
+
+struct V2Tex {
+    SDL_Texture* t = nullptr;
+    int w = 0, h = 0;
+};
+V2Tex g_v2_img[4];                 // lb_v2_hud_image 0..3
+SDL_Renderer* g_v2_ren = nullptr;
+SDL_Texture* g_v2_map = nullptr;   // the minimap as last drawn by the game, 96x96
+SDL_Texture* g_v2_title = nullptr; // the name banner's text, keyed, 208x26
+bool g_v2_map_ok = false;
+int g_v2_drag = 0;                 // 1 the minimap panel, 2 the card
+
+void v2_textures(SDL_Renderer* ren) {
+    if (g_v2_ren == ren) return;
+    g_v2_ren = ren;   // a new renderer: the old textures went with the old one
+    for (V2Tex& t : g_v2_img) t = V2Tex{};
+    g_v2_map = g_v2_title = nullptr;
+    g_v2_map_ok = false;
+    for (int k = 0; k < 4; ++k) {
+        const uint32_t* px = nullptr;
+        int w = 0, h = 0;
+        if (!lb_v2_hud_image(k, &px, &w, &h)) continue;
+        SDL_Texture* t = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, w, h);
+        if (!t) continue;
+        SDL_UpdateTexture(t, nullptr, px, w * 4);
+        SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
+        SDL_SetTextureScaleMode(t, SDL_ScaleModeNearest);
+        g_v2_img[k] = V2Tex{t, w, h};
+    }
+    g_v2_map = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, 96, 96);
+    g_v2_title = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, 208, 26);
+    if (g_v2_title) SDL_SetTextureBlendMode(g_v2_title, SDL_BLENDMODE_BLEND);
+}
+
+inline ImTextureID v2_id(SDL_Texture* t) { return (ImTextureID)(intptr_t)t; }
+
+// THE TEAM'S COLOUR. Jaime's port has two
+// schemes, red and blue; this one draws in the local player's own team colour.
+// A stock red or blue team keeps his exact colours; any other (purple, orange,
+// a custom colour) takes his red scheme recoloured: each colour's lightness
+// against his red brick's body scales the team's middle shade, darker toward
+// black and lighter toward white.
+extern "C" int lb_local_team_shades(unsigned short out[3]);   /* lb_patches.cpp */
+bool g_v2_tint = false;              // this frame: a team colour that is neither stock red nor blue
+int g_v2_tr = 198, g_v2_tg = 34, g_v2_tb = 28;   // its middle shade
+ImU32 v2_team_map(ImU32 c) {
+    const int r = (int)(c & 255u), g = (int)((c >> 8) & 255u), b = (int)((c >> 16) & 255u);
+    const unsigned a = c >> 24;
+    const float lm = (198.0f + 34.0f + 28.0f) / 3.0f;   // his red body's lightness
+    const float t = ((float)(r + g + b) / 3.0f) / lm;
+    float R, G, B;
+    if (t <= 1.0f) {
+        R = g_v2_tr * t; G = g_v2_tg * t; B = g_v2_tb * t;
+    } else {
+        const float f = std::min(1.0f, (t - 1.0f) / (255.0f / lm - 1.0f));
+        R = g_v2_tr + (255.0f - g_v2_tr) * f;
+        G = g_v2_tg + (255.0f - g_v2_tg) * f;
+        B = g_v2_tb + (255.0f - g_v2_tb) * f;
+    }
+    auto cl = [](float v) { return (unsigned)std::clamp((int)std::lround(v), 0, 255); };
+    return IM_COL32(cl(R), cl(G), cl(B), a);
+}
+// His red colour, his blue one, or the team's.
+inline ImU32 v2_col(ImU32 red_c, ImU32 blue_c, bool red) {
+    return g_v2_tint ? v2_team_map(red_c) : (red ? red_c : blue_c);
+}
+// Reads the team this frame; returns red-or-not for his two schemes.
+bool v2_team_scheme(bool guess_red) {
+    unsigned short sh[3] = {0, 0, 0};
+    g_v2_tint = false;
+    if (!lb_local_team_shades(sh)) return guess_red;
+    if (sh[1] == 0x005Cu) return true;    // stock red
+    if (sh[1] == 0x6920u) return false;   // stock blue
+    auto ch = [](unsigned v5) { const unsigned v6 = v5 << 1; return (int)((v6 << 2) | (v6 >> 4)); };
+    g_v2_tr = ch(sh[1] & 31u);
+    g_v2_tg = ch((sh[1] >> 5) & 31u);
+    g_v2_tb = ch((sh[1] >> 10) & 31u);
+    g_v2_tint = true;
+    return true;
+}
+// The studded plate in the team's colour: his red plate, recoloured, made again
+// whenever the colour changes.
+SDL_Texture* v2_tinted_plate(SDL_Renderer* ren) {
+    static SDL_Texture* tex = nullptr;
+    static SDL_Renderer* tex_ren = nullptr;
+    static int key = -1;
+    const int k = (g_v2_tr << 16) | (g_v2_tg << 8) | g_v2_tb;
+    if (tex && tex_ren == ren && key == k) return tex;
+    const uint32_t* px = nullptr;
+    int w = 0, h = 0;
+    if (!lb_v2_hud_image(3, &px, &w, &h) || w <= 0 || h <= 0) return nullptr;
+    if (tex && tex_ren == ren) SDL_DestroyTexture(tex);
+    tex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, w, h);
+    tex_ren = ren;
+    key = k;
+    if (!tex) return nullptr;
+    std::vector<uint32_t> out((size_t)w * (size_t)h);
+    for (size_t i = 0; i < out.size(); ++i) {
+        const uint32_t p = px[i];   // 0xAARRGGBB
+        const ImU32 m = v2_team_map(IM_COL32((p >> 16) & 255u, (p >> 8) & 255u, p & 255u, p >> 24));
+        out[i] = (m & 0xFF00FF00u) | ((m & 255u) << 16) | ((m >> 16) & 255u);
+    }
+    SDL_UpdateTexture(tex, nullptr, out.data(), w * 4);
+    SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+    SDL_SetTextureScaleMode(tex, SDL_ScaleModeNearest);
+    return tex;
+}
+
+void v2_fill(ImDrawList* dl, float x, float y, float w, float h, ImU32 c) {
+    dl->AddRectFilled(ImVec2(x, y), ImVec2(x + w, y + h), c);
+}
+// SDL_RenderDrawRect's one-pixel outline, inside the rect.
+void v2_outline(ImDrawList* dl, float x, float y, float w, float h, ImU32 c) {
+    dl->AddRect(ImVec2(x + 0.5f, y + 0.5f), ImVec2(x + w - 0.5f, y + h - 0.5f), c, 0.0f, 0, 1.0f);
+}
+
+void v2_baseplate(ImDrawList* dl, float x, float y, float w, float h, bool red) {
+    const V2Tex& t = red && g_v2_img[3].t ? g_v2_img[3] : g_v2_img[2];
+    SDL_Texture* tt = g_v2_tint ? v2_tinted_plate(g_v2_ren) : t.t;
+    if (!tt) {
+        v2_fill(dl, x, y, w, h, v2_col(IM_COL32(178, 28, 24, 255), IM_COL32(32, 82, 168, 255), red));
+        return;
+    }
+    dl->PushClipRect(ImVec2(x, y), ImVec2(x + w, y + h), true);
+    for (float ty = y; ty < y + h; ty += 32.0f)
+        for (float tx = x; tx < x + w; tx += 32.0f)
+            dl->AddImage(v2_id(tt), ImVec2(tx, ty), ImVec2(tx + 32.0f, ty + 32.0f));
+    dl->PopClipRect();
+}
+
+// His draw_slate_panel: the #24202C recessed panel, in a team-colour beveled
+// brick frame when `bevel`.
+void v2_slate(ImDrawList* dl, float x, float y, float w, float h, bool red, bool bevel) {
+    if (bevel) {
+        const float b = 6.0f;
+        const ImU32 outer = v2_col(IM_COL32(56, 10, 12, 255), IM_COL32(12, 26, 56, 255), red);
+        const ImU32 body = v2_col(IM_COL32(198, 34, 28, 255), IM_COL32(54, 134, 206, 255), red);
+        const ImU32 hi_t = v2_col(IM_COL32(252, 126, 114, 255), IM_COL32(126, 200, 248, 255), red);
+        const ImU32 hi_l = v2_col(IM_COL32(236, 92, 82, 255), IM_COL32(96, 174, 236, 255), red);
+        const ImU32 lo = v2_col(IM_COL32(114, 12, 14, 255), IM_COL32(22, 62, 118, 255), red);
+        const ImU32 inner = v2_col(IM_COL32(44, 12, 14, 255), IM_COL32(14, 22, 42, 255), red);
+        v2_fill(dl, x - b - 1, y - b - 1, w + 2 * (b + 1), h + 2 * (b + 1), outer);
+        v2_fill(dl, x - b, y - b, w + 2 * b, h + 2 * b, body);
+        v2_fill(dl, x - b, y - b, w + 2 * b, 2, hi_t);
+        v2_fill(dl, x - b, y - b, 2, h + 2 * b, hi_l);
+        v2_fill(dl, x - b, y + h + b - 2, w + 2 * b, 2, lo);
+        v2_fill(dl, x + w + b - 2, y - b, 2, h + 2 * b, lo);
+        v2_outline(dl, x - 1, y - 1, w + 2, h + 2, inner);
+    }
+    v2_fill(dl, x, y, w, h, IM_COL32(36, 32, 44, 255));
+    v2_fill(dl, x, y, w, 2, IM_COL32(20, 18, 28, 255));
+    v2_fill(dl, x, y, 2, h, IM_COL32(24, 20, 32, 255));
+    v2_fill(dl, x, y + h - 1, w, 1, IM_COL32(54, 48, 66, 255));
+    v2_outline(dl, x, y, w, h, IM_COL32(14, 12, 20, 255));
+}
+
+// His HUD digits: the DS glyphs at `scale`, his advances, a one-step shadow.
+bool v2_glyph(char ch, int* gx, int* gy, int* adv) {
+    static const char kOrder[] = "12345" "67890" "/-+.:";
+    static const int kAdv[15] = {5, 6, 6, 6, 6, 6, 6, 6, 6, 6, 8, 6, 6, 4, 4};
+    for (int k = 0; k < 15; ++k)
+        if (kOrder[k] == ch) {
+            *gx = (k % 5) * 8;
+            *gy = (k / 5) * 8;
+            *adv = kAdv[k];
+            return true;
+        }
+    return false;
+}
+int v2_digits_w(const char* s, int scale) {
+    int w = 0;
+    for (; *s; ++s) {
+        const char ch = *s;
+        w += (ch == ' ' || ch == ':' || ch == '.' ? 4 : ch == '/' ? 8 : ch == '1' ? 5 : 6) * scale;
+    }
+    return w;
+}
+void v2_digits(ImDrawList* dl, float x, float y, const char* s, ImU32 col, int scale) {
+    const V2Tex& t = g_v2_img[0];
+    if (!t.t) return;
+    auto pass = [&](float ox, float oy, ImU32 c) {
+        float cx = x + ox;
+        for (const char* p = s; *p; ++p) {
+            if (*p == ' ') {
+                cx += 4.0f * (float)scale;
+                continue;
+            }
+            int gx = 0, gy = 0, adv = 6;
+            if (!v2_glyph(*p, &gx, &gy, &adv)) continue;
+            // ON WHOLE PIXELS ("100" read "'00" otherwise). A cost
+            // centred under its icon lands on a half pixel, and nearest
+            // sampling then drops a one-pixel stroke -- the 1's stem.
+            const float dx = std::floor(cx - (float)(((8 - adv) / 2) * scale));
+            const float dy = std::floor(y + oy);
+            dl->AddImage(v2_id(t.t), ImVec2(dx, dy), ImVec2(dx + 8.0f * scale, dy + 8.0f * scale),
+                         ImVec2(gx / 40.0f, gy / 24.0f), ImVec2((gx + 8) / 40.0f, (gy + 8) / 24.0f), c);
+            cx += (float)(adv * scale);
+        }
+    };
+    pass((float)scale, (float)scale, IM_COL32(0, 0, 0, (col >> IM_COL32_A_SHIFT) & 0xFF));
+    pass(0.0f, 0.0f, col);
+}
+
+// His spinning icons from GameAnims: 0 the brick (4 frames), 1 the star and
+// 2 the minifig head (12 frames each).
+void v2_icon(ImDrawList* dl, int which, float x, float y, float size, float t) {
+    const V2Tex& a = g_v2_img[1];
+    if (!a.t) return;
+    const int frame = which == 0 ? int(t * 5.0f) % 4 : int(t * 8.0f) % 12;
+    const float sy = which == 0 ? 3.0f : which == 1 ? 27.0f : 52.0f;
+    const float sx = (float)(frame * 16);
+    dl->AddImage(v2_id(a.t), ImVec2(x, y), ImVec2(x + size, y + size), ImVec2(sx / a.w, sy / a.h),
+                 ImVec2((sx + 16.0f) / a.w, (sy + 16.0f) / a.h));
+}
+
+const ImGuiWindowFlags kV2Flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                                  ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground |
+                                  ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav |
+                                  ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoScrollbar;
+
+// A press on a panel's frame (not on one of its buttons) starts a drag; the
+// panel follows the mouse until the button is let go, then it is saved.
+void v2_drag(int id, int* ox, int* oy, int sx, int sy) {
+    if (ImGui::IsWindowHovered() && !ImGui::IsAnyItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+        g_v2_drag = id;
+    if (g_v2_drag != id) return;
+    if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+        const ImVec2 d = ImGui::GetIO().MouseDelta;
+        *ox += (int)std::lround(d.x) * sx;
+        *oy += (int)std::lround(d.y) * sy;
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+    } else {
+        g_v2_drag = 0;
+        settings_save();
+    }
+}
+
+}  // namespace
+
+// Guest rows the bottom screen's top-anchored HUD moves down by, so the bar
+// covers none of it (lb_hud.cpp). 0 unless the bar was drawn in the last fifth
+// of a second.
+extern "C" int lb_v2_hud_top_inset(void) {
+    if (SDL_GetTicks() - g_v2_inset_ms.load() > 200u) return 0;
+    return g_v2_inset.load();
+}
+
+// Returns true when it has drawn the minimap panel and the card in place of
+// the Top Screen panel.
+static bool pc_hud_draw(const uint32_t* top, SDL_Renderer* ren) {
+    const bool want_bar = lb_setting_v2_hud_bar() != 0, want_mm = lb_setting_v2_hud_minimap() != 0,
+               want_card = lb_setting_v2_hud_card() != 0;
+    if (!(want_bar || want_mm || want_card) || !top || g_top_w != 256 || g_top_h != 192 || !g_top_tex || !ren)
+        return false;
+    static unsigned last_seq = 0;
+    static int still = 1000;
+    const unsigned seq = lb_top_battle_seq();
+    if (seq != last_seq) {
+        last_seq = seq;
+        still = 0;
+    } else if (still < 1000) {
+        ++still;
+    }
+    if (still > 20 || lb_top_suspended()) return false;   // not in a live battle
+    v2_textures(ren);
+
+    // Blue for King, Pirates and Space; red for Wizards, Imperials and Aliens,
+    // as his port. The game's own board says which: its studs at (0..15,
+    // 144..159) are in the team's colour.
+    int rs = 0, bs = 0;
+    for (int y = 144; y < 160; ++y)
+        for (int x = 0; x < 16; ++x) {
+            rs += (int)((top[y * 256 + x] >> 16) & 255);
+            bs += (int)(top[y * 256 + x] & 255);
+        }
+    // Then the local player's own team colour, when it can be read (a pause
+    // dims the board, which flashed the guess blue).
+    const bool red = v2_team_scheme(rs > bs);
+    const float t = (float)(SDL_GetTicks() % 1000000u) / 1000.0f;
+
+    // The battle's time: counted while the battle runs (its view updating),
+    // from the level's start.
+    static unsigned ordinal = ~0u;
+    static double secs = 0.0;
+    static uint32_t last_ms = 0;
+    const uint32_t now = SDL_GetTicks();
+    if (lb_level_ordinal() != ordinal) {
+        ordinal = lb_level_ordinal();
+        secs = 0.0;
+    } else if (still <= 2) {
+        secs += std::min(0.25, (double)(now - last_ms) / 1000.0);
+    }
+    last_ms = now;
+
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    const float W = vp->WorkSize.x, H = vp->WorkSize.y, X0 = vp->WorkPos.x, Y0 = vp->WorkPos.y;
+    const ImU32 edge = v2_col(IM_COL32(54, 10, 12, 255), IM_COL32(10, 22, 52, 255), red);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, ImVec2(1.0f, 1.0f));
+
+    // ---- the resource bar -------------------------------------------------
+    if (want_bar) {
+        constexpr float kBarH = 48.0f;
+        ImGui::SetNextWindowPos(ImVec2(X0, Y0), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(W, kBarH + 2.0f), ImGuiCond_Always);
+        if (ImGui::Begin("##v2hud_bar", nullptr, kV2Flags)) {
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            v2_baseplate(dl, X0, Y0, W, kBarH, red);
+            v2_fill(dl, X0, Y0 + kBarH, W, 2, v2_col(IM_COL32(58, 10, 12, 255), IM_COL32(12, 26, 58, 255), red));
+            const float tow = 544.0f, toh = kBarH;
+            const float tox = X0 + (float)std::max(16, (((int)W - 544) / 2 / 16) * 16), toy = Y0;
+            v2_fill(dl, tox, toy, tow, toh, v2_col(IM_COL32(56, 10, 12, 255), IM_COL32(12, 26, 58, 255), red));
+            v2_fill(dl, tox + 1, toy + 1, tow - 2, toh - 2, v2_col(IM_COL32(198, 34, 28, 255), IM_COL32(54, 134, 206, 255), red));
+            v2_fill(dl, tox + 1, toy + 1, tow - 2, 2, v2_col(IM_COL32(252, 126, 114, 255), IM_COL32(126, 200, 248, 255), red));
+            v2_fill(dl, tox + 1, toy + toh - 3, tow - 2, 2, v2_col(IM_COL32(114, 12, 14, 255), IM_COL32(22, 62, 118, 255), red));
+            const float tx = tox + 5, ty = toy + 5, tw = tow - 10, th = toh - 10;
+            v2_fill(dl, tx, ty, tw, th, IM_COL32(36, 32, 44, 255));
+            v2_outline(dl, tx, ty, tw, th, IM_COL32(14, 12, 20, 255));
+            const float c[4] = {tx, tx + 148, tx + 292, tx + 424};
+            for (int k = 1; k < 4; ++k) {
+                v2_fill(dl, c[k], ty, 2, th, IM_COL32(18, 16, 26, 255));
+                v2_fill(dl, c[k] + 2, ty + 1, 1, th - 2, IM_COL32(56, 50, 68, 255));
+            }
+            const float icon_y = ty + (th - 24.0f) / 2.0f, text_y = ty + (th - 16.0f) / 2.0f;
+            char vals[3][16];
+            lb_v2_hud_read_bar(top, vals);
+            // A count at its cap, as he colours it.
+            auto full = [](const char* v) {
+                const char* sl = std::strchr(v, '/');
+                return sl && sl != v && std::atoi(v) >= std::atoi(sl + 1) && std::atoi(sl + 1) > 0;
+            };
+            v2_icon(dl, 0, c[0] + 14, icon_y, 24, t);
+            v2_digits(dl, c[0] + 46, text_y, vals[0], IM_COL32(255, 255, 255, 255), 2);
+            v2_icon(dl, 2, c[1] + 14, icon_y, 24, t);
+            v2_digits(dl, c[1] + 46, text_y, vals[1], full(vals[1]) ? IM_COL32(255, 110, 90, 255) : IM_COL32(255, 255, 255, 255), 2);
+            v2_icon(dl, 1, c[2] + 14, icon_y, 24, t);
+            v2_digits(dl, c[2] + 46, text_y, vals[2], full(vals[2]) ? IM_COL32(255, 185, 90, 255) : IM_COL32(255, 255, 255, 255), 2);
+            char tbuf[16];
+            const int sec = (int)secs;
+            std::snprintf(tbuf, sizeof tbuf, "%02d:%02d", sec / 60, sec % 60);
+            v2_digits(dl, c[3] + (tx + tw - c[3] - (float)v2_digits_w(tbuf, 2)) / 2.0f, text_y, tbuf,
+                      IM_COL32(255, 255, 255, 255), 2);
+        }
+        ImGui::End();
+        // The bottom screen's top-anchored HUD starts under the bar.
+        int fx = 0, fy = 0, fw = 0, fh = 0, gw = 0, gh = 0;
+        if (lb_overlay_field_rect(&fx, &fy, &fw, &fh, &gw, &gh) && fh > 0 && gh > 0) {
+            const float rows = (kBarH + 2.0f - (float)fy) * (float)gh / (float)fh;
+            g_v2_inset = rows > 0.0f ? (int)std::ceil(rows) : 0;
+            g_v2_inset_ms = SDL_GetTicks();
+        }
+    }
+
+    // ---- the minimap panel -----------------------------------------------
+    if (want_mm) {
+        const float s = 146.0f / 96.0f;
+        if (g_v2_map && lb_top_minimap() && lb_top_pane() == 0) {   // the game is drawing it: keep a copy
+            // WITHOUT THE GAME'S CAMERA BOX (in play it did not
+            // move while the camera did). The cartridge plots its box into the
+            // minimap, which it redraws a quarter of the rows per update, so
+            // in motion the box is torn or gone (docs/370). Its white (the DS
+            // 7FFF, drawn as 251,251,251) is taken out -- the last clean pixel
+            // there, else the one to the left -- and the box is drawn below
+            // from the live camera instead. A white the map itself has (snow)
+            // stays white: its last clean pixel was white too.
+            uint32_t* clean = g_v2_clean;
+            bool& have_clean = g_v2_have_clean;
+            static uint32_t buf[96 * 96];
+            for (int yy = 0; yy < 96; ++yy)
+                for (int xx = 0; xx < 96; ++xx) {
+                    uint32_t c = top[(40 + yy) * 256 + 136 + xx];
+                    if ((c & 0xFFFFFFu) == 0xFBFBFBu) {
+                        const uint32_t was = clean[yy * 96 + xx];
+                        if (have_clean && (was & 0xFFFFFFu) != 0xFBFBFBu) c = was;
+                        else if (xx > 0) c = buf[yy * 96 + xx - 1];
+                    } else {
+                        clean[yy * 96 + xx] = c;
+                    }
+                    buf[yy * 96 + xx] = c;
+                }
+            have_clean = true;
+            SDL_UpdateTexture(g_v2_map, nullptr, buf, 96 * 4);
+            g_v2_map_ok = true;
+        }
+        int ox = g_set.v2_mm_x < 0 ? 64 : g_set.v2_mm_x, oy = g_set.v2_mm_y < 0 ? 8 : g_set.v2_mm_y;
+        ox = std::clamp(ox, 0, std::max(0, (int)W - 192));
+        oy = std::clamp(oy, 0, std::max(0, (int)H - 208));
+        const float fx = X0 + (float)ox, fy = Y0 + H - 208.0f - (float)oy;
+        ImGui::SetNextWindowPos(ImVec2(fx, fy), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(192.0f + 5.0f, 208.0f + 5.0f), ImGuiCond_Always);
+        if (ImGui::Begin("##v2hud_map", nullptr, kV2Flags)) {
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            v2_fill(dl, fx + 4, fy + 4, 192, 208, IM_COL32(0, 0, 0, 130));
+            v2_baseplate(dl, fx, fy, 192, 208, red);
+            v2_outline(dl, fx - 1, fy - 1, 194, 210, edge);
+            const float mx = fx + 23, my = fy + 23;
+            v2_slate(dl, mx, my, 146, 146, red, true);
+            if (g_v2_map_ok) dl->AddImage(v2_id(g_v2_map), ImVec2(mx, my), ImVec2(mx + 146, my + 146));
+            float ax = 0, ay = 0, bx = 0, by = 0;
+            // The corrected box only when the Top Screen panel would draw it:
+            // the game's own small box was found and erased this frame. When
+            // the game draws the widened box itself (docs/370) it is already in
+            // the picture, and a second box was drawn over it.
+            if (g_v2_map_ok && v2_live_box(&ax, &ay, &bx, &by)) {
+                dl->PushClipRect(ImVec2(mx, my), ImVec2(mx + 146, my + 146), true);
+                const float x0 = std::round(mx + (ax - 136.0f) * s), y0 = std::round(my + (ay - 40.0f) * s);
+                const float cw = std::max(10.0f, std::round((bx - ax) * s)), ch = std::max(10.0f, std::round((by - ay) * s));
+                for (int b = 0; b < 3; ++b)
+                    v2_outline(dl, x0 + b, y0 + b, cw - 2 * b, ch - 2 * b, IM_COL32(255, 255, 255, 255));
+                dl->PopClipRect();
+            }
+            // A click (or a drag) on it moves the camera, through the game's
+            // own minimap handler. In play it took clicks only
+            // while the game's minimap was up, and a building's builds pane
+            // covers that one while this panel stays; request 30000 + cell
+            // is the same tap without that refusal (lb_patches.cpp).
+            if (g_set.cancel_queue_click && g_v2_map_ok) {
+                ImGui::SetCursorScreenPos(ImVec2(mx, my));
+                ImGui::InvisibleButton("##v2map", ImVec2(146, 146),
+                                       ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+                if (ImGui::IsItemHovered() && v2_send_button() >= 0 && ImGui::IsMouseClicked(v2_send_button())) {
+                    const ImVec2 mp = ImGui::GetIO().MousePos;
+                    v2_send_to(std::clamp((int)std::floor((mp.x - mx) / s), 0, 95),
+                               std::clamp((int)std::floor((mp.y - my) / s), 0, 95));
+                }
+                if (ImGui::IsItemHovered() || ImGui::IsItemActive()) ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                if (ImGui::IsItemActive() && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                    const ImVec2 mp = ImGui::GetIO().MousePos;
+                    const int lx = std::clamp((int)std::floor((mp.x - mx) / s), 0, 95);
+                    const int ly = std::clamp((int)std::floor((mp.y - my) / s), 0, 95);
+                    static int last_x = -1, last_y = -1;
+                    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) || lx != last_x || ly != last_y) {
+                        last_x = lx;
+                        last_y = ly;
+                        lb_quick_request(30000 + ly * 96 + lx);
+                    }
+                }
+            }
+            v2_drag(1, &ox, &oy, 1, -1);
+            if (g_v2_drag == 1) {
+                g_set.v2_mm_x = ox;
+                g_set.v2_mm_y = oy;
+            }
+        }
+        ImGui::End();
+    }
+
+    // ---- the selection card ----------------------------------------------
+    const int pane = lb_top_pane();
+    if (want_card && (pane != 0 || pc_hud_selected(top))) {
+        const bool right_box = pane != 0;   // build costs, or a building's builds and queue
+        // A building with something to train: his icon grid with the costs,
+        // and his queue strip under the card (80 px more of it).
+        uint32_t units[9];
+        int unit_off[9] = {0};
+        // Opening the red list (a number key, a click here) turns the game's
+        // pane into its Build Costs (mode 1); for the building that was on
+        // show, the panel stays, with the icons and the queue as last drawn.
+        static uint32_t prod_ent = 0;
+        const uint32_t sel_ent = lb_v2_selected_entity();
+        const bool listing = pane == 1 && lb_v2_red_open() && sel_ent && sel_ent == prod_ent;
+        const int nunits = (pane == 2 || listing) ? lb_v2_red_list(units, 9, unit_off) : 0;
+        const bool prod = nunits > 0;
+        if (pane == 2 && prod) prod_ent = sel_ent;
+        // His multi-selection card: wide, "N Units
+        // Selected" in the header and a grid of the group's portraits.
+        // THE PANE IS TAKEN ONLY ONCE IT HAS SETTLED (otherwise
+        // clicking off a factory left the minimap tiled over its prices). On
+        // the frame the selection changes the game can already draw the next
+        // pane while +0x394 still names the old one, and that frame was kept
+        // as the icons. Three frames of the same pane and the same selected
+        // unit first.
+        static int settle = 0, settle_pane = -1;
+        static uint32_t settle_sel = 0;
+        if (pane == settle_pane && sel_ent == settle_sel) {
+            if (settle < 1000) ++settle;
+        } else {
+            settle = 0;
+            settle_pane = pane;
+            settle_sel = sel_ent;
+        }
+        const bool pane_settled = settle >= 3 && (pane == 2 || pane == 1);
+        const int ngroup = lb_v2_group_count();
+        const bool multi = ngroup > 1 && !prod;
+        const float cw = (right_box || multi) ? 384.0f : 192.0f, chh = 256.0f + (prod ? 80.0f : 0.0f);
+        int ox = g_set.v2_card_x < 0 ? 16 : g_set.v2_card_x, oy = g_set.v2_card_y < 0 ? 64 : g_set.v2_card_y;
+        ox = std::clamp(ox, 0, std::max(0, (int)W - (int)cw));
+        oy = std::clamp(oy, 0, std::max(0, (int)H - (int)chh));
+        const float x = X0 + W - cw - (float)ox, y = Y0 + (float)oy;
+        ImGui::SetNextWindowPos(ImVec2(x - 1, y - 1), ImGuiCond_Always);
+        ImGui::SetNextWindowSize(ImVec2(cw + 6, chh + 6), ImGuiCond_Always);
+        if (ImGui::Begin("##v2hud_card", nullptr, kV2Flags)) {
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            v2_fill(dl, x + 4, y + 4, cw, chh, IM_COL32(0, 0, 0, 120));
+            v2_baseplate(dl, x, y, cw, chh, red);
+            v2_outline(dl, x - 1, y - 1, cw + 2, chh + 2, edge);
+            // The header: the game's own name text, keyed off its banner.
+            const float hx = x + 23, hy = y + 23, hw = cw - 46, hh = 34;
+            v2_slate(dl, hx, hy, hw, hh, red, true);
+            if (multi) {
+                char ht[32];
+                std::snprintf(ht, sizeof ht, "%d Units Selected", ngroup);
+                ImFont* f = ImGui::GetFont();
+                // His header text is his font at 2x (16 px tall); ours is the
+                // overlay's pixel font at twice its own size, smaller if long.
+                float fs = ImGui::GetFontSize() * 2.0f;
+                ImVec2 ts = f->CalcTextSizeA(fs, FLT_MAX, 0.0f, ht);
+                if (ts.x > hw - 10.0f) {
+                    fs = ImGui::GetFontSize();
+                    ts = f->CalcTextSizeA(fs, FLT_MAX, 0.0f, ht);
+                }
+                const float tx = hx + std::max(4.0f, std::floor((hw - ts.x) / 2.0f)), ty = hy + std::floor((hh - ts.y) / 2.0f);
+                dl->AddText(f, fs, ImVec2(tx + 2, ty + 2), IM_COL32(0, 0, 0, 255), ht);
+                dl->AddText(f, fs, ImVec2(tx, ty), IM_COL32(255, 255, 255, 255), ht);
+            } else if (g_v2_title) {
+                static uint32_t buf[208 * 26];
+                int x0 = 208, y0 = 26, x1 = -1, y1 = -1;
+                for (int yy = 0; yy < 26; ++yy)
+                    for (int xx = 0; xx < 208; ++xx) {
+                        const uint32_t c = top[(6 + yy) * 256 + 8 + xx];
+                        // The name is white; the banner's frame has bright red
+                        // and pink, which are not text.
+                        const int mn = std::min({(int)((c >> 16) & 255), (int)((c >> 8) & 255), (int)(c & 255)});
+                        const bool ink = mn > 170;
+                        buf[yy * 208 + xx] = ink ? (c | 0xFF000000u) : 0u;
+                        if (ink) {
+                            x0 = std::min(x0, xx);
+                            x1 = std::max(x1, xx);
+                            y0 = std::min(y0, yy);
+                            y1 = std::max(y1, yy);
+                        }
+                    }
+                SDL_UpdateTexture(g_v2_title, nullptr, buf, 208 * 4);
+                if (x1 >= x0) {
+                    const float bw = (float)(x1 - x0 + 1), bh = (float)(y1 - y0 + 1);
+                    // His sizes: twice the font when it fits, else once; the
+                    // game's font runs a little wider than his, so a long
+                    // name in the narrow card is scaled down to fit.
+                    float sc = bw * 2.0f <= hw - 10.0f ? 2.0f : 1.0f;
+                    if (bw * sc > hw - 8.0f) sc = (hw - 8.0f) / bw;
+                    SDL_SetTextureScaleMode(g_v2_title, sc == std::floor(sc) ? SDL_ScaleModeNearest : SDL_ScaleModeLinear);
+                    const float dx = hx + std::max(4.0f, std::floor((hw - bw * sc) / 2.0f));
+                    const float dy = hy + std::floor((hh - bh * sc) / 2.0f);
+                    dl->AddImage(v2_id(g_v2_title), ImVec2(dx, dy), ImVec2(dx + bw * sc, dy + bh * sc),
+                                 ImVec2(x0 / 208.0f, y0 / 26.0f), ImVec2((x1 + 1) / 208.0f, (y1 + 1) / 26.0f));
+                }
+            }
+            if (multi) {
+                // His grid: one 338x146 slate, six portraits to a row in 52-px
+                // cells 4 px apart, each the game's own 24x24 head (as it drew
+                // it in its group pane, team colours and all) at 2x, with his
+                // eight-block health bar under it.
+                const float gpx = x + 23, gpy = y + 87;
+                v2_slate(dl, gpx, gpy, 338, 146, red, true);
+                int btn[24 * 5];
+                const int nb = lb_top_buttons(btn, 24);
+                const float gx0 = gpx + (338.0f - (6.0f * 52.0f + 5.0f * 4.0f)) / 2.0f, gy0 = gpy + 7.0f;
+                const int shown = std::min(ngroup, 9);   // the game's pane holds nine
+                for (int k = 0; k < shown; ++k) {
+                    const float cx = gx0 + (float)((k % 6) * 56), cy = gy0 + (float)((k / 6) * 70);
+                    for (int b = 0; b < nb; ++b) {
+                        if (btn[b * 5] != 713 + k) continue;
+                        const int hx = btn[b * 5 + 1] + ((btn[b * 5 + 3] - btn[b * 5 + 1] + 1) - 24) / 2;
+                        const int hy = btn[b * 5 + 2];
+                        dl->AddImage(v2_id(g_top_tex), ImVec2(cx + 2, cy + 2), ImVec2(cx + 50, cy + 50),
+                                     ImVec2(hx / 256.0f, hy / 192.0f), ImVec2((hx + 24) / 256.0f, (hy + 24) / 192.0f));
+                        break;
+                    }
+                    int hp = 0, mx = 0;
+                    if (lb_v2_group_hp(k, &hp, &mx) && mx > 0) {
+                        const float frac = std::clamp((float)hp / (float)mx, 0.0f, 1.0f);
+                        const int bucket = std::min(4, (int)(frac * 100.0f) / 20);
+                        const ImU32 fill = bucket >= 2 ? IM_COL32(0, 238, 0, 255)
+                                         : bucket == 1 ? IM_COL32(246, 218, 16, 255) : IM_COL32(238, 28, 28, 255);
+                        const ImU32 empty = bucket >= 2 ? IM_COL32(0, 68, 0, 255)
+                                          : bucket == 1 ? IM_COL32(96, 86, 16, 255) : IM_COL32(76, 12, 12, 255);
+                        const float bx = cx + 1, by = cy + 54;
+                        v2_fill(dl, bx, by, 50, 8, IM_COL32(0, 0, 0, 255));
+                        const int filled = hp <= 0 ? 0 : (int)std::ceil(frac * 8.0f);
+                        for (int sgi = 0; sgi < 8; ++sgi)
+                            v2_fill(dl, bx + 2 + (float)(sgi * 6), by + 2, 4, 4, sgi < filled ? fill : empty);
+                    }
+                }
+                if (ngroup > shown) {   // his "+N" on the last portrait
+                    char more[12];
+                    std::snprintf(more, sizeof more, "+%d", ngroup - shown);
+                    const float cx = gx0 + (float)(((shown - 1) % 6) * 56), cy = gy0 + (float)(((shown - 1) / 6) * 70);
+                    const float mw = (float)v2_digits_w(more, 1);
+                    v2_fill(dl, cx + 52 - mw - 6, cy + 52 - 12, mw + 6, 12, IM_COL32(0, 0, 0, 210));
+                    v2_digits(dl, cx + 52 - mw - 3, cy + 52 - 10, more, IM_COL32(255, 236, 80, 255), 1);
+                }
+            } else {
+                // The portrait and health (the game's left pane, 96x96 at (24,40)).
+                const float s = 146.0f / 96.0f;
+                const float lx = x + 23, ly = y + 87;
+                v2_slate(dl, lx, ly, 146, 146, red, true);
+                // The game draws a multi-selection's portraits from the pane's
+                // top left (three across, health bars under them); in his card the
+                // group sits in the middle. So what the game drew there (anything
+                // but the pane's own dark ground) is found and centred; a single
+                // portrait fills the pane and does not move.
+                float dx = 0.0f, dy = 0.0f;
+                {
+                    const uint32_t bg = top[134 * 256 + 118];   // the pane's ground, bottom right
+                    int bx0 = 120, by0 = 136, bx1 = 23, by1 = 39;
+                    for (int yy = 40; yy < 136; ++yy)
+                        for (int xx = 24; xx < 120; ++xx) {
+                            const uint32_t c = top[yy * 256 + xx];
+                            const int d = std::abs((int)((c >> 16) & 255) - (int)((bg >> 16) & 255)) +
+                                          std::abs((int)((c >> 8) & 255) - (int)((bg >> 8) & 255)) +
+                                          std::abs((int)(c & 255) - (int)(bg & 255));
+                            if (d > 60) {
+                                bx0 = std::min(bx0, xx);
+                                bx1 = std::max(bx1, xx);
+                                by0 = std::min(by0, yy);
+                                by1 = std::max(by1, yy);
+                            }
+                        }
+                    if (bx1 >= bx0 && (bx1 - bx0 < 80 || by1 - by0 < 80)) {
+                        dx = std::floor(((24.0f + 120.0f) / 2.0f - (float)(bx0 + bx1 + 1) / 2.0f) * s);
+                        dy = std::floor(((40.0f + 136.0f) / 2.0f - (float)(by0 + by1 + 1) / 2.0f) * s);
+                    }
+                }
+                dl->PushClipRect(ImVec2(lx, ly), ImVec2(lx + 146, ly + 146), true);
+                dl->AddImage(v2_id(g_top_tex), ImVec2(lx + dx, ly + dy), ImVec2(lx + dx + 146, ly + dy + 146),
+                             ImVec2(24.0f / 256.0f, 40.0f / 192.0f), ImVec2(120.0f / 256.0f, 136.0f / 192.0f));
+                dl->PopClipRect();
+                top_click_spots(ImVec2(lx + dx - 24.0f * s, ly + dy - 40.0f * s), s, s, 24.0f, 40.0f, 120.0f, 136.0f);
+                // The costs or the queue (the game's right pane, 96x96 at (136,40)).
+                if (prod) {
+                    // His production panel: the units this building trains, as
+                    // the game's own icons (its "Builds" pane draws them 24x24 at
+                    // (144 + 32 col, 64 + 32 row)) at 38 px, three to a row, each
+                    // with its cost under it; greyed when the bricks are short.
+                    // A click trains it, as the red list's item does (request
+                    // 11 + i, the "item N" shortcut).
+                    const float rx = x + 199, ry = y + 87;
+                    v2_slate(dl, rx, ry, 162, 146, red, true);
+                    char vals[3][16];
+                    lb_v2_hud_read_bar(top, vals);
+                    const int bricks = std::atoi(vals[0]);
+                    // The icons as the game last drew them in its "Builds" pane:
+                    // kept while its red list is shut, because opening it (as a
+                    // click here does) turns that pane into its Build Costs.
+                    static SDL_Texture* icons = nullptr;
+                    static SDL_Renderer* icons_ren = nullptr;
+                    static bool have_icons = false;
+                    if (icons_ren != ren) {
+                        icons = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, 64, 72);
+                        icons_ren = ren;
+                        have_icons = false;
+                    }
+                    if (icons && pane == 2 && pane_settled && !lb_v2_red_open()) {
+                        SDL_UpdateTexture(icons, nullptr, top + 64 * 256 + 144, 256 * 4);   // x 144..207, y 64..135
+                        have_icons = true;
+                    }
+                    for (int i = 0; i < nunits && i < 6; ++i) {
+                        const float ix = rx + 10 + (float)((i % 3) * 50), iy = ry + 6 + (float)((i / 3) * 54);
+                        // The game's Builds pane lays them out TWO to a row
+                        // (measured on a barracks: x 144 and 176, rows 32 apart).
+                        const float sx = (float)(144 + 32 * (i % 2)), sy = (float)(64 + 32 * (i / 2));
+                        const int cost = lb_v2_bp_cost(units[i]);
+                        const bool ok = cost >= 0 && bricks >= cost && !unit_off[i];
+                        if (have_icons && sy + 24.0f <= 136.0f)
+                            dl->AddImage(v2_id(icons), ImVec2(ix, iy), ImVec2(ix + 38, iy + 38),
+                                         ImVec2((sx - 144.0f) / 64.0f, (sy - 64.0f) / 72.0f),
+                                         ImVec2((sx - 144.0f + 24.0f) / 64.0f, (sy - 64.0f + 24.0f) / 72.0f),
+                                         ok ? IM_COL32(255, 255, 255, 255) : IM_COL32(150, 155, 165, 255));
+                        if (cost >= 0) {
+                            char cb[12];
+                            std::snprintf(cb, sizeof cb, "%d", cost);
+                            const float tw = (float)v2_digits_w(cb, 1);
+                            v2_digits(dl, ix + std::max(0.0f, (38.0f - tw) / 2.0f), iy + 40, cb,
+                                      ok ? IM_COL32(255, 255, 255, 255) : IM_COL32(150, 155, 165, 255), 1);
+                        }
+                        if (g_set.cancel_queue_click) {
+                            ImGui::SetCursorScreenPos(ImVec2(ix, iy));
+                            ImGui::PushID(900 + i);
+                            ImGui::InvisibleButton("##v2train", ImVec2(38, 51));
+                            if (ImGui::IsItemHovered()) {
+                                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) lb_quick_request(11 + i);
+                            }
+                            ImGui::PopID();
+                        }
+                    }
+                    // His queue strip: three slate boxes on the same baseplate,
+                    // each holding the game's own picture of that queued unit with
+                    // his red cancel mark; a click cancels it (request 40 + slot,
+                    // the queue button's own handler).
+                    int qr[3][4];
+                    int nq = lb_v2_queue(qr);
+                    const float qby = y + 256.0f;
+                    // Each queued unit's picture, as the game last drew it: the
+                    // square at the TOP of its slot (the slot runs on below it, in
+                    // the game's purple), kept so the open red list (which hides the
+                    // queue) shows it still.
+                    static SDL_Texture* qtex = nullptr;
+                    static SDL_Renderer* qtex_ren = nullptr;
+                    static int q_kept = 0, q_side[3] = {0, 0, 0};
+                    if (qtex_ren != ren) {
+                        qtex = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, 96, 32);
+                        qtex_ren = ren;
+                        q_kept = 0;
+                    }
+                    if (qtex && pane == 2 && pane_settled) {
+                        static uint32_t qbuf[96 * 32];
+                        std::fill(qbuf, qbuf + 96 * 32, 0u);
+                        for (int qi = 0; qi < nq; ++qi) {
+                            // The 24x24 head, centred across the slot at its top,
+                            // as the game draws it (the portraits' rule): the
+                            // slot's left corner was a strip of its purple.
+                            // Its top outline (eight black pixels, columns 8..15 of
+                        // its first row) found near the button's centre, as the
+                        // recolour finds it: the button is wider than the head.
+                        int x0 = qr[qi][0] + ((qr[qi][2] - qr[qi][0] + 1) - 24) / 2, y0 = qr[qi][1];
+                        {
+                            auto blk = [&](int X, int Y) {
+                                return X >= 0 && X <= 255 && Y >= 0 && Y <= 191 &&
+                                       (top[Y * 256 + X] & 0xFFFFFFu) == 0x181818u;
+                            };
+                            bool hit = false;
+                            for (int dy = -4; dy <= 4 && !hit; ++dy)
+                                for (int dx = -8; dx <= 8 && !hit; ++dx) {
+                                    const int X = x0 + dx, Y = qr[qi][1] + dy;
+                                    bool run = !blk(X + 7, Y) && !blk(X + 16, Y);
+                                    for (int i = 8; i <= 15 && run; ++i) run = blk(X + i, Y);
+                                    if (run) { x0 = X; y0 = Y; hit = true; }
+                                }
+                        }
+                        const int side = 24;
+                            q_side[qi] = side;
+                            for (int yy = 0; yy < side; ++yy)
+                                for (int xx = 0; xx < side; ++xx)
+                                    // Inside the round head only: his queue shows the
+                                    // head on the slate, without the slot's backdrop.
+                                    if (x0 + xx >= 0 && x0 + xx < 256 && y0 + yy >= 0 && y0 + yy < 192 &&
+                                        (2 * xx - 23) * (2 * xx - 23) + (2 * yy - 23) * (2 * yy - 23) <= 25 * 25)
+                                        qbuf[yy * 96 + qi * 32 + xx] = top[(y0 + yy) * 256 + x0 + xx];
+                        }
+                        SDL_UpdateTexture(qtex, nullptr, qbuf, 96 * 4);
+                        q_kept = nq;
+                    } else if (listing) {
+                        nq = q_kept;
+                    }
+                    // His red brick progress bar beside the strip while training:
+                    // eight studded segments, lit as the unit comes along.
+                    const int prog = nq > 0 ? lb_v2_train_progress() : -1;
+                    if (prog >= 0) {
+                        const float bx0 = x + 220, by0 = qby + 20, bw = 142, bh = 24;
+                        v2_fill(dl, bx0, by0, bw, bh, IM_COL32(8, 10, 16, 255));
+                        const float iw = bw - 4, ih = bh - 4, pitch = iw / 8.0f;
+                        const int lit = (int)std::lround(prog / 1000.0 * 8.0);
+                        for (int sgi = 0; sgi < 8; ++sgi) {
+                            const float sx0 = bx0 + 2 + std::round(sgi * pitch), nx = bx0 + 2 + std::round((sgi + 1) * pitch);
+                            const float sw = std::max(4.0f, nx - sx0 - 1);
+                            const bool on = sgi < lit;
+                            const ImU32 body = on ? IM_COL32(222, 34, 34, 255) : IM_COL32(104, 118, 140, 255);
+                            const ImU32 hi = on ? IM_COL32(255, 126, 118, 255) : IM_COL32(158, 172, 194, 255);
+                            const ImU32 lo = on ? IM_COL32(126, 12, 16, 255) : IM_COL32(62, 72, 90, 255);
+                            const ImU32 stud = on ? IM_COL32(248, 66, 58, 255) : IM_COL32(132, 146, 168, 255);
+                            v2_fill(dl, sx0, by0 + 2, sw, ih, body);
+                            v2_fill(dl, sx0, by0 + 2, sw, 2, hi);
+                            v2_fill(dl, sx0, by0 + 2 + ih - 2, sw, 2, lo);
+                            v2_fill(dl, sx0 + sw - 1, by0 + 2, 1, ih, lo);
+                            const float stw = std::max(3.0f, std::floor(sw / 2)), sth = std::max(2.0f, std::floor(ih / 3));
+                            const float stx = sx0 + std::floor((sw - stw) / 2), sty = by0 + 3;
+                            v2_fill(dl, stx, sty, stw, sth, stud);
+                            v2_fill(dl, stx, sty, std::max(1.0f, std::floor(stw / 2)), 1, IM_COL32(245, 235, 235, 220));
+                        }
+                    }
+                    for (int qi = 0; qi < 3; ++qi) {
+                        const float bx = x + 23 + (float)(qi * 64), by = qby + 7;
+                        v2_slate(dl, bx, by, 50, 50, red, true);
+                        if (qi >= nq) continue;
+                        if (qtex && q_side[qi] > 0)
+                            dl->AddImage(v2_id(qtex), ImVec2(bx + 4, by + 4), ImVec2(bx + 46, by + 46),
+                                         ImVec2((float)(qi * 32) / 96.0f, 0.0f),
+                                         ImVec2((float)(qi * 32 + q_side[qi]) / 96.0f, (float)q_side[qi] / 32.0f));
+                        const float cx = bx + 50 - 16, cy = by + 50 - 16;
+                        v2_fill(dl, cx, cy, 15, 15, IM_COL32(225, 26, 26, 255));
+                        v2_outline(dl, cx, cy, 15, 15, IM_COL32(18, 12, 14, 255));
+                        v2_outline(dl, cx + 2, cy + 2, 11, 11, IM_COL32(18, 12, 14, 255));
+                        dl->AddLine(ImVec2(cx + 3, cy + 3), ImVec2(cx + 11, cy + 11), IM_COL32(18, 12, 14, 255), 1.0f);
+                        dl->AddLine(ImVec2(cx + 4, cy + 3), ImVec2(cx + 11, cy + 10), IM_COL32(18, 12, 14, 255), 1.0f);
+                        if (g_set.cancel_queue_click) {
+                            ImGui::SetCursorScreenPos(ImVec2(bx, by));
+                            ImGui::PushID(950 + qi);
+                            ImGui::InvisibleButton("##v2cancel", ImVec2(50, 50));
+                            if (ImGui::IsItemHovered()) {
+                                ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+                                ImGui::SetTooltip("Click to cancel this unit\nand get its bricks back");
+                                if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) lb_quick_request(40 + qi);
+                            }
+                            ImGui::PopID();
+                        }
+                    }
+                } else if (right_box) {
+                    const float rx = x + 199, ry = y + 87;
+                    v2_slate(dl, rx, ry, 162, 146, red, true);
+                    const float px = rx + 8;
+                    // Not the minimap: the panel of its own shows that (the
+                    // owner's "double minimap").
+                    if (pane_settled) {
+                        dl->AddImage(v2_id(g_top_tex), ImVec2(px, ry), ImVec2(px + 146, ry + 146),
+                                     ImVec2(136.0f / 256.0f, 40.0f / 192.0f), ImVec2(232.0f / 256.0f, 136.0f / 192.0f));
+                        top_click_spots(ImVec2(px - 136.0f * s, ry - 40.0f * s), s, s, 136.0f, 40.0f, 232.0f, 136.0f);
+                    }
+                }
+            }
+            v2_drag(2, &ox, &oy, -1, 1);
+            if (g_v2_drag == 2) {
+                g_set.v2_card_x = ox;
+                g_set.v2_card_y = oy;
+            }
+        }
+        ImGui::End();
+    }
+    ImGui::PopStyleVar(3);
+    return want_mm && want_card;
+}
+
 void draw_top_screen(SDL_Renderer* renderer) {
+    if (renderer)
+        if (SDL_Window* win = SDL_RenderGetWindow(renderer)) g_v2_win_id = SDL_GetWindowID(win);
+    v2_send_tick();   // docs/506
     // SG-0072: the window follows the setting, the overlay checkbox, and
     // Enhanced. Not wanted: closed. Wanted but the panel is hidden: hidden.
     const bool own = top_own_wanted() && g_set.enhanced;
@@ -6956,6 +8598,8 @@ void draw_top_screen(SDL_Renderer* renderer) {
     if (!g_top_visible || !g_top_pixels || g_top_w <= 0 || g_top_h <= 0) return;
     // DS Vanilla shows the top screen above the bottom one already.
     if (!g_set.enhanced) return;
+    // docs/506: a film in the cutscene theatre is already in the main window.
+    if (lb_visuals_theatre_active()) return;
 
     if (!g_top_tex || g_top_tex_w != g_top_w || g_top_tex_h != g_top_h) {
         if (g_top_tex) SDL_DestroyTexture(g_top_tex);
@@ -7127,6 +8771,8 @@ void draw_top_screen(SDL_Renderer* renderer) {
     }
     SDL_UpdateTexture(g_top_tex, nullptr, top_src,
                       g_top_w * (int)sizeof(uint32_t));
+    // docs/506: Visuals 2.0's PC HUD replaces the panel in battle.
+    if (pc_hud_draw((const uint32_t*)top_src, renderer)) return;
 
     // Lower-right on first run, by design. Movable and
     // resizable after that, and ImGui remembers it for the session.
@@ -7252,69 +8898,9 @@ void draw_top_screen(SDL_Renderer* renderer) {
         // Each spot is an InvisibleButton, so a press on one is a click on an
         // item and does not start dragging the panel by its picture, which a
         // press on the bare Image does.
-        if (g_set.cancel_queue_click && sx > 0.0f && sy > 0.0f) {
+        if (sx > 0.0f && sy > 0.0f) {
             const ImVec2 i0 = pic_item0;
-            const ImVec2 img0(i0.x + ib, i0.y + ib);
-            int btn[24 * 5];
-            const int nb = lb_top_buttons(btn, 24);
-            for (int k = 0; k < nb; ++k) {
-                const int id = btn[k * 5];
-                const float x0 = (float)btn[k * 5 + 1], y0 = (float)btn[k * 5 + 2];
-                const float x1 = (float)btn[k * 5 + 3], y1 = (float)btn[k * 5 + 4];
-                if (x1 <= x0 || y1 <= y0) continue;
-                ImGui::SetCursorScreenPos(
-                    ImVec2(img0.x + x0 * sx, img0.y + y0 * sy));
-                ImGui::PushID(id);
-                ImGui::InvisibleButton("##topbtn",
-                                       ImVec2((x1 - x0) * sx, (y1 - y0) * sy),
-                                       ImGuiButtonFlags_MouseButtonLeft |
-                                           ImGuiButtonFlags_MouseButtonRight);
-                if (ImGui::IsItemHovered()) {
-                    ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-                    const bool occupant = id >= 730 && lb_top_occupants();
-                    ImGui::SetTooltip(
-                        id >= 730 && id <= 732 && !occupant
-                            ? "Click to cancel this unit\nand get its bricks back"
-                        : id >= 730
-                            ? "Click to unload this unit\nfrom the transport"
-                        : id <= 721
-                            ? "Click to take this unit\nout of the selection"
-                            : "Click to use this button");
-                    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
-                        ImGui::IsMouseClicked(ImGuiMouseButton_Right))
-                        lb_quick_request(id >= 730 && id <= 732 ? 40 + (id - 730)
-                                                               : 50 + (id - 713));
-                }
-                ImGui::PopID();
-            }
-            // The minimap: the 96x96 square at (136,40) the cartridge's own tap
-            // handler takes. A click, or a drag across it, centres the camera.
-            if (lb_top_minimap()) {
-                ImGui::SetCursorScreenPos(
-                    ImVec2(img0.x + 136.0f * sx, img0.y + 40.0f * sy));
-                ImGui::InvisibleButton("##topmap", ImVec2(96.0f * sx, 96.0f * sy),
-                                       ImGuiButtonFlags_MouseButtonLeft);
-                if (ImGui::IsItemHovered() || ImGui::IsItemActive()) {
-                    ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
-                    if (!ImGui::IsItemActive())
-                        ImGui::SetTooltip("Click to move the camera here");
-                }
-                if (ImGui::IsItemActive() &&
-                    ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                    const ImVec2 mp = ImGui::GetIO().MousePos;
-                    int lx = (int)std::floor((mp.x - img0.x) / sx) - 136;
-                    int ly = (int)std::floor((mp.y - img0.y) / sy) - 40;
-                    lx = lx < 0 ? 0 : (lx > 95 ? 95 : lx);
-                    ly = ly < 0 ? 0 : (ly > 95 ? 95 : ly);
-                    static int last_x = -1, last_y = -1;
-                    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) ||
-                        lx != last_x || ly != last_y) {
-                        last_x = lx;
-                        last_y = ly;
-                        lb_quick_request(1000 + ly * 96 + lx);
-                    }
-                }
-            }
+            top_click_spots(ImVec2(i0.x + ib, i0.y + ib), sx, sy, 0.0f, 0.0f, 256.0f, 192.0f);
         }
 
         // The corrected camera box. The cartridge draws its own indicator sized
@@ -9498,6 +11084,19 @@ void tab_balance_presets() {
     ImGui::SetItemTooltip("Saves this cartridge's own Entities.ebp with your values\n"
                           "in it. Only what the Balance menus cover; presets are not.");
     ImGui::SameLine();
+    // SG-0144: spells and the Gold Brick are not in Entities.ebp.
+    if (ImGui::Button("Export spells and Gold Brick as cheat codes...")) {
+        if (lb_pick_text_save_file(g_bal_path, (int)sizeof g_bal_path)) {
+            char msg[320];
+            g_bal_msg_bad = lb_balance_export_ar(g_bal_path, msg, (int)sizeof msg) < 0;
+            g_bal_msg = msg;
+        }
+    }
+    ImGui::SetItemTooltip("Saves your spell and Gold Brick values as Action Replay\n"
+                          "codes (a text file), for a DS cheat device, a flashcart's\n"
+                          "cheat menu or an emulator. An Entities.ebp cannot hold\n"
+                          "them: they are in the game's code.");
+    ImGui::SameLine();
     ImGui::BeginDisabled(lb_balance_custom_blocked() != nullptr);
     if (ImGui::Button("Import my balance (.json)...")) {
         if (lb_pick_json_file(g_bal_path, (int)sizeof g_bal_path, 0)) {
@@ -10901,7 +12500,7 @@ const char* const kPackKeysRules[] = {
     nullptr};
 const char* const kPackKeysAi[] = {
     "ai_hero_rebuild", "ai_more_mines", "ai_cross_fire", "ai_bridges", "ai_shipyards", "ai_finish_upgrades",
-    "ai_keep_bridges", "ai_stuck_bridges", "ai_transports_on_request", "ai_fewer_farms", "ai_cheats", "ai_cheats_only",
+    "ai_keep_bridges", "ai_stuck_bridges", "ai_transports_on_request", "ai_fewer_farms", "ai_gold_trees", "ai_cheats", "ai_cheats_only",
     "ai_tap_spells", nullptr};
 const char* const kPackKeysCaps[] = {"cap", "cheat", nullptr};
 const char* const kPackKeysBans[] = {
@@ -12159,6 +13758,7 @@ extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
     lb_sfx_tick();   // docs/427: decode the chosen notification sound
     lb_matchpic_tick();   // docs/428: LB_MATCHPIC_TEST only
     upd_startup_tick();   // docs/430: the quiet update check
+    news_tick();          // SG-0151: community announcements
     lb_discord_tick();    // docs/430: Discord Rich Presence
 
     if (g_ready) save_cache_tick();   // docs/388: the save's recent armies
@@ -12259,7 +13859,8 @@ extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
                               (int)(c - x), x);
                 g_set.master_port = std::atoi(c + 1);
                 g_set.master_both = false;
-                g_set.master_https = false;
+                // BR-0111: LB_TEST_WSS is a local server over HTTPS, so HTTPS stays on.
+                g_set.master_https = std::getenv("LB_TEST_WSS") != nullptr;
             }
         }
         // docs/419: LB_EXTRA_SERVER is in place before the self-test runs.
@@ -12486,6 +14087,8 @@ extern "C" void lb_overlay_draw(SDL_Window* window, SDL_Renderer* renderer) {
         maps_sync_local();   // docs/429
     }
     if (g_visible) draw_panels();
+    v2_cmd_tick();          // docs/506: a command key's blue button
+    lb_visuals_overlay();   // docs/506: Visuals 2.0's victory fireworks
     ImGui::Render();
     ImDrawData* draw = ImGui::GetDrawData();
 
@@ -12559,16 +14162,191 @@ bool quick_in_battle() {
 }
 
 // Returns true when the event was a shortcut (and so is consumed).
+extern "C" int lb_v2_blue_open(void);         // lb_patches.cpp, docs/506
+extern "C" int lb_v2_blue_index(int id);
+int g_v2_centre_frames = 0;   // frames until the camera goes to the selection
+bool g_v2_ctrl_held = false;   // a Ctrl key is down (docs/506's Ctrl+1..3)
+extern "C" int lb_v2_selection_minimap(int* lx, int* ly);   // lb_patches.cpp, docs/506
+int g_v2_cmd_widget = 0;   // a blue button a command key is waiting to click
+int g_v2_cmd_frames = 0;
+// Once a frame: click the waiting blue button once its list is open.
+void v2_cmd_tick() {
+    // Jaime brings the camera to what a selection key picked: once the game
+    // has taken the selection, the minimap tap (the game's own) at its first unit.
+    if (g_v2_centre_frames > 0 && --g_v2_centre_frames == 0) {
+        int lx = 0, ly = 0;
+        if (lb_v2_selection_minimap(&lx, &ly)) lb_quick_request(1000 + ly * 96 + lx);
+    }
+    if (!g_v2_cmd_widget) return;
+    if (--g_v2_cmd_frames <= 0) {
+        g_v2_cmd_widget = 0;
+        return;
+    }
+    static const bool log = std::getenv("LB_QUICKLOG") != nullptr;
+    if (log)
+        std::fprintf(stderr, "[lb_v2] command key: widget %d, %d frames left, blue open %d, index %d\n",
+                     g_v2_cmd_widget, g_v2_cmd_frames, lb_v2_blue_open(), lb_v2_blue_index(g_v2_cmd_widget));
+    if (!lb_v2_blue_open()) return;
+    // The list may still be sliding in: wait until it lists the button (or
+    // the frames run out -- this unit's list may not have it at all).
+    const int n = lb_v2_blue_index(g_v2_cmd_widget);
+    if (n <= 0) return;
+    lb_quick_request(20 + n);   // blue item n
+    g_v2_cmd_widget = 0;
+}
+
+// docs/506: the music mute (Jaime's M), read by the SPU mix (spu.cpp).
+bool g_music_muted = false;
+extern "C" int lb_music_muted(void) { return g_music_muted ? 1 : 0; }
+
+// docs/506, Jaime's middle-drag: where the drag began, and where it is.
+bool g_v2_pan_on = false;
+int g_v2_pan_x0 = 0, g_v2_pan_y0 = 0, g_v2_pan_x = 0, g_v2_pan_y = 0;
+extern "C" int lb_v2_pan_keys(void) {
+    if (!g_v2_pan_on) return 0;
+    // Grab semantics, as his: drag the mouse left and the view moves right.
+    // The KEYINPUT bits: Right 0x10, Left 0x20, Up 0x40, Down 0x80.
+    const int dx = g_v2_pan_x - g_v2_pan_x0, dy = g_v2_pan_y - g_v2_pan_y0, dead = 12;
+    int bits = 0;
+    if (dx < -dead) bits |= 0x10;
+    if (dx > dead) bits |= 0x20;
+    if (dy < -dead) bits |= 0x80;
+    if (dy > dead) bits |= 0x40;
+    return bits;
+}
+
+// ---- docs/506: Jaime's controls, as the player binds them -------------------
+// Is a battle on (its view updating)? Every action but the music needs one;
+// outside it a bound key keeps whatever job it otherwise has.
+static bool v2_in_battle() {
+    static unsigned seq = 0;
+    static uint32_t ms = 0;
+    if (lb_top_battle_seq() != seq) {
+        seq = lb_top_battle_seq();
+        ms = SDL_GetTicks();
+    }
+    return SDL_GetTicks() - ms < 500u;
+}
+// The action bound to this key event (with its modifiers), or -1.
+static int v2_key_action(const SDL_Event* event) {
+    if (event->type != SDL_KEYDOWN || event->key.repeat) return -1;
+    const int sc = (int)event->key.keysym.scancode;
+    const uint16_t mod = event->key.keysym.mod;
+    const int v = sc | (((mod & KMOD_CTRL) || g_v2_ctrl_held) ? kV2Ctrl : 0) | ((mod & KMOD_SHIFT) ? kV2Shift : 0) |
+                  ((mod & KMOD_ALT) ? kV2Alt : 0);
+    for (int i = 0; i < kV2N; ++i)
+        if ((g_set.v2_key[i] & 0xFFFF) && g_set.v2_key[i] == v) return i;
+    return -1;
+}
+// Does a bound key take this event in a battle (so F1's menu, say, gives way)?
+bool v2_takes_key(const SDL_Event* event) {
+    const int a = v2_key_action(event);
+    return a >= 0 && (a == kV2Mute || v2_in_battle());
+}
+static void v2_run(int a) {
+    switch (a) {
+        case kV2Hero: {   // the camera to the hero, by the game's own minimap tap
+            const int local = (int)(bus_read_u32(0x02156A24u + 100u) & 0xFFu);
+            int o = 0, c = 0, x = 0, y = 0;
+            for (int i = 0; i < 512 && lb_field_entity_at(i, &o, &c, &x, &y); ++i) {
+                if (o != local || c != 0) continue;
+                float ax = 0.0f, ay = 0.0f;
+                lb_field_map_to_minimap(x, y, &ax, &ay);
+                const int lx = (int)ax - 136, ly = (int)ay - 40;
+                if (lx >= 0 && lx < 96 && ly >= 0 && ly < 96) lb_quick_request(1000 + ly * 96 + lx);
+                break;
+            }
+            break;
+        }
+        case kV2Mute: g_music_muted = !g_music_muted; break;
+        case kV2Stop:
+        case kV2Attack:   // the blue list's own button, by its widget id
+            g_v2_cmd_widget = a == kV2Stop ? 616 : 619;
+            g_v2_cmd_frames = 20;
+            if (!lb_v2_blue_open()) lb_quick_request(kQuickBlue);
+            break;
+        case kV2Unload: lb_quick_request(50 + (733 - 713)); break;   // the first occupant's unload button
+        case kV2SelHero: case kV2SelBuilder: case kV2SelArmy:
+            lb_quick_request(20000 + (a - kV2SelHero));
+            g_v2_centre_frames = 12;   // then the camera to it
+            break;
+        case kV2Set1: case kV2Set2: case kV2Set3: lb_quick_request(20010 + (a - kV2Set1)); break;
+        case kV2Rec1: case kV2Rec2: case kV2Rec3:
+            lb_quick_request(20020 + (a - kV2Rec1));
+            g_v2_centre_frames = 12;
+            break;
+        default: break;
+    }
+}
+// The pan: a bound button, or a bound key, held; the drag measured from where
+// it began (lb_v2_pan_keys turns it into the d-pad).
+static void v2_pan_begin() {
+    int x = 0, y = 0;
+    SDL_GetMouseState(&x, &y);
+    const ImVec2 mp = ImGui::GetIO().MousePos;
+    if (mp.x > -1000.0f) {
+        x = (int)mp.x;
+        y = (int)mp.y;
+    }
+    g_v2_pan_on = true;
+    g_v2_pan_x0 = g_v2_pan_x = x;
+    g_v2_pan_y0 = g_v2_pan_y = y;
+}
+bool v2_event(const SDL_Event* event, const ImGuiIO& io) {
+    // Ctrl from its own key events as well as the modifier state: an event
+    // pushed into the queue (a test harness, an injector) carries no modifiers.
+    if ((event->type == SDL_KEYDOWN || event->type == SDL_KEYUP) &&
+        (event->key.keysym.scancode == SDL_SCANCODE_LCTRL || event->key.keysym.scancode == SDL_SCANCODE_RCTRL))
+        g_v2_ctrl_held = event->type == SDL_KEYDOWN;
+    if (event->type == SDL_MOUSEMOTION && g_v2_pan_on) {
+        g_v2_pan_x = event->motion.x;
+        g_v2_pan_y = event->motion.y;
+    }
+    const int pan_key = g_set.v2_key[kV2Pan] & 0xFFFF, pan_btn = g_set.v2_mouse[kV2Pan];
+    if (event->type == SDL_KEYUP && pan_key && (int)event->key.keysym.scancode == pan_key && g_v2_pan_on) {
+        g_v2_pan_on = false;
+        return true;
+    }
+    if (event->type == SDL_MOUSEBUTTONUP && pan_btn && event->button.button == pan_btn && g_v2_pan_on) {
+        g_v2_pan_on = false;
+        return true;
+    }
+    if (event->type == SDL_KEYDOWN && !io.WantCaptureKeyboard) {
+        if (event->key.repeat) return v2_key_action(event) >= 0 && v2_in_battle();   // swallow a held key's repeats
+        const int a = v2_key_action(event);
+        if (a < 0 || (a != kV2Mute && !v2_in_battle())) return false;
+        if (a == kV2Pan) v2_pan_begin();
+        else if (a != kV2Send) v2_run(a);
+        return true;
+    }
+    if (event->type == SDL_MOUSEBUTTONDOWN && event->button.button != SDL_BUTTON_LEFT && !io.WantCaptureMouse) {
+        for (int a = 0; a < kV2N; ++a) {
+            if (!g_set.v2_mouse[a] || event->button.button != g_set.v2_mouse[a]) continue;
+            if (a == kV2Send) return false;   // the minimaps take it (ImGui)
+            if (a != kV2Mute && !v2_in_battle()) return false;
+            if (a == kV2Pan) v2_pan_begin();
+            else v2_run(a);
+            return true;
+        }
+    }
+    if (event->type == SDL_MOUSEBUTTONUP && event->button.button != SDL_BUTTON_LEFT)
+        for (int a = 0; a < kV2N; ++a)
+            if (g_set.v2_mouse[a] && event->button.button == g_set.v2_mouse[a] && a != kV2Send) return true;
+    return false;
+}
+
 bool quick_event(const SDL_Event* event, const ImGuiIO& io) {
     // BR-0043: no display-mode test. These are input conveniences that call
     // the game's own widget callbacks, which exist in DS Vanilla as well; only
     // the "Battle shortcuts" setting turns them off.
+    if (v2_event(event, io)) return true;   // docs/506: Jaime's controls, as bound
     if (!g_set.quick_keys) return false;
     int action = kQuickNone;
     const int sc = event->type == SDL_KEYDOWN ? (int)event->key.keysym.scancode : -1;
     const bool key = event->type == SDL_KEYDOWN && event->key.repeat == 0 &&
                      !io.WantCaptureKeyboard && lb_binding_key_bit(sc) == 0;   // not a DS button
-    if (key && g_set.quick_bind[9] && sc == g_set.quick_bind[9]) {
+    if (false) {
+    } else if (key && g_set.quick_bind[9] && sc == g_set.quick_bind[9]) {
         action = kQuickDeselect;
     } else if (key && g_set.quick_bind[10] && sc == g_set.quick_bind[10]) {
         action = kQuickBlue;     // SG-0049
@@ -12612,6 +14390,55 @@ extern "C" bool lb_overlay_event(const SDL_Event* event) {
         (int)event->key.keysym.scancode != g_set.chat_key)
         g_chat_eat_text = false;
 
+    // docs/506: binding one of Jaime's controls. A key with the modifiers held
+    // (a lone Ctrl, Shift or Alt waits for the key); a mouse button: middle,
+    // right, Mouse 4 or 5. Esc cancels, Delete clears. What it takes leaves any
+    // other of these, and the shortcuts above, it was on.
+    if (g_rebinding_v2 >= 0 && event->type == SDL_KEYDOWN && event->key.repeat == 0) {
+        const SDL_Scancode sc = event->key.keysym.scancode;
+        if (sc == SDL_SCANCODE_LCTRL || sc == SDL_SCANCODE_RCTRL || sc == SDL_SCANCODE_LSHIFT ||
+            sc == SDL_SCANCODE_RSHIFT || sc == SDL_SCANCODE_LALT || sc == SDL_SCANCODE_RALT) {
+            if (sc == SDL_SCANCODE_LCTRL || sc == SDL_SCANCODE_RCTRL) g_v2_ctrl_held = true;
+            return true;
+        }
+        if (event->key.keysym.sym != SDLK_ESCAPE) {
+            const uint16_t mod = event->key.keysym.mod;
+            const int v = sc == SDL_SCANCODE_DELETE ? 0
+                          : (int)sc | (((mod & KMOD_CTRL) || g_v2_ctrl_held) ? kV2Ctrl : 0) |
+                                ((mod & KMOD_SHIFT) ? kV2Shift : 0) | ((mod & KMOD_ALT) ? kV2Alt : 0);
+            for (int i = 0; i < kV2N; ++i)
+                if (i != g_rebinding_v2 && v && g_set.v2_key[i] == v) g_set.v2_key[i] = 0;
+            for (int i = 0; i < 12; ++i)
+                if (v && g_set.quick_bind[i] == v) g_set.quick_bind[i] = 0;
+            g_set.v2_key[g_rebinding_v2] = v;
+        }
+        g_rebinding_v2 = -1;
+        return true;
+    }
+    if (g_rebinding_v2_mouse >= 0) {
+        if (event->type == SDL_MOUSEBUTTONDOWN && event->button.button != SDL_BUTTON_LEFT) {
+            const int b = event->button.button;
+            if (b >= SDL_BUTTON_MIDDLE && b <= SDL_BUTTON_X2) {
+                for (int i = 0; i < kV2N; ++i)
+                    if (i != g_rebinding_v2_mouse && g_set.v2_mouse[i] == b) g_set.v2_mouse[i] = 0;
+                for (int i = 0; i < 12; ++i)
+                    if (g_set.quick_mouse[i] == b) g_set.quick_mouse[i] = 0;
+                g_set.v2_mouse[g_rebinding_v2_mouse] = b;
+            }
+            g_rebinding_v2_mouse = -1;
+            return true;
+        }
+        if (event->type == SDL_MOUSEBUTTONUP && event->button.button != SDL_BUTTON_LEFT) return true;
+        if (event->type == SDL_KEYDOWN && event->key.repeat == 0) {
+            if (event->key.keysym.scancode == SDL_SCANCODE_DELETE) g_set.v2_mouse[g_rebinding_v2_mouse] = 0;
+            if (event->key.keysym.scancode == SDL_SCANCODE_DELETE || event->key.keysym.sym == SDLK_ESCAPE) {
+                g_rebinding_v2_mouse = -1;
+                return true;
+            }
+        }
+        if (event->type == SDL_MOUSEBUTTONDOWN && event->button.button == SDL_BUTTON_LEFT && !ImGui::IsAnyItemHovered())
+            g_rebinding_v2_mouse = -1;
+    }
     // SG-0074: a shortcut's mouse rebind takes the next middle, right, Mouse 4
     // or Mouse 5 press; a left click elsewhere cancels it, Esc too, Delete clears.
     if (g_rebinding_quick_mouse >= 0 && g_rebinding_quick_mouse < 12) {
@@ -12621,6 +14448,8 @@ extern "C" bool lb_overlay_event(const SDL_Event* event) {
                 for (int i = 0; i < 12; ++i)
                     if (i != g_rebinding_quick_mouse && g_set.quick_mouse[i] == b)
                         g_set.quick_mouse[i] = 0;   // one button, one shortcut
+                for (int i = 0; i < kV2N; ++i)
+                    if (g_set.v2_mouse[i] == b) g_set.v2_mouse[i] = 0;   // docs/506
                 g_set.quick_mouse[g_rebinding_quick_mouse] = b;
             }
             g_rebinding_quick_mouse = -1;
@@ -12667,6 +14496,8 @@ extern "C" bool lb_overlay_event(const SDL_Event* event) {
                 for (int i = 0; i < 12; ++i)
                     if (i != g_rebinding_quick && v && g_set.quick_bind[i] == v)
                         g_set.quick_bind[i] = 0;   // one key, one shortcut
+                for (int i = 0; i < kV2N; ++i)
+                    if (v && g_set.v2_key[i] == v) g_set.v2_key[i] = 0;   // docs/506
                 g_set.quick_bind[g_rebinding_quick] = v;
             }
             g_rebinding_quick = -1;
@@ -12724,7 +14555,9 @@ extern "C" bool lb_overlay_event(const SDL_Event* event) {
             return true;
         }
 
-        if (k == SDLK_F1 || k == SDLK_ESCAPE) {
+        // docs/506: F1 bound to one of Jaime's controls is that, in a battle;
+        // the menu is still on Escape.
+        if ((k == SDLK_F1 && !v2_takes_key(event)) || k == SDLK_ESCAPE) {
             g_visible = !g_visible;
             return true;
         }
@@ -13231,7 +15064,7 @@ extern "C" int lb_binding_pad_bit(int button) {
 }
 
 extern "C" int lb_setting_balance_patch(void) {
-    return g_set.balance_patch;
+    return play_set().balance_patch;
 }
 
 // lb_setting_fit_all and its LB_FIT environment variable are REMOVED.
@@ -13284,6 +15117,17 @@ extern "C" int lb_ff_extra_frames(void) {
 // docs/451: HUD lists stay open when the selection shrinks.
 extern "C" int lb_setting_tabs_stay_open(void) {
     return g_set.tabs_stay_open ? 1 : 0;
+}
+
+// SG-0154 (docs/509): Attack Move. What a tap runs is attack_move_effective
+// in lb_patches.cpp (a replay's kind 33, else this).
+extern "C" int lb_setting_attack_move(void) {
+    static int forced = -2;   // LB_ATTACK_MOVE=0|1 forces it (test aid)
+    if (forced == -2) {
+        const char* v = std::getenv("LB_ATTACK_MOVE");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.attack_move ? 1 : 0);
 }
 
 // docs/351: steady 30 Hz game pacing. Read every VBlank by apply_cadence
@@ -13389,6 +15233,48 @@ extern "C" int lb_setting_master_https(void) {
 }
 extern "C" const char* lb_overlay_player_name(void) { return mp_player_name(); }
 
+// docs/506: Visuals 2.0's cutscene parts. LB_V2_THEATRE / LB_V2_UPSCALE = 0|1
+// force them (test aids). The theatre needs Enhanced: DS Vanilla already shows
+// the top screen, film and all.
+static int lb_env_forced(const char* name) {
+    const char* v = std::getenv(name);
+    return v ? (std::atoi(v) ? 1 : 0) : -1;
+}
+extern "C" int lb_setting_v2_movie_theatre(void) {
+    static const int forced = lb_env_forced("LB_V2_THEATRE");
+    const int on = forced >= 0 ? forced : (g_set.v2_movie_theatre ? 1 : 0);
+    return on && g_set.enhanced ? 1 : 0;
+}
+extern "C" int lb_setting_v2_fireworks(void) {
+    static const int forced = lb_env_forced("LB_V2_FIREWORKS");
+    return forced >= 0 ? forced : (g_set.v2_fireworks ? 1 : 0);
+}
+extern "C" int lb_setting_v2_spell_shake(void) {
+    static const int forced = lb_env_forced("LB_V2_SHAKE");
+    const int on = forced >= 0 ? forced : (g_set.v2_spell_shake ? 1 : 0);
+    return on && g_set.enhanced ? 1 : 0;
+}
+// LB_V2_HUD forces all three parts (test aid).
+extern "C" int lb_setting_v2_hud_bar(void) {
+    static const int forced = lb_env_forced("LB_V2_HUD");
+    const int on = forced >= 0 ? forced : (g_set.v2_hud_bar ? 1 : 0);
+    return on && g_set.enhanced ? 1 : 0;
+}
+extern "C" int lb_setting_v2_hud_minimap(void) {
+    static const int forced = lb_env_forced("LB_V2_HUD");
+    const int on = forced >= 0 ? forced : (g_set.v2_hud_minimap ? 1 : 0);
+    return on && g_set.enhanced ? 1 : 0;
+}
+extern "C" int lb_setting_v2_hud_card(void) {
+    static const int forced = lb_env_forced("LB_V2_HUD");
+    const int on = forced >= 0 ? forced : (g_set.v2_hud_card ? 1 : 0);
+    return on && g_set.enhanced ? 1 : 0;
+}
+extern "C" int lb_setting_v2_movie_upscale(void) {
+    static const int forced = lb_env_forced("LB_V2_UPSCALE");
+    return forced >= 0 ? forced : (g_set.v2_movie_upscale ? 1 : 0);
+}
+
 extern "C" int lb_setting_smooth_models(void) {   // docs/411; LB_SMOOTH_MODELS
     static int forced = -2;
     if (forced == -2) {
@@ -13490,7 +15376,7 @@ extern "C" int lb_setting_attack_boost_ranged(void) {
         const char* v = std::getenv("LB_ATTACKBOOST");
         forced = v ? std::atoi(v) : -1;
     }
-    const int m = forced >= 0 ? forced : g_set.attack_boost_ranged;
+    const int m = forced >= 0 ? forced : play_set().attack_boost_ranged;
     return m < 0 ? 0 : (m > 2 ? 2 : m);   // docs/433: 2 = not the blast
 }
 
@@ -13508,7 +15394,7 @@ extern "C" int lb_setting_hotwire_transport(void) {
             if (n >= 0 && n <= 2) forced = n;
         }
     }
-    return forced >= 0 ? forced : g_set.hotwire_transport;
+    return forced >= 0 ? forced : play_set().hotwire_transport;
 }
 
 // docs/406: this machine's EMP-on-transports choice (LB_EMP_TRANSPORTS=0|1
@@ -13520,7 +15406,7 @@ extern "C" int lb_setting_emp_transports(void) {
         const char* v = std::getenv("LB_EMP_TRANSPORTS");
         forced = v ? (std::atoi(v) ? 1 : 0) : -1;
     }
-    return forced >= 0 ? forced : (g_set.emp_transports ? 1 : 0);
+    return forced >= 0 ? forced : (play_set().emp_transports ? 1 : 0);
 }
 
 // SG-0077: this machine's choice (LB_MANY_MINES=0|1 forces it); a match runs
@@ -13531,7 +15417,7 @@ extern "C" int lb_setting_many_mines(void) {
         const char* v = std::getenv("LB_MANY_MINES");
         forced = v ? (std::atoi(v) ? 1 : 0) : -1;
     }
-    return forced >= 0 ? forced : (g_set.many_mines ? 1 : 0);
+    return forced >= 0 ? forced : (play_set().many_mines ? 1 : 0);
 }
 extern "C" int lb_many_mines_live(void) {
     const int host = lb_rules_host_flags();
@@ -13548,7 +15434,7 @@ extern "C" int lb_setting_stun_cast(void) {
         const char* v = std::getenv("LB_STUN_CAST");
         forced = v ? (std::atoi(v) ? 1 : 0) : -1;
     }
-    return forced >= 0 ? forced : (g_set.stun_cast ? 1 : 0);
+    return forced >= 0 ? forced : (play_set().stun_cast ? 1 : 0);
 }
 
 // docs/488: Soldiers Repair Buildings (SG-0111, LB_ANY_REPAIR=0|1 forces it)
@@ -13561,7 +15447,7 @@ extern "C" int lb_setting_any_unit_repairs(void) {
         const char* v = std::getenv("LB_ANY_REPAIR");
         forced = v ? (std::atoi(v) ? 1 : 0) : -1;
     }
-    return forced >= 0 ? forced : (g_set.any_unit_repairs ? 1 : 0);
+    return forced >= 0 ? forced : (play_set().any_unit_repairs ? 1 : 0);
 }
 // docs/497 (SG-0123): Smarter Unit Movement, this machine's choice
 // (LB_SMART_MOVE=0|1 forces it). What a match runs is lb_smart_move_live.
@@ -13571,7 +15457,7 @@ extern "C" int lb_setting_smart_move(void) {
         const char* v = std::getenv("LB_SMART_MOVE");
         forced = v ? (std::atoi(v) ? 1 : 0) : -1;
     }
-    return forced >= 0 ? forced : (g_set.smart_move ? 1 : 0);
+    return forced >= 0 ? forced : (play_set().smart_move ? 1 : 0);
 }
 // SG-0127: Fix Thunder Hammer, this machine's choice (LB_THUNDER_FIX=0|1
 // forces it). What a match runs is lb_thunder_fix_live (lb_patches.cpp).
@@ -13581,7 +15467,7 @@ extern "C" int lb_setting_thunder_fix(void) {
         const char* v = std::getenv("LB_THUNDER_FIX");
         forced = v ? (std::atoi(v) ? 1 : 0) : -1;
     }
-    return forced >= 0 ? forced : (g_set.thunder_fix ? 1 : 0);
+    return forced >= 0 ? forced : (play_set().thunder_fix ? 1 : 0);
 }
 // SG-0131: Faster Pathfinding, this machine's choice (LB_FAST_PATH=0|1
 // forces it). What a match runs is lb_fast_path_live (lb_patches.cpp).
@@ -13591,7 +15477,7 @@ extern "C" int lb_setting_fast_path(void) {
         const char* v = std::getenv("LB_FAST_PATH");
         forced = v ? (std::atoi(v) ? 1 : 0) : -1;
     }
-    return forced >= 0 ? forced : (g_set.fast_path ? 1 : 0);
+    return forced >= 0 ? forced : (play_set().fast_path ? 1 : 0);
 }
 extern "C" int lb_setting_unique_heroes(void) {
     static int forced = -2;
@@ -13599,7 +15485,7 @@ extern "C" int lb_setting_unique_heroes(void) {
         const char* v = std::getenv("LB_UNIQUE_HEROES");
         forced = v ? (std::atoi(v) ? 1 : 0) : -1;
     }
-    return forced >= 0 ? forced : (g_set.unique_heroes ? 1 : 0);
+    return forced >= 0 ? forced : (play_set().unique_heroes ? 1 : 0);
 }
 // The second rule flags a host sends its players ('R' page, lb_teams.cpp).
 extern "C" int lb_rules2_local_flags(void) {
@@ -13618,7 +15504,7 @@ extern "C" int lb_setting_phantom_guard(void) {
         const char* v = std::getenv("LB_PHANTOM_GUARD");
         forced = v ? (std::atoi(v) ? 1 : 0) : -1;
     }
-    return forced >= 0 ? forced : (g_set.phantom_guard ? 1 : 0);
+    return forced >= 0 ? forced : (play_set().phantom_guard ? 1 : 0);
 }
 
 // Joined: the host's (its flags carry LB_RULE_OWN_CHEATS when it is Off; an
@@ -13638,7 +15524,7 @@ extern "C" int lb_setting_transport_release(void) {
         const char* v = std::getenv("LB_TRANSPORT_RELEASE");
         forced = v ? (std::atoi(v) ? 1 : 0) : -1;
     }
-    return forced >= 0 ? forced : (g_set.transport_release ? 1 : 0);
+    return forced >= 0 ? forced : (play_set().transport_release ? 1 : 0);
 }
 
 // SG-0032: LB_AI_MORE_MINES=0|1 forces it.
@@ -13729,6 +15615,16 @@ extern "C" int lb_setting_ai_fewer_farms(void) {
         forced = v ? (std::atoi(v) ? 1 : 0) : -1;
     }
     return forced >= 0 ? forced : (g_set.ai_fewer_farms ? 1 : 0);
+}
+
+// SG-0136 (docs/512): LB_AI_GOLD_TREES=0|1 forces it.
+extern "C" int lb_setting_ai_gold_trees(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_AI_GOLD_TREES");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : (g_set.ai_gold_trees ? 1 : 0);
 }
 
 // SG-0091 (docs/478): LB_AI_TRANSPORTS=0|1 forces it.
@@ -13869,7 +15765,7 @@ extern "C" int lb_setting_creatures(void) {
         const char* v = std::getenv("LB_CREATURES");
         forced = v ? (std::atoi(v) ? 1 : 0) : -1;
     }
-    return forced >= 0 ? forced : (g_set.creatures ? 1 : 0);
+    return forced >= 0 ? forced : (play_set().creatures ? 1 : 0);
 }
 
 // docs/436: this machine's creature slots, packed 4 bits a creature (Wolf low):
@@ -14016,9 +15912,19 @@ extern "C" int lb_setting_own_hero_spells(void) {   // docs/385
     return g_set.own_hero_spells ? 1 : 0;
 }
 
+// SG-0141 (docs/510): LB_HERO_SHEETS=0|1 forces it (a test aid).
+extern "C" int lb_setting_hero_sheets(void) {
+    static int forced = -2;
+    if (forced == -2) {
+        const char* v = std::getenv("LB_HERO_SHEETS");
+        forced = v ? (std::atoi(v) ? 1 : 0) : -1;
+    }
+    return forced >= 0 ? forced : 0;   // held back (docs/508): not from settings.json
+}
+
 extern "C" int lb_setting_fix_hotwired_healing(void) {
     { LbHostSettings h; if (lb_rules_host_settings(&h) >= 0) return h.fix_healing; }   // BR-0011
-    return g_set.fix_hotwired_healing ? 1 : 0;
+    return play_set().fix_hotwired_healing ? 1 : 0;
 }
 
 // LB_HOTWIRE_MODE=<0|1|2> forces the combo without the UI, so the cheat can be
@@ -14036,7 +15942,7 @@ extern "C" int lb_setting_hotwire_mode(void) {
             if (n >= 0 && n <= 2) forced = n;
         }
     }
-    return forced >= 0 ? forced : g_set.hotwire_mode;
+    return forced >= 0 ? forced : play_set().hotwire_mode;
 }
 
 // docs/392: the one the game runs with -- a replay's own, else this machine's.
@@ -14078,7 +15984,7 @@ extern "C" int lb_setting_cap(int build_limit_class) {
     }
     if (build_limit_class == forced_class) return forced_value;
 
-    return g_set.cap[build_limit_class];
+    return play_set().cap[build_limit_class];
 }
 
 extern "C" int lb_setting_cheat(int index) {
@@ -14112,7 +16018,7 @@ extern "C" int lb_setting_cheat(int index) {
         if (lb_rules_host_settings(&h) >= 0) return (int)((h.cheats >> index) & 1u);
     }
     if (forced & (1u << index)) return 1;
-    return g_set.cheat[index] ? 1 : 0;
+    return play_set().cheat[index] ? 1 : 0;
 }
 
 extern "C" int lb_setting_cheat_count(void) { return kCheatCount; }
@@ -14573,7 +16479,7 @@ extern "C" int lb_setting_same_builders(void) {
     // The patch is applied first, so equalising to "the Imperial builder"
     // means the patched Imperial, which is what a player selecting both would
     // expect. lb_patches.cpp enforces that order.
-    return g_set.same_builders;   // docs/396: 0, or the source builder 1..6
+    return play_set().same_builders;   // docs/396: 0, or the source builder 1..6
 }
 
 extern "C" void lb_overlay_shutdown(void) {
@@ -14677,22 +16583,23 @@ extern "C" const char* lb_net_lobby_options_json(void) {
         return r + "\"";
     };
     std::vector<std::pair<std::string, std::string>> kv;
-    kv.push_back({"Balance patch", (g_set.balance_patch >= 0 && g_set.balance_patch <= lb_balance_pack_count())
-                      ? lb_balance_name(g_set.balance_patch) : "?"});
-    kv.push_back({"Hotwire targets", pick(kHotwire, 3, g_set.hotwire_mode)});
-    kv.push_back({"Transport occupants", pick(kTransport, 3, g_set.hotwire_transport)});
+    if (lb_setting_tourney_rules()) kv.push_back({"Tournament rules", "On"});   // SG-0155
+    kv.push_back({"Balance patch", (play_set().balance_patch >= 0 && play_set().balance_patch <= lb_balance_pack_count())
+                      ? lb_balance_name(play_set().balance_patch) : "?"});
+    kv.push_back({"Hotwire targets", pick(kHotwire, 3, play_set().hotwire_mode)});
+    kv.push_back({"Transport occupants", pick(kTransport, 3, play_set().hotwire_transport)});
     kv.push_back({"Hotwire neutrals in missions", g_set.hotwire_neutrals ? "On" : "Off"});
-    kv.push_back({"EMP disables transports", g_set.emp_transports ? "On" : "Off"});
-    kv.push_back({"More than 10 mine spots", g_set.many_mines ? "On" : "Off"});   // SG-0077
+    kv.push_back({"EMP disables transports", play_set().emp_transports ? "On" : "Off"});
+    kv.push_back({"More than 10 mine spots", play_set().many_mines ? "On" : "Off"});   // SG-0077
     kv.push_back({"Native game logic", g_set.native_logic ? "On" : "Off"});       // docs/479
     kv.push_back({"Faster CPU", g_set.faster_cpu ? "On" : "Off"});               // docs/484
-    kv.push_back({"Prevent phantom ties", g_set.phantom_guard ? "On" : "Off"});   // docs/469
-    kv.push_back({"Stunned heroes can cast", g_set.stun_cast ? "On" : "Off"});
-    kv.push_back({"Soldiers repair buildings", g_set.any_unit_repairs ? "On" : "Off"});   // docs/488
-    kv.push_back({"One of each hero", g_set.unique_heroes ? "On" : "Off"});               // docs/488
-    kv.push_back({"Smarter unit movement", g_set.smart_move ? "On" : "Off"});             // docs/497
-    kv.push_back({"Fix Thunder Hammer", g_set.thunder_fix ? "On" : "Off"});               // SG-0127
-    kv.push_back({"Faster pathfinding", g_set.fast_path ? "On" : "Off"});                 // SG-0131
+    kv.push_back({"Prevent phantom ties", play_set().phantom_guard ? "On" : "Off"});   // docs/469
+    kv.push_back({"Stunned heroes can cast", play_set().stun_cast ? "On" : "Off"});
+    kv.push_back({"Soldiers repair buildings", play_set().any_unit_repairs ? "On" : "Off"});   // docs/488
+    kv.push_back({"One of each hero", play_set().unique_heroes ? "On" : "Off"});               // docs/488
+    kv.push_back({"Smarter unit movement", play_set().smart_move ? "On" : "Off"});             // docs/497
+    kv.push_back({"Fix Thunder Hammer", play_set().thunder_fix ? "On" : "Off"});               // SG-0127
+    kv.push_back({"Faster pathfinding", play_set().fast_path ? "On" : "Off"});                 // SG-0131
     kv.push_back({"AI rebuilds its hero", g_set.ai_hero_rebuild ? "On" : "Off"});
     kv.push_back({"AI builds more mines", g_set.ai_more_mines ? "On" : "Off"});
     kv.push_back({"Computers attack each other", g_set.ai_cross_fire ? "On" : "Off"});   // SG-0051
@@ -14700,31 +16607,32 @@ extern "C" const char* lb_net_lobby_options_json(void) {
     kv.push_back({"AI bridges any map", g_set.ai_bridges ? "On" : "Off"});               // SG-0071
     kv.push_back({"AI shipyards any map", g_set.ai_shipyards ? "On" : "Off"});           // SG-0078
     kv.push_back({"AI fewer farms", g_set.ai_fewer_farms ? "On" : "Off"});               // SG-0146
+    kv.push_back({"AI clears trees to Gold Bricks", g_set.ai_gold_trees ? "On" : "Off"});  // SG-0136
     kv.push_back({"AI finishes tower upgrades", g_set.ai_finish_upgrades ? "On" : "Off"});  // BR-0070
     kv.push_back({"AI keeps its bridges", g_set.ai_keep_bridges ? "On" : "Off"});          // SG-0089
     kv.push_back({"AI bridges when stuck", g_set.ai_stuck_bridges ? "On" : "Off"});        // SG-0090
     kv.push_back({"AI transports only when needed", g_set.ai_transports_on_request ? "On" : "Off"});  // SG-0091
-    kv.push_back({"Hotwired transports leave", g_set.transport_release ? "On" : "Off"});
+    kv.push_back({"Hotwired transports leave", play_set().transport_release ? "On" : "Off"});
     kv.push_back({"Attack boost reaches ranged",
-                  g_set.attack_boost_ranged >= 2 ? "On, no blast"
-                  : g_set.attack_boost_ranged ? "On" : "Off"});
+                  play_set().attack_boost_ranged >= 2 ? "On, no blast"
+                  : play_set().attack_boost_ranged ? "On" : "Off"});
     kv.push_back({"Fix hotwired healing", g_set.fix_hotwired_healing ? "On" : "Off"});
     {
         static const char* const kFrom[7] = {"Off", "King", "Wizard", "Pirate",
                                              "Imperial", "Earth", "Alien"};
-        const int f = g_set.same_builders;
+        const int f = play_set().same_builders;
         kv.push_back({"Same builders", kFrom[f >= 0 && f <= 6 ? f : 0]});
     }
     std::string caps;
     for (int i = 0; i < 10; ++i) {
-        if (!kCapName[i] || g_set.cap[i] == kShippedCap[i]) continue;
+        if (!kCapName[i] || play_set().cap[i] == kShippedCap[i]) continue;
         if (!caps.empty()) caps += ", ";
-        caps += std::string(kCapName[i]) + " " + std::to_string(g_set.cap[i]);
+        caps += std::string(kCapName[i]) + " " + std::to_string(play_set().cap[i]);
     }
     kv.push_back({"Unit caps", caps.empty() ? "Shipped" : caps});
     std::string cheats;
     for (int i = 0; i < kCheatCount; ++i) {
-        if (!g_set.cheat[i]) continue;
+        if (!play_set().cheat[i]) continue;
         if (!cheats.empty()) cheats += ", ";
         cheats += kCheats[i].name;
     }

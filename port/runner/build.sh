@@ -80,6 +80,7 @@ cp -p "$W/port/runner/src/lb_chat_words.h" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_slur_words.h" "$TREE/runner/src/"   # docs/502
 # HTTPS for the master server (docs/419). Its own TU for <windows.h>.
 cp -p "$W/port/runner/src/lb_https.cpp" "$TREE/runner/src/"
+cp -p "$W/port/runner/src/lb_wss.h" "$TREE/runner/src/"   # BR-0111: the relay over TLS
 # A host's mod map from the community archive (docs/420).
 cp -p "$W/port/runner/src/lb_mapfetch.cpp" "$TREE/runner/src/"
 # The level editor (Maps > Level Editor): the map model and the page.
@@ -110,6 +111,7 @@ cp -p "$W/port/runner/src/lb_discord.cpp" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_maptx.cpp" "$TREE/runner/src/"
 # Download and install a release in place (docs/435).
 cp -p "$W/port/runner/src/lb_update.cpp" "$TREE/runner/src/"
+cp -p "$W/port/runner/src/lb_visuals.cpp" "$W/port/runner/src/lb_visuals_front.inc" "$W/port/runner/src/lb_anime4k_cnn.hpp" "$TREE/runner/src/"   # docs/506
 # The first-run setup: the player's own ROM, Europe or USA (docs/394).
 cp -p "$W/port/runner/src/lb_setup.cpp" "$TREE/runner/src/"
 cp -p "$W/port/runner/src/lb_app.rc" "$W/port/runner/src/lb_app.ico" "$W/port/runner/src/lb_app.manifest" "$TREE/runner/src/"
